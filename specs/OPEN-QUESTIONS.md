@@ -1,6 +1,23 @@
 # Open questions (running log; Claude Code appends here per CLAUDE.md)
 - none at package creation
 
+## W1 kernel implementation (2026-07-02) — narrow interpretations, TODO(spec)
+- Q14 Enum CHECK constraints are NOT emitted in DDL (doc 04 §2 says
+  enum->TEXT + CHECK(list)): add_enum_value cannot alter a CHECK without a
+  table rebuild, which would contradict "migrations trivial". Enum
+  membership is kernel-validated on every write instead. Candidate
+  correction to doc 04 §2.
+- Q15 rename_column is REJECTED when any computed expression in the table
+  references the renamed column. The alternative (rewriting exprs via the
+  I4 rename-map, like panel queries per G16) needs a spec decision.
+- Q16 Computed columns are usable in select/where/orderBy (evaluated
+  post-SQL, exemplar 3 works) but REJECTED in groupBy/aggregate (E_TYPE).
+- Q17 set_required supports required:true only, so unset_required is a
+  faithful inverse (required:false forward would not round-trip — the
+  vocabulary has no "restore previous flag" op). Also: set_required
+  without default_for_existing is allowed even when null rows exist;
+  enforcement is prospective (inserts) — decide if it should scan.
+
 ## P0 verification pass (2026-07-02) — exemplars/schema/shells vs docs 03-06
 
 STATUS 2026-07-02: ALL RESOLVED. Q1→G18, Q2→G19, Q3→G20, Q4→G21,
