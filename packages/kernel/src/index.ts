@@ -30,3 +30,7 @@ export {
   Bridge, queryMatchesDeclared,
   type BridgeHooks, type BridgeLimits, type PanelManifest,
 } from "./bridge";
+export {
+  FORBIDDEN_IDENTIFIERS, validateMutationPlan,
+  type ValidationIssue, type ValidatorContext,
+} from "./validate";

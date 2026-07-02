@@ -57,9 +57,12 @@ function checkComputedExpr(t: RegTable, expr: string): void {
  * Simulate a forward op list against a registry copy, checking structural
  * validity of every op in sequence (V5) and expressions (I6), and return
  * the normalized mirror list (G23: backfill/add_index on plan-created
- * columns are absorbed). Throws ClayError on the first invalid op.
+ * columns are absorbed) plus the post-migration registry. Throws ClayError
+ * on the first invalid op.
  */
-function computeMirrors(operations: ForwardOpT[], registry: Registry): InverseOpT[] {
+function computeMirrors(operations: ForwardOpT[], registry: Registry): {
+  mirrors: InverseOpT[]; sim: Registry;
+} {
   const sim = cloneRegistry(registry);
   const createdTables = new Set<string>();
   const createdColumns = new Set<string>();   // "table.column"
@@ -190,19 +193,22 @@ function computeMirrors(operations: ForwardOpT[], registry: Registry): InverseOp
     }
   }
 
-  return mirrors;
+  return { mirrors, sim };
 }
 
 /**
  * Validate a full MigrationPlan against a registry: op-sequence validity
  * (V5, I6 via computeMirrors) plus the I2 mirror check — the plan's inverse
  * must equal the normalized forward mirrors, reversed. Throws ClayError.
+ * Returns the post-migration registry (used by the Validator to check
+ * panel queries against the schema the plan produces).
  */
-export function validateMigrationPlan(plan: MigrationPlanT, registry: Registry): void {
+export function validateMigrationPlan(plan: MigrationPlanT, registry: Registry): Registry {
   const parsed = MigrationPlanSchema.safeParse(plan);
   if (!parsed.success) fail("malformed migration plan", parsed.error.issues);
 
-  const expected = computeMirrors(plan.operations, registry).reverse();
+  const { mirrors, sim } = computeMirrors(plan.operations, registry);
+  const expected = mirrors.reverse();
   if (plan.inverse.length !== expected.length)
     fail(`I2: inverse has ${plan.inverse.length} ops, expected ${expected.length}`, { expected });
   for (let i = 0; i < expected.length; i++) {
@@ -210,11 +216,12 @@ export function validateMigrationPlan(plan: MigrationPlanT, registry: Registry):
     const want = JSON.stringify(expected[i]);
     if (got !== want) fail(`I2: inverse op ${i} mismatch`, { got: plan.inverse[i], want: expected[i] });
   }
+  return sim;
 }
 
 /** The canonical inverse for a forward op list (tests, kernel-local commits). */
 export function deriveInverse(operations: ForwardOpT[], registry: Registry): InverseOpT[] {
-  return computeMirrors(operations, registry).reverse();
+  return computeMirrors(operations, registry).mirrors.reverse();
 }
 
 // ---------- execution ----------
