@@ -36,6 +36,25 @@ importers:
         specifier: ^3.0.0
         version: 3.2.6(@types/node@24.13.2)(jsdom@26.1.0)
 
+  packages/mutation:
+    dependencies:
+      '@clay/schema':
+        specifier: workspace:*
+        version: link:../schema
+    devDependencies:
+      '@clay/kernel':
+        specifier: workspace:*
+        version: link:../kernel
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.2
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.6(@types/node@24.13.2)(jsdom@26.1.0)
+
   packages/panel-runtime:
     dependencies:
       '@clay/kernel':

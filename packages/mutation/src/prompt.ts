@@ -1,0 +1,90 @@
+// Prompt assembly (doc 05 §3): the static SYSTEM prompt from spec-derived
+// assets (byte-stable per deploy — prompt caching and the regression gate
+// both depend on that), plus the dynamic user/repair turns. The user turn
+// carries schema shapes and intent ONLY — never row data (ADR-009, P2).
+import {
+  API_REFERENCE, COMPONENT_CONTRACTS, EXEMPLARS, HARD_RULES,
+  MIGRATION_VOCAB, OUTPUT_CONTRACT, ROLE,
+} from "./assets.gen";
+
+export const INTENT_MAX_CHARS = 500;         // S0 (doc 05 §1)
+const CONTEXT_BUDGET_CHARS = 48_000;         // ~12k tokens (doc 05 §4)
+
+export type S1PanelManifest = {
+  id: string;
+  title: string;
+  placement: { region: string; order: number };
+  declared_queries: unknown[];
+  declared_writes: string[];
+  /** one-line kernel-generated description (doc 05 §4) */
+  description: string;
+  /** full code ONLY for panels the intent targets (doc 05 §1 S1) */
+  code?: string;
+};
+
+export type S1Context = {
+  registry: { name: string; columns: unknown[] }[];
+  panels: S1PanelManifest[];
+  recentSummaries: string[];
+  intent: string;
+};
+
+export function buildSystemPrompt(): string {
+  const exemplars = EXEMPLARS.map((e, i) =>
+    `### Exemplar ${i + 1}\nINTENT: ${e.intent}\n\n\`\`\`json\n${e.plan}\n\`\`\``,
+  ).join("\n\n");
+  return [
+    ROLE,
+    `## ClayAPI reference\n\n${API_REFERENCE}`,
+    `## Migration vocabulary and invariants\n\n${MIGRATION_VOCAB}`,
+    `## Output contract\n\n${OUTPUT_CONTRACT}`,
+    `## Component contracts (G25)\n\n${COMPONENT_CONTRACTS}`,
+    `## Hard rules\n\n${HARD_RULES}`,
+    `## Exemplars\n\n${exemplars}`,
+  ].join("\n\n");
+}
+
+export class MutationRequestError extends Error {
+  constructor(readonly code: string, message: string, readonly detail?: unknown) {
+    super(message);
+    this.name = "MutationRequestError";
+  }
+}
+
+export function buildUserTurn(ctx: S1Context): string {
+  if (ctx.intent.length === 0 || ctx.intent.length > INTENT_MAX_CHARS)
+    throw new MutationRequestError("E_VALIDATION",
+      `intent must be 1..${INTENT_MAX_CHARS} chars`);
+
+  // Budget trimming (doc 05 §4): drop panel code first, then descriptions,
+  // least-recently-relevant last in the caller-provided order. The registry
+  // is never dropped.
+  const panels = ctx.panels.map(p => ({ ...p }));
+  const render = (): string => [
+    `<registry>${JSON.stringify(ctx.registry)}</registry>`,
+    `<panels>${JSON.stringify(panels)}</panels>`,
+    `<recent>${ctx.recentSummaries.map(s => `- ${s}`).join("\n")}</recent>`,
+    `<intent>${ctx.intent}</intent>`,
+  ].join("\n");
+
+  let out = render();
+  for (let i = panels.length - 1; i >= 0 && out.length > CONTEXT_BUDGET_CHARS; i--) {
+    if (panels[i]!.code !== undefined) { delete panels[i]!.code; out = render(); }
+  }
+  for (let i = panels.length - 1; i >= 0 && out.length > CONTEXT_BUDGET_CHARS; i--) {
+    panels[i]!.description = ""; out = render();
+  }
+  return out;
+}
+
+/** The repair turn (doc 05 §1 S2'): machine reasons + offending artifact. */
+export function buildRepairTurn(failures: string[], offendingArtifact: string): string {
+  return [
+    `<failure>`,
+    ...failures.map(f => `- ${f}`),
+    ``,
+    offendingArtifact,
+    `</failure>`,
+    `Return a corrected COMPLETE MutationPlan.`,
+  ].join("\n");
+}
