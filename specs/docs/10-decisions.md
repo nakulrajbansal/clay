@@ -66,3 +66,24 @@ ADR-011 Hosted proxy AND BYO key, both first-class from day one.
 ADR-012 Panels communicate only via kernel-routed events.
   Alt: shared state object. Rejected: coupling + integrity risk.
   Consequence: FilterBar/Chart pairs need the event pattern (exemplar 6).
+
+ADR-013 Two-layer plan validation: simplified schema at the API, full Zod
+  client-side. (Decided in G1; entry back-filled per G26.)
+  Alt: push the full MutationPlan schema into the structured-output
+  grammar. Rejected: API grammar complexity caps can't hold nested
+  Query/Condition/op constraints, and coupling the grammar to every schema
+  change defeats caching. Consequence: the API guarantees parseability
+  only; packages/schema (Zod) + Validator remain the sole correctness
+  gate; mutation-plan-api.json is kept byte-stable.
+
+ADR-014 Panels declare writes, not just reads (declared_writes).
+  Context: doc 03 scoped declared_queries to reads while doc 06 checked
+  "table access" per call — write access was unspecified (G22).
+  Alt 1: writes unrestricted to any registered table. Rejected: violates
+  least privilege; a buggy generated panel could corrupt unrelated tables.
+  Alt 2: infer write tables from code statically without a declaration.
+  Rejected: the manifest should be reviewable without executing code, and
+  V4's declare-then-verify pattern already exists for reads.
+  Consequence: PanelArtifact gains declared_writes (<= 4 tables); Bridge
+  enforces at call time; V4 verifies write-call table literals against it;
+  one more field the model must emit (taught by exemplar 5).

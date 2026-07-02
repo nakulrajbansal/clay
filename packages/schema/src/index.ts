@@ -2,6 +2,8 @@
 // Full semantic validation lives here (client-side). The API-level
 // structured-output schema is the simplified projection in
 // mutation-plan-api.json (gap G1 / ADR-013).
+// Frozen per P0.3 on 2026-07-02 with gap resolutions G18–G26 applied;
+// changes from here on require an ADR in the same commit (CLAUDE.md §3).
 import { z } from "zod";
 
 // ---------- primitives ----------
@@ -10,6 +12,14 @@ export const PanelId = z.string().regex(/^[a-z][a-z0-9_]{2,40}$/);
 export const ColumnType = z.enum([
   "text","number","integer","boolean","date","enum","json","computed",
 ]);
+
+// JSON without `any` (G26). Scalars for values the migration ops carry.
+export type Json =
+  | string | number | boolean | null | Json[] | { [key: string]: Json };
+export const JsonValue: z.ZodType<Json> = z.lazy(() =>
+  z.union([z.string(), z.number(), z.boolean(), z.null(),
+           z.array(JsonValue), z.record(JsonValue)]));
+export const JsonScalar = z.union([z.string(), z.number(), z.boolean()]);
 
 export const ColumnSpec = z.object({
   name: Ident,
@@ -64,14 +74,16 @@ export const ForwardOp = z.discriminatedUnion("op", [
              column: Ident, value: z.string().max(40) }),
   z.object({ op: z.literal("add_index"), table: Ident, column: Ident }),
   z.object({ op: z.literal("backfill"), table: Ident, column: Ident,
-             value: z.any().optional(), expr: z.string().max(500).optional() }),
+             value: JsonScalar.optional(),
+             expr: z.string().max(500).optional() }),
   z.object({ op: z.literal("create_computed"), table: Ident,
              column: Ident, expr: z.string().max(500) }),
   z.object({ op: z.literal("update_computed"), table: Ident,
              column: Ident, expr: z.string().max(500) }),
   z.object({ op: z.literal("hide_column"), table: Ident, column: Ident }),
   z.object({ op: z.literal("set_required"), table: Ident, column: Ident,
-             required: z.boolean(), default_for_existing: z.any().optional() }),
+             required: z.boolean(),
+             default_for_existing: JsonScalar.optional() }),
 ]);
 export const InverseOp = z.discriminatedUnion("op", [
   z.object({ op: z.literal("drop_table_if_created_by_this"), table: Ident }),
@@ -90,8 +102,14 @@ export const InverseOp = z.discriminatedUnion("op", [
 export const MigrationPlan = z.object({
   operations: z.array(ForwardOp).min(1).max(12),
   inverse: z.array(InverseOp).min(1).max(12),
-}).refine(m => new Set(m.operations.map(o => o.table)).size <= 3,
-  { message: "I5: <=3 tables per plan" });
+}).superRefine((m, ctx) => {
+  if (new Set(m.operations.map(o => o.table)).size > 3)
+    ctx.addIssue({ code: "custom", message: "I5: <=3 tables per plan" });
+  for (const op of m.operations)
+    if (op.op === "backfill" && (op.value === undefined) === (op.expr === undefined))
+      ctx.addIssue({ code: "custom",
+        message: "G23: backfill takes exactly one of value|expr" });
+});
 
 // ---------- MutationPlan ----------
 export const DiffKind = z.enum([
@@ -105,10 +123,11 @@ export const PanelArtifact = z.object({
                         order: z.number().int().min(0).max(50) }),
   code: z.string().max(65_536),
   declared_queries: z.array(Query).max(8),
+  declared_writes: z.array(Ident).max(4).default([]),   // G22 / ADR-014
 });
 export const MutationPlan = z.object({
   api: z.literal(1),
-  summary: z.string().min(1).max(200),
+  summary: z.string().max(200),      // non-empty unless clarifying (G18)
   user_facing_diff: z.array(z.object({ kind: DiffKind,
     detail: z.string().max(120) })).max(12),
   clarifying_question: z.string().max(200).nullable(),
@@ -125,6 +144,8 @@ export const MutationPlan = z.object({
     ctx.addIssue({ code: "custom", message: "empty plan" });
   if (!p.clarifying_question && p.confidence < 0.5)
     ctx.addIssue({ code: "custom", message: "R5: low confidence must clarify" });
+  if (!p.clarifying_question && p.summary.trim().length === 0)
+    ctx.addIssue({ code: "custom", message: "G18: summary required unless clarifying" });
 });
 export type MutationPlan = z.infer<typeof MutationPlan>;
 
@@ -133,22 +154,30 @@ export const BridgeCall = z.object({
   v: z.literal(1),
   panel: PanelId,
   seq: z.number().int().nonnegative(),
+  // compute.* is in-iframe and sync (G20); events.off added per G26.
   call: z.enum(["db.query","db.watch","db.unwatch","db.insert","db.update",
     "db.softDelete","ui.toast","ui.confirm","events.emit","events.on",
-    "compute.eval"]),
-  args: z.array(z.any()).max(4),           // per-call schemas applied next
+    "events.off"]),
+  args: z.array(JsonValue).max(4),         // per-call schemas applied next
 });
 export const BridgeReply = z.object({
   v: z.literal(1), seq: z.number().int(),
   ok: z.boolean(),
-  result: z.any().optional(),
+  result: JsonValue.optional(),
   error: z.object({ code: z.string(), message: z.string() }).optional(),
 });
 export const BridgePush = z.discriminatedUnion("kind", [
   z.object({ v: z.literal(1), kind: z.literal("watch"),
-             watchId: z.string(), rows: z.array(z.record(z.any())) }),
+             watchId: z.string(), rows: z.array(z.record(JsonValue)) }),
   z.object({ v: z.literal(1), kind: z.literal("event"),
-             name: Ident, payload: z.any() }),
+             name: Ident, payload: JsonValue }),
   z.object({ v: z.literal(1), kind: z.literal("boot"),
-             code: z.string(), panelId: PanelId, apiVersion: z.literal(1) }),
+             code: z.string(), panelId: PanelId, apiVersion: z.literal(1),
+             meta: z.object({                       // backs clay.meta (G21)
+               schema: JsonValue,                   // registry snapshot
+               appVersion: z.number().int().nonnegative(),
+               placement: z.object({ region: z.enum(["top","main","side"]),
+                                     order: z.number().int() }),
+             }),
+             tokens: z.record(z.string()) }),       // design tokens (G21)
 ]);

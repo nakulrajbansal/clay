@@ -14,9 +14,11 @@ INTENT: "give me a quick way to book an appointment without opening the data vie
    "placement":{"region":"side","order":0},
    "declared_queries":[{"from":"clients","select":["id","name","dog_name"],
      "orderBy":[{"field":"name","dir":"asc"}]}],
+   "declared_writes":["appointments"],
    "code":"export default function(clay){\n  clay.db.watch({from:\"clients\",select:[\"id\",\"name\",\"dog_name\"],orderBy:[{field:\"name\",dir:\"asc\"}]},(clients)=>{\n    clay.ui.render(h(Form,{\n      submitLabel:\"Book\",\n      fields:[\n        {name:\"client_id\",label:\"Client\",kind:\"select\",\n         options:clients.map(c=>({value:c.id,label:`${c.name} (${c.dog_name})`}))},\n        {name:\"at\",label:\"When\",kind:\"date\"},\n        {name:\"service\",label:\"Service\",kind:\"select\",fromSchema:\"appointments.service\"},\n        {name:\"price\",label:\"Price\",kind:\"number\"}],\n      onSubmit:async(v)=>{\n        await clay.db.insert(\"appointments\",{...v,status:\"booked\"});\n        clay.ui.toast(\"Appointment booked\",\"success\");\n      }}));\n  });\n}"}],
  "remove_panels":[],
  "confidence":0.9}
 ```
 Teaches: Form + insert + toast; fromSchema pulls enum options from the
-registry so the form survives future enum additions.
+registry so the form survives future enum additions; writes are declared
+up front in declared_writes (G22/ADR-014), reads in declared_queries.

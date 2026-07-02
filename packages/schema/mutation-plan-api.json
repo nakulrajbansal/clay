@@ -38,7 +38,8 @@
           "title": { "type": "string" },
           "placement": { "type": "object" },
           "code": { "type": "string" },
-          "declared_queries": { "type": "array", "items": { "type": "object" } }
+          "declared_queries": { "type": "array", "items": { "type": "object" } },
+          "declared_writes": { "type": "array", "items": { "type": "string" } }
         },
         "required": ["panel_id", "title", "placement", "code", "declared_queries"]
       }

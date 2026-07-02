@@ -3,6 +3,11 @@
 
 ## P0 verification pass (2026-07-02) — exemplars/schema/shells vs docs 03-06
 
+STATUS 2026-07-02: ALL RESOLVED. Q1→G18, Q2→G19, Q3→G20, Q4→G21,
+Q5→G22+ADR-014, Q6→G23, Q7→G24, Q8→G25, Q9/Q11/Q12/Q13→G26, Q10→G26
+(layout applied: specs/ + packages/schema per doc 02 §9). ADR-013
+back-filled into doc 10. Original findings kept below for the record.
+
 ### Contradictions (need a decision / ADR or gap resolution)
 - Q1 Exemplar 7 fails the Zod MutationPlan schema: `summary: ""` violates
   `z.string().min(1)`. Doc 05 §2 says a clarifying plan has "ALL other
