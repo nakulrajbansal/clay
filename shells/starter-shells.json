@@ -1,0 +1,53 @@
+{
+  "$comment": "Static seeds (gap G9). Panels are hand-written, validator-passing. Sample rows carry sample:true; 'Remove samples' is a kernel-local commit.",
+  "shells": [
+    {
+      "shell_id": "tracker",
+      "name": "Tracker",
+      "tagline": "Projects, tasks, anything with a status",
+      "registry": [
+        {"table": "items",
+         "columns": [
+           {"name": "name", "type": "text", "required": true},
+           {"name": "owner", "type": "text"},
+           {"name": "status", "type": "enum", "values": ["todo", "doing", "done"]},
+           {"name": "due", "type": "date"},
+           {"name": "notes", "type": "text"}]}
+      ],
+      "seed_panels": ["items_table:main:0", "status_counts:top:0", "add_item_form:side:0"],
+      "sample_rows": {"items": 3}
+    },
+    {
+      "shell_id": "log",
+      "name": "Log",
+      "tagline": "Entries over time: reading, workouts, anything",
+      "registry": [
+        {"table": "entries",
+         "columns": [
+           {"name": "title", "type": "text", "required": true},
+           {"name": "on", "type": "date", "required": true},
+           {"name": "amount", "type": "number"},
+           {"name": "rating", "type": "integer"},
+           {"name": "notes", "type": "text"}]}
+      ],
+      "seed_panels": ["entries_table:main:0", "per_week_chart:main:1", "quick_add_form:side:0"],
+      "sample_rows": {"entries": 3}
+    },
+    {
+      "shell_id": "dashboard",
+      "name": "Dashboard",
+      "tagline": "Records plus the numbers that matter",
+      "registry": [
+        {"table": "records",
+         "columns": [
+           {"name": "name", "type": "text", "required": true},
+           {"name": "category", "type": "enum", "values": ["a", "b", "c"]},
+           {"name": "value", "type": "number"},
+           {"name": "on", "type": "date"}]}
+      ],
+      "seed_panels": ["metrics_row:top:0", "records_table:main:0", "by_category_chart:main:1"],
+      "sample_rows": {"records": 5}
+    }
+  ],
+  "note": "Seed panel code to be written in W1 against the final PanelRuntime; the ids and placements above are binding."
+}

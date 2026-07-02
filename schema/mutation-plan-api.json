@@ -1,0 +1,50 @@
+{
+  "$comment": "SIMPLIFIED MutationPlan for API structured output (gap G1/ADR-013). Grammar guarantees parseability; full Zod schema (index.ts) guarantees correctness client-side. Keep byte-stable for grammar caching.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "api": { "type": "number" },
+    "summary": { "type": "string" },
+    "user_facing_diff": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "kind": { "type": "string", "enum": ["add_field","change_field","add_panel","change_panel","remove_panel","add_status","add_computed","add_chart"] },
+          "detail": { "type": "string" }
+        },
+        "required": ["kind", "detail"]
+      }
+    },
+    "clarifying_question": { "type": ["string", "null"] },
+    "assumptions": { "type": "array", "items": { "type": "string" } },
+    "migration": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "operations": { "type": "array", "items": { "type": "object" } },
+        "inverse": { "type": "array", "items": { "type": "object" } }
+      },
+      "required": ["operations", "inverse"]
+    },
+    "panels": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "panel_id": { "type": "string" },
+          "title": { "type": "string" },
+          "placement": { "type": "object" },
+          "code": { "type": "string" },
+          "declared_queries": { "type": "array", "items": { "type": "object" } }
+        },
+        "required": ["panel_id", "title", "placement", "code", "declared_queries"]
+      }
+    },
+    "remove_panels": { "type": "array", "items": { "type": "string" } },
+    "confidence": { "type": "number" }
+  },
+  "required": ["api","summary","user_facing_diff","clarifying_question","assumptions","migration","panels","remove_panels","confidence"]
+}
