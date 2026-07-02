@@ -1,0 +1,6 @@
+packages:
+  - packages/*
+# Doc 06 §6: no post-install scripts. esbuild's binary arrives via its
+# platform optionalDependency; the install script is only a fallback check.
+allowBuilds:
+  esbuild: false
