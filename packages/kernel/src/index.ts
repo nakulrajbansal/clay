@@ -1,4 +1,5 @@
 // @clay/kernel public API. Shell code may import ONLY from here (doc 02 §7).
+export type { Query } from "@clay/schema";
 export { ClayError, type ClayErrorCode } from "./errors";
 export {
   compileExpr, evalExpr, parseExpr, typecheckExpr, exprFields,
@@ -21,3 +22,11 @@ export {
   type ForwardOpT, type InverseOpT, type MigrationPlanT,
 } from "./migrate";
 export { ClayStore, type CommitInput, type VersionEntry } from "./store";
+export {
+  InProcessAsyncStore, StoreRpcClient, portFromMessagePort, serveStore,
+  type AsyncStore, type MessagePortLike, type StoreRequest, type StoreResponse,
+} from "./asyncstore";
+export {
+  Bridge, queryMatchesDeclared,
+  type BridgeHooks, type BridgeLimits, type PanelManifest,
+} from "./bridge";

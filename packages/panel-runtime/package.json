@@ -1,25 +1,21 @@
 {
-  "name": "@clay/kernel",
+  "name": "@clay/panel-runtime",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./expr": "./src/expr.ts",
-    "./errors": "./src/errors.ts"
+    ".": "./src/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "@clay/schema": "workspace:*",
-    "@sqlite.org/sqlite-wasm": "3.53.0-build1",
-    "zod": "^3.25.76"
+    "@clay/kernel": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
-    "fast-check": "^4.0.0",
+    "jsdom": "^26.0.0",
     "typescript": "^5.6.0",
     "vitest": "^3.0.0"
   }
