@@ -18,6 +18,18 @@
   without default_for_existing is allowed even when null rows exist;
   enforcement is prospective (inserts) — decide if it should scan.
 
+## W2 pipeline implementation (2026-07-02)
+- Q18 G16 rename rewrite: the kernel rewrites untouched panels' DECLARED
+  queries at commit time (implemented), but not yet the query literals
+  inside their stored CODE blobs. Until that lands (W3, reusing the
+  validator's AST extraction), an untouched panel whose code queries a
+  renamed column will mismatch its rewritten declaration at the Bridge and
+  trip its boundary — recoverable via panel repair, but not the G16 ideal.
+- Q19 attempts.outcome gains two values beyond the doc 04 §3 comment
+  (kept|discarded|failed): 'pending' (row created at S0 intake per doc 05)
+  and 'clarify' (the §5 clarify-rate metric needs it). TEXT column, no
+  migration impact; doc comment correction candidate.
+
 ## P0 verification pass (2026-07-02) — exemplars/schema/shells vs docs 03-06
 
 STATUS 2026-07-02: ALL RESOLVED. Q1→G18, Q2→G19, Q3→G20, Q4→G21,

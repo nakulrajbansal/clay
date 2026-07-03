@@ -13,7 +13,15 @@ export interface DbDriver {
   select(sql: string, params?: SqlValue[]): SqlRow[];
   tx<T>(fn: () => T): T;
   close(): void;
+  /** Full copy for the shadow dry-run (S4, doc 05 §1): user.db serialized,
+   * system tables row-copied. The copy is independent and disposable. */
+  snapshot(): Promise<DbDriver>;
 }
+
+export const SYSTEM_TABLES = [
+  "tables_registry", "version_log", "panel_blobs", "panel_tombstones",
+  "usage_events", "suggestions", "settings", "attempts",
+] as const;
 
 let sqlite3Promise: Promise<Sqlite3Static> | null = null;
 function sqlite3(): Promise<Sqlite3Static> {
@@ -63,6 +71,45 @@ class SqliteWasmDriver implements DbDriver {
 
   close(): void {
     this.db.close();
+  }
+
+  async snapshot(): Promise<DbDriver> {
+    const s = await sqlite3();
+    type Capi = {
+      sqlite3_js_db_export(db: unknown, schema?: string): Uint8Array;
+      sqlite3_deserialize(db: unknown, schema: string, ptr: number,
+        size: number, sizeMax: number, flags: number): number;
+      SQLITE_DESERIALIZE_FREEONCLOSE: number;
+      SQLITE_DESERIALIZE_RESIZEABLE: number;
+    };
+    type Wasm = { allocFromTypedArray(bytes: Uint8Array): number };
+    const capi = s.capi as unknown as Capi;
+    const wasm = s.wasm as unknown as Wasm;
+
+    // user.db: byte-exact serialization of the main schema
+    const bytes = capi.sqlite3_js_db_export(this.db.pointer);
+    const copy = new s.oo1.DB(":memory:");
+    const ptr = wasm.allocFromTypedArray(bytes);
+    const rc = capi.sqlite3_deserialize(copy.pointer, "main", ptr,
+      bytes.byteLength, bytes.byteLength,
+      capi.SQLITE_DESERIALIZE_FREEONCLOSE | capi.SQLITE_DESERIALIZE_RESIZEABLE);
+    copy.checkRc(rc);
+    copy.exec("PRAGMA foreign_keys = ON");
+    copy.exec("ATTACH ':memory:' AS sys");
+
+    // system.db: fixed table set, row-copied
+    const target = new SqliteWasmDriver(copy);
+    target.exec(SYSTEM_SCHEMA_SQL);
+    for (const table of SYSTEM_TABLES) {
+      for (const row of this.select(`SELECT * FROM sys.${table}`)) {
+        const cols = Object.keys(row);
+        target.exec(
+          `INSERT INTO sys.${table} (${cols.map(c => `"${c}"`).join(", ")})
+           VALUES (${cols.map(() => "?").join(", ")})`,
+          cols.map(c => row[c] ?? null));
+      }
+    }
+    return target;
   }
 }
 

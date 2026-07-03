@@ -21,7 +21,15 @@ export {
   applyForwardOps, applyInverseOps, deriveInverse, validateMigrationPlan,
   type ForwardOpT, type InverseOpT, type MigrationPlanT,
 } from "./migrate";
-export { ClayStore, type CommitInput, type VersionEntry } from "./store";
+export {
+  ClayStore,
+  type CommitInput, type LivePanel, type PanelBlobInput, type VersionEntry,
+} from "./store";
+export {
+  MutationPipeline, defaultSmokeTest,
+  type AttemptResult, type Planner, type PlannerContext, type PlannerResult,
+  type PreviewHandle, type SmokeTest,
+} from "./pipeline";
 export {
   InProcessAsyncStore, StoreRpcClient, portFromMessagePort, serveStore,
   type AsyncStore, type MessagePortLike, type StoreRequest, type StoreResponse,

@@ -20,12 +20,39 @@ import { runQuery, type QueryRow } from "./query";
 
 type QueryT = import("@clay/schema").Query;
 
+export type PanelBlobInput = {
+  panel_id: string;
+  title: string;
+  placement: { region: "top" | "main" | "side"; order: number };
+  code: string;
+  declared_queries: QueryT[];
+  declared_writes: string[];
+};
+
+export type LivePanel = PanelBlobInput & { version: number };
+
 export type CommitInput = {
   intent: string;
   summary: string;
   migration: MigrationPlanT | null;
+  panels?: PanelBlobInput[];
+  removePanels?: string[];
   diff?: unknown;
 };
+
+/** G16/I4: rewrite field references in a declared query after a rename. */
+function renameQueryFields(q: QueryT, table: string, from: string, to: string): QueryT {
+  if (q.from !== table) return q;
+  const field = (f: string): string => (f === from ? to : f);
+  const out: QueryT = { ...q };
+  if (out.select) out.select = out.select.map(field);
+  if (out.where) out.where = out.where.map(c => ({ ...c, field: field(c.field) }));
+  if (out.orWhere) out.orWhere = out.orWhere.map(g => g.map(c => ({ ...c, field: field(c.field) })));
+  if (out.orderBy) out.orderBy = out.orderBy.map(o => ({ ...o, field: field(o.field) }));
+  if (out.groupBy) out.groupBy = out.groupBy.map(field);
+  if (out.aggregate) out.aggregate = out.aggregate.map(a => ({ ...a, field: field(a.field) }));
+  return out;
+}
 
 export type VersionEntry = {
   version: number;
@@ -116,7 +143,8 @@ export class ClayStore {
     };
   }
 
-  /** Commit a mutation: validate, migrate, persist registry, append log. */
+  /** Commit a mutation: validate, migrate, write panel blobs/tombstones,
+   * persist registry, append log — one transaction (doc 04 §4). */
   commit(input: CommitInput): number {
     const head = this.headVersion();
     if (this.currentVersion() !== head)
@@ -124,6 +152,11 @@ export class ClayStore {
         "store is rolled back (scrub preview); roll forward or truncate first");
     try {
       return this.driver.tx(() => {
+        // capture the pre-commit manifest for the G16 rename rewrite
+        const untouched = this.livePanels().filter(p =>
+          !(input.panels ?? []).some(np => np.panel_id === p.panel_id)
+          && !(input.removePanels ?? []).includes(p.panel_id));
+
         if (input.migration) {
           validateMigrationPlan(input.migration, this.reg);
           applyForwardOps(this.driver, this.reg, input.migration.operations);
@@ -138,6 +171,29 @@ export class ClayStore {
            JSON.stringify(input.diff ?? []),
            input.migration ? JSON.stringify(input.migration.operations) : null,
            input.migration ? JSON.stringify(input.migration.inverse) : null]);
+
+        for (const p of input.panels ?? []) this.writePanelBlob(version, p);
+        for (const id of input.removePanels ?? [])
+          this.driver.exec(
+            "INSERT INTO sys.panel_tombstones(version, panel_id) VALUES (?, ?)",
+            [version, id]);
+
+        // G16: untouched panels whose declared queries reference renamed
+        // columns get a rewritten blob at this version. (Query literals
+        // inside code are rewritten at the Bridge via the same map — the
+        // static rewrite of code text is tracked as OPEN-QUESTIONS Q18.)
+        const renames = (input.migration?.operations ?? [])
+          .filter(o => o.op === "rename_column");
+        if (renames.length > 0) {
+          for (const lp of untouched) {
+            let queries = lp.declared_queries;
+            for (const r of renames)
+              queries = queries.map(q => renameQueryFields(q, r.table, r.from, r.to));
+            if (JSON.stringify(queries) !== JSON.stringify(lp.declared_queries))
+              this.writePanelBlob(version, { ...lp, declared_queries: queries });
+          }
+        }
+
         this.setCurrentVersion(version);
         return version;
       });
@@ -145,6 +201,80 @@ export class ClayStore {
       this.loadRegistry();   // in-memory registry may be ahead of the rolled-back tx
       throw e;
     }
+  }
+
+  private writePanelBlob(version: number, p: PanelBlobInput): void {
+    this.driver.exec(
+      `INSERT OR REPLACE INTO sys.panel_blobs(version, panel_id, code,
+         placement_json, declared_q_json) VALUES (?, ?, ?, ?, ?)`,
+      [version, p.panel_id, p.code, JSON.stringify(p.placement),
+       JSON.stringify({
+         title: p.title,
+         declared_queries: p.declared_queries,
+         declared_writes: p.declared_writes,   // ADR-014 rides in the manifest json
+       })]);
+  }
+
+  /** Live panels at the current version: latest blob per id, minus panels
+   * whose latest tombstone is newer than their latest blob (doc 04 §5). */
+  livePanels(): LivePanel[] {
+    const v = this.currentVersion();
+    const rows = this.driver.select(
+      `SELECT b.panel_id, b.version, b.code, b.placement_json, b.declared_q_json
+       FROM sys.panel_blobs b
+       JOIN (SELECT panel_id, MAX(version) AS mv FROM sys.panel_blobs
+             WHERE version <= ? GROUP BY panel_id) m
+         ON b.panel_id = m.panel_id AND b.version = m.mv
+       ORDER BY b.panel_id`, [v, ]);
+    const out: LivePanel[] = [];
+    for (const r of rows) {
+      const tomb = this.driver.select(
+        `SELECT MAX(version) AS tv FROM sys.panel_tombstones
+         WHERE panel_id = ? AND version <= ?`, [String(r.panel_id), v]);
+      const tv = tomb[0]?.tv;
+      if (tv !== null && tv !== undefined && Number(tv) >= Number(r.version)) continue;
+      const manifest = JSON.parse(String(r.declared_q_json)) as {
+        title: string; declared_queries: QueryT[]; declared_writes: string[];
+      };
+      out.push({
+        panel_id: String(r.panel_id), version: Number(r.version),
+        code: String(r.code),
+        placement: JSON.parse(String(r.placement_json)) as LivePanel["placement"],
+        title: manifest.title,
+        declared_queries: manifest.declared_queries,
+        declared_writes: manifest.declared_writes ?? [],
+      });
+    }
+    return out;
+  }
+
+  /** Last n commit summaries, newest first (S1 context, doc 05 §1). */
+  recentSummaries(n: number): string[] {
+    return this.driver
+      .select("SELECT summary FROM sys.version_log ORDER BY version DESC LIMIT ?", [n])
+      .map(r => String(r.summary));
+  }
+
+  // ---------- attempts (S0/doc 05 §5 analytics) ----------
+  beginAttempt(intent: string): string {
+    const id = uuidv7();
+    this.driver.exec(
+      "INSERT INTO sys.attempts(id, at, intent_text, outcome, error_code) VALUES (?, ?, ?, 'pending', NULL)",
+      [id, nowIso(), intent]);
+    return id;
+  }
+
+  finishAttempt(id: string, outcome: string, errorCode: string | null = null): void {
+    this.driver.exec(
+      "UPDATE sys.attempts SET outcome = ?, error_code = ? WHERE id = ?",
+      [outcome, errorCode, id]);
+  }
+
+  /** Independent full copy for the S4 shadow dry-run (doc 05 §1). */
+  async shadowCopy(): Promise<ClayStore> {
+    const copy = new ClayStore(await this.driver.snapshot());
+    copy.loadRegistry();
+    return copy;
   }
 
   /** Apply inverses current..K+1. With truncate, the chain above K is discarded. */
@@ -160,8 +290,11 @@ export class ClayStore {
             applyInverseOps(this.driver, this.reg, entry.migration.inverse);
         }
         this.persistRegistry(target);
-        if (opts.truncate)
+        if (opts.truncate) {
           this.driver.exec("DELETE FROM sys.version_log WHERE version > ?", [target]);
+          this.driver.exec("DELETE FROM sys.panel_blobs WHERE version > ?", [target]);
+          this.driver.exec("DELETE FROM sys.panel_tombstones WHERE version > ?", [target]);
+        }
         this.setCurrentVersion(target);
       });
     } catch (e) {
