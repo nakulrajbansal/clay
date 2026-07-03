@@ -290,13 +290,15 @@ function buildForm(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
   }
 
   const submit = el(ctx, "button", "clay-button clay-form-submit") as HTMLButtonElement;
-  submit.type = "submit";
+  // type=button, NOT submit: the panel sandbox is allow-scripts only, and
+  // browsers block native form submission there (no allow-forms — kept
+  // that way on purpose, doc 06 §2). Values are collected by hand.
+  submit.type = "button";
   submit.textContent = String(props.submitLabel ?? "Save");
   form.appendChild(submit);
 
   const onSubmit = props.onSubmit;
-  form.addEventListener("submit", (e) => {
-    e.preventDefault();
+  const doSubmit = (): void => {
     if (typeof onSubmit !== "function") return;
     const values: Record<string, unknown> = {};
     for (const [name, { spec, input }] of controls) {
@@ -307,6 +309,16 @@ function buildForm(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
       else values[name] = input.value;
     }
     (onSubmit as (v: Record<string, unknown>) => void)(values);
+  };
+  submit.addEventListener("click", doSubmit);
+  form.addEventListener("submit", (e) => { e.preventDefault(); doSubmit(); });
+  form.addEventListener("keydown", (e) => {
+    const key = (e as KeyboardEvent).key;
+    const target = e.target as HTMLElement | null;
+    if (key === "Enter" && target?.tagName !== "TEXTAREA") {
+      e.preventDefault();
+      doSubmit();
+    }
   });
   return form;
 }

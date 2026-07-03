@@ -29,6 +29,19 @@
   (kept|discarded|failed): 'pending' (row created at S0 intake per doc 05)
   and 'clarify' (the §5 clarify-rate metric needs it). TEXT column, no
   migration impact; doc comment correction candidate.
+- Q21 mutation-plan-api.json corrected (2026-07-03) after the first real
+  API call 400'd: the structured-outputs subset requires EVERY object to
+  be closed (additionalProperties:false) and rejects type arrays
+  (nullability must use anyOf). G1's "migration ops as loosely-typed
+  objects" is therefore not expressible — ops/queries/conditions are now
+  fully-but-generously typed closed objects (op names left as free
+  strings; Zod remains the correctness gate). This is the new byte-stable
+  baseline; a test enforces the subset constraints and validates all ten
+  exemplars against the grammar.
+- Q22 Panel iframes are sandbox=allow-scripts only, so native form
+  submission is blocked by the browser (no allow-forms — deliberate).
+  Form components submit via plain button click + Enter handling instead;
+  worth a line in doc 03 §2's Form contract.
 - Q20 Chart is a dependency-free SVG renderer inside the PanelRuntime.
   Doc 03 §2 only binds the spec-object contract ("kernel wraps the chart
   lib"), which it satisfies; doc 06 §6 mentions SRI on "the chart lib"

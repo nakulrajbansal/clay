@@ -148,7 +148,9 @@ export class MutationClient {
     });
     const text = await res.text();
     if (!res.ok)
-      throw new MutationRequestError("E_MODEL", `anthropic ${res.status}`, text.slice(0, 500));
+      // include the response body: the API's own message is the diagnosis
+      throw new MutationRequestError("E_MODEL",
+        `anthropic ${res.status}: ${text.slice(0, 400)}`);
     const parsed = JSON.parse(text) as AnthropicResponse;
     const block = parsed.content?.find(c => c.type === "text");
     if (!block?.text)
@@ -173,7 +175,8 @@ export class MutationClient {
     });
     const text = await res.text();
     if (!res.ok)
-      throw new MutationRequestError("E_MODEL", `backend ${res.status}`, text.slice(0, 500));
+      throw new MutationRequestError("E_MODEL",
+        `backend ${res.status}: ${text.slice(0, 400)}`);
     return text;
   }
 }

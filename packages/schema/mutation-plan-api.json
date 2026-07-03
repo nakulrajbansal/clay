@@ -1,5 +1,5 @@
 {
-  "$comment": "SIMPLIFIED MutationPlan for API structured output (gap G1/ADR-013). Grammar guarantees parseability; full Zod schema (index.ts) guarantees correctness client-side. Keep byte-stable for grammar caching.",
+  "$comment": "SIMPLIFIED MutationPlan for API structured output (G1/ADR-013, corrected per Q21). The grammar guarantees parseability; full Zod (index.ts) guarantees correctness client-side. Constraints of the structured-outputs subset: EVERY object is closed (additionalProperties:false), nullability via anyOf (no type arrays), no recursion. Keep byte-stable for grammar caching.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -11,22 +11,27 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "kind": { "type": "string", "enum": ["add_field","change_field","add_panel","change_panel","remove_panel","add_status","add_computed","add_chart"] },
+          "kind": { "type": "string", "enum": ["add_field", "change_field", "add_panel", "change_panel", "remove_panel", "add_status", "add_computed", "add_chart"] },
           "detail": { "type": "string" }
         },
         "required": ["kind", "detail"]
       }
     },
-    "clarifying_question": { "type": ["string", "null"] },
+    "clarifying_question": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
     "assumptions": { "type": "array", "items": { "type": "string" } },
     "migration": {
-      "type": ["object", "null"],
-      "additionalProperties": false,
-      "properties": {
-        "operations": { "type": "array", "items": { "type": "object" } },
-        "inverse": { "type": "array", "items": { "type": "object" } }
-      },
-      "required": ["operations", "inverse"]
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "operations": { "type": "array", "items": { "$ref": "#/$defs/op" } },
+            "inverse": { "type": "array", "items": { "$ref": "#/$defs/op" } }
+          },
+          "required": ["operations", "inverse"]
+        },
+        { "type": "null" }
+      ]
     },
     "panels": {
       "type": "array",
@@ -36,9 +41,17 @@
         "properties": {
           "panel_id": { "type": "string" },
           "title": { "type": "string" },
-          "placement": { "type": "object" },
+          "placement": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "region": { "type": "string", "enum": ["top", "main", "side"] },
+              "order": { "type": "number" }
+            },
+            "required": ["region", "order"]
+          },
           "code": { "type": "string" },
-          "declared_queries": { "type": "array", "items": { "type": "object" } },
+          "declared_queries": { "type": "array", "items": { "$ref": "#/$defs/query" } },
           "declared_writes": { "type": "array", "items": { "type": "string" } }
         },
         "required": ["panel_id", "title", "placement", "code", "declared_queries"]
@@ -47,5 +60,100 @@
     "remove_panels": { "type": "array", "items": { "type": "string" } },
     "confidence": { "type": "number" }
   },
-  "required": ["api","summary","user_facing_diff","clarifying_question","assumptions","migration","panels","remove_panels","confidence"]
+  "required": ["api", "summary", "user_facing_diff", "clarifying_question", "assumptions", "migration", "panels", "remove_panels", "confidence"],
+  "$defs": {
+    "scalar": { "anyOf": [{ "type": "string" }, { "type": "number" }, { "type": "boolean" }] },
+    "columnSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "required": { "type": "boolean" },
+        "values": { "type": "array", "items": { "type": "string" } },
+        "expr": { "type": "string" },
+        "pk": { "type": "boolean" }
+      },
+      "required": ["name", "type"]
+    },
+    "op": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "op": { "type": "string" },
+        "table": { "type": "string" },
+        "column": { "anyOf": [{ "type": "string" }, { "$ref": "#/$defs/columnSpec" }] },
+        "columns": { "type": "array", "items": { "$ref": "#/$defs/columnSpec" } },
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "value": { "$ref": "#/$defs/scalar" },
+        "expr": { "type": "string" },
+        "required": { "type": "boolean" },
+        "default_for_existing": { "$ref": "#/$defs/scalar" }
+      },
+      "required": ["op", "table"]
+    },
+    "condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "field": { "type": "string" },
+        "op": { "type": "string" },
+        "value": {
+          "anyOf": [
+            { "type": "string" },
+            { "type": "number" },
+            { "type": "boolean" },
+            { "type": "array", "items": { "anyOf": [{ "type": "string" }, { "type": "number" }] } },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": { "$var": { "type": "boolean" } },
+              "required": ["$var"]
+            }
+          ]
+        }
+      },
+      "required": ["field", "op"]
+    },
+    "query": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "from": { "type": "string" },
+        "select": { "type": "array", "items": { "type": "string" } },
+        "where": { "type": "array", "items": { "$ref": "#/$defs/condition" } },
+        "orWhere": { "type": "array", "items": { "type": "array", "items": { "$ref": "#/$defs/condition" } } },
+        "orderBy": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "field": { "type": "string" },
+              "dir": { "type": "string", "enum": ["asc", "desc"] }
+            },
+            "required": ["field", "dir"]
+          }
+        },
+        "groupBy": { "type": "array", "items": { "type": "string" } },
+        "aggregate": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "fn": { "type": "string", "enum": ["count", "sum", "avg", "min", "max"] },
+              "field": { "type": "string" },
+              "as": { "type": "string" }
+            },
+            "required": ["fn", "field", "as"]
+          }
+        },
+        "limit": { "type": "number" },
+        "includeDeleted": { "type": "boolean" }
+      },
+      "required": ["from"]
+    }
+  }
 }
