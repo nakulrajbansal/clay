@@ -120,13 +120,16 @@ export class StoreRpcClient implements AsyncStore {
   registryTables(): Promise<RegTable[]> { return this.call("registryTables", {}); }
 }
 
-/** Adapt a real MessagePort / Worker to MessagePortLike. */
+/** Adapt a real MessagePort / Worker to MessagePortLike. The `never`
+ * parameter keeps this assignable from lib.dom's MessagePort (we only ever
+ * WRITE onmessage). */
 export function portFromMessagePort(p: {
   postMessage(msg: unknown): void;
-  onmessage: ((ev: { data: unknown }) => void) | null;
+  onmessage: ((ev: never) => unknown) | null;
 }): MessagePortLike {
+  const target = p as { onmessage: ((ev: { data: unknown }) => void) | null };
   return {
     send: (msg) => p.postMessage(msg),
-    onMessage: (cb) => { p.onmessage = (ev): void => cb(ev.data); },
+    onMessage: (cb) => { target.onmessage = (ev): void => cb(ev.data); },
   };
 }

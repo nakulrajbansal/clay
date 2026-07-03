@@ -122,6 +122,29 @@ export async function openMemoryDriver(): Promise<DbDriver> {
   return new SqliteWasmDriver(db);
 }
 
+/**
+ * Browser (worker) driver: user.db + system.db in OPFS via the sahpool VFS
+ * (no COOP/COEP requirement). Falls back to in-memory when OPFS is
+ * unavailable — supported but hostile on purpose (doc 04 §8): the shell
+ * shows the "your data will not persist" banner when persistent=false.
+ */
+export async function openBrowserDriver(): Promise<{ driver: DbDriver; persistent: boolean }> {
+  const s = await sqlite3();
+  try {
+    type PoolUtil = { OpfsSAHPoolDb: new (filename: string) => Database };
+    const withPool = s as unknown as {
+      installOpfsSAHPoolVfs(opts?: { name?: string }): Promise<PoolUtil>;
+    };
+    const pool = await withPool.installOpfsSAHPoolVfs({});
+    const db = new pool.OpfsSAHPoolDb("/user.db");
+    db.exec("PRAGMA foreign_keys = ON");
+    db.exec("ATTACH 'file:/system.db?vfs=opfs-sahpool' AS sys");
+    return { driver: new SqliteWasmDriver(db), persistent: true };
+  } catch {
+    return { driver: await openMemoryDriver(), persistent: false };
+  }
+}
+
 export const SYSTEM_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS sys.tables_registry(
   table_name TEXT PRIMARY KEY, version INTEGER NOT NULL,

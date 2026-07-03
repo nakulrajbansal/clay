@@ -3,6 +3,8 @@
   "private": true,
   "packageManager": "pnpm@11.9.0",
   "scripts": {
+    "dev": "pnpm --filter @clay/shell dev",
+    "build": "pnpm --filter @clay/shell build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test"
   }

@@ -48,6 +48,47 @@ function inferScope(scope: Record<string, ExprValue>): ExprScope {
   return out;
 }
 
+type PanelMain = (clay: unknown) => unknown;
+
+/**
+ * Load the panel module. Browser path (doc 06 §2): Blob URL + dynamic
+ * import under the srcdoc CSP (script-src 'unsafe-inline' blob:), with
+ * h/components published as globals first. Test/jsdom fallback: a Function
+ * wrapper with the same scope — identical semantics for the canonical
+ * single-default-export panels the Validator enforces (V1).
+ */
+async function evaluatePanelModule(code: string): Promise<PanelMain> {
+  const globals: Record<string, unknown> = { ...PANEL_GLOBALS, h };
+  if (typeof URL !== "undefined" && typeof Blob !== "undefined"
+      && typeof URL.createObjectURL === "function") {
+    try {
+      for (const [k, v] of Object.entries(globals))
+        (globalThis as Record<string, unknown>)[k] = v;
+      const url = URL.createObjectURL(new Blob([code], { type: "text/javascript" }));
+      try {
+        const mod = await import(/* @vite-ignore */ url) as { default?: unknown };
+        if (typeof mod.default !== "function")
+          throw new PanelRuntimeError("E_RENDER", "module has no default function");
+        return mod.default as PanelMain;
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    } catch (e) {
+      if (e instanceof PanelRuntimeError) throw e;
+      // jsdom and older engines can't import blob modules — fall through
+    }
+  }
+  const names = Object.keys(globals);
+  const body = code.replace(/export\s+default/, "return ");
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval
+  const factory = new Function(...names, `"use strict";\n${body}`) as
+    (...args: unknown[]) => unknown;
+  const main = factory(...names.map(n => globals[n]));
+  if (typeof main !== "function")
+    throw new PanelRuntimeError("E_RENDER", "module has no default function");
+  return main as PanelMain;
+}
+
 export type PanelRuntimeOptions = {
   port: PortLike;
   container: Element;
@@ -142,20 +183,14 @@ export function bootPanelRuntime(opts: PanelRuntimeOptions): void {
     };
 
     // Evaluate the module with h + component markers in scope, then invoke.
-    try {
-      const globals: Record<string, unknown> = { ...PANEL_GLOBALS, h };
-      const names = Object.keys(globals);
-      const body = boot.code.replace(/export\s+default/, "return ");
-      // eslint-disable-next-line @typescript-eslint/no-implied-eval
-      const factory = new Function(...names, `"use strict";\n${body}`) as
-        (...args: unknown[]) => (c: unknown) => unknown;
-      const main = factory(...names.map(n => globals[n]));
-      if (typeof main !== "function")
-        throw new PanelRuntimeError("E_RENDER", "module has no default function");
-      main(clay);
-    } catch (e) {
-      reportError(e);
-    }
+    void (async () => {
+      try {
+        const main = await evaluatePanelModule(boot.code);
+        main(clay);
+      } catch (e) {
+        reportError(e);
+      }
+    })();
   }
 
   port.onMessage((raw) => {

@@ -71,7 +71,11 @@ export class ClayStore {
   private constructor(private readonly driver: DbDriver) {}
 
   static async openMemory(): Promise<ClayStore> {
-    const driver = await openMemoryDriver();
+    return ClayStore.fromDriver(await openMemoryDriver());
+  }
+
+  /** Bind a store to an already-open driver (browser worker, imports). */
+  static fromDriver(driver: DbDriver): ClayStore {
     createSystemTables(driver);
     const store = new ClayStore(driver);
     store.loadRegistry();
