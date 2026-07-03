@@ -29,6 +29,13 @@
   (kept|discarded|failed): 'pending' (row created at S0 intake per doc 05)
   and 'clarify' (the §5 clarify-rate metric needs it). TEXT column, no
   migration impact; doc comment correction candidate.
+- Q20 Chart is a dependency-free SVG renderer inside the PanelRuntime.
+  Doc 03 §2 only binds the spec-object contract ("kernel wraps the chart
+  lib"), which it satisfies; doc 06 §6 mentions SRI on "the chart lib"
+  (chart.js in CLAUDE.md's dep list). Bundling chart.js into the sandboxed
+  bootstrap under the srcdoc CSP is nontrivial — decide whether the SVG
+  renderer stays (zero deps, smaller attack surface) or chart.js lands in
+  W4 polish. Until decided, the dependency budget is UNDER spec, not over.
 
 ## P0 verification pass (2026-07-02) — exemplars/schema/shells vs docs 03-06
 

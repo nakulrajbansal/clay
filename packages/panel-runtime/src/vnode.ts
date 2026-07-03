@@ -84,7 +84,12 @@ function formatCell(value: unknown, format: unknown): string {
 }
 
 // ---------- renderer ----------
-type Ctx = { doc: Document };
+/** Registry snapshot shape delivered at boot (backs fromSchema, G25). */
+export type SchemaTable = {
+  name: string;
+  columns: { name: string; type: string; values?: string[] }[];
+};
+type Ctx = { doc: Document; schema: SchemaTable[] };
 
 function el(ctx: Ctx, tag: string, className?: string): HTMLElement {
   const node = ctx.doc.createElement(tag);
@@ -182,12 +187,244 @@ function buildComponent(ctx: Ctx, node: VNode): HTMLElement {
       card.append(label, value);
       return card;
     }
-    case Chart: case Form: case Field: case Input: case Select:
-    case DatePicker: case Checkbox: case Toggle: case FilterBar:
-      throw new Error(`E_RENDER: component ${tag} lands in W2`);
+    case Form: return buildForm(ctx, props);
+    case FilterBar: return buildFilterBar(ctx, props);
+    case Chart: return buildChart(ctx, props);
+    case Field: {
+      const wrap = el(ctx, "label", "clay-field");
+      const span = el(ctx, "span", "clay-field-label");
+      span.textContent = String(props.label ?? "");
+      wrap.appendChild(span);
+      return wrap;
+    }
+    case Input: return buildControl(ctx, "text", props);
+    case DatePicker: return buildControl(ctx, "date", props);
+    case Checkbox: case Toggle: return buildControl(ctx, "checkbox", props);
+    case Select: {
+      const select = buildSelect(ctx,
+        (Array.isArray(props.options) ? props.options : []) as FieldOption[],
+        props.value);
+      const onChange = props.onChange;
+      if (typeof onChange === "function")
+        select.addEventListener("change", () =>
+          (onChange as (v: string) => void)(select.value));
+      return select;
+    }
     default:
       throw new Error(`E_RENDER: unknown tag '${tag}'`);
   }
+}
+
+// ---------- form vocabulary (doc 03 §2 + G25 FieldSpec) ----------
+type FieldOption = { value: string; label?: string };
+type FieldSpec = {
+  name: string; label?: string;
+  kind?: "text" | "number" | "date" | "select" | "checkbox";
+  options?: FieldOption[];
+  fromSchema?: string;          // "table.column" -> registry enum (G25)
+  required?: boolean;
+};
+
+function schemaOptions(ctx: Ctx, ref: string): FieldOption[] {
+  const [table, column] = ref.split(".");
+  const col = ctx.schema.find(t => t.name === table)
+    ?.columns.find(c => c.name === column);
+  return (col?.values ?? []).map(v => ({ value: v, label: v }));
+}
+
+function buildSelect(ctx: Ctx, options: FieldOption[], value: unknown): HTMLSelectElement {
+  const select = el(ctx, "select", "clay-select") as HTMLSelectElement;
+  for (const o of options) {
+    const opt = el(ctx, "option") as HTMLOptionElement;
+    opt.value = o.value;
+    opt.textContent = o.label ?? o.value;
+    select.appendChild(opt);
+  }
+  if (typeof value === "string") select.value = value;
+  return select;
+}
+
+function buildControl(ctx: Ctx, type: string, props: Record<string, unknown>): HTMLInputElement {
+  const input = el(ctx, "input", "clay-input") as HTMLInputElement;
+  input.type = type;
+  if (typeof props.placeholder === "string") input.placeholder = props.placeholder;
+  if (type === "checkbox") input.checked = props.checked === true;
+  else if (props.value !== undefined && props.value !== null) input.value = String(props.value);
+  const onChange = props.onChange;
+  if (typeof onChange === "function")
+    input.addEventListener("change", () =>
+      (onChange as (v: unknown) => void)(type === "checkbox" ? input.checked : input.value));
+  return input;
+}
+
+function buildForm(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
+  const fields = (Array.isArray(props.fields) ? props.fields : []) as FieldSpec[];
+  const initial = (props.initial ?? {}) as Record<string, unknown>;
+  const form = el(ctx, "form", "clay-form") as HTMLFormElement;
+  const controls = new Map<string, { spec: FieldSpec; input: HTMLInputElement | HTMLSelectElement }>();
+
+  for (const spec of fields) {
+    const wrap = el(ctx, "label", "clay-field");
+    const span = el(ctx, "span", "clay-field-label");
+    span.textContent = spec.label ?? spec.name;
+    wrap.appendChild(span);
+    const kind = spec.kind ?? "text";
+    let input: HTMLInputElement | HTMLSelectElement;
+    if (kind === "select") {
+      const options = spec.fromSchema
+        ? schemaOptions(ctx, spec.fromSchema)
+        : (spec.options ?? []);
+      input = buildSelect(ctx,
+        [{ value: "", label: "—" }, ...options], initial[spec.name]);
+    } else {
+      input = buildControl(ctx,
+        kind === "number" ? "number" : kind === "date" ? "date"
+          : kind === "checkbox" ? "checkbox" : "text", {});
+      if (kind === "checkbox") (input as HTMLInputElement).checked = initial[spec.name] === true;
+      else if (initial[spec.name] !== undefined) input.value = String(initial[spec.name]);
+    }
+    input.setAttribute("name", spec.name);
+    wrap.appendChild(input);
+    form.appendChild(wrap);
+    controls.set(spec.name, { spec, input });
+  }
+
+  const submit = el(ctx, "button", "clay-button clay-form-submit") as HTMLButtonElement;
+  submit.type = "submit";
+  submit.textContent = String(props.submitLabel ?? "Save");
+  form.appendChild(submit);
+
+  const onSubmit = props.onSubmit;
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    if (typeof onSubmit !== "function") return;
+    const values: Record<string, unknown> = {};
+    for (const [name, { spec, input }] of controls) {
+      const kind = spec.kind ?? "text";
+      if (kind === "checkbox") values[name] = (input as HTMLInputElement).checked;
+      else if (input.value === "") continue;   // omit untouched optionals
+      else if (kind === "number") values[name] = Number(input.value);
+      else values[name] = input.value;
+    }
+    (onSubmit as (v: Record<string, unknown>) => void)(values);
+  });
+  return form;
+}
+
+function buildFilterBar(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
+  type FilterSpec = { field: string; kind: "select" | "search" | "daterange";
+    options?: FieldOption[] };
+  const filters = (Array.isArray(props.filters) ? props.filters : []) as FilterSpec[];
+  const onChange = props.onChange;
+  const bar = el(ctx, "div", "clay-filterbar");
+  const state: Record<string, unknown> = {};
+  const emit = (): void => {
+    if (typeof onChange === "function")
+      (onChange as (s: Record<string, unknown>) => void)({ ...state });
+  };
+  for (const f of filters) {
+    if (f.kind === "select") {
+      const select = buildSelect(ctx, f.options ?? [], undefined);
+      select.setAttribute("name", f.field);
+      select.addEventListener("change", () => { state[f.field] = select.value; emit(); });
+      bar.appendChild(select);
+    } else if (f.kind === "search") {
+      const input = buildControl(ctx, "search", { placeholder: f.field });
+      input.setAttribute("name", f.field);
+      input.addEventListener("input", () => { state[f.field] = input.value; emit(); });
+      bar.appendChild(input);
+    } else {
+      const from = buildControl(ctx, "date", {});
+      const to = buildControl(ctx, "date", {});
+      const update = (): void => {
+        state[f.field] = { from: from.value, to: to.value }; emit();
+      };
+      from.addEventListener("change", update);
+      to.addEventListener("change", update);
+      bar.append(from, to);
+    }
+  }
+  return bar;
+}
+
+// ---------- Chart: dependency-free SVG renderer ----------
+// Doc 03 §2: panels declare a spec; the kernel draws it. This SVG renderer
+// satisfies the contract without a chart library in the sandbox; swapping
+// in an SRI-pinned chart lib (doc 06 §6) is tracked as OPEN-QUESTIONS Q20.
+const SVG_NS = "http://www.w3.org/2000/svg";
+const CHART_W = 400;
+const MAX_POINTS = 200;
+
+function buildChart(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
+  const kind = typeof props.kind === "string" ? props.kind : "bar";
+  const height = typeof props.height === "number" ? props.height : 200;
+  const data = (Array.isArray(props.data) ? props.data : [])
+    .filter((d): d is { x: unknown; y: number } =>
+      typeof d === "object" && d !== null && typeof (d as { y: unknown }).y === "number")
+    .slice(0, MAX_POINTS);
+
+  const wrap = el(ctx, "figure", "clay-chart");
+  const svg = ctx.doc.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", `0 0 ${CHART_W} ${height}`);
+  svg.setAttribute("role", "img");
+  wrap.appendChild(svg);
+  if (data.length === 0) return wrap;
+
+  const maxY = Math.max(...data.map(d => d.y), 0) || 1;
+  const pad = 4;
+  const plotH = height - pad * 2;
+  const yFor = (y: number): number => pad + plotH - (Math.max(y, 0) / maxY) * plotH;
+
+  if (kind === "pie") {
+    const total = data.reduce((s, d) => s + Math.max(d.y, 0), 0) || 1;
+    const cx = CHART_W / 2; const cy = height / 2;
+    const r = Math.min(cx, cy) - pad;
+    let angle = -Math.PI / 2;
+    for (const d of data) {
+      const sweep = (Math.max(d.y, 0) / total) * Math.PI * 2;
+      const x1 = cx + r * Math.cos(angle); const y1 = cy + r * Math.sin(angle);
+      angle += sweep;
+      const x2 = cx + r * Math.cos(angle); const y2 = cy + r * Math.sin(angle);
+      const path = ctx.doc.createElementNS(SVG_NS, "path");
+      path.setAttribute("d",
+        `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${sweep > Math.PI ? 1 : 0} 1 ${x2} ${y2} Z`);
+      path.setAttribute("class", "clay-chart-slice");
+      const title = ctx.doc.createElementNS(SVG_NS, "title");
+      title.textContent = `${String(d.x)}: ${d.y}`;
+      path.appendChild(title);
+      svg.appendChild(path);
+    }
+    return wrap;
+  }
+
+  if (kind === "line" || kind === "area") {
+    const step = data.length > 1 ? (CHART_W - pad * 2) / (data.length - 1) : 0;
+    const points = data.map((d, i) => `${pad + i * step},${yFor(d.y)}`);
+    const node = ctx.doc.createElementNS(SVG_NS, kind === "area" ? "polygon" : "polyline");
+    const path = kind === "area"
+      ? `${pad},${yFor(0)} ${points.join(" ")} ${pad + (data.length - 1) * step},${yFor(0)}`
+      : points.join(" ");
+    node.setAttribute("points", path);
+    node.setAttribute("class", `clay-chart-${kind}`);
+    svg.appendChild(node);
+    return wrap;
+  }
+
+  // bar (default)
+  const slot = (CHART_W - pad * 2) / data.length;
+  data.forEach((d, i) => {
+    const rect = ctx.doc.createElementNS(SVG_NS, "rect");
+    rect.setAttribute("x", String(pad + i * slot + slot * 0.1));
+    rect.setAttribute("width", String(slot * 0.8));
+    rect.setAttribute("y", String(yFor(d.y)));
+    rect.setAttribute("height", String(Math.max(yFor(0) - yFor(d.y), 0)));
+    rect.setAttribute("class", "clay-chart-bar");
+    const title = ctx.doc.createElementNS(SVG_NS, "title");
+    title.textContent = `${String(d.x)}: ${d.y}`;
+    rect.appendChild(title);
+    svg.appendChild(rect);
+  });
+  return wrap;
 }
 
 function build(ctx: Ctx, child: VChild): Node | null {
@@ -210,8 +447,12 @@ function build(ctx: Ctx, child: VChild): Node | null {
   return node;
 }
 
-export function render(vnode: VChild, container: Element): void {
+export function render(
+  vnode: VChild,
+  container: Element,
+  opts: { schema?: SchemaTable[] } = {},
+): void {
   const doc = container.ownerDocument;
-  const built = build({ doc }, vnode);
+  const built = build({ doc, schema: opts.schema ?? [] }, vnode);
   container.replaceChildren(...(built ? [built] : []));
 }

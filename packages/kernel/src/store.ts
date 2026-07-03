@@ -112,17 +112,27 @@ export class ClayStore {
   }
 
   currentVersion(): number {
-    const rows = this.driver.select(
-      "SELECT value_json FROM sys.settings WHERE key = 'current_version'");
-    const raw = rows[0]?.value_json;
-    return raw === undefined ? this.headVersion() : Number(JSON.parse(String(raw)));
+    const v = this.getSetting<number>("current_version");
+    return v === undefined ? this.headVersion() : v;
   }
 
   private setCurrentVersion(v: number): void {
+    this.setSetting("current_version", v);
+  }
+
+  // ---------- settings (doc 04 §3: mode, byo key, sample markers, …) ----------
+  getSetting<T>(key: string): T | undefined {
+    const rows = this.driver.select(
+      "SELECT value_json FROM sys.settings WHERE key = ?", [key]);
+    const raw = rows[0]?.value_json;
+    return raw === undefined ? undefined : JSON.parse(String(raw)) as T;
+  }
+
+  setSetting(key: string, value: unknown): void {
     this.driver.exec(
-      `INSERT INTO sys.settings(key, value_json) VALUES ('current_version', ?)
+      `INSERT INTO sys.settings(key, value_json) VALUES (?, ?)
        ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json`,
-      [JSON.stringify(v)]);
+      [key, JSON.stringify(value)]);
   }
 
   getEntry(version: number): VersionEntry {

@@ -11,7 +11,7 @@
 // arrives with the shell (W2).
 import { compileExpr, evalExpr, parseExpr, typecheckExpr } from "@clay/kernel/expr";
 import type { ExprScope, ExprValue } from "@clay/kernel/expr";
-import { PANEL_GLOBALS, h, render, type VChild } from "./vnode";
+import { PANEL_GLOBALS, h, render, type SchemaTable, type VChild } from "./vnode";
 
 export type PortLike = {
   send(msg: unknown): void;
@@ -102,7 +102,9 @@ export function bootPanelRuntime(opts: PanelRuntimeOptions): void {
         softDelete: (table: unknown, id: unknown) => call("db.softDelete", [table, id]),
       },
       ui: {
-        render: (vnode: VChild): void => { render(vnode, container); },
+        render: (vnode: VChild): void => {
+          render(vnode, container, { schema: boot.meta.schema as SchemaTable[] });
+        },
         toast: (msg: unknown, kind?: unknown): void => {
           call("ui.toast", kind === undefined ? [msg] : [msg, kind]).catch(reportError);
         },

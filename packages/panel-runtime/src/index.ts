@@ -2,7 +2,7 @@ export {
   h, render, resolveBadgeTone, PANEL_GLOBALS,
   Table, Chart, MetricCard, Badge, Form, Field, Button, Input, Select,
   DatePicker, Checkbox, Toggle, EmptyState, Stack, Grid, FilterBar,
-  type VChild, type VNode,
+  type SchemaTable, type VChild, type VNode,
 } from "./vnode";
 export {
   bootPanelRuntime, PanelRuntimeError,
