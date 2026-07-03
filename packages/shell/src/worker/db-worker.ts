@@ -5,7 +5,7 @@
 // Records never leave this worker except over those ports to the Bridge.
 import {
   ClayStore, MutationPipeline, openBrowserDriver, portFromMessagePort,
-  serveStore, type LivePanel, type PreviewHandle,
+  serveStore, wipeBrowserStorage, type LivePanel, type PreviewHandle,
 } from "@clay/kernel";
 import { MutationClient } from "@clay/mutation";
 import { removeSampleRows, seedStarterShell, type StarterShellId } from "../shells/seed";
@@ -115,6 +115,14 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "removeSamples":
       removeSampleRows(mustStore());
       return null;
+    case "reset": {
+      // P4: deleting the local databases removes all local data.
+      dropPending();
+      store?.close();
+      store = null;
+      await wipeBrowserStorage();
+      return null;
+    }
     case "getSetting":
       return mustStore().getSetting(String(p.key)) ?? null;
     case "setSetting":

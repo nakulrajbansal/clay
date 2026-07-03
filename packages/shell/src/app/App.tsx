@@ -129,6 +129,14 @@ export function App(): React.JSX.Element {
     pushToast("API key saved locally", "success");
   };
 
+  const resetApp = async (): Promise<void> => {
+    if (!window.confirm(
+      "Erase this app and start over? All data in it is deleted. "
+      + "This is the one action Clay cannot undo.")) return;
+    await client().reset();
+    window.location.reload();
+  };
+
   const removeSamples = async (): Promise<void> => {
     await client().removeSamples();
     liveBridge?.notifyWrite("items");
@@ -204,6 +212,7 @@ export function App(): React.JSX.Element {
         onDiscard={() => void discard()}
         onSaveKey={k => void saveKey(k)}
         onRemoveSamples={() => void removeSamples()}
+        onReset={() => void resetApp()}
       />
       <div className="toasts">
         {toasts.map(t => (

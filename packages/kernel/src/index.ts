@@ -12,7 +12,7 @@ export {
   type ColumnKind, type RegColumn, type RegTable, type Registry,
 } from "./registry";
 export {
-  createSystemTables, openBrowserDriver, openMemoryDriver,
+  createSystemTables, openBrowserDriver, openMemoryDriver, wipeBrowserStorage,
   type DbDriver, type SqlRow, type SqlValue,
 } from "./db";
 export { compileQuery, runQuery, type CompiledQuery, type QueryRow } from "./query";

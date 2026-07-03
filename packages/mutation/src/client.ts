@@ -51,7 +51,11 @@ export class MutationClient {
   readonly systemPrompt: string;
 
   constructor(private readonly transport: Transport, opts: MutationClientOptions = {}) {
-    this.fetchFn = opts.fetchFn ?? (fetch as unknown as FetchLike);
+    // fetch must stay bound to the global scope — storing it unbound and
+    // calling this.fetchFn(...) throws "Illegal invocation" in browsers.
+    this.fetchFn = opts.fetchFn
+      ?? ((url, init): ReturnType<FetchLike> =>
+        (fetch as unknown as FetchLike)(url, init));
     this.modelRepair = opts.modelRepair ?? false;
     this.systemPrompt = buildSystemPrompt();
   }

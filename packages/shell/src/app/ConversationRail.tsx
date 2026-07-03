@@ -22,6 +22,7 @@ export function ConversationRail(props: {
   onDiscard: () => void;
   onSaveKey: (key: string) => void;
   onRemoveSamples: () => void;
+  onReset: () => void;
 }): React.JSX.Element {
   const [text, setText] = useState("");
   const [keyDraft, setKeyDraft] = useState("");
@@ -64,6 +65,9 @@ export function ConversationRail(props: {
             </button>
             <button className="link" onClick={props.onRemoveSamples}>
               Remove sample rows
+            </button>
+            <button className="link danger" onClick={props.onReset}>
+              Start over…
             </button>
           </div>
         </div>

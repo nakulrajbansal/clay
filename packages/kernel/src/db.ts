@@ -128,14 +128,20 @@ export async function openMemoryDriver(): Promise<DbDriver> {
  * unavailable — supported but hostile on purpose (doc 04 §8): the shell
  * shows the "your data will not persist" banner when persistent=false.
  */
+type PoolUtil = {
+  OpfsSAHPoolDb: new (filename: string) => Database;
+  wipeFiles(): Promise<number>;
+};
+let activePool: PoolUtil | null = null;
+
 export async function openBrowserDriver(): Promise<{ driver: DbDriver; persistent: boolean }> {
   const s = await sqlite3();
   try {
-    type PoolUtil = { OpfsSAHPoolDb: new (filename: string) => Database };
     const withPool = s as unknown as {
       installOpfsSAHPoolVfs(opts?: { name?: string }): Promise<PoolUtil>;
     };
     const pool = await withPool.installOpfsSAHPoolVfs({});
+    activePool = pool;
     const db = new pool.OpfsSAHPoolDb("/user.db");
     db.exec("PRAGMA foreign_keys = ON");
     db.exec("ATTACH 'file:/system.db?vfs=opfs-sahpool' AS sys");
@@ -143,6 +149,14 @@ export async function openBrowserDriver(): Promise<{ driver: DbDriver; persisten
   } catch {
     return { driver: await openMemoryDriver(), persistent: false };
   }
+}
+
+/** Erase the OPFS databases (G14-adjacent "start over"; caller closes the
+ * store first and reboots). Returns false when nothing was persistent. */
+export async function wipeBrowserStorage(): Promise<boolean> {
+  if (!activePool) return false;
+  await activePool.wipeFiles();
+  return true;
 }
 
 export const SYSTEM_SCHEMA_SQL = `

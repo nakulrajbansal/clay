@@ -36,6 +36,7 @@ export class WorkerClient {
   keep(): Promise<{ version: number }> { return this.call("keep"); }
   discard(): Promise<null> { return this.call("discard"); }
   removeSamples(): Promise<null> { return this.call("removeSamples"); }
+  reset(): Promise<null> { return this.call("reset"); }
   getSetting<T>(key: string): Promise<T | null> { return this.call("getSetting", { key }); }
   setSetting(key: string, value: unknown): Promise<null> {
     return this.call("setSetting", { key, value });

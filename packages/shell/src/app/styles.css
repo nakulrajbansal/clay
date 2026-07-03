@@ -12,6 +12,7 @@ button.primary {
 }
 button.primary:disabled { opacity: .4; cursor: default; }
 button.link { border: 0; background: none; color: #57534e; text-decoration: underline; padding: 0; }
+button.link.danger { color: #991b1b; }
 
 .boot { display: grid; place-items: center; height: 100%; color: #78716c; }
 
