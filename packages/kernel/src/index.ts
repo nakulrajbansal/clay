@@ -23,7 +23,8 @@ export {
 } from "./migrate";
 export {
   ClayStore,
-  type CommitInput, type LivePanel, type PanelBlobInput, type VersionEntry,
+  type CommitInput, type HistoryEntry, type LivePanel, type PanelBlobInput,
+  type VersionEntry,
 } from "./store";
 export {
   MutationPipeline, defaultSmokeTest,

@@ -59,6 +59,16 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       return null;
     case "panels":
       return mustStore().livePanels();
+    case "history":
+      return mustStore().history();
+    case "panelsAt":
+      return mustStore().livePanels(Number(p.version));
+    case "makeLatest": {
+      // ADR-007: the one destructive-ish operation; the shell warns first.
+      dropPending();
+      mustStore().rollbackTo(Number(p.version), { truncate: true });
+      return mustStore().livePanels();
+    }
     case "registryTables":
       return [...mustStore().registrySnapshot().values()];
     case "storePort": {

@@ -39,11 +39,25 @@ button.link.danger { color: #991b1b; }
 .regions {
   flex: 1; overflow-y: auto; padding: 18px;
   display: grid; gap: 14px;
-  grid-template-areas: "top top" "main side";
+  grid-template-areas: "slider slider" "top top" "main side";
   grid-template-columns: 1fr 280px;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto auto 1fr;
   align-content: start;
 }
+/* time slider */
+.timeslider {
+  grid-area: slider; display: flex; align-items: center; gap: 14px;
+  border: 1px solid #e7e5e4; border-radius: 12px; background: #fff;
+  padding: 10px 14px;
+}
+.timeslider-scrubbed { border-color: #6366f1; background: #eef2ff; }
+.timeslider input[type="range"] { flex: 1; accent-color: #6366f1; }
+.timeslider-info { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.timeslider-version { font-weight: 700; white-space: nowrap; }
+.timeslider-summary { color: #57534e; max-width: 320px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.timeslider-actions { display: flex; gap: 8px; }
+
 .region-top { grid-area: top; display: flex; gap: 14px; flex-wrap: wrap; }
 .region-main { grid-area: main; display: flex; flex-direction: column; gap: 14px; }
 .region-side { grid-area: side; display: flex; flex-direction: column; gap: 14px; }

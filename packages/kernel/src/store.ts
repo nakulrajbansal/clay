@@ -63,6 +63,8 @@ export type VersionEntry = {
   migration: MigrationPlanT | null;
 };
 
+export type HistoryEntry = Omit<VersionEntry, "migration">;
+
 const qid = (name: string): string => `"${name}"`;
 
 export class ClayStore {
@@ -229,10 +231,12 @@ export class ClayStore {
        })]);
   }
 
-  /** Live panels at the current version: latest blob per id, minus panels
-   * whose latest tombstone is newer than their latest blob (doc 04 §5). */
-  livePanels(): LivePanel[] {
-    const v = this.currentVersion();
+  /** Live panels at a version (default: current): latest blob per id, minus
+   * panels whose latest tombstone is newer than their latest blob
+   * (doc 04 §5). Passing an older version powers scrub-preview — panels AT
+   * K rendered against CURRENT data, no inverses run (doc 02 §6). */
+  livePanels(at?: number): LivePanel[] {
+    const v = at ?? this.currentVersion();
     const rows = this.driver.select(
       `SELECT b.panel_id, b.version, b.code, b.placement_json, b.declared_q_json
        FROM sys.panel_blobs b
@@ -260,6 +264,17 @@ export class ClayStore {
       });
     }
     return out;
+  }
+
+  /** The full linear chain, oldest first (history view / time slider). */
+  history(): HistoryEntry[] {
+    return this.driver.select(
+      `SELECT version, parent, created_at, intent_text, summary
+       FROM sys.version_log ORDER BY version`).map(r => ({
+      version: Number(r.version), parent: Number(r.parent),
+      created_at: String(r.created_at), intent_text: String(r.intent_text),
+      summary: String(r.summary),
+    }));
   }
 
   /** Last n commit summaries, newest first (S1 context, doc 05 §1). */

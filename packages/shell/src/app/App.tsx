@@ -4,7 +4,8 @@
 // bound to a SECOND Bridge over the shadow store (preview-before-commit).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Bridge, StoreRpcClient, portFromMessagePort, type LivePanel,
+  Bridge, StoreRpcClient, portFromMessagePort,
+  type HistoryEntry, type LivePanel,
 } from "@clay/kernel";
 import { WorkerClient } from "./worker-client";
 import type { IntentOutcome, PreviewInfo } from "../worker/db-worker";
@@ -12,6 +13,7 @@ import type { StarterShellId } from "../shells/seed";
 import { ConversationRail, type FeedItem } from "./ConversationRail";
 import { Onboarding } from "./Onboarding";
 import { PanelFrame } from "./PanelFrame";
+import { TimeSlider } from "./TimeSlider";
 
 type Phase = "loading" | "onboarding" | "main";
 type Toast = { id: number; msg: string; kind: string };
@@ -31,6 +33,8 @@ export function App(): React.JSX.Element {
   const [phase, setPhase] = useState<Phase>("loading");
   const [persistent, setPersistent] = useState(true);
   const [panels, setPanels] = useState<LivePanel[]>([]);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [scrub, setScrub] = useState<{ version: number; panels: LivePanel[] } | null>(null);
   const [liveBridge, setLiveBridge] = useState<Bridge | null>(null);
   const [shadowBridge, setShadowBridge] = useState<Bridge | null>(null);
   const [preview, setPreview] = useState<PreviewInfo | null>(null);
@@ -53,6 +57,7 @@ export function App(): React.JSX.Element {
 
   const refreshPanels = useCallback(async (): Promise<void> => {
     setPanels(await client().panels());
+    setHistory(await client().history());
   }, []);
 
   // boot
@@ -68,6 +73,7 @@ export function App(): React.JSX.Element {
       if (!boot.seeded) { setPhase("onboarding"); return; }
       setLiveBridge(makeBridge(wc, "live", pushToast));
       setPanels(await wc.panels());
+      setHistory(await wc.history());
       setPhase("main");
     })();
     return (): void => worker.terminate();
@@ -129,6 +135,27 @@ export function App(): React.JSX.Element {
     pushToast("API key saved locally", "success");
   };
 
+  const head = history.length > 0 ? history[history.length - 1]!.version : 0;
+
+  const scrubTo = async (version: number): Promise<void> => {
+    if (version >= head) { setScrub(null); return; }
+    const panelsAt = await client().panelsAt(version);
+    setScrub({ version, panels: panelsAt });
+  };
+
+  const makeLatest = async (): Promise<void> => {
+    if (!scrub) return;
+    const dropped = history.filter(h => h.version > scrub.version).length;
+    if (!window.confirm(
+      `Rewind your app to v${scrub.version}? The ${dropped} newer change${dropped === 1 ? "" : "s"} `
+      + `will be removed from history. Data rows are always kept.`)) return;
+    const fresh = await client().makeLatest(scrub.version);
+    setScrub(null);
+    setPanels(fresh);
+    setHistory(await client().history());
+    setFeed(f => [...f, { kind: "info", text: `Rewound — v${scrub.version} is the latest again.` }]);
+  };
+
   const resetApp = async (): Promise<void> => {
     if (!window.confirm(
       "Erase this app and start over? All data in it is deleted. "
@@ -145,9 +172,12 @@ export function App(): React.JSX.Element {
     pushToast("Sample rows removed", "success");
   };
 
-  // S5: proposed panels render in place (dashed), replacing same-id live
-  // panels; panels slated for removal are ghosted.
+  // Scrub takes precedence (read-only render at K); otherwise S5 merging:
+  // proposed panels render in place (dashed), removals are ghosted.
   const display = useMemo(() => {
+    if (scrub) {
+      return scrub.panels.map(panel => ({ panel, isPreview: false, ghost: false }));
+    }
     const removed = new Set(preview?.removePanels ?? []);
     const proposedIds = new Set((preview?.panels ?? []).map(p => p.panel_id));
     const items: { panel: LivePanel; isPreview: boolean; ghost: boolean }[] = [];
@@ -160,7 +190,7 @@ export function App(): React.JSX.Element {
     return items.sort((a, b) =>
       a.panel.placement.order - b.panel.placement.order
       || a.panel.panel_id.localeCompare(b.panel.panel_id));
-  }, [panels, preview]);
+  }, [panels, preview, scrub]);
 
   if (phase === "loading") return <div className="boot">Opening your app…</div>;
   if (phase === "onboarding") return <Onboarding onPick={id => void pickShell(id)} busy={busy} />;
@@ -198,6 +228,14 @@ export function App(): React.JSX.Element {
         </div>
       ) : null}
       <main className="regions">
+        <TimeSlider
+          history={history}
+          current={scrub?.version ?? head}
+          scrubbed={scrub !== null}
+          disabled={busy || preview !== null}
+          onScrub={v => void scrubTo(v)}
+          onMakeLatest={() => void makeLatest()}
+        />
         <div className="region-top">{region("top")}</div>
         <div className="region-main">{region("main")}</div>
         <div className="region-side">{region("side")}</div>
@@ -205,7 +243,7 @@ export function App(): React.JSX.Element {
       <ConversationRail
         feed={feed}
         preview={preview}
-        busy={busy}
+        busy={busy || scrub !== null}
         hasKey={hasKey}
         onIntent={t => void runIntent(t)}
         onKeep={() => void keep()}

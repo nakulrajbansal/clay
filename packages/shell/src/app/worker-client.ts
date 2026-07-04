@@ -1,5 +1,5 @@
 // Typed promise wrapper over the DB worker's command protocol.
-import type { LivePanel } from "@clay/kernel";
+import type { HistoryEntry, LivePanel } from "@clay/kernel";
 import type { IntentOutcome } from "../worker/db-worker";
 
 export type BootInfo = { persistent: boolean; seeded: boolean; shellId: string | null };
@@ -32,6 +32,9 @@ export class WorkerClient {
   boot(): Promise<BootInfo> { return this.call("boot"); }
   seed(shellId: string): Promise<null> { return this.call("seed", { shellId }); }
   panels(): Promise<LivePanel[]> { return this.call("panels"); }
+  history(): Promise<HistoryEntry[]> { return this.call("history"); }
+  panelsAt(version: number): Promise<LivePanel[]> { return this.call("panelsAt", { version }); }
+  makeLatest(version: number): Promise<LivePanel[]> { return this.call("makeLatest", { version }); }
   intent(text: string): Promise<IntentOutcome> { return this.call("intent", { text }); }
   keep(): Promise<{ version: number }> { return this.call("keep"); }
   discard(): Promise<null> { return this.call("discard"); }
