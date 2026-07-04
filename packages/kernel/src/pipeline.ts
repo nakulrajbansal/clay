@@ -96,7 +96,8 @@ export class MutationPipeline {
       registry: [...this.store.registrySnapshot().values()],
       panels: this.store.livePanels().map(p => {
         const tables = [...new Set(p.declared_queries.map(q => q.from))].join(", ");
-        const targeted = lowered.includes(p.panel_id.replaceAll("_", " "))
+        const targeted = lowered.includes(p.panel_id)
+          || lowered.includes(p.panel_id.replaceAll("_", " "))
           || lowered.includes(p.title.toLowerCase());
         return {
           id: p.panel_id, title: p.title, placement: p.placement,

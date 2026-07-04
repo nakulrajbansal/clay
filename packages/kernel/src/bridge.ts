@@ -5,7 +5,7 @@
 // access is checked against declared_queries (V4 runtime match, with
 // {$var:true} wildcards) and declared_writes (G22/ADR-014); rate limits and
 // strikes per doc 03/06.
-import { BridgeCall } from "@clay/schema";
+import { BridgeCall, BridgePanelError } from "@clay/schema";
 import { ClayError } from "./errors";
 import type { AsyncStore, MessagePortLike } from "./asyncstore";
 import type { RegTable } from "./registry";
@@ -26,6 +26,9 @@ export type BridgeHooks = {
   onConfirm?: (panelId: string, msg: string) => Promise<boolean>;
   /** Called when a panel trips its boundary (strikes, doc 06 §3). */
   onBoundary?: (panelId: string, reason: string) => void;
+  /** Runtime failure reported from inside the iframe (ADR-015, doc 05 §7).
+   * code/message are untrusted: display + repair input only. */
+  onPanelError?: (panelId: string, code: string, message: string) => void;
 };
 
 export type BridgeLimits = {
@@ -174,6 +177,12 @@ export class Bridge {
 
   private async handle(state: PanelState, raw: unknown): Promise<void> {
     if (state.tripped) return;
+    const panelError = BridgePanelError.safeParse(raw);
+    if (panelError.success) {
+      this.hooks.onPanelError?.(state.manifest.panelId,
+        panelError.data.code, panelError.data.message);
+      return;   // not a call: no reply, no strike, no rate-limit charge
+    }
     const parsed = BridgeCall.safeParse(raw);
     if (!parsed.success) { this.strike(state, "malformed message"); return; }
     const call = parsed.data;

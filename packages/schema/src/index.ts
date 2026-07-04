@@ -166,6 +166,16 @@ export const BridgeReply = z.object({
   result: JsonValue.optional(),
   error: z.object({ code: z.string(), message: z.string() }).optional(),
 });
+/** Panel -> Kernel upstream error signal (ADR-015): fire-and-forget, no
+ * seq/reply. Feeds the error boundary (doc 05 §7); never trusted beyond
+ * display + repair-prompt input. */
+export const BridgePanelError = z.object({
+  v: z.literal(1),
+  kind: z.literal("panel_error"),
+  code: z.string().max(40),
+  message: z.string().max(500),
+});
+
 export const BridgePush = z.discriminatedUnion("kind", [
   z.object({ v: z.literal(1), kind: z.literal("watch"),
              watchId: z.string(), rows: z.array(z.record(JsonValue)) }),

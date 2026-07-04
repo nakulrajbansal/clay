@@ -53,7 +53,17 @@ function buildSrcdoc(): string {
 </head><body><div id="root"></div><script>${script}</script></body></html>`;
 }
 
-export function PanelFrame(props: { panel: LivePanel; bridge: Bridge; preview?: boolean }): React.JSX.Element {
+export type PanelFaultInfo = { code: string; message: string };
+
+export function PanelFrame(props: {
+  panel: LivePanel;
+  bridge: Bridge;
+  preview?: boolean;
+  fault?: PanelFaultInfo;
+  onRepair?: () => void;
+  onRevert?: () => void;
+  onDismiss?: () => void;
+}): React.JSX.Element {
   const { panel, bridge, preview } = props;
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
@@ -92,6 +102,23 @@ export function PanelFrame(props: { panel: LivePanel; bridge: Bridge; preview?: 
         sandbox="allow-scripts"
         srcDoc={buildSrcdoc()}
       />
+      {props.fault ? (
+        <div className="panel-boundary">
+          <p className="panel-boundary-title">This panel hit a problem.</p>
+          <p className="panel-boundary-msg">
+            {props.fault.code}: {props.fault.message}
+          </p>
+          <div className="rail-actions">
+            {props.onRepair ? (
+              <button className="primary" onClick={props.onRepair}>Repair</button>
+            ) : null}
+            {props.onRevert ? (
+              <button onClick={props.onRevert}>Roll back this panel</button>
+            ) : null}
+            <button className="link" onClick={props.onDismiss}>Dismiss</button>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

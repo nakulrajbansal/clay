@@ -18,13 +18,19 @@ import { TimeSlider } from "./TimeSlider";
 type Phase = "loading" | "onboarding" | "main";
 type Toast = { id: number; msg: string; kind: string };
 
+type PanelFault = { code: string; message: string };
+
 function makeBridge(client: WorkerClient, target: "live" | "shadow",
-  onToast: (msg: string, kind: string) => void): Bridge {
+  onToast: (msg: string, kind: string) => void,
+  onFault: (panelId: string, fault: PanelFault) => void): Bridge {
   const port = client.openStorePort(target);
   const store = new StoreRpcClient(portFromMessagePort(port));
   return new Bridge(store, {
     onToast: (_panel, msg, kind) => onToast(msg, kind),
     onConfirm: async (_panel, msg) => window.confirm(msg),
+    onPanelError: (panelId, code, message) => onFault(panelId, { code, message }),
+    onBoundary: (panelId, reason) =>
+      onFault(panelId, { code: "E_STRIKES", message: reason }),
   });
 }
 
@@ -41,6 +47,7 @@ export function App(): React.JSX.Element {
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [busy, setBusy] = useState(false);
   const [hasKey, setHasKey] = useState(false);
+  const [faults, setFaults] = useState<Record<string, PanelFault>>({});
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastId = useRef(0);
 
@@ -55,9 +62,14 @@ export function App(): React.JSX.Element {
     return workerRef.current;
   };
 
+  const recordFault = useCallback((panelId: string, fault: PanelFault): void => {
+    setFaults(f => (f[panelId] ? f : { ...f, [panelId]: fault }));
+  }, []);
+
   const refreshPanels = useCallback(async (): Promise<void> => {
     setPanels(await client().panels());
     setHistory(await client().history());
+    setFaults({});
   }, []);
 
   // boot
@@ -71,42 +83,75 @@ export function App(): React.JSX.Element {
       setPersistent(boot.persistent);
       setHasKey((await wc.getSetting<string>("byo_api_key")) !== null);
       if (!boot.seeded) { setPhase("onboarding"); return; }
-      setLiveBridge(makeBridge(wc, "live", pushToast));
+      setLiveBridge(makeBridge(wc, "live", pushToast, recordFault));
       setPanels(await wc.panels());
       setHistory(await wc.history());
       setPhase("main");
     })();
     return (): void => worker.terminate();
-  }, [pushToast]);
+  }, [pushToast, recordFault]);
 
   const pickShell = async (id: StarterShellId): Promise<void> => {
     setBusy(true);
     await client().seed(id);
-    setLiveBridge(makeBridge(client(), "live", pushToast));
+    setLiveBridge(makeBridge(client(), "live", pushToast, recordFault));
     await refreshPanels();
     setFeed([{ kind: "info", text: "Your app is ready. Describe any change to reshape it." }]);
     setBusy(false);
     setPhase("main");
   };
 
+  const handleOutcome = (outcome: IntentOutcome): void => {
+    if (outcome.status === "clarify") {
+      setFeed(f => [...f, { kind: "clarify", question: outcome.question }]);
+    } else if (outcome.status === "failed") {
+      setFeed(f => [...f, { kind: "failure", reasons: outcome.reasons }]);
+    } else {
+      setPreview(outcome.preview);
+      setShadowBridge(makeBridge(client(), "shadow", pushToast, recordFault));
+    }
+  };
+
   const runIntent = async (text: string): Promise<void> => {
     setFeed(f => [...f, { kind: "intent", text }]);
     setBusy(true);
     try {
-      const outcome: IntentOutcome = await client().intent(text);
-      if (outcome.status === "clarify") {
-        setFeed(f => [...f, { kind: "clarify", question: outcome.question }]);
-      } else if (outcome.status === "failed") {
-        setFeed(f => [...f, { kind: "failure", reasons: outcome.reasons }]);
-      } else {
-        setPreview(outcome.preview);
-        setShadowBridge(makeBridge(client(), "shadow", pushToast));
-      }
+      handleOutcome(await client().intent(text));
     } catch (e) {
       setFeed(f => [...f, { kind: "failure", reasons: [String(e)] }]);
     } finally {
       setBusy(false);
     }
+  };
+
+  // doc 05 §7 boundary actions
+  const repairPanel = async (panelId: string): Promise<void> => {
+    const fault = faults[panelId];
+    if (!fault) return;
+    setFeed(f => [...f, { kind: "info", text: `Repairing ${panelId} (${fault.message.slice(0, 80)})…` }]);
+    setBusy(true);
+    try {
+      handleOutcome(await client().repairPanel(panelId, fault.message));
+    } catch (e) {
+      setFeed(f => [...f, { kind: "failure", reasons: [String(e)] }]);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const revertPanel = async (panelId: string): Promise<void> => {
+    try {
+      setPanels(await client().revertPanel(panelId));
+      setHistory(await client().history());
+      setFaults(f => { const { [panelId]: _drop, ...rest } = f; return rest; });
+      setFeed(f => [...f, { kind: "info", text: `Rolled back the ${panelId} panel.` }]);
+    } catch (e) {
+      pushToast(String(e instanceof Error ? e.message : e), "danger");
+    }
+  };
+
+  const dismissFault = (panelId: string): void => {
+    setFaults(f => { const { [panelId]: _drop, ...rest } = f; return rest; });
   };
 
   const closePreview = (): void => {
@@ -215,6 +260,10 @@ export function App(): React.JSX.Element {
             panel={d.panel}
             bridge={bridge}
             preview={d.isPreview}
+            fault={faults[d.panel.panel_id]}
+            onRepair={d.isPreview ? undefined : (): void => void repairPanel(d.panel.panel_id)}
+            onRevert={d.isPreview ? undefined : (): void => void revertPanel(d.panel.panel_id)}
+            onDismiss={(): void => dismissFault(d.panel.panel_id)}
           />
         );
       });

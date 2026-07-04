@@ -36,6 +36,12 @@ export class WorkerClient {
   panelsAt(version: number): Promise<LivePanel[]> { return this.call("panelsAt", { version }); }
   makeLatest(version: number): Promise<LivePanel[]> { return this.call("makeLatest", { version }); }
   intent(text: string): Promise<IntentOutcome> { return this.call("intent", { text }); }
+  repairPanel(panelId: string, error: string): Promise<IntentOutcome> {
+    return this.call("repairPanel", { panelId, error });
+  }
+  revertPanel(panelId: string): Promise<LivePanel[]> {
+    return this.call("revertPanel", { panelId });
+  }
   keep(): Promise<{ version: number }> { return this.call("keep"); }
   discard(): Promise<null> { return this.call("discard"); }
   removeSamples(): Promise<null> { return this.call("removeSamples"); }

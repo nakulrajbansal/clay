@@ -406,6 +406,38 @@ export class ClayStore {
     return row;
   }
 
+  /** Panel-scoped revert (doc 05 §7): restore the PREVIOUS blob of one
+   * panel as a NEW commit — linear history preserved, nothing truncated. */
+  revertPanel(panelId: string): number {
+    const current = this.livePanels().find(p => p.panel_id === panelId);
+    if (!current)
+      throw new ClayError("E_VALIDATION", `no live panel '${panelId}'`);
+    const rows = this.driver.select(
+      `SELECT version, code, placement_json, declared_q_json FROM sys.panel_blobs
+       WHERE panel_id = ? AND version < ? ORDER BY version DESC LIMIT 1`,
+      [panelId, current.version]);
+    const prev = rows[0];
+    if (!prev)
+      throw new ClayError("E_VALIDATION",
+        `'${panelId}' has no earlier version to roll back to`);
+    const manifest = JSON.parse(String(prev.declared_q_json)) as {
+      title: string; declared_queries: QueryT[]; declared_writes?: string[];
+    };
+    return this.commit({
+      intent: `roll back panel ${panelId}`,
+      summary: `Rolls back the ${manifest.title} panel to its previous version.`,
+      migration: null,
+      panels: [{
+        panel_id: panelId, title: manifest.title,
+        placement: JSON.parse(String(prev.placement_json)) as LivePanel["placement"],
+        code: String(prev.code),
+        declared_queries: manifest.declared_queries,
+        declared_writes: manifest.declared_writes ?? [],
+      }],
+      diff: [{ kind: "change_panel", detail: `${manifest.title} rolled back` }],
+    });
+  }
+
   /** Raw physical dump, ordered by id — bit-equality checks (PB1, spine). */
   dumpTable(table: string): SqlRow[] {
     getTable(this.reg, table);

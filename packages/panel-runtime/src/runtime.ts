@@ -94,11 +94,24 @@ export type PanelRuntimeOptions = {
   container: Element;
   /** Called when the panel module or a callback throws (boundary, doc 05 §7). */
   onPanelError?: (err: unknown) => void;
+  /** ui.render must run within this window after boot (doc 03 §2). */
+  renderTimeoutMs?: number;
 };
 
 export function bootPanelRuntime(opts: PanelRuntimeOptions): void {
   const { port, container } = opts;
-  const reportError = (err: unknown): void => { opts.onPanelError?.(err); };
+  const renderTimeoutMs = opts.renderTimeoutMs ?? 2000;
+  let rendered = false;
+  const reportError = (err: unknown): void => {
+    opts.onPanelError?.(err);
+    // ADR-015: signal the boundary through the Bridge (validated, no reply)
+    const code = err instanceof PanelRuntimeError ? err.code : "E_PANEL";
+    const message = err instanceof Error ? err.message : String(err);
+    try {
+      port.send({ v: 1, kind: "panel_error", code: code.slice(0, 40),
+        message: message.slice(0, 500) });
+    } catch { /* port already torn down */ }
+  };
 
   let booted = false;
   let panelId = "";
@@ -144,6 +157,7 @@ export function bootPanelRuntime(opts: PanelRuntimeOptions): void {
       },
       ui: {
         render: (vnode: VChild): void => {
+          rendered = true;
           render(vnode, container, { schema: boot.meta.schema as SchemaTable[] });
         },
         toast: (msg: unknown, kind?: unknown): void => {
@@ -181,6 +195,15 @@ export function bootPanelRuntime(opts: PanelRuntimeOptions): void {
       },
       meta,
     };
+
+    // E_RENDER_TIMEOUT (doc 03 §2): render must happen soon after boot.
+    // The timer lives in the trusted bootstrap — V2 only bans timers in
+    // panel code.
+    setTimeout(() => {
+      if (!rendered)
+        reportError(new PanelRuntimeError("E_RENDER_TIMEOUT",
+          `panel did not render within ${renderTimeoutMs}ms of boot`));
+    }, renderTimeoutMs);
 
     // Evaluate the module with h + component markers in scope, then invoke.
     void (async () => {

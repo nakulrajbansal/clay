@@ -87,3 +87,15 @@ ADR-014 Panels declare writes, not just reads (declared_writes).
   Consequence: PanelArtifact gains declared_writes (<= 4 tables); Bridge
   enforces at call time; V4 verifies write-call table literals against it;
   one more field the model must emit (taught by exemplar 5).
+
+ADR-015 A validated upstream panel_error Bridge message.
+  Context: the error boundary (doc 05 §7) needs runtime failure signals
+  (uncaught errors, render timeout) from inside the iframe; the protocol
+  had no Panel->Kernel path that isn't a call.
+  Alt 1: encode as a BridgeCall. Rejected: calls carry seq + replies and
+  count against the rate limit; error reporting must not be droppable by
+  the panel's own budget exhaustion. Alt 2: shell-side watchdog only.
+  Rejected: the shell can detect silence (timeout) but not error detail.
+  Consequence: BridgePanelError {v, kind, code<=40, message<=500}; the
+  Bridge forwards it to a hook without a strike; content is untrusted —
+  used only for display and as sanitized repair-prompt input.

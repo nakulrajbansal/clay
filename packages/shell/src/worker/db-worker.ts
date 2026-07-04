@@ -39,6 +39,40 @@ function dropPending(): void {
   if (pending) { pending.discard(); pending = null; }
 }
 
+async function runPipelineText(text: string): Promise<IntentOutcome> {
+  dropPending();   // one mutation in flight per app (doc 05 §6)
+  const s = mustStore();
+  const apiKey = s.getSetting<string>("byo_api_key");
+  if (!apiKey) {
+    return { status: "failed", stage: "plan", reasons: [
+      "No model access configured. Add your Anthropic API key in Settings (BYO mode).",
+    ] };
+  }
+  const client = new MutationClient({ mode: "byo", apiKey });
+  const pipeline = new MutationPipeline(s, client);
+  const result = await pipeline.run(text);
+  if (result.status === "clarify")
+    return { status: "clarify", question: result.question };
+  if (result.status === "failed")
+    return { status: "failed", stage: result.stage, reasons: result.reasons };
+  pending = result.preview;
+  return {
+    status: "preview",
+    preview: {
+      summary: result.preview.plan.summary,
+      diff: result.preview.plan.user_facing_diff,
+      panels: result.preview.plan.panels.map(pa => ({
+        panel_id: pa.panel_id, title: pa.title, placement: pa.placement,
+        code: pa.code, declared_queries: pa.declared_queries,
+        declared_writes: pa.declared_writes, version: result.preview.version,
+      })),
+      removePanels: result.preview.plan.remove_panels,
+      version: result.preview.version,
+      repaired: result.repaired,
+    },
+  };
+}
+
 async function handle(req: Request, ports: readonly MessagePort[]): Promise<unknown> {
   const p = req.payload ?? {};
   switch (req.op) {
@@ -80,38 +114,22 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       serveStore(target, portFromMessagePort(port));
       return null;
     }
-    case "intent": {
-      dropPending();   // one mutation in flight per app (doc 05 §6)
-      const s = mustStore();
-      const apiKey = s.getSetting<string>("byo_api_key");
-      if (!apiKey) {
-        return { status: "failed", stage: "plan", reasons: [
-          "No model access configured. Add your Anthropic API key in Settings (BYO mode).",
-        ] } satisfies IntentOutcome;
-      }
-      const client = new MutationClient({ mode: "byo", apiKey });
-      const pipeline = new MutationPipeline(s, client);
-      const result = await pipeline.run(String(p.text ?? ""));
-      if (result.status === "clarify")
-        return { status: "clarify", question: result.question } satisfies IntentOutcome;
-      if (result.status === "failed")
-        return { status: "failed", stage: result.stage, reasons: result.reasons } satisfies IntentOutcome;
-      pending = result.preview;
-      return {
-        status: "preview",
-        preview: {
-          summary: result.preview.plan.summary,
-          diff: result.preview.plan.user_facing_diff,
-          panels: result.preview.plan.panels.map(pa => ({
-            panel_id: pa.panel_id, title: pa.title, placement: pa.placement,
-            code: pa.code, declared_queries: pa.declared_queries,
-            declared_writes: pa.declared_writes, version: result.preview.version,
-          })),
-          removePanels: result.preview.plan.remove_panels,
-          version: result.preview.version,
-          repaired: result.repaired,
-        },
-      } satisfies IntentOutcome;
+    case "intent":
+      return runPipelineText(String(p.text ?? ""));
+    case "repairPanel": {
+      // doc 05 §7 Repair: one-round fix with the runtime error; the result
+      // arrives as a NORMAL preview and never auto-commits.
+      const panelId = String(p.panelId);
+      const error = String(p.error ?? "unknown error").slice(0, 200);
+      const text = (`The ${panelId} panel crashed at runtime with this error: ${error}. `
+        + `Fix that panel. Keep its purpose and layout; change only what is `
+        + `needed to stop the error.`).slice(0, 500);
+      return runPipelineText(text);
+    }
+    case "revertPanel": {
+      dropPending();
+      mustStore().revertPanel(String(p.panelId));
+      return mustStore().livePanels();
     }
     case "keep": {
       if (!pending) throw new Error("no preview open");

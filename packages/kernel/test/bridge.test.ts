@@ -184,6 +184,27 @@ describe("limits and strikes", () => {
     store.close();
   });
 
+  it("panel_error pushes reach the hook without a strike (ADR-015)", async () => {
+    const faults: string[] = [];
+    let tripped = false;
+    const { c, store } = await setup({}, { strikeLimit: 2 }, {
+      onPanelError: (id: string, code: string, msg: string) =>
+        faults.push(`${id}/${code}/${msg}`),
+      onBoundary: () => { tripped = true; },
+    });
+    c.send({ v: 1, kind: "panel_error", code: "E_RENDER_TIMEOUT", message: "no render" });
+    c.send({ v: 1, kind: "panel_error", code: "E_PANEL", message: "boom" });
+    await sleep(5);
+    expect(faults).toEqual([
+      "test_panel/E_RENDER_TIMEOUT/no render",
+      "test_panel/E_PANEL/boom",
+    ]);
+    expect(tripped).toBe(false);   // two malformed messages would have tripped
+    // and calls still work afterwards
+    expect(await c.call("db.query", [STRIP_QUERY])).toHaveLength(1);
+    store.close();
+  });
+
   it("events: payload cap and name validation", async () => {
     const { c, store } = await setup({}, { maxEventPayload: 64 });
     await c.call("events.emit", ["board_filter", { owner: "Dev" }]);

@@ -177,6 +177,41 @@ describe("W1: hand-written panel through the real Bridge", () => {
     store.close();
   });
 
+  it("crashes and render timeouts surface through the boundary (ADR-015)", async () => {
+    const store = await seeded([]);
+    const faults: string[] = [];
+    const bridge = new Bridge(new InProcessAsyncStore(store), {
+      onPanelError: (id, code, msg) => faults.push(`${id}:${code}:${msg}`),
+    });
+
+    // a panel that throws at boot
+    {
+      const [bridgeSide, panelSide] = portPair();
+      bootPanelRuntime({ port: panelSide, container: mount() });
+      await bridge.attachPanel({
+        panelId: "crash_panel", title: "Crash",
+        placement: { region: "main", order: 0 },
+        code: `export default function (clay) { throw new Error("boom at boot"); }`,
+        declaredQueries: [], declaredWrites: [],
+      }, bridgeSide);
+      await waitFor(() => faults.some(f => f.startsWith("crash_panel:E_PANEL:boom")));
+    }
+
+    // a panel that never renders -> E_RENDER_TIMEOUT (doc 03 §2)
+    {
+      const [bridgeSide, panelSide] = portPair();
+      bootPanelRuntime({ port: panelSide, container: mount(), renderTimeoutMs: 60 });
+      await bridge.attachPanel({
+        panelId: "silent_panel", title: "Silent",
+        placement: { region: "main", order: 0 },
+        code: `export default function (clay) { /* renders nothing */ }`,
+        declaredQueries: [], declaredWrites: [],
+      }, bridgeSide);
+      await waitFor(() => faults.some(f => f.includes("silent_panel:E_RENDER_TIMEOUT")));
+    }
+    store.close();
+  });
+
   it("undeclared queries are refused end-to-end", async () => {
     const store = await seeded([
       { name: "Apollo", owner: "Dev", slipped_milestones: 0, open_risks: 1 },

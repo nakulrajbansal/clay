@@ -44,6 +44,30 @@ describe("history and scrub", () => {
     store.close();
   });
 
+  it("revertPanel restores the previous blob as a NEW commit (doc 05 §7)", async () => {
+    const store = await storeWithTwoPanelVersions();   // head v3, panel at v2
+    const version = store.revertPanel("project_table");
+    expect(version).toBe(4);                            // linear, not truncated
+    expect(store.history().map(e => e.version)).toEqual([1, 2, 3, 4]);
+    expect(store.livePanels()[0]!.code).toContain("v1");
+    // the v3 migration (health_score) is untouched — panel-scoped only
+    expect(store.registrySnapshot().get("projects")!.columns
+      .some(c => c.name === "health_score")).toBe(true);
+    // a second revert flips back to the v2 blob
+    store.revertPanel("project_table");
+    expect(store.livePanels()[0]!.code).toContain("v2");
+    store.close();
+  });
+
+  it("revertPanel refuses when there is no earlier version", async () => {
+    const store = await seededStore();
+    store.commit({ intent: "seed panel", summary: "Adds the table.",
+      migration: null, panels: [PANEL_V1] });
+    expect(() => store.revertPanel("project_table")).toThrowError(/no earlier version/);
+    expect(() => store.revertPanel("ghost_panel")).toThrowError(/no live panel/);
+    store.close();
+  });
+
   it("make-latest truncates and the chain continues from K", async () => {
     const store = await storeWithTwoPanelVersions();
     store.rollbackTo(2, { truncate: true });
