@@ -38,6 +38,13 @@
   strings; Zod remains the correctness gate). This is the new byte-stable
   baseline; a test enforces the subset constraints and validates all ten
   exemplars against the grammar.
+- Q23 L3 property gate: `PB_RUNS=10000 pnpm --filter @clay/kernel test:pb`
+  passes all 8 properties (PB1-PB4) but the ~160s single-file run trips a
+  vitest worker reporter-RPC timeout at the final flush (threads AND forks
+  pools; "8 passed / 1 error", non-zero exit). Substance is met — the pass
+  count is authoritative. If a clean CI exit is needed for L3, split the
+  four PBs across separate invocations or shard by numRuns. Default
+  `pnpm test` (small counts) is clean and fast.
 - Q22 Panel iframes are sandbox=allow-scripts only, so native form
   submission is blocked by the browser (no allow-forms — deliberate).
   Form components submit via plain button click + Enter handling instead;
