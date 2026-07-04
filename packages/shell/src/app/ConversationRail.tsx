@@ -1,9 +1,10 @@
 // ConversationRail (doc 02 §1): intent input, attempt feed, the diff card
 // with Keep/Discard (S5/S6), clarify and amber failure cards, and the
 // minimal settings (BYO key, P3: stored locally, sent only to Anthropic).
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Suggestion } from "@clay/kernel";
 import type { PreviewInfo } from "../worker/db-worker";
+import type { StatusInfo } from "./worker-client";
 
 export type FeedItem =
   | { kind: "intent"; text: string }
@@ -30,10 +31,19 @@ export function ConversationRail(props: {
   suggestions: Suggestion[];
   onAcceptSuggestion: (s: Suggestion) => void;
   onDismissSuggestion: (s: Suggestion) => void;
+  loadStatus: () => Promise<StatusInfo>;
 }): React.JSX.Element {
   const [text, setText] = useState("");
   const [keyDraft, setKeyDraft] = useState("");
   const [showSettings, setShowSettings] = useState(!props.hasKey);
+  const [status, setStatus] = useState<StatusInfo | null>(null);
+
+  useEffect(() => {
+    if (showSettings) void props.loadStatus().then(setStatus).catch(() => setStatus(null));
+  }, [showSettings, props]);
+
+  const mb = (n: number | null): string =>
+    n == null ? "—" : n < 1e6 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1e6).toFixed(1)} MB`;
 
   const submit = (): void => {
     const t = text.trim();
@@ -56,6 +66,24 @@ export function ConversationRail(props: {
 
       {showSettings ? (
         <div className="rail-settings">
+          {status ? (
+            <div className="rail-status">
+              <div>
+                Storage:{" "}
+                {status.persistent
+                  ? (status.persisted ? "persistent ✓" : "on this device (not yet pinned)")
+                  : "in-memory — will not persist"}
+              </div>
+              {status.persistent ? (
+                <div>Using {mb(status.usageBytes)} of {mb(status.quotaBytes)}</div>
+              ) : null}
+              <div>
+                {status.versions} change{status.versions === 1 ? "" : "s"} ·{" "}
+                {status.stats.kept} kept · {status.stats.discarded} discarded ·{" "}
+                {status.stats.clarify} clarified
+              </div>
+            </div>
+          ) : null}
           <label className="rail-label">
             Anthropic API key (BYO — stored in this browser, sent only to Anthropic)
             <input

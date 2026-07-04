@@ -103,6 +103,10 @@ button.link.danger { color: #991b1b; }
   padding: 14px 16px; font-weight: 700;
 }
 .rail-settings { padding: 0 16px 12px; border-bottom: 1px solid #f5f5f4; }
+.rail-status { font-size: 12px; color: #57534e; background: #fafaf9;
+  border: 1px solid #f5f5f4; border-radius: 8px; padding: 8px 10px;
+  margin-bottom: 10px; display: flex; flex-direction: column; gap: 3px; }
+.file-label { cursor: pointer; }
 .rail-label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #57534e; }
 .rail-label input { border: 1px solid #d6d3d1; border-radius: 7px; padding: 7px 9px; font: inherit; }
 .rail-actions { display: flex; gap: 10px; align-items: center; margin-top: 10px; }

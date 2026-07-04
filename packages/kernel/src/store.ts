@@ -419,6 +419,16 @@ export class ClayStore {
       `SELECT COUNT(*) AS n FROM "row_history"`)[0]?.n ?? 0);
   }
 
+  /** Local attempt stats for Settings (doc 05 §5). No network. */
+  attemptStats(): { kept: number; discarded: number; failed: number; clarify: number } {
+    const rows = this.driver.select(
+      `SELECT outcome, COUNT(*) AS n FROM sys.attempts GROUP BY outcome`);
+    const by = (o: string): number =>
+      Number(rows.find(r => r.outcome === o)?.n ?? 0);
+    return { kept: by("kept"), discarded: by("discarded"),
+      failed: by("failed"), clarify: by("clarify") };
+  }
+
   /** Rows with a snapshot in the restore window (G6: last 30 days). */
   restorableRows(table: string, sinceDays = 30): string[] {
     getTable(this.reg, table);

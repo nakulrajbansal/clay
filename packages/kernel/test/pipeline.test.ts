@@ -257,6 +257,39 @@ describe("pipeline stages", () => {
     store2.close();
   });
 
+  it("attemptStats aggregates outcomes for Settings (doc 05 §5)", async () => {
+    const { store, table, panelId } = await seedShellStore(tracker());
+    const cols = tracker().registry[0]!.columns.map(c => c.name);
+    // a kept mutation
+    const good = new ScriptedPlanner([priorityPlan(table, panelId, cols)]);
+    const r1 = await new MutationPipeline(store, good).run(INTENT);
+    if (r1.status === "preview") r1.preview.keep();
+    // a discarded one
+    const good2 = new ScriptedPlanner([{
+      ...priorityPlan(table, panelId, cols),
+      migration: null,
+      panels: [{ panel_id: "extra", title: "Extra",
+        placement: { region: "side", order: 0 },
+        declared_queries: [{ from: table }], declared_writes: [],
+        code: "export default function(clay){ clay.ui.render(h(EmptyState,{label:\"x\"})); }" }],
+      user_facing_diff: [{ kind: "add_panel", detail: "extra" }],
+    }]);
+    const r2 = await new MutationPipeline(store, good2).run("add an extra panel");
+    if (r2.status === "preview") r2.preview.discard();
+    // a clarify
+    const clar = new ScriptedPlanner([{
+      api: 1, summary: "", user_facing_diff: [], clarifying_question: "Which?",
+      assumptions: [], migration: null, panels: [], remove_panels: [], confidence: 0.3,
+    }]);
+    await new MutationPipeline(store, clar).run("do something");
+
+    const stats = store.attemptStats();
+    expect(stats.kept).toBe(1);
+    expect(stats.discarded).toBe(1);
+    expect(stats.clarify).toBe(1);
+    store.close();
+  });
+
   it("S1 context carries shapes + intent, never rows (ADR-009)", async () => {
     const { store } = await seedShellStore(tracker());
     const ctx = new MutationPipeline(store, new ScriptedPlanner([])).buildContext(INTENT);

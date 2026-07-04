@@ -29,6 +29,7 @@ type Request = { id: number; op: string; payload?: Record<string, unknown> };
 
 let store: ClayStore | null = null;
 let persistent = false;
+let persistRequested = false;
 let pending: PreviewHandle | null = null;
 
 function mustStore(): ClayStore {
@@ -136,6 +137,12 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       if (!pending) throw new Error("no preview open");
       const version = pending.keep();
       pending = null;
+      // doc 04 §8: request durable storage at the first kept mutation.
+      if (!persistRequested && persistent
+          && typeof navigator !== "undefined" && navigator.storage?.persist) {
+        persistRequested = true;
+        try { await navigator.storage.persist(); } catch { /* best effort */ }
+      }
       return { version };
     }
     case "discard":
@@ -196,6 +203,31 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       if (!openFresh) { store?.close(); }
       store = result.store;
       return { manifest: result.manifest, invalidPanels: result.invalidPanels };
+    }
+    case "status": {
+      // navigator.storage.persist() requested at first commit (doc 04 §8),
+      // status + usage estimate surfaced here.
+      let persisted = persistent;
+      let usageBytes: number | null = null;
+      let quotaBytes: number | null = null;
+      try {
+        if (persistent && typeof navigator !== "undefined" && navigator.storage) {
+          persisted = await navigator.storage.persisted();
+          const est = await navigator.storage.estimate();
+          usageBytes = est.usage ?? null;
+          quotaBytes = est.quota ?? null;
+        }
+      } catch { /* estimate unavailable */ }
+      return {
+        persistent, persisted, usageBytes, quotaBytes,
+        versions: mustStore().headVersion(),
+        stats: mustStore().attemptStats(),
+      };
+    }
+    case "requestPersist": {
+      if (typeof navigator !== "undefined" && navigator.storage?.persist)
+        return { persisted: await navigator.storage.persist() };
+      return { persisted: false };
     }
     case "getSetting":
       return mustStore().getSetting(String(p.key)) ?? null;

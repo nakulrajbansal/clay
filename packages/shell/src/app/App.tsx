@@ -367,6 +367,7 @@ export function App(): React.JSX.Element {
         suggestions={suggestions}
         onAcceptSuggestion={acceptSuggestion}
         onDismissSuggestion={dismissSuggestion}
+        loadStatus={() => client().status()}
         onIntent={t => void runIntent(t)}
         onKeep={() => void keep()}
         onDiscard={() => void discard()}

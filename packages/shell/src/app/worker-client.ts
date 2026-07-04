@@ -3,6 +3,12 @@ import type { HistoryEntry, LivePanel, RegTable, Suggestion } from "@clay/kernel
 import type { IntentOutcome } from "../worker/db-worker";
 
 export type BootInfo = { persistent: boolean; seeded: boolean; shellId: string | null };
+export type StatusInfo = {
+  persistent: boolean; persisted: boolean;
+  usageBytes: number | null; quotaBytes: number | null;
+  versions: number;
+  stats: { kept: number; discarded: number; failed: number; clarify: number };
+};
 
 export class WorkerClient {
   private nextId = 1;
@@ -30,6 +36,7 @@ export class WorkerClient {
   }
 
   boot(): Promise<BootInfo> { return this.call("boot"); }
+  status(): Promise<StatusInfo> { return this.call("status"); }
   seed(shellId: string): Promise<null> { return this.call("seed", { shellId }); }
   panels(): Promise<LivePanel[]> { return this.call("panels"); }
   history(): Promise<HistoryEntry[]> { return this.call("history"); }
