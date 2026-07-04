@@ -5,9 +5,11 @@
 // forward ops; truncation is the only destructive-ish operation (ADR-007).
 import { ClayError } from "./errors";
 import {
-  createSystemTables, openMemoryDriver,
+  copyDatabase, createSystemTables, openDriverFromBytes, openMemoryDriver,
   type DbDriver, type SqlRow, type SqlValue,
 } from "./db";
+import { zipRead, zipWrite } from "./zip";
+import { validateMutationPlan } from "./validate";
 import {
   cloneRegistry, getTable, type Registry, type RegTable,
 } from "./registry";
@@ -513,4 +515,114 @@ export class ClayStore {
     getTable(this.reg, table);
     return this.driver.select(`SELECT * FROM ${qid(table)} ORDER BY "id"`);
   }
+
+  // ---------- .clay archives (doc 04 §7) ----------
+  /** zip{ manifest.json, user.db, system.db } — the backup story and a
+   * trust artifact: the whole app in one file. */
+  async exportArchive(appName: string): Promise<Uint8Array> {
+    const { user, system } = await this.driver.exportDatabases();
+    const manifest: ClayManifest = {
+      format: 1, app: appName, exported_at: nowIso(),
+      tables: this.reg.size, versions: this.headVersion(),
+    };
+    return zipWrite([
+      { name: "manifest.json", data: new TextEncoder().encode(JSON.stringify(manifest, null, 2)) },
+      { name: "user.db", data: user },
+      { name: "system.db", data: system },
+    ]);
+  }
+
+  static parseArchive(bytes: Uint8Array): {
+    manifest: ClayManifest; user: Uint8Array; system: Uint8Array;
+  } {
+    const entries = zipRead(bytes);
+    const get = (name: string): Uint8Array => {
+      const e = entries.find(x => x.name === name);
+      if (!e) throw new ClayError("E_VALIDATION", `archive is missing ${name}`);
+      return e.data;
+    };
+    const manifest = JSON.parse(new TextDecoder().decode(get("manifest.json"))) as ClayManifest;
+    if (manifest.format !== 1)
+      throw new ClayError("E_VALIDATION",
+        `unsupported archive format ${String(manifest.format)}`);
+    return { manifest, user: get("user.db"), system: get("system.db") };
+  }
+
+  /** Integrity checks run on an import staging store (doc 04 §7). */
+  verifyIntegrity(): string[] {
+    const issues: string[] = [];
+    for (const t of this.reg.values()) {
+      const info = this.driver.select(`PRAGMA main.table_info(${qid(t.name)})`);
+      const physical = new Set(info.map(r => String(r.name)));
+      if (physical.size === 0) { issues.push(`table '${t.name}' is missing`); continue; }
+      for (const col of ["id", "created_at", "updated_at", "deleted_at"])
+        if (!physical.has(col)) issues.push(`'${t.name}' lacks kernel column '${col}'`);
+      for (const c of t.columns)
+        if (c.type !== "computed" && !physical.has(c.name))
+          issues.push(`'${t.name}' lacks registered column '${c.name}'`);
+    }
+    const chain = this.history();
+    chain.forEach((e, i) => {
+      if (e.version !== i + 1 || e.parent !== i)
+        issues.push(`version chain broken at v${e.version}`);
+    });
+    try { this.livePanels(); }
+    catch (e) { issues.push(`panel manifest unreadable: ${String(e)}`); }
+    return issues;
+  }
+
+  /**
+   * Import an archive: stage in memory, run integrity checks (abort on
+   * failure — the live app is untouched), re-validate every live panel
+   * blob (G15: never execute unvalidated blobs, regardless of provenance),
+   * then swap. With `openFresh` the staged content is copied into a fresh
+   * (persistent) driver; without it the staging store IS the result.
+   */
+  static async importArchive(
+    bytes: Uint8Array,
+    openFresh?: () => Promise<DbDriver>,
+  ): Promise<{ store: ClayStore; manifest: ClayManifest; invalidPanels: string[] }> {
+    const { manifest, user, system } = ClayStore.parseArchive(bytes);
+    const staging = ClayStore.fromDriver(await openDriverFromBytes(user, system));
+    try {
+      const issues = staging.verifyIntegrity();
+      if (issues.length > 0)
+        throw new ClayError("E_VALIDATION",
+          `archive failed integrity checks: ${issues.join("; ")}`, issues);
+
+      const invalidPanels: string[] = [];
+      for (const panel of staging.livePanels()) {
+        const problems = validateMutationPlan({
+          api: 1, summary: "Imported panel.",
+          user_facing_diff: [{ kind: "add_panel", detail: panel.panel_id }],
+          clarifying_question: null, assumptions: [], migration: null,
+          panels: [{
+            panel_id: panel.panel_id, title: panel.title,
+            placement: panel.placement, code: panel.code,
+            declared_queries: panel.declared_queries,
+            declared_writes: panel.declared_writes,
+          }],
+          remove_panels: [], confidence: 1,
+        }, { registry: staging.registrySnapshot(), livePanelIds: [] });
+        if (problems.length > 0) invalidPanels.push(panel.panel_id);
+      }
+
+      if (!openFresh) return { store: staging, manifest, invalidPanels };
+      const fresh = await openFresh();
+      copyDatabase(staging.driver, fresh);
+      staging.close();
+      return { store: ClayStore.fromDriver(fresh), manifest, invalidPanels };
+    } catch (e) {
+      staging.close();
+      throw e;
+    }
+  }
 }
+
+export type ClayManifest = {
+  format: 1;
+  app: string;
+  exported_at: string;
+  tables: number;
+  versions: number;
+};

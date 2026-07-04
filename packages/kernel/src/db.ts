@@ -16,6 +16,8 @@ export interface DbDriver {
   /** Full copy for the shadow dry-run (S4, doc 05 §1): user.db serialized,
    * system tables row-copied. The copy is independent and disposable. */
   snapshot(): Promise<DbDriver>;
+  /** Serialized bytes of both databases (doc 04 §7 export). */
+  exportDatabases(): Promise<{ user: Uint8Array; system: Uint8Array }>;
 }
 
 export const SYSTEM_TABLES = [
@@ -75,25 +77,10 @@ class SqliteWasmDriver implements DbDriver {
 
   async snapshot(): Promise<DbDriver> {
     const s = await sqlite3();
-    type Capi = {
-      sqlite3_js_db_export(db: unknown, schema?: string): Uint8Array;
-      sqlite3_deserialize(db: unknown, schema: string, ptr: number,
-        size: number, sizeMax: number, flags: number): number;
-      SQLITE_DESERIALIZE_FREEONCLOSE: number;
-      SQLITE_DESERIALIZE_RESIZEABLE: number;
-    };
-    type Wasm = { allocFromTypedArray(bytes: Uint8Array): number };
-    const capi = s.capi as unknown as Capi;
-    const wasm = s.wasm as unknown as Wasm;
-
     // user.db: byte-exact serialization of the main schema
-    const bytes = capi.sqlite3_js_db_export(this.db.pointer);
+    const bytes = exportMain(s, this.db);
     const copy = new s.oo1.DB(":memory:");
-    const ptr = wasm.allocFromTypedArray(bytes);
-    const rc = capi.sqlite3_deserialize(copy.pointer, "main", ptr,
-      bytes.byteLength, bytes.byteLength,
-      capi.SQLITE_DESERIALIZE_FREEONCLOSE | capi.SQLITE_DESERIALIZE_RESIZEABLE);
-    copy.checkRc(rc);
+    deserializeInto(s, copy, bytes);
     copy.exec("PRAGMA foreign_keys = ON");
     copy.exec("ATTACH ':memory:' AS sys");
 
@@ -101,16 +88,99 @@ class SqliteWasmDriver implements DbDriver {
     const target = new SqliteWasmDriver(copy);
     target.exec(SYSTEM_SCHEMA_SQL);
     for (const table of SYSTEM_TABLES) {
-      for (const row of this.select(`SELECT * FROM sys.${table}`)) {
-        const cols = Object.keys(row);
-        target.exec(
-          `INSERT INTO sys.${table} (${cols.map(c => `"${c}"`).join(", ")})
-           VALUES (${cols.map(() => "?").join(", ")})`,
-          cols.map(c => row[c] ?? null));
-      }
+      copyRows(this, `sys.${table}`, target, `sys.${table}`);
     }
     return target;
   }
+
+  async exportDatabases(): Promise<{ user: Uint8Array; system: Uint8Array }> {
+    const s = await sqlite3();
+    const user = exportMain(s, this.db);
+    // system.db: standalone file with UNPREFIXED tables (doc 04 §7 layout)
+    const temp = new s.oo1.DB(":memory:");
+    const tempDriver = new SqliteWasmDriver(temp);
+    tempDriver.exec(systemSchemaSql(""));
+    for (const table of SYSTEM_TABLES)
+      copyRows(this, `sys.${table}`, tempDriver, `"${table}"`);
+    const system = exportMain(s, temp);
+    temp.close();
+    return { user, system };
+  }
+}
+
+type Capi = {
+  sqlite3_js_db_export(db: unknown, schema?: string): Uint8Array;
+  sqlite3_deserialize(db: unknown, schema: string, ptr: number,
+    size: number, sizeMax: number, flags: number): number;
+  SQLITE_DESERIALIZE_FREEONCLOSE: number;
+  SQLITE_DESERIALIZE_RESIZEABLE: number;
+};
+type Wasm = { allocFromTypedArray(bytes: Uint8Array): number };
+
+function exportMain(s: Sqlite3Static, db: Database): Uint8Array {
+  return (s.capi as unknown as Capi).sqlite3_js_db_export(db.pointer);
+}
+
+function deserializeInto(s: Sqlite3Static, db: Database, bytes: Uint8Array): void {
+  const capi = s.capi as unknown as Capi;
+  const wasm = s.wasm as unknown as Wasm;
+  const ptr = wasm.allocFromTypedArray(bytes);
+  const rc = capi.sqlite3_deserialize(db.pointer, "main", ptr,
+    bytes.byteLength, bytes.byteLength,
+    capi.SQLITE_DESERIALIZE_FREEONCLOSE | capi.SQLITE_DESERIALIZE_RESIZEABLE);
+  db.checkRc(rc);
+}
+
+function copyRows(from: DbDriver, fromTable: string, to: DbDriver, toTable: string): void {
+  for (const row of from.select(`SELECT * FROM ${fromTable}`)) {
+    const cols = Object.keys(row);
+    if (cols.length === 0) continue;
+    to.exec(
+      `INSERT INTO ${toTable} (${cols.map(c => `"${c}"`).join(", ")})
+       VALUES (${cols.map(() => "?").join(", ")})`,
+      cols.map(c => row[c] ?? null));
+  }
+}
+
+/** Open an in-memory driver from archive bytes (import staging). */
+export async function openDriverFromBytes(
+  user: Uint8Array, system: Uint8Array,
+): Promise<DbDriver> {
+  const s = await sqlite3();
+  const db = new s.oo1.DB(":memory:");
+  deserializeInto(s, db, user);
+  db.exec("PRAGMA foreign_keys = ON");
+  db.exec("ATTACH ':memory:' AS sys");
+  const driver = new SqliteWasmDriver(db);
+  driver.exec(SYSTEM_SCHEMA_SQL);
+
+  const temp = new s.oo1.DB(":memory:");
+  deserializeInto(s, temp, system);
+  const tempDriver = new SqliteWasmDriver(temp);
+  for (const table of SYSTEM_TABLES) {
+    const exists = tempDriver.select(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, [table]);
+    if (exists.length > 0) copyRows(tempDriver, `"${table}"`, driver, `sys.${table}`);
+  }
+  temp.close();
+  return driver;
+}
+
+/** Copy everything (user schema + rows, system rows) into a fresh target —
+ * the import swap for persistent (OPFS) targets. */
+export function copyDatabase(from: DbDriver, to: DbDriver): void {
+  const objects = from.select(
+    `SELECT type, name, sql FROM main.sqlite_master
+     WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
+     ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END`);
+  for (const o of objects) to.exec(String(o.sql));
+  for (const o of objects) {
+    if (o.type !== "table") continue;
+    copyRows(from, `main."${String(o.name)}"`, to, `main."${String(o.name)}"`);
+  }
+  to.exec(SYSTEM_SCHEMA_SQL);
+  for (const table of SYSTEM_TABLES)
+    copyRows(from, `sys.${table}`, to, `sys.${table}`);
 }
 
 /** In-memory user.db with an in-memory system.db attached as `sys`. */
@@ -157,6 +227,10 @@ export async function wipeBrowserStorage(): Promise<boolean> {
   if (!activePool) return false;
   await activePool.wipeFiles();
   return true;
+}
+
+export function systemSchemaSql(prefix: string): string {
+  return SYSTEM_SCHEMA_SQL.replaceAll("sys.", prefix);
 }
 
 export const SYSTEM_SCHEMA_SQL = `

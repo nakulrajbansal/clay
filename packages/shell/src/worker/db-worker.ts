@@ -5,7 +5,8 @@
 // Records never leave this worker except over those ports to the Bridge.
 import {
   ClayStore, MutationPipeline, openBrowserDriver, portFromMessagePort,
-  serveStore, wipeBrowserStorage, type LivePanel, type PreviewHandle,
+  serveStore, wipeBrowserStorage,
+  type DbDriver, type LivePanel, type PreviewHandle,
 } from "@clay/kernel";
 import { MutationClient } from "@clay/mutation";
 import { removeSampleRows, seedStarterShell, type StarterShellId } from "../shells/seed";
@@ -155,6 +156,34 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       store = null;
       await wipeBrowserStorage();
       return null;
+    }
+    case "exportArchive": {
+      const s = mustStore();
+      const bytes = await s.exportArchive(s.getSetting<string>("shell_id") ?? "clay");
+      return {
+        bytes: bytes.buffer,
+        filename: `clay-${new Date().toISOString().slice(0, 10)}.clay`,
+      };
+    }
+    case "importArchive": {
+      dropPending();
+      const bytes = new Uint8Array(p.bytes as ArrayBuffer);
+      // staging + integrity run BEFORE the live app is touched (doc 04 §7);
+      // openFresh only fires once the archive has passed.
+      const openFresh = persistent
+        ? async (): Promise<DbDriver> => {
+            store?.close();
+            store = null;
+            await wipeBrowserStorage();
+            const opened = await openBrowserDriver();
+            persistent = opened.persistent;
+            return opened.driver;
+          }
+        : undefined;
+      const result = await ClayStore.importArchive(bytes, openFresh);
+      if (!openFresh) { store?.close(); }
+      store = result.store;
+      return { manifest: result.manifest, invalidPanels: result.invalidPanels };
     }
     case "getSetting":
       return mustStore().getSetting(String(p.key)) ?? null;

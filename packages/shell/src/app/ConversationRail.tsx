@@ -24,6 +24,8 @@ export function ConversationRail(props: {
   onRemoveSamples: () => void;
   onReset: () => void;
   onOpenData: () => void;
+  onExport: () => void;
+  onImport: (file: File) => void;
 }): React.JSX.Element {
   const [text, setText] = useState("");
   const [keyDraft, setKeyDraft] = useState("");
@@ -73,6 +75,24 @@ export function ConversationRail(props: {
             <button className="link danger" onClick={props.onReset}>
               Start over…
             </button>
+          </div>
+          <div className="rail-actions">
+            <button className="link" onClick={props.onExport}>
+              Export .clay backup
+            </button>
+            <label className="link file-label">
+              Import backup…
+              <input
+                type="file"
+                accept=".clay,.zip"
+                style={{ display: "none" }}
+                onChange={e => {
+                  const file = e.target.files?.[0];
+                  if (file) props.onImport(file);
+                  e.target.value = "";
+                }}
+              />
+            </label>
           </div>
         </div>
       ) : null}

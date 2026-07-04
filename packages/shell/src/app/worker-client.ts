@@ -53,6 +53,14 @@ export class WorkerClient {
   restorableRows(table: string): Promise<string[]> {
     return this.call("restorableRows", { table });
   }
+  exportArchive(): Promise<{ bytes: ArrayBuffer; filename: string }> {
+    return this.call("exportArchive");
+  }
+  importArchive(bytes: ArrayBuffer): Promise<{
+    manifest: { app: string; versions: number }; invalidPanels: string[];
+  }> {
+    return this.call("importArchive", { bytes }, [bytes]);
+  }
   getSetting<T>(key: string): Promise<T | null> { return this.call("getSetting", { key }); }
   setSetting(key: string, value: unknown): Promise<null> {
     return this.call("setSetting", { key, value });

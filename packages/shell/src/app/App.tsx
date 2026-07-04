@@ -157,6 +157,34 @@ export function App(): React.JSX.Element {
     setFaults(f => { const { [panelId]: _drop, ...rest } = f; return rest; });
   };
 
+  const exportArchive = async (): Promise<void> => {
+    const { bytes, filename } = await client().exportArchive();
+    const url = URL.createObjectURL(new Blob([bytes], { type: "application/zip" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+    pushToast("Exported your whole app to one file", "success");
+  };
+
+  const importArchive = async (file: File): Promise<void> => {
+    if (!window.confirm(
+      `Replace this app with the contents of "${file.name}"? `
+      + `Your current data will be overwritten — export a backup first if unsure.`)) return;
+    try {
+      const result = await client().importArchive(await file.arrayBuffer());
+      if (result.invalidPanels.length > 0) {
+        window.alert(
+          `Imported, but ${result.invalidPanels.length} panel(s) failed validation `
+          + `and were flagged: ${result.invalidPanels.join(", ")} (G15).`);
+      }
+      window.location.reload();   // clean re-boot against the imported app
+    } catch (e) {
+      pushToast(e instanceof Error ? e.message : String(e), "danger");
+    }
+  };
+
   const openData = (): void => {
     dataStoreRef.current ??= new StoreRpcClient(
       portFromMessagePort(client().openStorePort("live")));
@@ -319,6 +347,8 @@ export function App(): React.JSX.Element {
         onSaveKey={k => void saveKey(k)}
         onRemoveSamples={() => void removeSamples()}
         onReset={() => void resetApp()}
+        onExport={() => void exportArchive()}
+        onImport={file => void importArchive(file)}
       />
       <div className="toasts">
         {toasts.map(t => (

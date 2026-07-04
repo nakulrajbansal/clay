@@ -12,9 +12,11 @@ export {
   type ColumnKind, type RegColumn, type RegTable, type Registry,
 } from "./registry";
 export {
-  createSystemTables, openBrowserDriver, openMemoryDriver, wipeBrowserStorage,
+  copyDatabase, createSystemTables, openBrowserDriver, openDriverFromBytes,
+  openMemoryDriver, wipeBrowserStorage,
   type DbDriver, type SqlRow, type SqlValue,
 } from "./db";
+export { crc32, zipRead, zipWrite, type ZipEntry } from "./zip";
 export { compileQuery, runQuery, type CompiledQuery, type QueryRow } from "./query";
 export { coerceValue, nowIso, uuidv7, validateInsert, validatePatch } from "./rows";
 export {
@@ -23,8 +25,8 @@ export {
 } from "./migrate";
 export {
   ClayStore,
-  type CommitInput, type HistoryEntry, type LivePanel, type PanelBlobInput,
-  type VersionEntry,
+  type ClayManifest, type CommitInput, type HistoryEntry, type LivePanel,
+  type PanelBlobInput, type VersionEntry,
 } from "./store";
 export {
   MutationPipeline, defaultSmokeTest,
