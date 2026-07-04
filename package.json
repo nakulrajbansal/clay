@@ -6,6 +6,7 @@
     "dev": "pnpm --filter @clay/shell dev",
     "build": "pnpm --filter @clay/shell build",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test",
+    "regression": "pnpm --filter @clay/mutation regression"
   }
 }

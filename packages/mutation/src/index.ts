@@ -12,3 +12,9 @@ export {
   REPAIR_MODEL, TEMPERATURE,
 } from "./config/models";
 export { EXEMPLARS } from "./assets.gen";
+export {
+  REGRESSION_CASES, scoreGate,
+  type CaseOutcome, type Expect, type RegressionCase, type SuiteReport,
+} from "./regression/suite";
+export { runRegressionSuite, type RunOptions } from "./regression/runner";
+export { ARCHETYPE_STORES, type Archetype } from "./regression/contexts";
