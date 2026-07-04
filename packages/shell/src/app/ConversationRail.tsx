@@ -23,6 +23,7 @@ export function ConversationRail(props: {
   onSaveKey: (key: string) => void;
   onRemoveSamples: () => void;
   onReset: () => void;
+  onOpenData: () => void;
 }): React.JSX.Element {
   const [text, setText] = useState("");
   const [keyDraft, setKeyDraft] = useState("");
@@ -39,9 +40,12 @@ export function ConversationRail(props: {
     <aside className="rail">
       <header className="rail-header">
         <span>Reshape</span>
-        <button className="link" onClick={() => setShowSettings(s => !s)}>
-          settings
-        </button>
+        <span className="rail-header-links">
+          <button className="link" onClick={props.onOpenData}>data</button>
+          <button className="link" onClick={() => setShowSettings(s => !s)}>
+            settings
+          </button>
+        </span>
       </header>
 
       {showSettings ? (

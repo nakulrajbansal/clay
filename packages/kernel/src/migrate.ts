@@ -16,7 +16,7 @@ import {
   findColumn, getTable, physicalColumns,
   type ColumnKind, type RegColumn, type RegTable, type Registry,
 } from "./registry";
-import { coerceValue } from "./rows";
+import { coerceValue, nowIso, uuidv7 } from "./rows";
 
 export type ForwardOpT = z.infer<typeof ForwardOpSchema>;
 export type InverseOpT = z.infer<typeof InverseOpSchema>;
@@ -29,6 +29,9 @@ const SQL_TYPE: Record<Exclude<ColumnKind, "computed">, string> = {
 
 const qid = (name: string): string => `"${name}"`;
 const indexName = (table: string, column: string): string => `idx_${table}_${column}`;
+
+/** Kernel-owned user.db tables user migrations may not claim (G6). */
+const RESERVED_TABLES = new Set(["row_history", "sqlite_sequence"]);
 
 function fail(msg: string, detail?: unknown): never {
   throw new ClayError("E_VALIDATION", msg, detail);
@@ -71,6 +74,8 @@ function computeMirrors(operations: ForwardOpT[], registry: Registry): {
   for (const op of operations) {
     switch (op.op) {
       case "create_table": {
+        if (RESERVED_TABLES.has(op.table))
+          fail(`'${op.table}' is a reserved table name`);
         if (sim.has(op.table)) fail(`table '${op.table}' already exists`);
         const names = new Set<string>();
         for (const c of op.columns) {
@@ -325,9 +330,20 @@ export function applyForwardOps(driver: DbDriver, reg: Registry, ops: ForwardOpT
         const t = getTable(reg, op.table);
         const col = findColumn(t, op.column);
         if (!col) fail(`unknown column '${op.table}.${op.column}'`);
-        if (op.default_for_existing !== undefined)
+        if (op.default_for_existing !== undefined) {
+          // G23: the fill is only partially invertible via the version log,
+          // so the touched rows are recorded to row_history (G6).
+          const nulls = driver.select(
+            `SELECT * FROM ${qid(op.table)} WHERE ${qid(op.column)} IS NULL`);
+          for (const row of nulls) {
+            driver.exec(
+              `INSERT INTO "row_history"("id", "table", "row_id", "at", "before_json")
+               VALUES (?, ?, ?, ?, ?)`,
+              [uuidv7(), op.table, String(row.id), nowIso(), JSON.stringify(row)]);
+          }
           driver.exec(`UPDATE ${qid(op.table)} SET ${qid(op.column)} = ? WHERE ${qid(op.column)} IS NULL`,
             [coerceValue(op.table, col, op.default_for_existing)]);
+        }
         col.required = true;
         break;
       }

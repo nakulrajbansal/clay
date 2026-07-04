@@ -11,6 +11,7 @@ import { WorkerClient } from "./worker-client";
 import type { IntentOutcome, PreviewInfo } from "../worker/db-worker";
 import type { StarterShellId } from "../shells/seed";
 import { ConversationRail, type FeedItem } from "./ConversationRail";
+import { DataView } from "./DataView";
 import { Onboarding } from "./Onboarding";
 import { PanelFrame } from "./PanelFrame";
 import { TimeSlider } from "./TimeSlider";
@@ -48,6 +49,8 @@ export function App(): React.JSX.Element {
   const [busy, setBusy] = useState(false);
   const [hasKey, setHasKey] = useState(false);
   const [faults, setFaults] = useState<Record<string, PanelFault>>({});
+  const [showData, setShowData] = useState(false);
+  const dataStoreRef = useRef<StoreRpcClient | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastId = useRef(0);
 
@@ -152,6 +155,12 @@ export function App(): React.JSX.Element {
 
   const dismissFault = (panelId: string): void => {
     setFaults(f => { const { [panelId]: _drop, ...rest } = f; return rest; });
+  };
+
+  const openData = (): void => {
+    dataStoreRef.current ??= new StoreRpcClient(
+      portFromMessagePort(client().openStorePort("live")));
+    setShowData(true);
   };
 
   const closePreview = (): void => {
@@ -289,10 +298,20 @@ export function App(): React.JSX.Element {
         <div className="region-main">{region("main")}</div>
         <div className="region-side">{region("side")}</div>
       </main>
+      {showData && dataStoreRef.current && workerRef.current ? (
+        <DataView
+          worker={workerRef.current}
+          store={dataStoreRef.current}
+          onWrite={table => liveBridge?.notifyWrite(table)}
+          onClose={() => setShowData(false)}
+          onError={msg => pushToast(msg, "danger")}
+        />
+      ) : null}
       <ConversationRail
         feed={feed}
         preview={preview}
         busy={busy || scrub !== null}
+        onOpenData={openData}
         hasKey={hasKey}
         onIntent={t => void runIntent(t)}
         onKeep={() => void keep()}

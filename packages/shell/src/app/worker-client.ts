@@ -1,5 +1,5 @@
 // Typed promise wrapper over the DB worker's command protocol.
-import type { HistoryEntry, LivePanel } from "@clay/kernel";
+import type { HistoryEntry, LivePanel, RegTable } from "@clay/kernel";
 import type { IntentOutcome } from "../worker/db-worker";
 
 export type BootInfo = { persistent: boolean; seeded: boolean; shellId: string | null };
@@ -46,6 +46,13 @@ export class WorkerClient {
   discard(): Promise<null> { return this.call("discard"); }
   removeSamples(): Promise<null> { return this.call("removeSamples"); }
   reset(): Promise<null> { return this.call("reset"); }
+  registryTables(): Promise<RegTable[]> { return this.call("registryTables"); }
+  restoreRow(table: string, id: string): Promise<null> {
+    return this.call("restoreRow", { table, id });
+  }
+  restorableRows(table: string): Promise<string[]> {
+    return this.call("restorableRows", { table });
+  }
   getSetting<T>(key: string): Promise<T | null> { return this.call("getSetting", { key }); }
   setSetting(key: string, value: unknown): Promise<null> {
     return this.call("setSetting", { key, value });

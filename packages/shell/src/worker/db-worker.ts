@@ -143,6 +143,11 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "removeSamples":
       removeSampleRows(mustStore());
       return null;
+    case "restoreRow":
+      mustStore().restoreRow(String(p.table), String(p.id));
+      return null;
+    case "restorableRows":
+      return mustStore().restorableRows(String(p.table));
     case "reset": {
       // P4: deleting the local databases removes all local data.
       dropPending();

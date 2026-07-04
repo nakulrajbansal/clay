@@ -79,10 +79,17 @@ export class ClayStore {
   /** Bind a store to an already-open driver (browser worker, imports). */
   static fromDriver(driver: DbDriver): ClayStore {
     createSystemTables(driver);
+    // G6: row-level undo lives in user.db so it travels with exports.
+    driver.exec(`CREATE TABLE IF NOT EXISTS "row_history"(
+      "id" TEXT PRIMARY KEY, "table" TEXT NOT NULL, "row_id" TEXT NOT NULL,
+      "at" TEXT NOT NULL, "before_json" TEXT NOT NULL)`);
     const store = new ClayStore(driver);
     store.loadRegistry();
     return store;
   }
+
+  /** G6 ring cap; public so tests can lower it. */
+  rowHistoryCap = 10_000;
 
   close(): void {
     this.driver.close();
@@ -368,9 +375,71 @@ export class ClayStore {
     return this.rowById(table, id);
   }
 
+  /** G6: snapshot the raw row before every update/softDelete. */
+  private writeRowHistory(table: string, id: string): void {
+    const rows = this.driver.select(
+      `SELECT * FROM ${qid(table)} WHERE "id" = ?`, [id]);
+    if (!rows[0]) return;
+    this.driver.exec(
+      `INSERT INTO "row_history"("id", "table", "row_id", "at", "before_json")
+       VALUES (?, ?, ?, ?, ?)`,
+      [uuidv7(), table, id, nowIso(), JSON.stringify(rows[0])]);
+    const n = Number(this.driver.select(
+      `SELECT COUNT(*) AS n FROM "row_history"`)[0]?.n ?? 0);
+    if (n > this.rowHistoryCap) {
+      this.driver.exec(
+        `DELETE FROM "row_history" WHERE "id" IN (
+           SELECT "id" FROM "row_history" ORDER BY "at" ASC LIMIT ?)`,
+        [n - this.rowHistoryCap]);
+    }
+  }
+
+  rowHistoryCount(): number {
+    return Number(this.driver.select(
+      `SELECT COUNT(*) AS n FROM "row_history"`)[0]?.n ?? 0);
+  }
+
+  /** Rows with a snapshot in the restore window (G6: last 30 days). */
+  restorableRows(table: string, sinceDays = 30): string[] {
+    getTable(this.reg, table);
+    const cutoff = new Date(Date.now() - sinceDays * 86_400_000).toISOString();
+    return this.driver.select(
+      `SELECT DISTINCT "row_id" FROM "row_history" WHERE "table" = ? AND "at" >= ?`,
+      [table, cutoff]).map(r => String(r.row_id));
+  }
+
+  /** Restore the most recent snapshot of a row (also undeletes, since the
+   * snapshot carries deleted_at). Columns that no longer exist are skipped
+   * — a projection, not a loss (doc 04 §5 spirit). */
+  restoreRow(table: string, id: string): QueryRow {
+    const t = getTable(this.reg, table);
+    const entry = this.driver.select(
+      `SELECT "before_json" FROM "row_history"
+       WHERE "table" = ? AND "row_id" = ? ORDER BY "at" DESC LIMIT 1`,
+      [table, id])[0];
+    if (!entry)
+      throw new ClayError("E_VALIDATION", `no history for '${table}/${id}'`);
+    this.mustExist(table, id);
+    const before = JSON.parse(String(entry.before_json)) as Record<string, SqlValue>;
+    const settable = new Set([
+      ...t.columns.filter(c => c.type !== "computed").map(c => c.name),
+      "deleted_at",
+    ]);
+    const cols = Object.keys(before).filter(k => settable.has(k));
+    if (cols.length > 0) {
+      this.writeRowHistory(table, id);   // restoring is itself undoable
+      this.driver.exec(
+        `UPDATE ${qid(table)} SET ${cols.map(c => `${qid(c)} = ?`).join(", ")},
+           "updated_at" = ? WHERE "id" = ?`,
+        [...cols.map(c => before[c] ?? null), nowIso(), id]);
+    }
+    return this.rowById(table, id);
+  }
+
   update(table: string, id: string, patch: Record<string, unknown>): QueryRow {
     const t = getTable(this.reg, table);
     this.mustExist(table, id);
+    this.writeRowHistory(table, id);
     const { cols, vals } = validatePatch(t, patch);
     this.driver.exec(
       `UPDATE ${qid(table)} SET ${cols.map(c => `${qid(c)} = ?`).join(", ")},
@@ -382,6 +451,7 @@ export class ClayStore {
   softDelete(table: string, id: string): void {
     getTable(this.reg, table);
     this.mustExist(table, id);
+    this.writeRowHistory(table, id);
     this.driver.exec(
       `UPDATE ${qid(table)} SET "deleted_at" = ?, "updated_at" = ? WHERE "id" = ?`,
       [nowIso(), nowIso(), id]);
