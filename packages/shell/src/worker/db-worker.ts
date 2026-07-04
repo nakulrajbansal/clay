@@ -149,6 +149,18 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       return null;
     case "restorableRows":
       return mustStore().restorableRows(String(p.table));
+    case "suggestions":
+      return mustStore().suggestions();
+    case "recordFilter":
+      mustStore().recordUsage({ kind: "filter",
+        subject: String(p.name), detail: p.payload as Record<string, unknown> });
+      return null;
+    case "dismissSuggestion":
+      mustStore().dismissSuggestion(String(p.subject), String(p.kind));
+      return null;
+    case "acceptSuggestion":
+      mustStore().acceptSuggestion(String(p.subject), String(p.kind));
+      return null;
     case "reset": {
       // P4: deleting the local databases removes all local data.
       dropPending();

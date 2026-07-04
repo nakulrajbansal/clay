@@ -33,6 +33,7 @@ export {
   type AttemptResult, type Planner, type PlannerContext, type PlannerResult,
   type PreviewHandle, type SmokeTest,
 } from "./pipeline";
+export { Observer, type Suggestion, type UsageEvent } from "./observe";
 export {
   InProcessAsyncStore, StoreRpcClient, portFromMessagePort, serveStore,
   type AsyncStore, type MessagePortLike, type StoreRequest, type StoreResponse,

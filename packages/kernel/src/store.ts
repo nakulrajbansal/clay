@@ -19,6 +19,7 @@ import {
   type MigrationPlanT,
 } from "./migrate";
 import { runQuery, type QueryRow } from "./query";
+import { Observer, type Suggestion, type UsageEvent } from "./observe";
 
 type QueryT = import("@clay/schema").Query;
 
@@ -71,8 +72,11 @@ const qid = (name: string): string => `"${name}"`;
 
 export class ClayStore {
   private reg: Registry = new Map();
+  readonly observer: Observer;
 
-  private constructor(private readonly driver: DbDriver) {}
+  private constructor(private readonly driver: DbDriver) {
+    this.observer = new Observer(driver);
+  }
 
   static async openMemory(): Promise<ClayStore> {
     return ClayStore.fromDriver(await openMemoryDriver());
@@ -374,7 +378,21 @@ export class ClayStore {
     this.driver.exec(
       `INSERT INTO ${qid(table)} (${allCols.map(qid).join(", ")})
        VALUES (${allCols.map(() => "?").join(", ")})`, allVals);
+    this.observer.record({ kind: "insert", subject: table });
     return this.rowById(table, id);
+  }
+
+  // ---------- Observer (doc 02 §1) ----------
+  recordUsage(ev: UsageEvent): void { this.observer.record(ev); }
+  suggestions(): Suggestion[] { return this.observer.suggestions(this.reg); }
+  markSuggestionShown(subject: string, kind: string): void {
+    this.observer.markShown(subject, kind);
+  }
+  dismissSuggestion(subject: string, kind: string): void {
+    this.observer.dismiss(subject, kind);
+  }
+  acceptSuggestion(subject: string, kind: string): void {
+    this.observer.accept(subject, kind);
   }
 
   /** G6: snapshot the raw row before every update/softDelete. */

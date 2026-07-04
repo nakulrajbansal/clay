@@ -2,6 +2,7 @@
 // with Keep/Discard (S5/S6), clarify and amber failure cards, and the
 // minimal settings (BYO key, P3: stored locally, sent only to Anthropic).
 import { useState } from "react";
+import type { Suggestion } from "@clay/kernel";
 import type { PreviewInfo } from "../worker/db-worker";
 
 export type FeedItem =
@@ -26,6 +27,9 @@ export function ConversationRail(props: {
   onOpenData: () => void;
   onExport: () => void;
   onImport: (file: File) => void;
+  suggestions: Suggestion[];
+  onAcceptSuggestion: (s: Suggestion) => void;
+  onDismissSuggestion: (s: Suggestion) => void;
 }): React.JSX.Element {
   const [text, setText] = useState("");
   const [keyDraft, setKeyDraft] = useState("");
@@ -125,6 +129,24 @@ export function ConversationRail(props: {
         })}
         {props.busy ? <div className="feed-item feed-info">Reshaping…</div> : null}
       </div>
+
+      {props.suggestions.length > 0 && !props.preview ? (
+        <div className="rail-suggestions">
+          {props.suggestions.map(s => (
+            <div key={s.id} className="suggestion-chip">
+              <span className="suggestion-reason">{s.reason}</span>
+              <span className="rail-actions">
+                <button className="primary" onClick={() => props.onAcceptSuggestion(s)}>
+                  Do it
+                </button>
+                <button className="link" onClick={() => props.onDismissSuggestion(s)}>
+                  no thanks
+                </button>
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       {props.preview ? (
         <div className="diff-card">

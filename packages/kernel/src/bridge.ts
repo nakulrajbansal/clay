@@ -24,6 +24,8 @@ export type PanelManifest = {
 export type BridgeHooks = {
   onToast?: (panelId: string, msg: string, kind: string) => void;
   onConfirm?: (panelId: string, msg: string) => Promise<boolean>;
+  /** Observer feed: a panel emitted a cross-panel event (doc 02 §1). */
+  onEvent?: (panelId: string, name: string, payload: unknown) => void;
   /** Called when a panel trips its boundary (strikes, doc 06 §3). */
   onBoundary?: (panelId: string, reason: string) => void;
   /** Runtime failure reported from inside the iframe (ADR-015, doc 05 §7).
@@ -288,6 +290,7 @@ export class Bridge {
             throw new ClayError("E_LIMIT", "emit rate limit");
           state.emitTimes.push(now);
           this.reply(state, call.seq, null);
+          this.hooks.onEvent?.(state.manifest.panelId, name, payload ?? null);
           for (const other of this.panels.values())
             other.port.send({ v: 1, kind: "event", name, payload: payload ?? null });
           return;

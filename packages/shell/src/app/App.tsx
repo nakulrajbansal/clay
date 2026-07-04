@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bridge, StoreRpcClient, portFromMessagePort,
-  type HistoryEntry, type LivePanel,
+  type HistoryEntry, type LivePanel, type Suggestion,
 } from "@clay/kernel";
 import { WorkerClient } from "./worker-client";
 import type { IntentOutcome, PreviewInfo } from "../worker/db-worker";
@@ -32,6 +32,10 @@ function makeBridge(client: WorkerClient, target: "live" | "shadow",
     onPanelError: (panelId, code, message) => onFault(panelId, { code, message }),
     onBoundary: (panelId, reason) =>
       onFault(panelId, { code: "E_STRIKES", message: reason }),
+    // live bridge only: feed the Observer's repeated-filter heuristic
+    onEvent: target === "live"
+      ? (_panel, name, payload) => { void client.recordFilter(name, payload); }
+      : undefined,
   });
 }
 
@@ -49,6 +53,7 @@ export function App(): React.JSX.Element {
   const [busy, setBusy] = useState(false);
   const [hasKey, setHasKey] = useState(false);
   const [faults, setFaults] = useState<Record<string, PanelFault>>({});
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [showData, setShowData] = useState(false);
   const dataStoreRef = useRef<StoreRpcClient | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -75,6 +80,11 @@ export function App(): React.JSX.Element {
     setFaults({});
   }, []);
 
+  const refreshSuggestions = useCallback(async (): Promise<void> => {
+    try { setSuggestions(await client().suggestions()); }
+    catch { /* pre-boot */ }
+  }, []);
+
   // boot
   useEffect(() => {
     const worker = new Worker(new URL("../worker/db-worker.ts", import.meta.url),
@@ -89,6 +99,7 @@ export function App(): React.JSX.Element {
       setLiveBridge(makeBridge(wc, "live", pushToast, recordFault));
       setPanels(await wc.panels());
       setHistory(await wc.history());
+      setSuggestions(await wc.suggestions());
       setPhase("main");
     })();
     return (): void => worker.terminate();
@@ -125,6 +136,17 @@ export function App(): React.JSX.Element {
     } finally {
       setBusy(false);
     }
+  };
+
+  const acceptSuggestion = (s: Suggestion): void => {
+    void client().acceptSuggestion(s.subject, s.kind);
+    setSuggestions(list => list.filter(x => x.id !== s.id));
+    void runIntent(s.intent);
+  };
+
+  const dismissSuggestion = (s: Suggestion): void => {
+    void client().dismissSuggestion(s.subject, s.kind);
+    setSuggestions(list => list.filter(x => x.id !== s.id));
   };
 
   // doc 05 §7 boundary actions
@@ -202,6 +224,7 @@ export function App(): React.JSX.Element {
     setFeed(f => [...f, { kind: "committed", summary: preview.summary, version }]);
     closePreview();
     await refreshPanels();   // hot swap: keyed remount against the new blobs
+    await refreshSuggestions();
   };
 
   const discard = async (): Promise<void> => {
@@ -341,6 +364,9 @@ export function App(): React.JSX.Element {
         busy={busy || scrub !== null}
         onOpenData={openData}
         hasKey={hasKey}
+        suggestions={suggestions}
+        onAcceptSuggestion={acceptSuggestion}
+        onDismissSuggestion={dismissSuggestion}
         onIntent={t => void runIntent(t)}
         onKeep={() => void keep()}
         onDiscard={() => void discard()}
