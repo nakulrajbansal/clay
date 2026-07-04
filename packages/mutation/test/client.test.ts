@@ -67,10 +67,16 @@ describe("BYO request shape", () => {
     expect(call.body.model).toBe(DEFAULT_MODEL);
     expect(call.body.max_tokens).toBe(6000);
     expect(call.body.temperature).toBe(0.2);
-    // byte-stable simplified schema (G1/ADR-013)
-    expect(call.body.output_config).toEqual({
-      format: { type: "json_schema", schema: apiSchema },
-    });
+    // simplified schema (G1/ADR-013), sent without annotation keywords the
+    // API's grammar rejects ($comment)
+    const sent = (call.body.output_config as {
+      format: { type: string; schema: Record<string, unknown> };
+    }).format;
+    expect(sent.type).toBe("json_schema");
+    // no annotation keyword the API grammar rejects, anywhere in the tree
+    expect(JSON.stringify(sent.schema)).not.toContain("$comment");
+    expect(sent.schema.properties).toEqual(
+      (apiSchema as { properties: unknown }).properties);
     const messages = call.body.messages as { role: string; content: string }[];
     expect(messages).toHaveLength(1);
     expect(messages[0]!.content).toContain("<intent>add a notes field</intent>");

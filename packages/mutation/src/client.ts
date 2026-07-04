@@ -7,7 +7,25 @@
 // client dependency budget is ADR-gated (CLAUDE.md rule 4, doc 06 §6) and
 // the surface is one POST. Re-evaluate if the surface grows.
 import { MutationPlan } from "@clay/schema";
-import apiSchema from "@clay/schema/mutation-plan-api.json";
+import apiSchemaRaw from "@clay/schema/mutation-plan-api.json";
+
+// The API's structured-output grammar rejects annotation keywords like
+// $comment. Keep them in the source file (self-documenting) but strip them
+// from the schema we actually send. Deterministic, so the sent bytes stay
+// stable for grammar caching (G1/ADR-013).
+function stripAnnotations(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(stripAnnotations);
+  if (node && typeof node === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(node)) {
+      if (k === "$comment") continue;
+      out[k] = stripAnnotations(v);
+    }
+    return out;
+  }
+  return node;
+}
+const apiSchema = stripAnnotations(apiSchemaRaw);
 import {
   ANTHROPIC_API_URL, ANTHROPIC_VERSION, DEFAULT_MODEL, MAX_TOKENS,
   REPAIR_MODEL, TEMPERATURE,
