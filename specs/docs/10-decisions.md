@@ -99,3 +99,28 @@ ADR-015 A validated upstream panel_error Bridge message.
   Consequence: BridgePanelError {v, kind, code<=40, message<=500}; the
   Bridge forwards it to a hook without a strike; content is untrusted —
   used only for display and as sanitized repair-prompt input.
+
+ADR-016 Expand the vnode vocabulary with composable primitives (revises
+  ADR-004's fixed-component-set consequence, not its principle).
+  Context: the eight named components can't express whole classes of
+  intent (gantt, kanban, calendar, timeline, gauge, custom viz). ADR-004
+  foresaw this as "measured, drives v1.1"; hitting it repeatedly IS that
+  measurement.
+  Alt 1: raw HTML/React panels. REJECTED — on the pre-decided "no" list
+  (doc 01 §3): untrusted DOM means XSS, exfiltration, and system-UI
+  spoofing; the Validator could no longer reason about output.
+  Alt 2: keep adding named components forever. Rejected: always a gap
+  behind the next request.
+  DECISION: add four SAFE, composable primitives to the kernel-rendered
+  set — Box (flex/grid container, enumerated tokens only), Text, Bar
+  (proportional, offset+value → gantt rows/progress/meters), and Scene (a
+  constrained SVG canvas: rect|line|text|circle|path shapes with numeric
+  coords + token fills, textContent labels, shape cap). These COMPOSE into
+  arbitrary in-frame layouts while every element stays a known vnode: no
+  script, no raw DOM, no style/class props, nothing escapes the panel
+  frame (doc 06 §4 intact). The security model (ADR-004/005, sandbox, CSP,
+  Validator) is UNCHANGED — only the safe drawing surface widens.
+  Consequence: renderer + PANEL_GLOBALS gain the four; the prompt teaches
+  them; the Validator needs no change (it never allow-listed tags, and the
+  primitives add no query/write surface). Model quality at composing novel
+  layouts is a prompt-tuning loop, watched via the new diagnostics.

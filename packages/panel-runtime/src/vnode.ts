@@ -29,10 +29,17 @@ export const EmptyState = "EmptyState";
 export const Stack = "Stack";
 export const Grid = "Grid";
 export const FilterBar = "FilterBar";
+// Composable primitives (ADR-016): compose into arbitrary in-frame layouts
+// — gantt (Scene/Bar), kanban (Box columns), calendar (Box grid), etc.
+export const Box = "Box";
+export const Text = "Text";
+export const Bar = "Bar";
+export const Scene = "Scene";
 
 export const PANEL_GLOBALS: Record<string, unknown> = {
   Table, Chart, MetricCard, Badge, Form, Field, Button, Input, Select,
   DatePicker, Checkbox, Toggle, EmptyState, Stack, Grid, FilterBar,
+  Box, Text, Bar, Scene,
 };
 
 const LAYOUT_TAGS = new Set(["div", "span", "section", "h1", "h2", "h3", "p", "ul", "li", "hr"]);
@@ -190,6 +197,10 @@ function buildComponent(ctx: Ctx, node: VNode): HTMLElement {
     case Form: return buildForm(ctx, props);
     case FilterBar: return buildFilterBar(ctx, props);
     case Chart: return buildChart(ctx, props);
+    case Box: return buildBox(ctx, props);
+    case Text: return buildText(ctx, props);
+    case Bar: return buildBar(ctx, props);
+    case Scene: return buildScene(ctx, props);
     case Field: {
       const wrap = el(ctx, "label", "clay-field");
       const span = el(ctx, "span", "clay-field-label");
@@ -457,6 +468,143 @@ function build(ctx: Ctx, child: VChild): Node | null {
     if (built) node.appendChild(built);
   }
   return node;
+}
+
+// ---------- composable primitives (ADR-016) ----------
+const SIZES = new Set(["none", "xs", "sm", "md", "lg", "xl"]);
+const clampTone = (t: unknown): string | null =>
+  typeof t === "string" && TONES.has(t) ? t : null;
+const clampNum = (v: unknown, lo: number, hi: number, dflt: number): number => {
+  const n = typeof v === "number" && Number.isFinite(v) ? v : dflt;
+  return Math.max(lo, Math.min(hi, n));
+};
+
+function buildBox(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
+  const box = el(ctx, "div", "clay-box");
+  const cls = (name: unknown, allowed: Set<string>, prefix: string): void => {
+    if (typeof name === "string" && allowed.has(name)) box.classList.add(`${prefix}-${name}`);
+  };
+  box.classList.add(props.direction === "row" ? "clay-box-row" : "clay-box-col");
+  cls(props.gap ?? "md", SIZES, "clay-gap");
+  cls(props.pad, SIZES, "clay-pad");
+  cls(props.align, new Set(["start", "center", "end", "stretch"]), "clay-align");
+  cls(props.justify, new Set(["start", "center", "end", "between"]), "clay-justify");
+  if (props.wrap === true) box.classList.add("clay-box-wrap");
+  if (props.grow === true) box.classList.add("clay-box-grow");
+  const tone = clampTone(props.tone);
+  if (tone) box.classList.add(`clay-tone-${tone}`);
+  applyTokensAndHandlers(box, props);
+  return box;
+}
+
+function buildText(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
+  const span = el(ctx, "span", "clay-text");
+  if (typeof props.size === "string" && SIZES.has(props.size))
+    span.classList.add(`clay-text-${props.size}`);
+  if (props.weight === "bold") span.classList.add("clay-text-bold");
+  if (props.muted === true) span.classList.add("clay-text-muted");
+  const tone = clampTone(props.tone);
+  if (tone) span.classList.add(`clay-tone-fg-${tone}`);
+  if (props.value !== undefined && props.value !== null)
+    span.textContent = String(props.value);
+  return span;
+}
+
+function buildBar(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
+  // proportional bar. value/offset in 0..1: a gantt row is offset + value.
+  const wrap = el(ctx, "div", "clay-bar");
+  if (props.label !== undefined) {
+    const label = el(ctx, "span", "clay-bar-label");
+    label.textContent = String(props.label);
+    wrap.appendChild(label);
+  }
+  const track = el(ctx, "div", "clay-bar-track");
+  const fill = el(ctx, "div", "clay-bar-fill");
+  const offset = clampNum(props.offset, 0, 1, 0);
+  const value = clampNum(props.value, 0, 1, 0);
+  fill.style.marginLeft = `${(offset * 100).toFixed(2)}%`;
+  fill.style.width = `${(Math.min(value, 1 - offset) * 100).toFixed(2)}%`;
+  const tone = clampTone(props.tone) ?? "accent";
+  fill.classList.add(`clay-tone-${tone}`);
+  track.appendChild(fill);
+  wrap.appendChild(track);
+  if (props.caption !== undefined) {
+    const cap = el(ctx, "span", "clay-bar-caption");
+    cap.textContent = String(props.caption);
+    wrap.appendChild(cap);
+  }
+  return wrap;
+}
+
+const MAX_SHAPES = 2000;
+
+function buildScene(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
+  // A constrained SVG canvas — the "draw anything" escape hatch. Pure
+  // geometry: numeric coords, token fills, textContent labels. No script.
+  const width = clampNum(props.width, 1, 4000, 400);
+  const height = clampNum(props.height, 1, 4000, 200);
+  const shapes = (Array.isArray(props.shapes) ? props.shapes : [])
+    .slice(0, MAX_SHAPES) as Record<string, unknown>[];
+  const wrap = el(ctx, "figure", "clay-scene");
+  const svg = ctx.doc.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("role", "img");
+  wrap.appendChild(svg);
+  const n = (v: unknown, dflt = 0): number =>
+    typeof v === "number" && Number.isFinite(v) ? v : dflt;
+  const toneClass = (t: unknown): string => {
+    const tone = clampTone(t);
+    return tone ? `clay-fill-${tone}` : "clay-fill-default";
+  };
+  for (const s of shapes) {
+    let node: SVGElement | null = null;
+    switch (s.kind) {
+      case "rect": {
+        node = ctx.doc.createElementNS(SVG_NS, "rect");
+        node.setAttribute("x", String(n(s.x)));
+        node.setAttribute("y", String(n(s.y)));
+        node.setAttribute("width", String(Math.max(0, n(s.w))));
+        node.setAttribute("height", String(Math.max(0, n(s.h))));
+        if (typeof s.radius === "number") node.setAttribute("rx", String(clampNum(s.radius, 0, 40, 0)));
+        node.setAttribute("class", toneClass(s.tone));
+        break;
+      }
+      case "line": {
+        node = ctx.doc.createElementNS(SVG_NS, "line");
+        node.setAttribute("x1", String(n(s.x1)));
+        node.setAttribute("y1", String(n(s.y1)));
+        node.setAttribute("x2", String(n(s.x2)));
+        node.setAttribute("y2", String(n(s.y2)));
+        node.setAttribute("class", `clay-stroke-${clampTone(s.tone) ?? "gray"}`);
+        break;
+      }
+      case "circle": {
+        node = ctx.doc.createElementNS(SVG_NS, "circle");
+        node.setAttribute("cx", String(n(s.cx)));
+        node.setAttribute("cy", String(n(s.cy)));
+        node.setAttribute("r", String(Math.max(0, n(s.r))));
+        node.setAttribute("class", toneClass(s.tone));
+        break;
+      }
+      case "text": {
+        node = ctx.doc.createElementNS(SVG_NS, "text");
+        node.setAttribute("x", String(n(s.x)));
+        node.setAttribute("y", String(n(s.y)));
+        node.setAttribute("class", `clay-scene-text clay-stroke-${clampTone(s.tone) ?? "gray"}`);
+        node.textContent = String(s.text ?? "").slice(0, 120);
+        break;
+      }
+      default:
+        continue;   // unknown shape kinds are ignored, not fatal
+    }
+    if (s.label !== undefined && s.kind !== "text") {
+      const title = ctx.doc.createElementNS(SVG_NS, "title");
+      title.textContent = String(s.label);
+      node.appendChild(title);
+    }
+    svg.appendChild(node);
+  }
+  return wrap;
 }
 
 export function render(

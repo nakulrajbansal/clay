@@ -29,6 +29,39 @@ export type S1Context = {
   intent: string;
 };
 
+// Composable primitives (ADR-016): teach the model to tailor UI to any
+// request by composing Box/Text/Bar/Scene, not just the named components.
+const PRIMITIVES_NOTE = `## Composable UI primitives
+Beyond the named components, four primitives compose into ANY in-frame
+layout. Use them when the request needs something the named components
+don't cover (timelines, boards, calendars, gauges, custom visuals). All
+props are enumerated tokens or numbers — never CSS, never raw HTML.
+
+- Box{direction:"row"|"col", gap, pad:"none"|"xs"|"sm"|"md"|"lg"|"xl",
+      align:"start"|"center"|"end"|"stretch",
+      justify:"start"|"center"|"end"|"between", wrap:bool, grow:bool,
+      tone} — the universal flex container. Nest to build any layout.
+- Text{value, size:"xs".."xl", weight:"bold", muted:bool, tone}.
+- Bar{value:0..1, offset:0..1, label, caption, tone} — a proportional
+  bar. A gantt/timeline ROW is a Bar where offset = start fraction and
+  value = duration fraction along the row.
+- Scene{width, height, shapes:[…]} — a constrained SVG canvas for
+  drawing. shapes: {kind:"rect",x,y,w,h,radius?,tone?,label?} |
+  {kind:"line",x1,y1,x2,y2,tone?} | {kind:"circle",cx,cy,r,tone?,label?} |
+  {kind:"text",x,y,text,tone?}. Coordinates are viewBox units; tones are
+  the standard tokens. Use for gantt bars, network diagrams, heatmaps,
+  any bespoke visual.
+
+Composition patterns:
+- GANTT: a Box(col) of rows; each row a Box(row) with a Text label and a
+  Bar{offset,value} positioned by the item's start/end dates normalized to
+  0..1 over the visible window. Or a single Scene of positioned rects.
+- KANBAN: a Box(row, gap:"md") of columns; each column a Box(col) with a
+  Text header and one Box(tone) card per row.
+- CALENDAR: a Box(col) of week rows; each a Box(row) of 7 day cells (Box).
+- GAUGE/PROGRESS: a Bar{value} with a Text caption, or a Scene arc.
+Introspect clay.meta.schema and shape data in-panel to feed these.`;
+
 // The API grammar carries two fields as JSON strings (see
 // mutation-plan-api.json / hydrateApiPlan). The exemplars below show them
 // as objects for readability; this note reconciles that with the wire form.
@@ -49,6 +82,7 @@ export function buildSystemPrompt(): string {
     `## Migration vocabulary and invariants\n\n${MIGRATION_VOCAB}`,
     `## Output contract\n\n${OUTPUT_CONTRACT}`,
     `## Component contracts (G25)\n\n${COMPONENT_CONTRACTS}`,
+    PRIMITIVES_NOTE,
     `## Hard rules\n\n${HARD_RULES}`,
     WIRE_NOTE,
     `## Exemplars\n\n${exemplars}`,
