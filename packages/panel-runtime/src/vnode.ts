@@ -35,11 +35,15 @@ export const Box = "Box";
 export const Text = "Text";
 export const Bar = "Bar";
 export const Scene = "Scene";
+// View components (the multi-view workhorses for business apps): one
+// dataset shown as a kanban board or a card grid.
+export const Board = "Board";
+export const Cards = "Cards";
 
 export const PANEL_GLOBALS: Record<string, unknown> = {
   Table, Chart, MetricCard, Badge, Form, Field, Button, Input, Select,
   DatePicker, Checkbox, Toggle, EmptyState, Stack, Grid, FilterBar,
-  Box, Text, Bar, Scene,
+  Box, Text, Bar, Scene, Board, Cards,
 };
 
 const LAYOUT_TAGS = new Set(["div", "span", "section", "h1", "h2", "h3", "p", "ul", "li", "hr"]);
@@ -201,6 +205,8 @@ function buildComponent(ctx: Ctx, node: VNode): HTMLElement {
     case Text: return buildText(ctx, props);
     case Bar: return buildBar(ctx, props);
     case Scene: return buildScene(ctx, props);
+    case Board: return buildBoard(ctx, props);
+    case Cards: return buildCards(ctx, props);
     case Field: {
       const wrap = el(ctx, "label", "clay-field");
       const span = el(ctx, "span", "clay-field-label");
@@ -605,6 +611,78 @@ function buildScene(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
     svg.appendChild(node);
   }
   return wrap;
+}
+
+// ---------- view components (kanban board, card grid) ----------
+type CardSpec = {
+  title?: unknown; subtitle?: unknown; badge?: unknown; badgeTone?: unknown;
+  fields?: { label?: unknown; value?: unknown }[];
+};
+
+function buildCard(ctx: Ctx, card: CardSpec, large: boolean,
+  onClick: unknown): HTMLElement {
+  const c = el(ctx, "div", large ? "clay-card clay-card-lg" : "clay-card");
+  const head = el(ctx, "div", "clay-card-head");
+  const title = el(ctx, "div", "clay-card-title");
+  title.textContent = String(card.title ?? "");
+  head.appendChild(title);
+  if (card.badge !== undefined && card.badge !== null)
+    head.appendChild(buildBadge(ctx, card.badge, clampTone(card.badgeTone) ?? "gray"));
+  c.appendChild(head);
+  if (card.subtitle !== undefined && card.subtitle !== null) {
+    const sub = el(ctx, "div", "clay-card-subtitle");
+    sub.textContent = String(card.subtitle);
+    c.appendChild(sub);
+  }
+  for (const f of Array.isArray(card.fields) ? card.fields : []) {
+    const row = el(ctx, "div", "clay-card-field");
+    const l = el(ctx, "span", "clay-card-field-label");
+    l.textContent = String(f.label ?? "");
+    const v = el(ctx, "span", "clay-card-field-value");
+    v.textContent = String(f.value ?? "");
+    row.append(l, v);
+    c.appendChild(row);
+  }
+  if (typeof onClick === "function") {
+    c.classList.add("clay-clickable");
+    c.addEventListener("click", () => (onClick as (x: unknown) => void)(card));
+  }
+  return c;
+}
+
+function buildBoard(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
+  // A kanban board: the panel shapes rows into groups (e.g. by a status
+  // enum); Board renders columns of cards. Click a card to act on it.
+  type Group = { key?: unknown; label?: unknown; tone?: unknown; cards?: CardSpec[] };
+  const groups = (Array.isArray(props.groups) ? props.groups : []) as Group[];
+  const onCardClick = props.onCardClick;
+  const board = el(ctx, "div", "clay-board");
+  for (const g of groups) {
+    const col = el(ctx, "div", "clay-board-col");
+    const header = el(ctx, "div", "clay-board-header");
+    const label = el(ctx, "span", "clay-board-label");
+    label.textContent = String(g.label ?? g.key ?? "");
+    const tone = clampTone(g.tone);
+    if (tone) label.classList.add(`clay-tone-fg-${tone}`);
+    const cards = Array.isArray(g.cards) ? g.cards : [];
+    const count = el(ctx, "span", "clay-board-count");
+    count.textContent = String(cards.length);
+    header.append(label, count);
+    col.appendChild(header);
+    const list = el(ctx, "div", "clay-board-cards");
+    for (const card of cards) list.appendChild(buildCard(ctx, card, false, onCardClick));
+    col.appendChild(list);
+    board.appendChild(col);
+  }
+  return board;
+}
+
+function buildCards(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
+  const items = (Array.isArray(props.items) ? props.items : []) as CardSpec[];
+  const onItemClick = props.onItemClick;
+  const grid = el(ctx, "div", "clay-cards");
+  for (const it of items) grid.appendChild(buildCard(ctx, it, true, onItemClick));
+  return grid;
 }
 
 export function render(

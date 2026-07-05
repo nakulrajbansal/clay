@@ -77,6 +77,27 @@ const PANEL_CSS = `
   .clay-bar-fill.clay-tone-red { background: #ef4444; } .clay-bar-fill.clay-tone-accent { background: #6366f1; }
   .clay-bar-fill.clay-tone-gray { background: #a8a29e; }
   .clay-bar-caption { font-size: 11px; color: #78716c; }
+  /* view components: kanban board + card grid */
+  .clay-board { display: flex; gap: 10px; align-items: flex-start; overflow-x: auto; }
+  .clay-board-col { flex: 1; min-width: 150px; background: #fafaf9;
+    border: 1px solid #f0efed; border-radius: 10px; padding: 8px; }
+  .clay-board-header { display: flex; justify-content: space-between; align-items: center;
+    font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    color: #78716c; padding: 2px 4px 8px; }
+  .clay-board-count { background: #e7e5e4; color: #57534e; border-radius: 999px;
+    padding: 0 7px; font-size: 11px; }
+  .clay-board-cards { display: flex; flex-direction: column; gap: 6px; }
+  .clay-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .clay-card { background: #fff; border: 1px solid #e7e5e4; border-radius: 9px; padding: 8px 10px; }
+  .clay-card-lg { padding: 12px 14px; }
+  .clay-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+  .clay-card-title { font-weight: 600; font-size: 13px; }
+  .clay-card-subtitle { font-size: 12px; color: #78716c; margin-top: 2px; }
+  .clay-card-field { display: flex; justify-content: space-between; font-size: 12px; margin-top: 4px; }
+  .clay-card-field-label { color: #a8a29e; }
+  .clay-clickable { cursor: pointer; }
+  .clay-clickable:hover { border-color: #a8a29e; background: #fafaf9; }
+
   .clay-scene svg { width: 100%; height: auto; display: block; }
   .clay-fill-default, .clay-fill-accent { fill: #6366f1; } .clay-fill-green { fill: #22c55e; }
   .clay-fill-amber { fill: #f59e0b; } .clay-fill-red { fill: #ef4444; } .clay-fill-gray { fill: #d6d3d1; }

@@ -2,7 +2,7 @@
 // Composable primitives (ADR-016): Box/Text/Bar/Scene render safely and
 // compose into layouts the named components can't express (a Gantt).
 import { describe, expect, it } from "vitest";
-import { h, render, Box, Text, Bar, Scene, Stack } from "../src/index";
+import { h, render, Box, Text, Bar, Scene, Stack, Board, Cards } from "../src/index";
 
 function mount(vnode: Parameters<typeof render>[0]): HTMLElement {
   const c = document.createElement("div");
@@ -92,6 +92,52 @@ describe("Scene", () => {
     const c = mount(h(Scene, { width: 100, height: 100, shapes }));
     expect(c.querySelectorAll("iframe, script")).toHaveLength(0);
     expect(c.querySelectorAll("rect").length).toBeLessThanOrEqual(2000);
+  });
+});
+
+describe("Board (kanban)", () => {
+  it("renders columns of cards with counts and per-card badges", () => {
+    const c = mount(h(Board, {
+      groups: [
+        { key: "todo", label: "To do", tone: "gray",
+          cards: [{ title: "Fix sink", subtitle: "123 Main St", badge: "high", badgeTone: "red" }] },
+        { key: "done", label: "Done", tone: "green", cards: [
+          { title: "Mow lawn" }, { title: "Trim hedge" }] },
+      ],
+    }));
+    const cols = c.querySelectorAll(".clay-board-col");
+    expect(cols).toHaveLength(2);
+    expect(cols[0]!.querySelector(".clay-board-label")!.textContent).toBe("To do");
+    expect(cols[0]!.querySelector(".clay-board-count")!.textContent).toBe("1");
+    expect(cols[1]!.querySelector(".clay-board-count")!.textContent).toBe("2");
+    expect(c.querySelector(".clay-card-title")!.textContent).toBe("Fix sink");
+    expect(c.querySelector(".clay-card .clay-badge")!.className).toContain("clay-tone-red");
+  });
+
+  it("onCardClick fires with the clicked card", () => {
+    const clicked: unknown[] = [];
+    const c = mount(h(Board, {
+      groups: [{ label: "A", cards: [{ title: "job-1" }] }],
+      onCardClick: (card: unknown) => clicked.push(card),
+    }));
+    c.querySelector<HTMLElement>(".clay-card")!.click();
+    expect(clicked).toHaveLength(1);
+    expect((clicked[0] as { title: string }).title).toBe("job-1");
+  });
+});
+
+describe("Cards", () => {
+  it("renders a grid of record cards with fields", () => {
+    const c = mount(h(Cards, { items: [
+      { title: "Acme Co", subtitle: "acme@x.com", badge: "VIP", badgeTone: "accent",
+        fields: [{ label: "Phone", value: "555-1234" }, { label: "Owed", value: "$1,200" }] },
+    ] }));
+    expect(c.querySelector(".clay-cards")).not.toBeNull();
+    expect(c.querySelector(".clay-card-title")!.textContent).toBe("Acme Co");
+    const fields = c.querySelectorAll(".clay-card-field");
+    expect(fields).toHaveLength(2);
+    expect(fields[1]!.textContent).toContain("Owed");
+    expect(fields[1]!.textContent).toContain("$1,200");
   });
 });
 

@@ -21,7 +21,8 @@ describe("system prompt", () => {
       "## Component contracts (G25)",
       "## Composable UI primitives",                // ADR-016 primitives
       "Box{direction",
-      "GANTT:",
+      "Board{groups",                               // view components
+      "MANY VIEWS OVER ONE DATASET",
       "## Hard rules",                              // §5
       "NEVER emit destructive operations",
       "## Output encoding",                         // wire note (JSON strings)
