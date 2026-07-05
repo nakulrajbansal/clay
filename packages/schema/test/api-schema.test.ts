@@ -28,9 +28,14 @@ function walkObjects(node: unknown, path: string, visit: (n: Node, path: string)
 describe("structured-outputs subset constraints", () => {
   it("every object schema is closed; no type arrays; no unsupported keywords", () => {
     walkObjects(apiSchema, "$", (n, path) => {
-      if (n.type === "object") {
-        expect(n.additionalProperties, `${path} must be closed`).toBe(false);
-        expect(n.properties, `${path} must declare properties`).toBeDefined();
+      // objects may be LOOSE ({"type":"object"}, the grammar-shrinking
+      // design) or CLOSED with defined properties; the only rule is that
+      // additionalProperties, when present, must be false (never true).
+      if ("additionalProperties" in n) {
+        expect(n.additionalProperties, `${path}: additionalProperties must be false`).toBe(false);
+      }
+      if (n.type === "object" && n.properties) {
+        expect(n.additionalProperties, `${path}: an object with properties must be closed`).toBe(false);
       }
       if ("type" in n) {
         expect(Array.isArray(n.type), `${path}: use anyOf instead of a type array`).toBe(false);
@@ -40,6 +45,16 @@ describe("structured-outputs subset constraints", () => {
         expect(banned in n, `${path}: '${banned}' is not in the SO subset`).toBe(false);
       }
     });
+  });
+
+  it("keeps the compiled grammar small: loose objects for ops and queries", () => {
+    // G1/ADR-013: migration ops, queries, and placement must stay loose so
+    // the API's grammar-complexity cap is not tripped. Guard against a
+    // regression that re-introduces deep typed unions here.
+    const s = apiSchema as { properties: Record<string, { anyOf?: { properties?: Record<string, { items?: unknown }> }[] }> };
+    const migObj = s.properties.migration!.anyOf!.find(b => b.properties)!;
+    expect(migObj.properties!.operations!.items).toEqual({ type: "object" });
+    expect(migObj.properties!.inverse!.items).toEqual({ type: "object" });
   });
 
   it("compiles as a valid JSON schema", () => {

@@ -1,5 +1,5 @@
 {
-  "$comment": "SIMPLIFIED MutationPlan for API structured output (G1/ADR-013, corrected per Q21). The grammar guarantees parseability; full Zod (index.ts) guarantees correctness client-side. Constraints of the structured-outputs subset: EVERY object is closed (additionalProperties:false), nullability via anyOf (no type arrays), no recursion. Keep byte-stable for grammar caching.",
+  "$comment": "SIMPLIFIED MutationPlan for API structured output (G1/ADR-013). The grammar guarantees only PARSEABILITY; full correctness is the Zod schema (index.ts) client-side. Deliberately loose: migration ops, queries, and placement are bare objects so the compiled grammar stays small (the API enforces a grammar-complexity cap). Subset rules: nullability via anyOf (no type arrays); no $comment on the wire (the client strips it). Keep byte-stable for grammar caching.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -25,8 +25,8 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "operations": { "type": "array", "items": { "$ref": "#/$defs/op" } },
-            "inverse": { "type": "array", "items": { "$ref": "#/$defs/op" } }
+            "operations": { "type": "array", "items": { "type": "object" } },
+            "inverse": { "type": "array", "items": { "type": "object" } }
           },
           "required": ["operations", "inverse"]
         },
@@ -41,17 +41,9 @@
         "properties": {
           "panel_id": { "type": "string" },
           "title": { "type": "string" },
-          "placement": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "region": { "type": "string", "enum": ["top", "main", "side"] },
-              "order": { "type": "number" }
-            },
-            "required": ["region", "order"]
-          },
+          "placement": { "type": "object" },
           "code": { "type": "string" },
-          "declared_queries": { "type": "array", "items": { "$ref": "#/$defs/query" } },
+          "declared_queries": { "type": "array", "items": { "type": "object" } },
           "declared_writes": { "type": "array", "items": { "type": "string" } }
         },
         "required": ["panel_id", "title", "placement", "code", "declared_queries"]
@@ -60,100 +52,5 @@
     "remove_panels": { "type": "array", "items": { "type": "string" } },
     "confidence": { "type": "number" }
   },
-  "required": ["api", "summary", "user_facing_diff", "clarifying_question", "assumptions", "migration", "panels", "remove_panels", "confidence"],
-  "$defs": {
-    "scalar": { "anyOf": [{ "type": "string" }, { "type": "number" }, { "type": "boolean" }] },
-    "columnSpec": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "name": { "type": "string" },
-        "type": { "type": "string" },
-        "required": { "type": "boolean" },
-        "values": { "type": "array", "items": { "type": "string" } },
-        "expr": { "type": "string" },
-        "pk": { "type": "boolean" }
-      },
-      "required": ["name", "type"]
-    },
-    "op": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "op": { "type": "string" },
-        "table": { "type": "string" },
-        "column": { "anyOf": [{ "type": "string" }, { "$ref": "#/$defs/columnSpec" }] },
-        "columns": { "type": "array", "items": { "$ref": "#/$defs/columnSpec" } },
-        "from": { "type": "string" },
-        "to": { "type": "string" },
-        "value": { "$ref": "#/$defs/scalar" },
-        "expr": { "type": "string" },
-        "required": { "type": "boolean" },
-        "default_for_existing": { "$ref": "#/$defs/scalar" }
-      },
-      "required": ["op", "table"]
-    },
-    "condition": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "field": { "type": "string" },
-        "op": { "type": "string" },
-        "value": {
-          "anyOf": [
-            { "type": "string" },
-            { "type": "number" },
-            { "type": "boolean" },
-            { "type": "array", "items": { "anyOf": [{ "type": "string" }, { "type": "number" }] } },
-            {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": { "$var": { "type": "boolean" } },
-              "required": ["$var"]
-            }
-          ]
-        }
-      },
-      "required": ["field", "op"]
-    },
-    "query": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "from": { "type": "string" },
-        "select": { "type": "array", "items": { "type": "string" } },
-        "where": { "type": "array", "items": { "$ref": "#/$defs/condition" } },
-        "orWhere": { "type": "array", "items": { "type": "array", "items": { "$ref": "#/$defs/condition" } } },
-        "orderBy": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "field": { "type": "string" },
-              "dir": { "type": "string", "enum": ["asc", "desc"] }
-            },
-            "required": ["field", "dir"]
-          }
-        },
-        "groupBy": { "type": "array", "items": { "type": "string" } },
-        "aggregate": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "fn": { "type": "string", "enum": ["count", "sum", "avg", "min", "max"] },
-              "field": { "type": "string" },
-              "as": { "type": "string" }
-            },
-            "required": ["fn", "field", "as"]
-          }
-        },
-        "limit": { "type": "number" },
-        "includeDeleted": { "type": "boolean" }
-      },
-      "required": ["from"]
-    }
-  }
+  "required": ["api", "summary", "user_facing_diff", "clarifying_question", "assumptions", "migration", "panels", "remove_panels", "confidence"]
 }
