@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "pnpm --filter @clay/shell dev",
     "build": "pnpm --filter @clay/shell build",
+    "backend": "pnpm --filter @clay/backend start",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "regression": "pnpm --filter @clay/mutation regression"

@@ -38,6 +38,14 @@
   strings; Zod remains the correctness gate). This is the new byte-stable
   baseline; a test enforces the subset constraints and validates all ten
   exemplars against the grammar.
+- Q24 Hosted backend relays RAW model output (Phase 1.1), diverging from
+  doc 07's "server validates + never relays malformed plans." Reason: the
+  MutationPipeline is client-orchestrated (runs in the DB worker), so the
+  backend is a per-round proxy and MUST return raw for the client's repair
+  loop to feed a corrected round back to /mutations/repair. Safe because
+  the client validates (hydrate + Zod + Validator) before executing
+  anything. If the pipeline ever moves server-side, revisit. Candidate
+  doc 07 correction.
 - Q23 L3 property gate: `PB_RUNS=10000 pnpm --filter @clay/kernel test:pb`
   passes all 8 properties (PB1-PB4) but the ~160s single-file run trips a
   vitest worker reporter-RPC timeout at the final flush (threads AND forks

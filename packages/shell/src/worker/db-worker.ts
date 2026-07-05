@@ -56,13 +56,21 @@ function dropPending(): void {
 async function runPipelineText(text: string): Promise<IntentOutcome> {
   dropPending();   // one mutation in flight per app (doc 05 §6)
   const s = mustStore();
+  const backendUrl = s.getSetting<string>("backend_url");
   const apiKey = s.getSetting<string>("byo_api_key");
-  if (!apiKey) {
+  // Hosted first (ADR-011): if a backend is configured, use it and no
+  // browser key is needed. Otherwise fall back to BYO.
+  const client = backendUrl
+    ? new MutationClient({ mode: "hosted", endpoint: backendUrl.replace(/\/$/, "") })
+    : apiKey
+      ? new MutationClient({ mode: "byo", apiKey })
+      : null;
+  if (!client) {
     return { status: "failed", stage: "plan", reasons: [
-      "No model access configured. Add your Anthropic API key in Settings (BYO mode).",
+      "No model access configured. In Settings, either add a Clay backend URL "
+      + "(hosted) or your own Anthropic API key (BYO).",
     ] };
   }
-  const client = new MutationClient({ mode: "byo", apiKey });
   const events: DebugEvent[] = [];
   const pipeline = new MutationPipeline(s, client, {
     onDebug: (ev) => {

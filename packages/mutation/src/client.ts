@@ -123,6 +123,24 @@ export class MutationClient {
     return this.run(ctx, { priorPlanRaw, failures });
   }
 
+  /**
+   * Raw model output for the hosted backend to relay (the client re-runs
+   * hydrate + Zod + the repair loop, so a schema/parse failure must still
+   * flow back as raw). Throws MutationRequestError on a hard model/network
+   * failure so the proxy can map it to a 5xx.
+   */
+  async rawPlan(ctx: S1Context): Promise<string> {
+    return this.rawFor(await this.requestPlan(ctx));
+  }
+  async rawRepair(ctx: S1Context, priorPlanRaw: string, failures: string[]): Promise<string> {
+    return this.rawFor(await this.requestRepair(ctx, priorPlanRaw, failures));
+  }
+  private rawFor(r: PlanResult): string {
+    if (r.ok) return r.raw;
+    if (r.error.raw !== undefined) return r.error.raw;   // schema/parse: relay
+    throw new MutationRequestError(r.error.code, r.error.message);
+  }
+
   private async run(
     ctx: S1Context,
     repair: { priorPlanRaw: string; failures: string[] } | null,

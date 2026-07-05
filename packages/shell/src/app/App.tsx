@@ -94,7 +94,8 @@ export function App(): React.JSX.Element {
     void (async () => {
       const boot = await wc.boot();
       setPersistent(boot.persistent);
-      setHasKey((await wc.getSetting<string>("byo_api_key")) !== null);
+      setHasKey((await wc.getSetting<string>("byo_api_key")) !== null
+        || (await wc.getSetting<string>("backend_url")) !== null);
       if (!boot.seeded) { setPhase("onboarding"); return; }
       setLiveBridge(makeBridge(wc, "live", pushToast, recordFault));
       setPanels(await wc.panels());
@@ -253,6 +254,12 @@ export function App(): React.JSX.Element {
     pushToast("API key saved locally", "success");
   };
 
+  const saveBackend = async (url: string): Promise<void> => {
+    await client().setSetting("backend_url", url || null);
+    setHasKey(url !== "" || (await client().getSetting<string>("byo_api_key")) !== null);
+    pushToast(url ? "Hosted backend set" : "Hosted backend cleared", "success");
+  };
+
   const head = history.length > 0 ? history[history.length - 1]!.version : 0;
 
   const scrubTo = async (version: number): Promise<void> => {
@@ -385,6 +392,7 @@ export function App(): React.JSX.Element {
         onKeep={() => void keep()}
         onDiscard={() => void discard()}
         onSaveKey={k => void saveKey(k)}
+        onSaveBackend={u => void saveBackend(u)}
         onRemoveSamples={() => void removeSamples()}
         onReset={() => void resetApp()}
         onExport={() => void exportArchive()}

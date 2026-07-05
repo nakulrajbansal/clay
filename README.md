@@ -11,8 +11,18 @@ serves it on a fixed local port (4173 — a stable origin, so your data
 persists between launches), and opens Clay in its own app window.
 
 First run: pick a starter shell, then open **settings** in the right-hand
-rail to paste an Anthropic API key (BYO mode — stored locally, sent only to
-`api.anthropic.com`). Then describe a change:
+rail and give Clay model access one of two ways:
+
+- **Hosted (no key in the browser):** run the backend with your key in its
+  environment, then set the backend URL in settings to `http://localhost:8787`:
+  ```
+  # PowerShell:  $env:ANTHROPIC_API_KEY="sk-ant-..."; pnpm backend
+  # bash:        ANTHROPIC_API_KEY=sk-ant-... pnpm backend
+  ```
+- **BYO key:** paste an Anthropic API key (stored locally, sent only to
+  `api.anthropic.com`).
+
+Then describe a change:
 
 > add a priority field and show it as a colored badge
 

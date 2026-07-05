@@ -23,6 +23,7 @@ export function ConversationRail(props: {
   onKeep: () => void;
   onDiscard: () => void;
   onSaveKey: (key: string) => void;
+  onSaveBackend: (url: string) => void;
   onRemoveSamples: () => void;
   onReset: () => void;
   onOpenData: () => void;
@@ -36,6 +37,7 @@ export function ConversationRail(props: {
 }): React.JSX.Element {
   const [text, setText] = useState("");
   const [keyDraft, setKeyDraft] = useState("");
+  const [backendDraft, setBackendDraft] = useState("");
   const [showSettings, setShowSettings] = useState(!props.hasKey);
   const [status, setStatus] = useState<StatusInfo | null>(null);
 
@@ -86,7 +88,24 @@ export function ConversationRail(props: {
             </div>
           ) : null}
           <label className="rail-label">
-            Anthropic API key (BYO — stored in this browser, sent only to Anthropic)
+            Clay backend URL (hosted — no key needed in the browser)
+            <input
+              type="text"
+              value={backendDraft}
+              placeholder="http://localhost:8787"
+              onChange={e => setBackendDraft(e.target.value)}
+            />
+          </label>
+          <div className="rail-actions">
+            <button
+              className="primary"
+              onClick={() => { props.onSaveBackend(backendDraft.trim()); setBackendDraft(""); setShowSettings(false); }}
+            >
+              Use hosted backend
+            </button>
+          </div>
+          <label className="rail-label">
+            or your own Anthropic API key (BYO — stored in this browser, sent only to Anthropic)
             <input
               type="password"
               value={keyDraft}
