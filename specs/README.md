@@ -18,6 +18,7 @@ This package is the complete pre-implementation specification. Read order:
 | docs/08-testing.md | Regression suite, property tests, quality gates, launch criteria |
 | docs/09-build-plan.md | Milestones, exit tests, cut order, post-launch instrumentation |
 | docs/10-decisions.md | ADR log: every major decision, alternatives, and rationale |
+| docs/12-roadmap.md | Product roadmap: vision → shipped phases (Phase 0 done; 1–4 ahead) |
 
 Principles (binding, in priority order):
 1. Data outlives interface.
