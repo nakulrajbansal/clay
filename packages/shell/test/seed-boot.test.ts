@@ -68,6 +68,19 @@ describe("every seed panel boots and renders real data", () => {
       c.textContent!.includes("Records") && c.textContent!.includes("5")],
     ["dashboard", "records_table", c => c.textContent!.includes("Website refresh")],
     ["dashboard", "by_category_chart", c => c.querySelectorAll("svg rect").length === 3],
+    // small business — one dataset seen many ways
+    ["small_business", "sb_dashboard", c =>
+      c.textContent!.includes("Open jobs") && c.querySelectorAll(".clay-metric").length === 3],
+    ["small_business", "sb_jobs_board", c =>
+      c.querySelectorAll(".clay-board-col").length === 5 && c.textContent!.includes("Kitchen faucet fix")],
+    ["small_business", "sb_jobs_table", c => c.textContent!.includes("Water heater install")],
+    ["small_business", "sb_revenue", c => c.querySelectorAll("svg rect").length >= 1],
+    ["small_business", "sb_invoices", c => c.querySelectorAll("tbody tr").length === 3],
+    ["small_business", "sb_customers", c =>
+      c.querySelectorAll(".clay-card").length === 3 && c.textContent!.includes("Alice Nguyen")],
+    ["small_business", "sb_upcoming", c => c.querySelector("table, .clay-empty") !== null],
+    ["small_business", "sb_add_job", c =>
+      c.querySelectorAll("form.clay-form input, form.clay-form select").length === 5],
   ];
 
   for (const [shellId, panelId, check] of expectations) {

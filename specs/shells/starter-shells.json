@@ -47,7 +47,53 @@
       ],
       "seed_panels": ["metrics_row:top:0", "records_table:main:0", "by_category_chart:main:1"],
       "sample_rows": {"records": 5}
+    },
+    {
+      "shell_id": "small_business",
+      "name": "Small Business",
+      "tagline": "Customers, jobs, invoices, money — your whole business in one app",
+      "registry": [
+        {"table": "customers",
+         "columns": [
+           {"name": "name", "type": "text", "required": true},
+           {"name": "phone", "type": "text"},
+           {"name": "email", "type": "text"},
+           {"name": "address", "type": "text"},
+           {"name": "notes", "type": "text"}]},
+        {"table": "jobs",
+         "columns": [
+           {"name": "title", "type": "text", "required": true},
+           {"name": "customer", "type": "text"},
+           {"name": "status", "type": "enum", "values": ["lead", "scheduled", "in_progress", "done", "invoiced"]},
+           {"name": "scheduled", "type": "date"},
+           {"name": "price", "type": "number"},
+           {"name": "notes", "type": "text"}]},
+        {"table": "invoices",
+         "columns": [
+           {"name": "customer", "type": "text"},
+           {"name": "job", "type": "text"},
+           {"name": "amount", "type": "number"},
+           {"name": "status", "type": "enum", "values": ["draft", "sent", "paid"]},
+           {"name": "issued", "type": "date"},
+           {"name": "due", "type": "date"}]},
+        {"table": "items",
+         "columns": [
+           {"name": "name", "type": "text", "required": true},
+           {"name": "price", "type": "number"},
+           {"name": "category", "type": "enum", "values": ["service", "product", "material"]}]},
+        {"table": "expenses",
+         "columns": [
+           {"name": "description", "type": "text", "required": true},
+           {"name": "amount", "type": "number"},
+           {"name": "category", "type": "enum", "values": ["supplies", "fuel", "tools", "other"]},
+           {"name": "on", "type": "date"}]}
+      ],
+      "seed_panels": [
+        "sb_dashboard:top:0", "sb_upcoming:top:1",
+        "sb_jobs_board:main:0", "sb_jobs_table:main:1", "sb_revenue:main:2", "sb_invoices:main:3",
+        "sb_customers:side:0", "sb_add_job:side:1"],
+      "sample_rows": {"customers": 3, "jobs": 5, "invoices": 3, "items": 3, "expenses": 2}
     }
   ],
-  "note": "Seed panel code to be written in W1 against the final PanelRuntime; the ids and placements above are binding."
+  "note": "Seed panel code lives in the shell package; the registries, ids, and placements here are binding. Multi-table templates (small_business) show one dataset through many views — a jobs board AND a jobs table AND dashboard counts."
 }

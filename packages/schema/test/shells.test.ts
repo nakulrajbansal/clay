@@ -19,7 +19,11 @@ const { shells } = JSON.parse(readFileSync(shellsPath, "utf8")) as {
 };
 
 describe("starter shells validate against the constitution", () => {
-  it("exactly three shells", () => expect(shells).toHaveLength(3));
+  it("the seed shells (3 generic + Small Business)", () => {
+    expect(shells).toHaveLength(4);
+    expect(shells.map(s => s.shell_id))
+      .toEqual(["tracker", "log", "dashboard", "small_business"]);
+  });
 
   for (const shell of shells) {
     it(`${shell.shell_id}: registry tables and columns are valid`, () => {

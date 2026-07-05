@@ -195,8 +195,172 @@ const by_category_chart: PanelBlobInput = {
 }`,
 };
 
+// ---------- small business (multi-table, one dataset seen many ways) ----------
+const JOB_TONES = `{ lead: "gray", scheduled: "accent", in_progress: "amber", done: "green", invoiced: "green" }`;
+
+const sb_dashboard: PanelBlobInput = {
+  panel_id: "sb_dashboard", title: "The business",
+  placement: { region: "top", order: 0 },
+  declared_queries: [{ from: "jobs" }, { from: "invoices" }],
+  declared_writes: [],
+  code: `export default function (clay) {
+  let jobs = [], invoices = [];
+  const money = (n) => clay.compute.formatCurrency(n || 0);
+  const draw = () => {
+    const open = jobs.filter((j) => j.status !== "done" && j.status !== "invoiced").length;
+    const paid = invoices.filter((i) => i.status === "paid").reduce((s, i) => s + (i.amount || 0), 0);
+    const unpaid = invoices.filter((i) => i.status !== "paid").reduce((s, i) => s + (i.amount || 0), 0);
+    clay.ui.render(h(Grid, {},
+      h(MetricCard, { label: "Open jobs", value: open }),
+      h(MetricCard, { label: "Revenue", value: paid, format: "currency" }),
+      h(MetricCard, { label: "Unpaid", value: unpaid, format: "currency" })));
+  };
+  clay.db.watch({ from: "jobs" }, (r) => { jobs = r; draw(); });
+  clay.db.watch({ from: "invoices" }, (r) => { invoices = r; draw(); });
+}`,
+};
+
+const sb_upcoming: PanelBlobInput = {
+  panel_id: "sb_upcoming", title: "Next 2 weeks",
+  placement: { region: "top", order: 1 },
+  declared_queries: [{ from: "jobs",
+    where: [{ field: "scheduled", op: "within_days", value: 14 }],
+    orderBy: [{ field: "scheduled", dir: "asc" }] }],
+  declared_writes: [],
+  code: `export default function (clay) {
+  const q = { from: "jobs", where: [{ field: "scheduled", op: "within_days", value: 14 }], orderBy: [{ field: "scheduled", dir: "asc" }] };
+  clay.db.watch(q, (rows) => {
+    clay.ui.render(rows.length === 0
+      ? h(EmptyState, { label: "Nothing scheduled soon" })
+      : h(Table, { rows, columns: [
+          { field: "title", label: "Upcoming job" },
+          { field: "customer", label: "Customer" },
+          { field: "scheduled", label: "When", format: "date" }] }));
+  });
+}`,
+};
+
+// The multi-view star: jobs as a KANBAN...
+const sb_jobs_board: PanelBlobInput = {
+  panel_id: "sb_jobs_board", title: "Jobs board",
+  placement: { region: "main", order: 0 },
+  declared_queries: [{ from: "jobs" }],
+  declared_writes: [],
+  code: `export default function (clay) {
+  const cols = ["lead", "scheduled", "in_progress", "done", "invoiced"];
+  const tones = ${JOB_TONES};
+  clay.db.watch({ from: "jobs" }, (rows) => {
+    const groups = cols.map((s) => ({
+      key: s, label: s.split("_").join(" "), tone: tones[s],
+      cards: rows.filter((r) => r.status === s).map((r) => ({
+        title: r.title, subtitle: r.customer,
+        badge: r.price ? clay.compute.formatCurrency(r.price) : null })),
+    }));
+    clay.ui.render(h(Board, { groups }));
+  });
+}`,
+};
+
+// ...and the SAME jobs as a TABLE (multi-view over one dataset).
+const sb_jobs_table: PanelBlobInput = {
+  panel_id: "sb_jobs_table", title: "All jobs",
+  placement: { region: "main", order: 1 },
+  declared_queries: [{ from: "jobs", orderBy: [{ field: "scheduled", dir: "asc" }] }],
+  declared_writes: [],
+  code: `export default function (clay) {
+  clay.db.watch({ from: "jobs", orderBy: [{ field: "scheduled", dir: "asc" }] }, (rows) => {
+    clay.ui.render(rows.length === 0
+      ? h(EmptyState, { label: "Add your first job on the right" })
+      : h(Table, { sortable: true, rows, columns: [
+          { field: "title", label: "Job" },
+          { field: "customer", label: "Customer" },
+          { field: "status", label: "Status", badge: { field: "status", map: ${JOB_TONES} } },
+          { field: "scheduled", label: "Scheduled", format: "date" },
+          { field: "price", label: "Price", format: "currency" }] }));
+  });
+}`,
+};
+
+const sb_revenue: PanelBlobInput = {
+  panel_id: "sb_revenue", title: "Revenue by month",
+  placement: { region: "main", order: 2 },
+  declared_queries: [{ from: "invoices",
+    where: [{ field: "status", op: "eq", value: "paid" }], select: ["issued", "amount"] }],
+  declared_writes: [],
+  code: `export default function (clay) {
+  const q = { from: "invoices", where: [{ field: "status", op: "eq", value: "paid" }], select: ["issued", "amount"] };
+  clay.db.watch(q, (rows) => {
+    const byMonth = {};
+    for (const r of rows) { if (!r.issued) continue; const m = String(r.issued).slice(0, 7); byMonth[m] = (byMonth[m] || 0) + (r.amount || 0); }
+    const data = Object.keys(byMonth).sort().map((m) => ({ x: m, y: byMonth[m] }));
+    clay.ui.render(data.length === 0
+      ? h(EmptyState, { label: "Revenue appears as invoices are paid" })
+      : h(Chart, { kind: "bar", data, xLabel: "Month", yLabel: "Revenue", height: 200 }));
+  });
+}`,
+};
+
+const sb_invoices: PanelBlobInput = {
+  panel_id: "sb_invoices", title: "Invoices",
+  placement: { region: "main", order: 3 },
+  declared_queries: [{ from: "invoices", orderBy: [{ field: "due", dir: "asc" }] }],
+  declared_writes: [],
+  code: `export default function (clay) {
+  clay.db.watch({ from: "invoices", orderBy: [{ field: "due", dir: "asc" }] }, (rows) => {
+    clay.ui.render(rows.length === 0
+      ? h(EmptyState, { label: "No invoices yet" })
+      : h(Table, { sortable: true, rows, columns: [
+          { field: "customer", label: "Customer" },
+          { field: "amount", label: "Amount", format: "currency" },
+          { field: "status", label: "Status", badge: { field: "status", map: { draft: "gray", sent: "amber", paid: "green" } } },
+          { field: "due", label: "Due", format: "date" }] }));
+  });
+}`,
+};
+
+const sb_customers: PanelBlobInput = {
+  panel_id: "sb_customers", title: "Customers",
+  placement: { region: "side", order: 0 },
+  declared_queries: [{ from: "customers", orderBy: [{ field: "name", dir: "asc" }] }],
+  declared_writes: [],
+  code: `export default function (clay) {
+  clay.db.watch({ from: "customers", orderBy: [{ field: "name", dir: "asc" }] }, (rows) => {
+    clay.ui.render(rows.length === 0
+      ? h(EmptyState, { label: "No customers yet" })
+      : h(Cards, { items: rows.map((c) => ({
+          title: c.name, subtitle: c.email || c.phone,
+          fields: [{ label: "Phone", value: c.phone || "—" }] })) }));
+  });
+}`,
+};
+
+const sb_add_job: PanelBlobInput = {
+  panel_id: "sb_add_job", title: "New job",
+  placement: { region: "side", order: 1 },
+  declared_queries: [],
+  declared_writes: ["jobs"],
+  code: `export default function (clay) {
+  clay.ui.render(h(Form, {
+    submitLabel: "Add job",
+    fields: [
+      { name: "title", label: "Job", kind: "text", required: true },
+      { name: "customer", label: "Customer", kind: "text" },
+      { name: "status", label: "Status", kind: "select", fromSchema: "jobs.status" },
+      { name: "scheduled", label: "Scheduled", kind: "date" },
+      { name: "price", label: "Price", kind: "number" }],
+    onSubmit: async (v) => {
+      try { await clay.db.insert("jobs", v); clay.ui.toast("Job added", "success"); }
+      catch (e) { clay.ui.toast("Could not add: " + e.message, "danger"); }
+    } }));
+}`,
+};
+
 export const SEED_PANELS: Record<string, PanelBlobInput[]> = {
   tracker: [items_table, status_counts, add_item_form],
   log: [entries_table, per_week_chart, quick_add_form],
   dashboard: [metrics_row, records_table, by_category_chart],
+  small_business: [
+    sb_dashboard, sb_upcoming, sb_jobs_board, sb_jobs_table,
+    sb_revenue, sb_invoices, sb_customers, sb_add_job,
+  ],
 };
