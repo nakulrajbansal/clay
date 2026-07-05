@@ -73,7 +73,15 @@ export type PlanResult =
   | { ok: true; plan: MutationPlanT; raw: string;
       usage?: { input_tokens: number; output_tokens: number } }
   | { ok: false; error: { code: "E_NET" | "E_MODEL" | "E_PARSE" | "E_SCHEMA";
-      message: string; issues?: unknown } };
+      message: string; issues?: string[]; raw?: string } };
+
+/** Zod issues -> "path: message" strings the model can act on in repair. */
+function formatIssues(issues: { path: (string | number)[]; message: string }[]): string[] {
+  return issues.map(i => {
+    const where = i.path.length ? i.path.join(".") : "(root)";
+    return `${where}: ${i.message}`;
+  });
+}
 
 type FetchLike = (url: string, init: {
   method: string; headers: Record<string, string>; body: string;
@@ -130,7 +138,7 @@ export class MutationClient {
       }
     } catch (e) {
       if (e instanceof MutationRequestError && e.code !== "E_NET")
-        return { ok: false, error: { code: "E_MODEL", message: e.message, issues: e.detail } };
+        return { ok: false, error: { code: "E_MODEL", message: e.message } };
       return { ok: false, error: { code: "E_NET", message: String(e) } };
     }
 
@@ -139,14 +147,16 @@ export class MutationClient {
       json = hydrateApiPlan(JSON.parse(raw));
     } catch (e) {
       return { ok: false, error: { code: "E_PARSE",
-        message: `model output is not parseable: ${String(e)}` } };
+        message: `model output is not parseable: ${String(e)}`, raw } };
     }
     const parsed = MutationPlan.safeParse(json);   // full validation (G1)
     if (!parsed.success) {
+      const issues = formatIssues(parsed.error.issues);
       return {
         ok: false,
-        error: { code: "E_SCHEMA", message: "plan fails the Zod constitution",
-          issues: parsed.error.issues },
+        error: { code: "E_SCHEMA",
+          message: `plan fails validation: ${issues.slice(0, 3).join("; ")}`,
+          issues, raw },
       };
     }
     return usage !== undefined

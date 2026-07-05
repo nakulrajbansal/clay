@@ -30,8 +30,8 @@ export {
 } from "./store";
 export {
   MutationPipeline, defaultSmokeTest,
-  type AttemptResult, type Planner, type PlannerContext, type PlannerResult,
-  type PreviewHandle, type SmokeTest,
+  type AttemptResult, type DebugEvent, type Planner, type PlannerContext,
+  type PlannerResult, type PreviewHandle, type SmokeTest,
 } from "./pipeline";
 export { Observer, type Suggestion, type UsageEvent } from "./observe";
 export {

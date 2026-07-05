@@ -32,6 +32,7 @@ export function ConversationRail(props: {
   onAcceptSuggestion: (s: Suggestion) => void;
   onDismissSuggestion: (s: Suggestion) => void;
   loadStatus: () => Promise<StatusInfo>;
+  onCopyDiagnostics: () => void;
 }): React.JSX.Element {
   const [text, setText] = useState("");
   const [keyDraft, setKeyDraft] = useState("");
@@ -125,6 +126,11 @@ export function ConversationRail(props: {
                 }}
               />
             </label>
+          </div>
+          <div className="rail-actions">
+            <button className="link" onClick={props.onCopyDiagnostics}>
+              Copy diagnostics (last {25} reshapes)
+            </button>
           </div>
         </div>
       ) : null}

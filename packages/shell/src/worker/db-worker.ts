@@ -6,7 +6,7 @@
 import {
   ClayStore, MutationPipeline, openBrowserDriver, portFromMessagePort,
   serveStore, wipeBrowserStorage,
-  type DbDriver, type LivePanel, type PreviewHandle,
+  type DbDriver, type DebugEvent, type LivePanel, type PreviewHandle,
 } from "@clay/kernel";
 import { MutationClient } from "@clay/mutation";
 import { removeSampleRows, seedStarterShell, type StarterShellId } from "../shells/seed";
@@ -32,6 +32,18 @@ let persistent = false;
 let persistRequested = false;
 let pending: PreviewHandle | null = null;
 
+// A ring of recent pipeline traces the user can review/copy (the user
+// asked for logs of inputs -> processing -> outputs). Also mirrored to the
+// worker console (visible in DevTools).
+type TraceEntry = { at: string; intent: string; events: DebugEvent[] };
+const traceLog: TraceEntry[] = [];
+const TRACE_CAP = 25;
+
+function recordTrace(entry: TraceEntry): void {
+  traceLog.unshift(entry);
+  if (traceLog.length > TRACE_CAP) traceLog.length = TRACE_CAP;
+}
+
 function mustStore(): ClayStore {
   if (!store) throw new Error("worker not booted");
   return store;
@@ -51,8 +63,18 @@ async function runPipelineText(text: string): Promise<IntentOutcome> {
     ] };
   }
   const client = new MutationClient({ mode: "byo", apiKey });
-  const pipeline = new MutationPipeline(s, client);
+  const events: DebugEvent[] = [];
+  const pipeline = new MutationPipeline(s, client, {
+    onDebug: (ev) => {
+      events.push(ev);
+      // Console (DevTools): raw model output truncated, everything else full.
+      const printable = ev.stage === "plan" && ev.raw
+        ? { ...ev, raw: ev.raw.slice(0, 2000) } : ev;
+      console.log(`[clay pipeline] ${ev.stage}`, printable);
+    },
+  });
   const result = await pipeline.run(text);
+  recordTrace({ at: new Date().toISOString(), intent: text, events });
   if (result.status === "clarify")
     return { status: "clarify", question: result.question };
   if (result.status === "failed")
@@ -229,6 +251,8 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
         return { persisted: await navigator.storage.persist() };
       return { persisted: false };
     }
+    case "debugLog":
+      return traceLog;
     case "getSetting":
       return mustStore().getSetting(String(p.key)) ?? null;
     case "setSetting":

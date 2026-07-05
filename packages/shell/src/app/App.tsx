@@ -207,6 +207,19 @@ export function App(): React.JSX.Element {
     }
   };
 
+  const copyDiagnostics = async (): Promise<void> => {
+    const log = await client().debugLog();
+    const text = JSON.stringify(log, null, 2);
+    try {
+      await navigator.clipboard.writeText(text);
+      pushToast(`Copied ${log.length} attempt trace(s) to clipboard`, "success");
+    } catch {
+      // clipboard blocked — dump to console as a fallback
+      console.log("[clay diagnostics]", text);
+      pushToast("Diagnostics logged to the console (F12)", "default");
+    }
+  };
+
   const openData = (): void => {
     dataStoreRef.current ??= new StoreRpcClient(
       portFromMessagePort(client().openStorePort("live")));
@@ -376,6 +389,7 @@ export function App(): React.JSX.Element {
         onReset={() => void resetApp()}
         onExport={() => void exportArchive()}
         onImport={file => void importArchive(file)}
+        onCopyDiagnostics={() => void copyDiagnostics()}
       />
       <div className="toasts">
         {toasts.map(t => (

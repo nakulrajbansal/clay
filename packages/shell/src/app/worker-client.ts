@@ -1,6 +1,10 @@
 // Typed promise wrapper over the DB worker's command protocol.
-import type { HistoryEntry, LivePanel, RegTable, Suggestion } from "@clay/kernel";
+import type {
+  DebugEvent, HistoryEntry, LivePanel, RegTable, Suggestion,
+} from "@clay/kernel";
 import type { IntentOutcome } from "../worker/db-worker";
+
+export type TraceEntry = { at: string; intent: string; events: DebugEvent[] };
 
 export type BootInfo = { persistent: boolean; seeded: boolean; shellId: string | null };
 export type StatusInfo = {
@@ -61,6 +65,7 @@ export class WorkerClient {
     return this.call("restorableRows", { table });
   }
   suggestions(): Promise<Suggestion[]> { return this.call("suggestions"); }
+  debugLog(): Promise<TraceEntry[]> { return this.call("debugLog"); }
   recordFilter(name: string, payload: unknown): Promise<null> {
     return this.call("recordFilter", { name, payload });
   }

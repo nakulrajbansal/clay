@@ -28,12 +28,27 @@ export type PlannerContext = {
 
 export type PlannerResult =
   | { ok: true; plan: unknown; raw: string }
-  | { ok: false; error: { code: string; message: string } };
+  | { ok: false; error: {
+      code: string; message: string;
+      /** formatted reasons (e.g. Zod issues) for the repair prompt + card */
+      issues?: string[];
+      /** the model's raw output, so a schema/parse failure can be repaired */
+      raw?: string;
+    } };
 
 export type Planner = {
   requestPlan(ctx: PlannerContext): Promise<PlannerResult>;
   requestRepair(ctx: PlannerContext, priorPlanRaw: string, failures: string[]): Promise<PlannerResult>;
 };
+
+/** Structured trace of one attempt through the pipeline (for logs/review). */
+export type DebugEvent =
+  | { stage: "intake"; intent: string; registryTables: string[]; panelCount: number }
+  | { stage: "plan"; raw: string | null; ok: boolean; error?: string }
+  | { stage: "repair"; trigger: "schema" | "validate" | "dry_run"; reasons: string[] }
+  | { stage: "validate"; issues: string[] }
+  | { stage: "dry_run"; ok: boolean; error?: string }
+  | { stage: "outcome"; status: string; repaired: boolean };
 
 /** S4 smoke hook. Default: run every concrete declared query against the
  * shadow. The browser shell replaces this with a real panel boot +
@@ -80,13 +95,15 @@ function toCommitPanels(plan: MutationPlanT): PanelBlobInput[] {
 
 export class MutationPipeline {
   private readonly smokeTest: SmokeTest;
+  private readonly onDebug?: (ev: DebugEvent) => void;
 
   constructor(
     private readonly store: ClayStore,
     private readonly planner: Planner,
-    opts: { smokeTest?: SmokeTest } = {},
+    opts: { smokeTest?: SmokeTest; onDebug?: (ev: DebugEvent) => void } = {},
   ) {
     this.smokeTest = opts.smokeTest ?? defaultSmokeTest;
+    this.onDebug = opts.onDebug;
   }
 
   /** S1: registry + panel manifest + last 5 summaries + intent. NEVER rows. */
@@ -115,35 +132,64 @@ export class MutationPipeline {
     const attemptId = this.store.beginAttempt(intent);          // S0
     const ctx = this.buildContext(intent);                      // S1
     let repairUsed = false;
+    const debug = (ev: DebugEvent): void => this.onDebug?.(ev);
+    debug({ stage: "intake", intent,
+      registryTables: ctx.registry.map(t => (t as { name: string }).name),
+      panelCount: ctx.panels.length });
 
     const fail = (stage: "plan" | "validate" | "dry_run", reasons: string[],
       code: string): AttemptResult => {
       this.store.finishAttempt(attemptId, "failed", code);
+      debug({ stage: "outcome", status: `failed@${stage}`, repaired: repairUsed });
       return { status: "failed", stage, reasons, attemptId };
     };
 
     // S2
     let result = await this.planner.requestPlan(ctx);
-    if (!result.ok) return fail("plan", [result.error.message], result.error.code);
+    debug({ stage: "plan", ok: result.ok,
+      raw: result.ok ? result.raw : (result.error.raw ?? null),
+      error: result.ok ? undefined : result.error.message });
 
     for (;;) {
-      // S3 (also re-entered after a repair)
+      // Client-side failure (bad JSON or fails the Zod constitution). This
+      // IS an S3-class failure — repairable once, with the issues fed back.
+      if (!result.ok) {
+        const { code, message, issues, raw } = result.error;
+        const recoverable = (code === "E_SCHEMA" || code === "E_PARSE") && !!raw;
+        const reasons = issues && issues.length > 0 ? issues : [message];
+        if (recoverable && !repairUsed) {
+          repairUsed = true;
+          debug({ stage: "repair", trigger: "schema", reasons });
+          result = await this.planner.requestRepair(ctx, raw!, reasons);
+          debug({ stage: "plan", ok: result.ok,
+            raw: result.ok ? result.raw : (result.error.raw ?? null),
+            error: result.ok ? undefined : result.error.message });
+          continue;
+        }
+        return fail("plan", reasons, code);
+      }
+
+      // S3: the Validator (V1–V7)
       const issues = validateMutationPlan(result.plan, {
         registry: this.store.registrySnapshot(),
         livePanelIds: this.store.livePanels().map(p => p.panel_id),
       });
       if (issues.length > 0) {
+        debug({ stage: "validate", issues: issueStrings(issues) });
         if (repairUsed) return fail("validate", issueStrings(issues), "E_VALIDATION");
         repairUsed = true;
-        const repaired = await this.planner.requestRepair(ctx, result.raw, issueStrings(issues));
-        if (!repaired.ok) return fail("plan", [repaired.error.message], repaired.error.code);
-        result = repaired;
+        debug({ stage: "repair", trigger: "validate", reasons: issueStrings(issues) });
+        result = await this.planner.requestRepair(ctx, result.raw, issueStrings(issues));
+        debug({ stage: "plan", ok: result.ok,
+          raw: result.ok ? result.raw : (result.error.raw ?? null),
+          error: result.ok ? undefined : result.error.message });
         continue;
       }
 
       const plan = MutationPlanSchema.parse(result.plan);
       if (plan.clarifying_question) {
         this.store.finishAttempt(attemptId, "clarify");
+        debug({ stage: "outcome", status: "clarify", repaired: repairUsed });
         return { status: "clarify", question: plan.clarifying_question, attemptId };
       }
 
@@ -156,14 +202,18 @@ export class MutationPipeline {
           diff: plan.user_facing_diff,
         });
         await this.smokeTest(shadow, plan);
+        debug({ stage: "dry_run", ok: true });
       } catch (e) {
         shadow.close();
         const reason = e instanceof ClayError ? `${e.code}: ${e.message}` : String(e);
+        debug({ stage: "dry_run", ok: false, error: reason });
         if (repairUsed) return fail("dry_run", [reason], "E_DRY_RUN");
         repairUsed = true;
-        const repaired = await this.planner.requestRepair(ctx, result.raw, [reason]);
-        if (!repaired.ok) return fail("plan", [repaired.error.message], repaired.error.code);
-        result = repaired;
+        debug({ stage: "repair", trigger: "dry_run", reasons: [reason] });
+        result = await this.planner.requestRepair(ctx, result.raw, [reason]);
+        debug({ stage: "plan", ok: result.ok,
+          raw: result.ok ? result.raw : (result.error.raw ?? null),
+          error: result.ok ? undefined : result.error.message });
         continue;
       }
 
@@ -188,6 +238,7 @@ export class MutationPipeline {
           shadow.close();   // shadow.db deleted after every run (doc 04 §8)
         },
       };
+      debug({ stage: "outcome", status: "preview", repaired: repairUsed });
       return { status: "preview", preview, attemptId, repaired: repairUsed };
     }
   }
