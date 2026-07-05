@@ -47,14 +47,20 @@ describe("structured-outputs subset constraints", () => {
     });
   });
 
-  it("keeps the compiled grammar small: loose objects for ops and queries", () => {
-    // G1/ADR-013: migration ops, queries, and placement must stay loose so
-    // the API's grammar-complexity cap is not tripped. Guard against a
-    // regression that re-introduces deep typed unions here.
-    const s = apiSchema as { properties: Record<string, { anyOf?: { properties?: Record<string, { items?: unknown }> }[] }> };
-    const migObj = s.properties.migration!.anyOf!.find(b => b.properties)!;
-    expect(migObj.properties!.operations!.items).toEqual({ type: "object" });
-    expect(migObj.properties!.inverse!.items).toEqual({ type: "object" });
+  it("keeps the grammar small: migration + declared_queries are strings", () => {
+    // G1/ADR-013: the variable-shape nested parts are carried as JSON
+    // strings so every object can stay closed AND the grammar stays under
+    // the complexity cap. Guard against a regression that re-inlines them.
+    const s = apiSchema as {
+      properties: Record<string, {
+        anyOf?: { type?: string }[];
+        items?: { properties?: Record<string, { items?: unknown }> };
+      }>;
+    };
+    expect(s.properties.migration!.anyOf!.map(b => b.type).sort())
+      .toEqual(["null", "string"]);
+    expect(s.properties.panels!.items!.properties!.declared_queries!.items)
+      .toEqual({ type: "string" });
   });
 
   it("compiles as a valid JSON schema", () => {
@@ -63,7 +69,24 @@ describe("structured-outputs subset constraints", () => {
   });
 });
 
-describe("the grammar accepts every canonical exemplar plan", () => {
+// The exemplars are written in OBJECT form (readable few-shot); the wire
+// form stringifies migration + each declared_queries entry. This encodes an
+// exemplar the way the model must emit it, then checks it fits the grammar.
+function toWireForm(plan: Record<string, unknown>): unknown {
+  const out = { ...plan };
+  out.migration = out.migration == null ? null : JSON.stringify(out.migration);
+  if (Array.isArray(out.panels)) {
+    out.panels = out.panels.map(p => {
+      const panel = { ...(p as Record<string, unknown>) };
+      if (Array.isArray(panel.declared_queries))
+        panel.declared_queries = panel.declared_queries.map(q => JSON.stringify(q));
+      return panel;
+    });
+  }
+  return out;
+}
+
+describe("the grammar accepts every canonical exemplar (in wire form)", () => {
   const exemplarsDir = fileURLToPath(new URL("../../../specs/exemplars/", import.meta.url));
   const ajv = new Ajv({ strict: false });
   const validate = ajv.compile(apiSchema);
@@ -74,8 +97,8 @@ describe("the grammar accepts every canonical exemplar plan", () => {
     it(file, () => {
       const md = readFileSync(join(exemplarsDir, file), "utf8");
       const json = md.match(/```json\s*\n([\s\S]*?)```/)?.[1];
-      const plan = JSON.parse(json!) as unknown;
-      const ok = validate(plan);
+      const plan = JSON.parse(json!) as Record<string, unknown>;
+      const ok = validate(toWireForm(plan));
       expect(ok, JSON.stringify(validate.errors)).toBe(true);
     });
   }

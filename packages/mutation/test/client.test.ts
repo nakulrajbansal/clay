@@ -92,6 +92,49 @@ describe("BYO request shape", () => {
     expect(result.plan.panels[0]!.declared_writes).toEqual([]);   // default applied
     expect(result.usage).toEqual({ input_tokens: 5000, output_tokens: 900 });
   });
+
+  it("hydrates the wire form: migration + declared_queries as JSON strings", async () => {
+    // exactly what the API grammar forces the model to emit
+    const wire = JSON.stringify({
+      api: 1, summary: "Adds a priority field.",
+      user_facing_diff: [{ kind: "add_status", detail: "Priority" }],
+      clarifying_question: null, assumptions: [],
+      migration: JSON.stringify({
+        operations: [{ op: "add_column", table: "projects",
+          column: { name: "priority", type: "enum", required: false,
+            values: ["low", "medium", "high"] } }],
+        inverse: [{ op: "drop_column_if_added_by_this", table: "projects", column: "priority" }],
+      }),
+      panels: [{
+        panel_id: "project_table", title: "Projects",
+        placement: { region: "main", order: 0 },
+        code: "export default function(clay){}",
+        declared_queries: [JSON.stringify({ from: "projects" })],
+        declared_writes: [],
+      }],
+      remove_panels: [], confidence: 0.9,
+    });
+    const { fetchFn } = fakeFetch(200, anthropicBody(wire));
+    const client = new MutationClient({ mode: "byo", apiKey: "k" }, { fetchFn });
+    const result = await client.requestPlan(ctx());
+    if (!result.ok) throw new Error(`expected ok, got ${JSON.stringify(result)}`);
+    // migration parsed back into an object; the enum column survived
+    expect(result.plan.migration?.operations[0]).toMatchObject({ op: "add_column" });
+    // declared_queries parsed back into a Query object
+    expect(result.plan.panels[0]!.declared_queries[0]).toEqual({ from: "projects" });
+  });
+
+  it("malformed inner JSON -> E_PARSE", async () => {
+    const wire = JSON.stringify({
+      api: 1, summary: "x", user_facing_diff: [], clarifying_question: null,
+      assumptions: [], migration: "{not valid json", panels: [],
+      remove_panels: [], confidence: 0.9,
+    });
+    const { fetchFn } = fakeFetch(200, anthropicBody(wire));
+    const client = new MutationClient({ mode: "byo", apiKey: "k" }, { fetchFn });
+    expect(await client.requestPlan(ctx())).toMatchObject({
+      ok: false, error: { code: "E_PARSE" } });
+  });
 });
 
 describe("failure handling", () => {

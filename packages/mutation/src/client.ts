@@ -26,6 +26,34 @@ function stripAnnotations(node: unknown): unknown {
   return node;
 }
 const apiSchema = stripAnnotations(apiSchemaRaw);
+
+/**
+ * The API grammar carries the variable-shape nested parts (migration, each
+ * declared_queries entry) as JSON STRINGS to stay under the grammar cap
+ * while every object stays closed (G1/ADR-013). Parse them back before Zod.
+ * Tolerant of the already-object form so a hosted backend or a model that
+ * emits objects directly still works.
+ */
+export function hydrateApiPlan(input: unknown): unknown {
+  if (!input || typeof input !== "object") return input;
+  const plan = { ...(input as Record<string, unknown>) };
+  if (typeof plan.migration === "string") {
+    const s = plan.migration.trim();
+    plan.migration = s === "" || s === "null" ? null : JSON.parse(s);
+  }
+  if (Array.isArray(plan.panels)) {
+    plan.panels = plan.panels.map(p => {
+      if (!p || typeof p !== "object") return p;
+      const panel = { ...(p as Record<string, unknown>) };
+      if (Array.isArray(panel.declared_queries)) {
+        panel.declared_queries = panel.declared_queries.map(
+          q => (typeof q === "string" ? JSON.parse(q) : q));
+      }
+      return panel;
+    });
+  }
+  return plan;
+}
 import {
   ANTHROPIC_API_URL, ANTHROPIC_VERSION, DEFAULT_MODEL, MAX_TOKENS,
   REPAIR_MODEL, TEMPERATURE,
@@ -108,9 +136,10 @@ export class MutationClient {
 
     let json: unknown;
     try {
-      json = JSON.parse(raw);
-    } catch {
-      return { ok: false, error: { code: "E_PARSE", message: "model output is not JSON" } };
+      json = hydrateApiPlan(JSON.parse(raw));
+    } catch (e) {
+      return { ok: false, error: { code: "E_PARSE",
+        message: `model output is not parseable: ${String(e)}` } };
     }
     const parsed = MutationPlan.safeParse(json);   // full validation (G1)
     if (!parsed.success) {

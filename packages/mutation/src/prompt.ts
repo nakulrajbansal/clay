@@ -29,6 +29,16 @@ export type S1Context = {
   intent: string;
 };
 
+// The API grammar carries two fields as JSON strings (see
+// mutation-plan-api.json / hydrateApiPlan). The exemplars below show them
+// as objects for readability; this note reconciles that with the wire form.
+const WIRE_NOTE = `## Output encoding
+Two fields are transmitted as JSON STRINGS, not inline objects:
+- "migration": a JSON string of the migration object (or null).
+- each entry of a panel's "declared_queries": a JSON string of one Query.
+The exemplars show these as objects to be readable; emit them as strings.
+Everything else is a normal JSON value.`;
+
 export function buildSystemPrompt(): string {
   const exemplars = EXEMPLARS.map((e, i) =>
     `### Exemplar ${i + 1}\nINTENT: ${e.intent}\n\n\`\`\`json\n${e.plan}\n\`\`\``,
@@ -40,6 +50,7 @@ export function buildSystemPrompt(): string {
     `## Output contract\n\n${OUTPUT_CONTRACT}`,
     `## Component contracts (G25)\n\n${COMPONENT_CONTRACTS}`,
     `## Hard rules\n\n${HARD_RULES}`,
+    WIRE_NOTE,
     `## Exemplars\n\n${exemplars}`,
   ].join("\n\n");
 }

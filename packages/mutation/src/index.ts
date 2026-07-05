@@ -4,7 +4,7 @@ export {
   type S1Context, type S1PanelManifest,
 } from "./prompt";
 export {
-  MutationClient,
+  MutationClient, hydrateApiPlan,
   type MutationClientOptions, type PlanResult, type Transport,
 } from "./client";
 export {

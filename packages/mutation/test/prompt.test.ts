@@ -21,6 +21,8 @@ describe("system prompt", () => {
       "## Component contracts (G25)",
       "## Hard rules",                              // §5
       "NEVER emit destructive operations",
+      "## Output encoding",                         // wire note (JSON strings)
+      "transmitted as JSON STRINGS",
       "## Exemplars",                               // §6
     ];
     let pos = -1;

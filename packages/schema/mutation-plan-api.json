@@ -1,5 +1,5 @@
 {
-  "$comment": "SIMPLIFIED MutationPlan for API structured output (G1/ADR-013). The grammar guarantees only PARSEABILITY; full correctness is the Zod schema (index.ts) client-side. Deliberately loose: migration ops, queries, and placement are bare objects so the compiled grammar stays small (the API enforces a grammar-complexity cap). Subset rules: nullability via anyOf (no type arrays); no $comment on the wire (the client strips it). Keep byte-stable for grammar caching.",
+  "$comment": "SIMPLIFIED MutationPlan for API structured output (G1/ADR-013). The API requires additionalProperties:false on EVERY object AND caps grammar complexity, so the variable-shape nested parts (migration, each declared_queries entry) are carried as JSON STRINGS here and hydrated + Zod-validated client-side (see client.ts hydrateApiPlan). The grammar guarantees only parseability; index.ts is the correctness gate. Subset rules: every object closed; nullability via anyOf; no $comment on the wire (client strips it). Keep byte-stable for grammar caching.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -19,20 +19,7 @@
     },
     "clarifying_question": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
     "assumptions": { "type": "array", "items": { "type": "string" } },
-    "migration": {
-      "anyOf": [
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "operations": { "type": "array", "items": { "type": "object" } },
-            "inverse": { "type": "array", "items": { "type": "object" } }
-          },
-          "required": ["operations", "inverse"]
-        },
-        { "type": "null" }
-      ]
-    },
+    "migration": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
     "panels": {
       "type": "array",
       "items": {
@@ -41,9 +28,17 @@
         "properties": {
           "panel_id": { "type": "string" },
           "title": { "type": "string" },
-          "placement": { "type": "object" },
+          "placement": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "region": { "type": "string", "enum": ["top", "main", "side"] },
+              "order": { "type": "number" }
+            },
+            "required": ["region", "order"]
+          },
           "code": { "type": "string" },
-          "declared_queries": { "type": "array", "items": { "type": "object" } },
+          "declared_queries": { "type": "array", "items": { "type": "string" } },
           "declared_writes": { "type": "array", "items": { "type": "string" } }
         },
         "required": ["panel_id", "title", "placement", "code", "declared_queries"]
