@@ -85,6 +85,30 @@ Two fields are transmitted as JSON STRINGS, not inline objects:
 The exemplars show these as objects to be readable; emit them as strings.
 Everything else is a normal JSON value.`;
 
+// Preemptive constraint teaching: the format rules the client-side Zod
+// constitution enforces. Stating them up front raises the first-pass
+// commit rate (these are the shapes that otherwise fail and force a
+// repair round).
+const OUTPUT_RULES_NOTE = `## Get it right the first time
+Your plan is validated against a strict schema. Follow these exactly:
+- panel_id is snake_case: a lowercase letter then lowercase letters,
+  digits, or underscores, at least 3 chars ("jobs_board", never
+  "jobsBoard", "JobsBoard", or "jb"). REUSING an existing panel_id
+  REPLACES that panel; a NEW id ADDS a panel.
+- summary <= 200 chars, plain English, no code/SQL/jargon. Each
+  user_facing_diff detail <= 120 chars. Keep both short.
+- assumptions: at most 5, each <= 150 chars.
+- When you change an existing panel you are given its full current code.
+  Return the COMPLETE updated module (panels are whole-file replacements),
+  keeping what still applies — do not omit unrelated parts.
+- Reuse existing tables and fields. Migrate ONLY when new data must be
+  stored; a new way to SEE existing data is a new panel with migration
+  null. Prefer adding a view over changing the schema.
+- Every db.query/db.watch shape you use appears in declared_queries;
+  every table you insert/update/softDelete appears in declared_writes.
+- confidence < 0.5 => set clarifying_question and leave the plan empty;
+  otherwise decide and record the choice in assumptions.`;
+
 export function buildSystemPrompt(): string {
   const exemplars = EXEMPLARS.map((e, i) =>
     `### Exemplar ${i + 1}\nINTENT: ${e.intent}\n\n\`\`\`json\n${e.plan}\n\`\`\``,
@@ -97,6 +121,7 @@ export function buildSystemPrompt(): string {
     `## Component contracts (G25)\n\n${COMPONENT_CONTRACTS}`,
     PRIMITIVES_NOTE,
     `## Hard rules\n\n${HARD_RULES}`,
+    OUTPUT_RULES_NOTE,
     WIRE_NOTE,
     `## Exemplars\n\n${exemplars}`,
   ].join("\n\n");

@@ -106,20 +106,31 @@ export class MutationPipeline {
     this.onDebug = opts.onDebug;
   }
 
-  /** S1: registry + panel manifest + last 5 summaries + intent. NEVER rows. */
+  /** S1: registry + panel manifest + last 5 summaries + intent. NEVER rows.
+   * A panel's full CODE is included when the intent likely targets it — by
+   * its id, title, or (crucially) any TABLE it reads: "add a priority to
+   * the jobs table" must ship jobs-panel code so the model can return a
+   * correct whole-file replacement instead of regenerating from scratch. */
   buildContext(intent: string): PlannerContext {
-    const lowered = intent.toLowerCase();
+    const words = new Set(intent.toLowerCase().split(/[^a-z0-9_]+/).filter(Boolean));
+    const mentions = (s: string): boolean => {
+      const t = s.toLowerCase();
+      return words.has(t) || words.has(t.replace(/s$/, "")) || words.has(`${t}s`);
+    };
+    const registry = [...this.store.registrySnapshot().values()];
     return {
-      registry: [...this.store.registrySnapshot().values()],
+      registry,
       panels: this.store.livePanels().map(p => {
-        const tables = [...new Set(p.declared_queries.map(q => q.from))].join(", ");
-        const targeted = lowered.includes(p.panel_id)
-          || lowered.includes(p.panel_id.replaceAll("_", " "))
-          || lowered.includes(p.title.toLowerCase());
+        const tables = [...new Set(p.declared_queries.map(q => q.from))];
+        const targeted =
+          mentions(p.panel_id) || mentions(p.title)
+          || p.panel_id.split("_").some(mentions)
+          || p.title.split(/\s+/).some(mentions)
+          || tables.some(mentions);
         return {
           id: p.panel_id, title: p.title, placement: p.placement,
           declared_queries: p.declared_queries, declared_writes: p.declared_writes,
-          description: `${p.title} (${p.placement.region}) over ${tables || "no tables"}`,
+          description: `${p.title} (${p.placement.region}) over ${tables.join(", ") || "no tables"}`,
           ...(targeted ? { code: p.code } : {}),
         };
       }),

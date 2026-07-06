@@ -299,6 +299,23 @@ describe("pipeline stages", () => {
     expect(JSON.stringify(ctx)).not.toContain("Sample name");   // no row data
     store.close();
   });
+
+  it("S1 includes panel CODE when the intent names its TABLE (modify quality)", async () => {
+    const { store, panelId, table } = await seedShellStore(tracker());   // items_table over "items"
+    const pipeline = new MutationPipeline(store, new ScriptedPlanner([]));
+
+    // intent names the table, not the panel id/title -> code must still ship
+    const byTable = pipeline.buildContext(`add a priority column to the ${table} table`);
+    const p1 = byTable.panels.find(p => p.id === panelId)!;
+    expect(p1.code, "code included when the table is mentioned").toBeDefined();
+
+    // an unrelated intent -> code omitted (just the description), saving budget
+    const unrelated = pipeline.buildContext("what's the weather");
+    const p2 = unrelated.panels.find(p => p.id === panelId)!;
+    expect(p2.code).toBeUndefined();
+    expect(p2.description).toContain("over items");
+    store.close();
+  });
 });
 
 describe("store: panels, tombstones, and the G16 rename rewrite", () => {

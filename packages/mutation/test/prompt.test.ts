@@ -25,6 +25,8 @@ describe("system prompt", () => {
       "MANY VIEWS OVER ONE DATASET",
       "## Hard rules",                              // §5
       "NEVER emit destructive operations",
+      "## Get it right the first time",             // preemptive constraints
+      "panel_id is snake_case",
       "## Output encoding",                         // wire note (JSON strings)
       "transmitted as JSON STRINGS",
       "## Exemplars",                               // §6
