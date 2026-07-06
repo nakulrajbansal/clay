@@ -90,9 +90,9 @@ describe("the grammar accepts every canonical exemplar (in wire form)", () => {
   const exemplarsDir = fileURLToPath(new URL("../../../specs/exemplars/", import.meta.url));
   const ajv = new Ajv({ strict: false });
   const validate = ajv.compile(apiSchema);
-  const files = readdirSync(exemplarsDir).filter(f => /^(0[1-9]|10)-.*\.md$/.test(f));
+  const files = readdirSync(exemplarsDir).filter(f => /^(0[1-9]|1[0-2])-.*\.md$/.test(f));
 
-  it("finds all ten", () => expect(files).toHaveLength(10));
+  it("finds all twelve", () => expect(files).toHaveLength(12));
   for (const file of files) {
     it(file, () => {
       const md = readFileSync(join(exemplarsDir, file), "utf8");

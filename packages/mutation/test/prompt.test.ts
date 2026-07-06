@@ -39,7 +39,7 @@ describe("system prompt", () => {
     }
   });
 
-  it("includes all ten exemplar intents", () => {
+  it("includes all exemplar intents", () => {
     for (const intent of [
       "I want to record each dog's weight",
       "add a priority to each project",
@@ -49,6 +49,8 @@ describe("system prompt", () => {
       "let me filter the whole board by owner",
       "track my progress better",
       "rename owner to lead everywhere",
+      "show the projects as a board grouped by status",
+      "show my clients as cards instead of a table",
       "get rid of the breed field",
       "text clients a reminder",
     ]) {

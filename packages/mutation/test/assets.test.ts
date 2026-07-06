@@ -27,7 +27,7 @@ describe("committed assets match a fresh generation from specs/", () => {
   });
   it("exemplars", () => {
     expect(EXEMPLARS).toEqual(fresh.EXEMPLARS);
-    expect(EXEMPLARS).toHaveLength(10);
+    expect(EXEMPLARS).toHaveLength(12);
   });
 });
 

@@ -77,9 +77,11 @@ const EXEMPLARS: [string, keyof typeof CONTEXTS][] = [
   ["07-clarify.md", "C"],
   ["08-rename.md", "B"],
   ["09-remove.md", "A"],
+  ["11-board.md", "B"],
+  ["12-cards.md", "A"],
 ];
 
-describe("exemplars 1-9 validate clean against their contexts", () => {
+describe("clean exemplars validate against their contexts", () => {
   for (const [file, ctxKey] of EXEMPLARS) {
     it(file, () => {
       const c = CONTEXTS[ctxKey]!;
