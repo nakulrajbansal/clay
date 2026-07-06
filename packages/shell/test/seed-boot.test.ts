@@ -81,6 +81,21 @@ describe("every seed panel boots and renders real data", () => {
     ["small_business", "sb_upcoming", c => c.querySelector("table, .clay-empty") !== null],
     ["small_business", "sb_add_job", c =>
       c.querySelectorAll("form.clay-form input, form.clay-form select").length === 5],
+    // CRM
+    ["crm", "crm_pipeline", c =>
+      c.querySelectorAll(".clay-board-col").length === 5 && c.textContent!.includes("Northwind annual plan")],
+    ["crm", "crm_metrics", c => c.textContent!.includes("Pipeline") && c.querySelectorAll(".clay-metric").length === 3],
+    ["crm", "crm_contacts", c => c.querySelectorAll(".clay-card").length === 3],
+    // Financials
+    ["financials", "fin_summary", c =>
+      c.textContent!.includes("Net") && c.querySelectorAll(".clay-metric").length === 3],
+    ["financials", "fin_transactions", c => c.querySelectorAll("tbody tr").length === 4],
+    ["financials", "fin_spending", c => c.querySelectorAll("svg rect").length >= 1],
+    // Staff
+    ["staff", "staff_board", c =>
+      c.querySelectorAll(".clay-board-col").length === 3 && c.textContent!.includes("Maya Chen")],
+    ["staff", "staff_roster", c => c.querySelectorAll(".clay-card").length === 3],
+    ["staff", "staff_timeoff", c => c.querySelectorAll("tbody tr").length === 2],
   ];
 
   for (const [shellId, panelId, check] of expectations) {

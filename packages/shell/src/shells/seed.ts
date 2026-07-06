@@ -9,7 +9,9 @@
 import { ClayStore, deriveInverse, type MigrationPlanT } from "@clay/kernel";
 import { SEED_PANELS } from "./seed-panels";
 
-export type StarterShellId = "tracker" | "log" | "dashboard" | "small_business";
+export type StarterShellId =
+  | "tracker" | "log" | "dashboard" | "small_business"
+  | "crm" | "financials" | "staff";
 
 export type ShellColumn = {
   name: string;
@@ -152,6 +154,163 @@ export const STARTER_SHELLS: StarterShell[] = [
         sampleRows: [
           { description: "Van fuel", amount: 60, category: "fuel", on: "2026-07-01" },
           { description: "Pipe stock", amount: 210, category: "supplies", on: "2026-06-30" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "crm", name: "Sales CRM",
+    tagline: "Contacts, companies, and a deal pipeline (like HubSpot or Pipedrive)",
+    tables: [
+      {
+        name: "contacts",
+        columns: [
+          col("name", "text", true), col("email", "text"), col("phone", "text"),
+          col("company", "text"), col("title", "text"),
+        ],
+        sampleRows: [
+          { name: "Dana Lee", email: "dana@northwind.co", phone: "555-0101", company: "Northwind", title: "Owner" },
+          { name: "Sam Patel", email: "sam@brightlab.io", phone: "555-0102", company: "BrightLab", title: "Ops" },
+          { name: "Rosa Diaz", email: "rosa@harborcafe.com", phone: "555-0103", company: "Harbor Cafe", title: "Manager" },
+        ],
+      },
+      {
+        name: "companies",
+        columns: [
+          col("name", "text", true), col("industry", "text"), col("website", "text"),
+          col("size", "enum", false, ["small", "medium", "large"]),
+        ],
+        sampleRows: [
+          { name: "Northwind", industry: "Retail", website: "northwind.co", size: "small" },
+          { name: "BrightLab", industry: "Software", website: "brightlab.io", size: "medium" },
+        ],
+      },
+      {
+        name: "deals",
+        columns: [
+          col("title", "text", true), col("contact", "text"),
+          col("stage", "enum", false, ["lead", "qualified", "proposal", "won", "lost"]),
+          col("value", "number"), col("close_date", "date"),
+        ],
+        sampleRows: [
+          { title: "Northwind annual plan", contact: "Dana Lee", stage: "proposal", value: 8000, close_date: "2026-07-20" },
+          { title: "BrightLab pilot", contact: "Sam Patel", stage: "qualified", value: 3500, close_date: "2026-07-31" },
+          { title: "Harbor Cafe setup", contact: "Rosa Diaz", stage: "won", value: 1200, close_date: "2026-06-28" },
+          { title: "Referral lead", contact: "Sam Patel", stage: "lead", value: 0, close_date: "2026-08-10" },
+        ],
+      },
+      {
+        name: "activities",
+        columns: [
+          col("subject", "text", true), col("contact", "text"),
+          col("type", "enum", false, ["call", "email", "meeting", "note"]),
+          col("on", "date"),
+        ],
+        sampleRows: [
+          { subject: "Discovery call", contact: "Dana Lee", type: "call", on: "2026-07-06" },
+          { subject: "Send proposal", contact: "Dana Lee", type: "email", on: "2026-07-07" },
+          { subject: "Kickoff", contact: "Rosa Diaz", type: "meeting", on: "2026-07-02" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "financials", name: "Bookkeeping",
+    tagline: "Accounts, income and expenses, invoices and bills (like QuickBooks or Wave)",
+    tables: [
+      {
+        name: "accounts",
+        columns: [
+          col("name", "text", true),
+          col("type", "enum", false, ["checking", "savings", "credit", "cash"]),
+          col("balance", "number"),
+        ],
+        sampleRows: [
+          { name: "Business checking", type: "checking", balance: 8400 },
+          { name: "Business card", type: "credit", balance: -1200 },
+        ],
+      },
+      {
+        name: "transactions",
+        columns: [
+          col("description", "text", true), col("account", "text"), col("amount", "number"),
+          col("kind", "enum", false, ["income", "expense"]),
+          col("category", "text"), col("on", "date"),
+        ],
+        sampleRows: [
+          { description: "Client payment — Northwind", account: "Business checking", amount: 1200, kind: "income", category: "Sales", on: "2026-06-28" },
+          { description: "Software subscription", account: "Business card", amount: 90, kind: "expense", category: "Software", on: "2026-07-01" },
+          { description: "Supplies", account: "Business card", amount: 210, kind: "expense", category: "Materials", on: "2026-06-30" },
+          { description: "Client payment — Harbor", account: "Business checking", amount: 1200, kind: "income", category: "Sales", on: "2026-07-03" },
+        ],
+      },
+      {
+        name: "invoices",
+        columns: [
+          col("customer", "text"), col("amount", "number"),
+          col("status", "enum", false, ["draft", "sent", "paid", "overdue"]),
+          col("issued", "date"), col("due", "date"),
+        ],
+        sampleRows: [
+          { customer: "Northwind", amount: 8000, status: "sent", issued: "2026-06-29", due: "2026-07-13" },
+          { customer: "BrightLab", amount: 3500, status: "draft", issued: "2026-07-04", due: "2026-07-18" },
+          { customer: "Harbor Cafe", amount: 1200, status: "paid", issued: "2026-06-21", due: "2026-07-05" },
+        ],
+      },
+      {
+        name: "bills",
+        columns: [
+          col("vendor", "text", true), col("amount", "number"),
+          col("status", "enum", false, ["unpaid", "paid"]), col("due", "date"),
+        ],
+        sampleRows: [
+          { vendor: "Supply Co", amount: 210, status: "unpaid", due: "2026-07-15" },
+          { vendor: "Cloud Host", amount: 90, status: "paid", due: "2026-07-01" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "staff", name: "Staff & Scheduling",
+    tagline: "Employees, shifts, and time-off (like Deputy or When I Work)",
+    tables: [
+      {
+        name: "employees",
+        columns: [
+          col("name", "text", true), col("role", "text"), col("phone", "text"),
+          col("email", "text"),
+          col("status", "enum", false, ["active", "on_leave", "inactive"]),
+        ],
+        sampleRows: [
+          { name: "Maya Chen", role: "Barista", phone: "555-0201", email: "maya@x.com", status: "active" },
+          { name: "Leo Park", role: "Shift lead", phone: "555-0202", email: "leo@x.com", status: "active" },
+          { name: "Ivy Ross", role: "Barista", phone: "555-0203", email: "ivy@x.com", status: "on_leave" },
+        ],
+      },
+      {
+        name: "shifts",
+        columns: [
+          col("employee", "text"), col("date", "date", true),
+          col("start_time", "text"), col("end_time", "text"), col("role", "text"),
+          col("status", "enum", false, ["scheduled", "confirmed", "completed"]),
+        ],
+        sampleRows: [
+          { employee: "Maya Chen", date: "2026-07-06", start_time: "08:00", end_time: "14:00", role: "Barista", status: "confirmed" },
+          { employee: "Leo Park", date: "2026-07-06", start_time: "13:00", end_time: "21:00", role: "Shift lead", status: "scheduled" },
+          { employee: "Maya Chen", date: "2026-07-07", start_time: "08:00", end_time: "14:00", role: "Barista", status: "scheduled" },
+        ],
+      },
+      {
+        name: "time_off",
+        columns: [
+          col("employee", "text"),
+          col("kind", "enum", false, ["vacation", "sick", "personal"]),
+          col("start_date", "date"), col("end_date", "date"),
+          col("status", "enum", false, ["pending", "approved", "denied"]),
+        ],
+        sampleRows: [
+          { employee: "Ivy Ross", kind: "vacation", start_date: "2026-07-05", end_date: "2026-07-12", status: "approved" },
+          { employee: "Leo Park", kind: "personal", start_date: "2026-07-09", end_date: "2026-07-09", status: "pending" },
         ],
       },
     ],

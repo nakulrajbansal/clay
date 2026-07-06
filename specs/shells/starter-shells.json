@@ -93,7 +93,117 @@
         "sb_jobs_board:main:0", "sb_jobs_table:main:1", "sb_revenue:main:2", "sb_invoices:main:3",
         "sb_customers:side:0", "sb_add_job:side:1"],
       "sample_rows": {"customers": 3, "jobs": 5, "invoices": 3, "items": 3, "expenses": 2}
+    },
+    {
+      "shell_id": "crm",
+      "name": "Sales CRM",
+      "tagline": "Contacts, companies, and a deal pipeline (like HubSpot or Pipedrive)",
+      "registry": [
+        {"table": "contacts",
+         "columns": [
+           {"name": "name", "type": "text", "required": true},
+           {"name": "email", "type": "text"},
+           {"name": "phone", "type": "text"},
+           {"name": "company", "type": "text"},
+           {"name": "title", "type": "text"}]},
+        {"table": "companies",
+         "columns": [
+           {"name": "name", "type": "text", "required": true},
+           {"name": "industry", "type": "text"},
+           {"name": "website", "type": "text"},
+           {"name": "size", "type": "enum", "values": ["small", "medium", "large"]}]},
+        {"table": "deals",
+         "columns": [
+           {"name": "title", "type": "text", "required": true},
+           {"name": "contact", "type": "text"},
+           {"name": "stage", "type": "enum", "values": ["lead", "qualified", "proposal", "won", "lost"]},
+           {"name": "value", "type": "number"},
+           {"name": "close_date", "type": "date"}]},
+        {"table": "activities",
+         "columns": [
+           {"name": "subject", "type": "text", "required": true},
+           {"name": "contact", "type": "text"},
+           {"name": "type", "type": "enum", "values": ["call", "email", "meeting", "note"]},
+           {"name": "on", "type": "date"}]}
+      ],
+      "seed_panels": [
+        "crm_metrics:top:0",
+        "crm_pipeline:main:0", "crm_deals_table:main:1", "crm_activities:main:2",
+        "crm_contacts:side:0", "crm_add_deal:side:1"],
+      "sample_rows": {"contacts": 3, "companies": 2, "deals": 4, "activities": 3}
+    },
+    {
+      "shell_id": "financials",
+      "name": "Bookkeeping",
+      "tagline": "Accounts, income and expenses, invoices and bills (like QuickBooks or Wave)",
+      "registry": [
+        {"table": "accounts",
+         "columns": [
+           {"name": "name", "type": "text", "required": true},
+           {"name": "type", "type": "enum", "values": ["checking", "savings", "credit", "cash"]},
+           {"name": "balance", "type": "number"}]},
+        {"table": "transactions",
+         "columns": [
+           {"name": "description", "type": "text", "required": true},
+           {"name": "account", "type": "text"},
+           {"name": "amount", "type": "number"},
+           {"name": "kind", "type": "enum", "values": ["income", "expense"]},
+           {"name": "category", "type": "text"},
+           {"name": "on", "type": "date"}]},
+        {"table": "invoices",
+         "columns": [
+           {"name": "customer", "type": "text"},
+           {"name": "amount", "type": "number"},
+           {"name": "status", "type": "enum", "values": ["draft", "sent", "paid", "overdue"]},
+           {"name": "issued", "type": "date"},
+           {"name": "due", "type": "date"}]},
+        {"table": "bills",
+         "columns": [
+           {"name": "vendor", "type": "text", "required": true},
+           {"name": "amount", "type": "number"},
+           {"name": "status", "type": "enum", "values": ["unpaid", "paid"]},
+           {"name": "due", "type": "date"}]}
+      ],
+      "seed_panels": [
+        "fin_summary:top:0",
+        "fin_spending:main:0", "fin_transactions:main:1", "fin_invoices:main:2",
+        "fin_bills:side:0", "fin_add_txn:side:1"],
+      "sample_rows": {"accounts": 2, "transactions": 4, "invoices": 3, "bills": 2}
+    },
+    {
+      "shell_id": "staff",
+      "name": "Staff & Scheduling",
+      "tagline": "Employees, shifts, and time-off (like Deputy or When I Work)",
+      "registry": [
+        {"table": "employees",
+         "columns": [
+           {"name": "name", "type": "text", "required": true},
+           {"name": "role", "type": "text"},
+           {"name": "phone", "type": "text"},
+           {"name": "email", "type": "text"},
+           {"name": "status", "type": "enum", "values": ["active", "on_leave", "inactive"]}]},
+        {"table": "shifts",
+         "columns": [
+           {"name": "employee", "type": "text"},
+           {"name": "date", "type": "date", "required": true},
+           {"name": "start_time", "type": "text"},
+           {"name": "end_time", "type": "text"},
+           {"name": "role", "type": "text"},
+           {"name": "status", "type": "enum", "values": ["scheduled", "confirmed", "completed"]}]},
+        {"table": "time_off",
+         "columns": [
+           {"name": "employee", "type": "text"},
+           {"name": "kind", "type": "enum", "values": ["vacation", "sick", "personal"]},
+           {"name": "start_date", "type": "date"},
+           {"name": "end_date", "type": "date"},
+           {"name": "status", "type": "enum", "values": ["pending", "approved", "denied"]}]}
+      ],
+      "seed_panels": [
+        "staff_today:top:0",
+        "staff_board:main:0", "staff_shifts:main:1", "staff_timeoff:main:2",
+        "staff_roster:side:0", "staff_add_shift:side:1"],
+      "sample_rows": {"employees": 3, "shifts": 3, "time_off": 2}
     }
   ],
-  "note": "Seed panel code lives in the shell package; the registries, ids, and placements here are binding. Multi-table templates (small_business) show one dataset through many views — a jobs board AND a jobs table AND dashboard counts."
+  "note": "Seed panel code lives in the shell package; the registries, ids, and placements here are binding. Multi-table templates map to real small-business software (CRM, bookkeeping, staff scheduling) and show one dataset through many views — a board AND a table AND dashboard counts."
 }
