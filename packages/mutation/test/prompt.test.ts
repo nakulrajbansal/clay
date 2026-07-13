@@ -51,6 +51,7 @@ describe("system prompt", () => {
       "rename owner to lead everywhere",
       "show the projects as a board grouped by status",
       "show my clients as cards instead of a table",
+      "show my books on a timeline from when I started to when I finished",
       "get rid of the breed field",
       "text clients a reminder",
     ]) {

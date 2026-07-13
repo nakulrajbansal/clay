@@ -79,6 +79,7 @@ const EXEMPLARS: [string, keyof typeof CONTEXTS][] = [
   ["09-remove.md", "A"],
   ["11-board.md", "B"],
   ["12-cards.md", "A"],
+  ["13-timeline.md", "C"],
 ];
 
 describe("clean exemplars validate against their contexts", () => {

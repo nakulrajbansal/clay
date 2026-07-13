@@ -18,10 +18,10 @@ function loadExemplar(file: string): unknown {
 }
 
 const files = readdirSync(exemplarsDir)
-  .filter(f => /^(0[1-9]|1[0-2])-.*\.md$/.test(f));
+  .filter(f => /^(0[1-9]|1[0-3])-.*\.md$/.test(f));
 
 describe("exemplars validate against the frozen MutationPlan schema", () => {
-  it("finds all twelve exemplars", () => expect(files).toHaveLength(12));
+  it("finds all thirteen exemplars", () => expect(files).toHaveLength(13));
   for (const f of files) {
     it(f, () => {
       const r = MutationPlan.safeParse(loadExemplar(f));

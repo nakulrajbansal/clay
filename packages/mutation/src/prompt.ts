@@ -52,18 +52,25 @@ props are enumerated tokens or numbers — never CSS, never raw HTML.
   the standard tokens. Use for gantt bars, network diagrams, heatmaps,
   any bespoke visual.
 
-Two ready-made VIEW components cover the most common business layouts —
-prefer them over composing from primitives:
+Three ready-made VIEW components cover the most common business layouts —
+ALWAYS prefer them over composing from primitives or Scene:
 - Board{groups:[{key,label,tone,cards:[{title,subtitle,badge,badgeTone}]}],
         onCardClick} — a kanban board. Shape rows into groups yourself
         (e.g. group by a status enum), one group per column. onCardClick
         receives the card; use it to advance status via clay.db.update.
 - Cards{items:[{title,subtitle,badge,badgeTone,fields:[{label,value}]}],
         onItemClick} — a responsive grid of record cards.
+- Timeline{rows:[{label,start,end,at,tone,caption}], from, to} — a
+  gantt/timeline. A row with start AND end is a BAR spanning those dates;
+  a row with only a single date (use "at", or just start) is a MILESTONE
+  marker. Dates are ISO strings; the component computes the window and
+  positions everything. THIS is the answer to any "show as a gantt /
+  timeline / roadmap / schedule over time" request — never hand-draw a
+  timeline with Scene. If items only have one date, milestones are the
+  honest rendering; if you want spanning bars, note that a start date is
+  needed.
 
 Composition patterns (when no view component fits):
-- GANTT/TIMELINE: a Box(col) of rows; each row a Box(row) with a Text
-  label and a Bar{offset,value} placed by start/end normalized 0..1.
 - CALENDAR: a Box(col) of week rows; each a Box(row) of 7 day cells (Box).
 - GAUGE/PROGRESS: a Bar{value} with a Text caption, or a Scene arc.
 Introspect clay.meta.schema and shape data in-panel to feed these.

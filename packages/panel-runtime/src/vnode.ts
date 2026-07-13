@@ -39,11 +39,12 @@ export const Scene = "Scene";
 // dataset shown as a kanban board or a card grid.
 export const Board = "Board";
 export const Cards = "Cards";
+export const Timeline = "Timeline";
 
 export const PANEL_GLOBALS: Record<string, unknown> = {
   Table, Chart, MetricCard, Badge, Form, Field, Button, Input, Select,
   DatePicker, Checkbox, Toggle, EmptyState, Stack, Grid, FilterBar,
-  Box, Text, Bar, Scene, Board, Cards,
+  Box, Text, Bar, Scene, Board, Cards, Timeline,
 };
 
 const LAYOUT_TAGS = new Set(["div", "span", "section", "h1", "h2", "h3", "p", "ul", "li", "hr"]);
@@ -207,6 +208,7 @@ function buildComponent(ctx: Ctx, node: VNode): HTMLElement {
     case Scene: return buildScene(ctx, props);
     case Board: return buildBoard(ctx, props);
     case Cards: return buildCards(ctx, props);
+    case Timeline: return buildTimeline(ctx, props);
     case Field: {
       const wrap = el(ctx, "label", "clay-field");
       const span = el(ctx, "span", "clay-field-label");
@@ -683,6 +685,81 @@ function buildCards(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
   const grid = el(ctx, "div", "clay-cards");
   for (const it of items) grid.appendChild(buildCard(ctx, it, true, onItemClick));
   return grid;
+}
+
+// ---------- Timeline / Gantt ----------
+// The polished path for "show as a gantt/timeline". The panel maps rows to
+// {label, start, end, at, tone, caption}; the component does ALL the date
+// math, positioning, and axis. A row with start+end is a bar; a row with a
+// single date (at, or only start) is a milestone marker. Responsive HTML —
+// no hand-drawn geometry.
+function buildTimeline(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
+  type Row = { label?: unknown; start?: unknown; end?: unknown; at?: unknown;
+    tone?: unknown; caption?: unknown };
+  const rows = (Array.isArray(props.rows) ? props.rows : []) as Row[];
+  const parse = (d: unknown): number | null => {
+    if (d === undefined || d === null || d === "") return null;
+    const t = Date.parse(String(d));
+    return Number.isNaN(t) ? null : t;
+  };
+  const times: number[] = [];
+  for (const r of rows) for (const k of ["start", "end", "at"] as const) {
+    const t = parse(r[k]); if (t !== null) times.push(t);
+  }
+  const fromT = parse(props.from) ?? (times.length ? Math.min(...times) : null);
+  const toT = parse(props.to) ?? (times.length ? Math.max(...times) : null);
+
+  const wrap = el(ctx, "div", "clay-timeline");
+  if (fromT === null || toT === null || rows.length === 0) {
+    const empty = el(ctx, "div", "clay-empty");
+    empty.textContent = "No dated items to place on a timeline";
+    wrap.appendChild(empty);
+    return wrap;
+  }
+  const span = Math.max(1, toT - fromT);
+  const pos = (t: number): number => Math.max(0, Math.min(1, (t - fromT) / span));
+  const pct = (v: number): string => `${(v * 100).toFixed(2)}%`;
+  const iso = (t: number): string => new Date(t).toISOString().slice(0, 10);
+
+  const axis = el(ctx, "div", "clay-timeline-axis");
+  const a1 = el(ctx, "span"); a1.textContent = iso(fromT);
+  const a2 = el(ctx, "span"); a2.textContent = iso(toT);
+  axis.append(a1, a2);
+  wrap.appendChild(axis);
+
+  for (const r of rows) {
+    const row = el(ctx, "div", "clay-timeline-row");
+    const label = el(ctx, "span", "clay-timeline-label");
+    label.textContent = String(r.label ?? "");
+    row.appendChild(label);
+    const track = el(ctx, "div", "clay-timeline-track");
+    const tone = clampTone(r.tone) ?? "accent";
+    const s = parse(r.start), e = parse(r.end), at = parse(r.at);
+    if (s !== null && e !== null && e >= s) {
+      const bar = el(ctx, "div", `clay-timeline-bar clay-fill-${tone}`);
+      bar.style.left = pct(pos(s));
+      bar.style.width = pct(Math.max(0.01, pos(e) - pos(s)));
+      if (r.caption !== undefined && r.caption !== null) bar.textContent = String(r.caption);
+      track.appendChild(bar);
+    } else {
+      const pt = at ?? s ?? e;
+      if (pt !== null) {
+        const marker = el(ctx, "div", `clay-timeline-marker clay-fill-${tone}`);
+        marker.style.left = pct(pos(pt));
+        marker.title = iso(pt);
+        track.appendChild(marker);
+        if (r.caption !== undefined && r.caption !== null) {
+          const cap = el(ctx, "span", "clay-timeline-caption");
+          cap.style.left = pct(pos(pt));
+          cap.textContent = String(r.caption);
+          track.appendChild(cap);
+        }
+      }
+    }
+    row.appendChild(track);
+    wrap.appendChild(row);
+  }
+  return wrap;
 }
 
 export function render(

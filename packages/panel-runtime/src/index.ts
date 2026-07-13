@@ -2,7 +2,7 @@ export {
   h, render, resolveBadgeTone, PANEL_GLOBALS,
   Table, Chart, MetricCard, Badge, Form, Field, Button, Input, Select,
   DatePicker, Checkbox, Toggle, EmptyState, Stack, Grid, FilterBar,
-  Box, Text, Bar, Scene, Board, Cards,
+  Box, Text, Bar, Scene, Board, Cards, Timeline,
   type SchemaTable, type VChild, type VNode,
 } from "./vnode";
 export {

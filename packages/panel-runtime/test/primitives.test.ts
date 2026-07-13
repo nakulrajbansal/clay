@@ -2,7 +2,7 @@
 // Composable primitives (ADR-016): Box/Text/Bar/Scene render safely and
 // compose into layouts the named components can't express (a Gantt).
 import { describe, expect, it } from "vitest";
-import { h, render, Box, Text, Bar, Scene, Stack, Board, Cards } from "../src/index";
+import { h, render, Box, Text, Bar, Scene, Stack, Board, Cards, Timeline } from "../src/index";
 
 function mount(vnode: Parameters<typeof render>[0]): HTMLElement {
   const c = document.createElement("div");
@@ -138,6 +138,40 @@ describe("Cards", () => {
     expect(fields).toHaveLength(2);
     expect(fields[1]!.textContent).toContain("Owed");
     expect(fields[1]!.textContent).toContain("$1,200");
+  });
+});
+
+describe("Timeline (gantt)", () => {
+  it("renders bars for start+end and milestones for a single date", () => {
+    const c = mount(h(Timeline, { rows: [
+      { label: "Research", start: "2026-01-01", end: "2026-01-11", tone: "green", caption: "done" },
+      { label: "Kickoff", at: "2026-01-06", tone: "accent" },   // milestone
+    ] }));
+    // window is 2026-01-01 .. 2026-01-11 (10 days)
+    const bar = c.querySelector<HTMLElement>(".clay-timeline-bar")!;
+    expect(parseFloat(bar.style.left)).toBeCloseTo(0);
+    expect(parseFloat(bar.style.width)).toBeCloseTo(100);   // spans the whole window
+    expect(bar.textContent).toBe("done");
+    const marker = c.querySelector<HTMLElement>(".clay-timeline-marker")!;
+    expect(parseFloat(marker.style.left)).toBeCloseTo(50);  // Jan 6 is the midpoint
+    expect(c.querySelector(".clay-timeline-axis")!.textContent).toContain("2026-01-01");
+    // labels present
+    expect(c.textContent).toContain("Research");
+    expect(c.textContent).toContain("Kickoff");
+  });
+
+  it("falls back to a milestone when only a start date is given", () => {
+    const c = mount(h(Timeline, { rows: [
+      { label: "A", start: "2026-02-01", end: "2026-02-05" },
+      { label: "B", start: "2026-02-03" },   // no end -> milestone
+    ] }));
+    expect(c.querySelectorAll(".clay-timeline-bar")).toHaveLength(1);
+    expect(c.querySelectorAll(".clay-timeline-marker")).toHaveLength(1);
+  });
+
+  it("handles no dated rows without crashing", () => {
+    const c = mount(h(Timeline, { rows: [{ label: "no dates" }] }));
+    expect(c.querySelector(".clay-empty")).not.toBeNull();
   });
 });
 

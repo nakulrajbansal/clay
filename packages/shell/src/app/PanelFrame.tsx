@@ -98,6 +98,23 @@ const PANEL_CSS = `
   .clay-clickable { cursor: pointer; }
   .clay-clickable:hover { border-color: #a8a29e; background: #fafaf9; }
 
+  /* timeline / gantt */
+  .clay-timeline { display: flex; flex-direction: column; gap: 6px; }
+  .clay-timeline-axis { display: flex; justify-content: space-between;
+    font-size: 11px; color: #a8a29e; margin-left: 140px; }
+  .clay-timeline-row { display: flex; align-items: center; gap: 8px; }
+  .clay-timeline-label { width: 132px; flex: none; font-size: 12px; color: #57534e;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .clay-timeline-track { position: relative; flex: 1; height: 20px;
+    background: #f5f5f4; border-radius: 6px; }
+  .clay-timeline-bar { position: absolute; top: 3px; height: 14px; border-radius: 5px;
+    min-width: 4px; font-size: 10px; color: #fff; line-height: 14px;
+    padding: 0 5px; overflow: hidden; white-space: nowrap; box-sizing: border-box; }
+  .clay-timeline-marker { position: absolute; top: 3px; width: 14px; height: 14px;
+    border-radius: 50%; transform: translateX(-7px); border: 2px solid #fff; box-sizing: border-box; }
+  .clay-timeline-caption { position: absolute; top: 2px; transform: translateX(10px);
+    font-size: 11px; color: #57534e; white-space: nowrap; }
+
   .clay-scene svg { width: 100%; height: auto; display: block; }
   .clay-fill-default, .clay-fill-accent { fill: #6366f1; } .clay-fill-green { fill: #22c55e; }
   .clay-fill-amber { fill: #f59e0b; } .clay-fill-red { fill: #ef4444; } .clay-fill-gray { fill: #d6d3d1; }
