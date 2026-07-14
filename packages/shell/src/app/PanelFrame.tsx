@@ -95,6 +95,9 @@ const PANEL_CSS = `
   .clay-card-subtitle { font-size: 12px; color: #78716c; margin-top: 2px; }
   .clay-card-field { display: flex; justify-content: space-between; font-size: 12px; margin-top: 4px; }
   .clay-card-field-label { color: #a8a29e; }
+  .clay-card-draggable { cursor: grab; }
+  .clay-card-draggable:active { cursor: grabbing; }
+  .clay-board-col-over { background: #eef2ff; outline: 2px dashed #a5b4fc; outline-offset: -2px; }
   .clay-clickable { cursor: pointer; }
   /* subtle, color-safe hover — brightness works on tinted badges/boxes too */
   .clay-clickable:hover { filter: brightness(0.96); }

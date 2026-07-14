@@ -670,12 +670,20 @@ function buildCard(ctx: Ctx, card: CardSpec, large: boolean,
 
 function buildBoard(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
   // A kanban board: the panel shapes rows into groups (e.g. by a status
-  // enum); Board renders columns of cards. Click a card to act on it.
+  // enum); Board renders columns of cards. The natural interaction is
+  // DRAGGING a card between columns (bidirectional, intentional) — the
+  // panel wires onCardMove(card, toGroupKey) to change the record's group.
+  // onCardClick is also supported for opening a card.
   type Group = { key?: unknown; label?: unknown; tone?: unknown; cards?: CardSpec[] };
   const groups = (Array.isArray(props.groups) ? props.groups : []) as Group[];
   const onCardClick = props.onCardClick;
+  const onCardMove = props.onCardMove;
+  const draggable = typeof onCardMove === "function";
+  let dragged: { card: CardSpec; fromKey: string } | null = null;
+
   const board = el(ctx, "div", "clay-board");
   for (const g of groups) {
+    const groupKey = String(g.key ?? g.label ?? "");
     const col = el(ctx, "div", "clay-board-col");
     const header = el(ctx, "div", "clay-board-header");
     const label = el(ctx, "span", "clay-board-label");
@@ -687,8 +695,39 @@ function buildBoard(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
     count.textContent = String(cards.length);
     header.append(label, count);
     col.appendChild(header);
+
+    if (draggable) {
+      col.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        col.classList.add("clay-board-col-over");
+      });
+      col.addEventListener("dragleave", () => col.classList.remove("clay-board-col-over"));
+      col.addEventListener("drop", (e) => {
+        e.preventDefault();
+        col.classList.remove("clay-board-col-over");
+        if (dragged && dragged.fromKey !== groupKey)
+          (onCardMove as (c: CardSpec, k: string) => void)(dragged.card, groupKey);
+        dragged = null;
+      });
+    }
+
     const list = el(ctx, "div", "clay-board-cards");
-    for (const card of cards) list.appendChild(buildCard(ctx, card, false, onCardClick));
+    for (const card of cards) {
+      const cardEl = buildCard(ctx, card, false, onCardClick);
+      if (draggable) {
+        cardEl.setAttribute("draggable", "true");
+        cardEl.classList.add("clay-card-draggable");
+        cardEl.addEventListener("dragstart", (e) => {
+          dragged = { card, fromKey: groupKey };
+          (e as DragEvent).dataTransfer?.setData("text/plain", String(card.title ?? ""));
+        });
+        cardEl.addEventListener("dragend", () => {
+          dragged = null;
+          col.classList.remove("clay-board-col-over");
+        });
+      }
+      list.appendChild(cardEl);
+    }
     col.appendChild(list);
     board.appendChild(col);
   }

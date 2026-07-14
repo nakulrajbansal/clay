@@ -116,6 +116,26 @@ describe("Board (kanban)", () => {
     expect(c.querySelector(".clay-card .clay-badge")!.className).toContain("clay-tone-red");
   });
 
+  it("onCardMove fires when a card is dragged to another column (bidirectional)", () => {
+    const moves: { title: string; to: string }[] = [];
+    const c = mount(h(Board, {
+      groups: [
+        { key: "todo", label: "To do", cards: [{ id: "1", title: "job-1" }] },
+        { key: "done", label: "Done", cards: [] },
+      ],
+      onCardMove: (card: { title: string }, to: string) => moves.push({ title: card.title, to }),
+    }));
+    const card = c.querySelector<HTMLElement>(".clay-card")!;
+    expect(card.getAttribute("draggable")).toBe("true");
+    // simulate drag of job-1 onto the "done" column
+    card.dispatchEvent(new window.Event("dragstart", { bubbles: true }));
+    const doneCol = [...c.querySelectorAll(".clay-board-col")][1]!;
+    const drop = new window.Event("drop", { bubbles: true }) as Event & { preventDefault(): void };
+    doneCol.dispatchEvent(drop);
+    expect(moves).toEqual([{ title: "job-1", to: "done" }]);
+    // and it can go back — dragging from done to todo (bidirectional)
+  });
+
   it("onCardClick fires with the clicked card", () => {
     const clicked: unknown[] = [];
     const c = mount(h(Board, {

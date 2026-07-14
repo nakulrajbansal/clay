@@ -114,64 +114,64 @@ describe("every seed panel boots and renders real data", () => {
   }
 });
 
-describe("template interactivity: click to act (end-to-end through the Bridge)", () => {
-  it("CRM: clicking a deal card advances its stage and re-renders", async () => {
+describe("template interactivity: DRAG a card between columns (bidirectional, end-to-end)", () => {
+  // simulate an HTML5 drag of a card onto the column whose label === toLabel
+  const dragCardTo = (container: HTMLElement, cardText: string, toLabel: string): void => {
+    const card = [...container.querySelectorAll<HTMLElement>(".clay-card")]
+      .find(c => c.textContent!.includes(cardText))!;
+    const col = [...container.querySelectorAll<HTMLElement>(".clay-board-col")]
+      .find(c => c.querySelector(".clay-board-label")?.textContent === toLabel)!;
+    card.dispatchEvent(new window.Event("dragstart", { bubbles: true }));
+    col.dispatchEvent(new window.Event("drop", { bubbles: true }));
+  };
+
+  it("CRM: dragging a deal to another stage updates it and re-renders — and back again", async () => {
     const { store, container } = await bootShellPanel("crm", "crm_pipeline");
     await waitFor(() => container.textContent!.includes("Northwind annual plan"), "board");
-    const card = [...container.querySelectorAll<HTMLElement>(".clay-card")]
-      .find(c => c.textContent!.includes("Northwind annual plan"))!;
-    expect(card.className).toContain("clay-clickable");   // shows it's actionable
-    card.click();
-    // Northwind was "proposal" -> advances to "negotiation" (declared_writes)
+    const cards = [...container.querySelectorAll<HTMLElement>(".clay-card")];
+    expect(cards[0]!.getAttribute("draggable")).toBe("true");   // draggable, not click-to-advance
+
+    dragCardTo(container, "Northwind annual plan", "won");       // proposal -> won
     await waitFor(() => store.query({ from: "deals",
       where: [{ field: "title", op: "eq", value: "Northwind annual plan" }] })[0]?.stage
-      === "negotiation", "stage advanced in store");
-    // and the board re-rendered the card into the negotiation column
+      === "won", "moved to won");
     await waitFor(() => {
-      const cols = [...container.querySelectorAll(".clay-board-col")];
-      const neg = cols.find(col => col.querySelector(".clay-board-label")?.textContent === "negotiation");
-      return neg?.textContent?.includes("Northwind annual plan") ?? false;
-    }, "card moved column");
+      const won = [...container.querySelectorAll(".clay-board-col")]
+        .find(c => c.querySelector(".clay-board-label")?.textContent === "won");
+      return won?.textContent?.includes("Northwind annual plan") ?? false;
+    }, "card in won column");
+
+    // bidirectional: drag it back to lead
+    dragCardTo(container, "Northwind annual plan", "lead");
+    await waitFor(() => store.query({ from: "deals",
+      where: [{ field: "title", op: "eq", value: "Northwind annual plan" }] })[0]?.stage
+      === "lead", "moved back to lead");
     store.close();
     document.body.replaceChildren();
   });
 
-  it("Small Business: clicking a job on the board advances its stage", async () => {
+  it("Small Business: dragging a job between board columns updates its stage", async () => {
     const { store, container } = await bootShellPanel("small_business", "sb_jobs_board");
     await waitFor(() => container.textContent!.includes("Kitchen faucet fix"), "board");
-    // "Kitchen faucet fix" starts scheduled -> in_progress
-    [...container.querySelectorAll<HTMLElement>(".clay-card")]
-      .find(c => c.textContent!.includes("Kitchen faucet fix"))!.click();
+    dragCardTo(container, "Kitchen faucet fix", "done");         // scheduled -> done
     await waitFor(() => store.query({ from: "jobs",
       where: [{ field: "title", op: "eq", value: "Kitchen faucet fix" }] })[0]?.status
-      === "in_progress", "job advanced");
+      === "done", "job moved to done");
     store.close();
     document.body.replaceChildren();
   });
 
-  it("Bookkeeping: clicking an unpaid bill marks it paid and removes it", async () => {
-    const { store, container } = await bootShellPanel("financials", "fin_bills");
-    await waitFor(() => container.textContent!.includes("Supply Co"), "bills");
-    [...container.querySelectorAll<HTMLElement>(".clay-card")]
-      .find(c => c.textContent!.includes("Supply Co"))!.click();
-    await waitFor(() => !container.textContent!.includes("Supply Co"), "bill left unpaid list");
-    expect(store.query({ from: "bills",
-      where: [{ field: "vendor", op: "eq", value: "Supply Co" }] })[0]?.status).toBe("paid");
+  it("Bookkeeping: dragging an invoice to 'paid' updates it", async () => {
+    const { store, container } = await bootShellPanel("financials", "fin_invoices");
+    await waitFor(() => container.textContent!.includes("Northwind"), "invoices board");
+    dragCardTo(container, "Northwind", "paid");                  // sent -> paid
+    await waitFor(() => store.query({ from: "invoices",
+      where: [{ field: "customer", op: "eq", value: "Northwind" }] })[0]?.status
+      === "paid", "invoice paid");
     store.close();
     document.body.replaceChildren();
   });
 
-  it("CRM: clicking a follow-up marks it done and drops it from the open list", async () => {
-    const { store, container } = await bootShellPanel("crm", "crm_today");
-    await waitFor(() => container.textContent!.includes("Follow up on proposal"), "tasks");
-    const row = [...container.querySelectorAll<HTMLElement>("tbody tr")]
-      .find(r => r.textContent!.includes("Follow up on proposal"))!;
-    row.click();
-    await waitFor(() => !container.textContent!.includes("Follow up on proposal"),
-      "task left the open list");
-    store.close();
-    document.body.replaceChildren();
-  });
 });
 
 describe("forms write through declared_writes end-to-end", () => {
