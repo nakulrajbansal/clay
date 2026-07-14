@@ -116,21 +116,34 @@
          "columns": [
            {"name": "title", "type": "text", "required": true},
            {"name": "contact", "type": "text"},
-           {"name": "stage", "type": "enum", "values": ["lead", "qualified", "proposal", "won", "lost"]},
+           {"name": "company", "type": "text"},
+           {"name": "stage", "type": "enum", "values": ["lead", "qualified", "proposal", "negotiation", "won", "lost"]},
            {"name": "value", "type": "number"},
-           {"name": "close_date", "type": "date"}]},
+           {"name": "owner", "type": "text"},
+           {"name": "source", "type": "enum", "values": ["inbound", "outbound", "referral", "event"]},
+           {"name": "probability", "type": "integer"},
+           {"name": "expected_close", "type": "date"}]},
         {"table": "activities",
          "columns": [
            {"name": "subject", "type": "text", "required": true},
            {"name": "contact", "type": "text"},
+           {"name": "deal", "type": "text"},
            {"name": "type", "type": "enum", "values": ["call", "email", "meeting", "note"]},
-           {"name": "on", "type": "date"}]}
+           {"name": "on", "type": "date"}]},
+        {"table": "tasks",
+         "columns": [
+           {"name": "title", "type": "text", "required": true},
+           {"name": "deal", "type": "text"},
+           {"name": "owner", "type": "text"},
+           {"name": "due", "type": "date"},
+           {"name": "priority", "type": "enum", "values": ["low", "medium", "high"]},
+           {"name": "status", "type": "enum", "values": ["open", "done"]}]}
       ],
       "seed_panels": [
-        "crm_metrics:top:0",
-        "crm_pipeline:main:0", "crm_deals_table:main:1", "crm_activities:main:2",
-        "crm_contacts:side:0", "crm_add_deal:side:1"],
-      "sample_rows": {"contacts": 3, "companies": 2, "deals": 4, "activities": 3}
+        "crm_metrics:top:0", "crm_today:top:1",
+        "crm_pipeline:main:0", "crm_deals_table:main:1", "crm_forecast:main:2", "crm_activities:main:3",
+        "crm_contacts:side:0", "crm_add_deal:side:1", "crm_add_task:side:2"],
+      "sample_rows": {"contacts": 3, "companies": 2, "deals": 5, "activities": 3, "tasks": 4}
     },
     {
       "shell_id": "financials",

@@ -81,11 +81,16 @@ describe("every seed panel boots and renders real data", () => {
     ["small_business", "sb_upcoming", c => c.querySelector("table, .clay-empty") !== null],
     ["small_business", "sb_add_job", c =>
       c.querySelectorAll("form.clay-form input, form.clay-form select").length === 5],
-    // CRM
+    // CRM (Pipedrive-grade: 6 stages, weighted pipeline, follow-ups, forecast)
     ["crm", "crm_pipeline", c =>
-      c.querySelectorAll(".clay-board-col").length === 5 && c.textContent!.includes("Northwind annual plan")],
-    ["crm", "crm_metrics", c => c.textContent!.includes("Pipeline") && c.querySelectorAll(".clay-metric").length === 3],
+      c.querySelectorAll(".clay-board-col").length === 6 && c.textContent!.includes("Northwind annual plan")],
+    ["crm", "crm_metrics", c =>
+      c.textContent!.includes("Weighted pipeline") && c.querySelectorAll(".clay-metric").length === 4],
+    ["crm", "crm_today", c => c.textContent!.includes("Follow up on proposal")],
+    ["crm", "crm_forecast", c => c.querySelectorAll("svg rect").length >= 1],
     ["crm", "crm_contacts", c => c.querySelectorAll(".clay-card").length === 3],
+    ["crm", "crm_add_task", c =>
+      c.querySelectorAll("form.clay-form input, form.clay-form select").length === 4],
     // Financials
     ["financials", "fin_summary", c =>
       c.textContent!.includes("Net") && c.querySelectorAll(".clay-metric").length === 3],

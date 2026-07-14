@@ -365,51 +365,83 @@ const panel = (
 });
 
 // ---------- Sales CRM ----------
+const DEAL_TONES = `{ lead: "gray", qualified: "accent", proposal: "amber", negotiation: "amber", won: "green", lost: "red" }`;
+const DEAL_STAGES = `["lead", "qualified", "proposal", "negotiation", "won", "lost"]`;
+
 const crm = [
   panel("crm_metrics", "Pipeline at a glance", "top", 0, [{ from: "deals" }], [],
     `export default function (clay) {
   clay.db.watch({ from: "deals" }, (rows) => {
     const open = rows.filter((d) => d.stage !== "won" && d.stage !== "lost");
-    const pipeline = open.reduce((s, d) => s + (d.value || 0), 0);
-    const won = rows.filter((d) => d.stage === "won").reduce((s, d) => s + (d.value || 0), 0);
+    const weighted = open.reduce((s, d) => s + (d.value || 0) * ((d.probability || 0) / 100), 0);
+    const won = rows.filter((d) => d.stage === "won");
+    const wonVal = won.reduce((s, d) => s + (d.value || 0), 0);
+    const closed = rows.filter((d) => d.stage === "won" || d.stage === "lost").length;
+    const winRate = closed > 0 ? Math.round((won.length / closed) * 100) : 0;
     clay.ui.render(h(Grid, {},
       h(MetricCard, { label: "Open deals", value: open.length }),
-      h(MetricCard, { label: "Pipeline", value: pipeline, format: "currency" }),
-      h(MetricCard, { label: "Won", value: won, format: "currency" })));
+      h(MetricCard, { label: "Weighted pipeline", value: weighted, format: "currency" }),
+      h(MetricCard, { label: "Won", value: wonVal, format: "currency" }),
+      h(MetricCard, { label: "Win rate %", value: winRate })));
+  });
+}`),
+  panel("crm_today", "Follow-ups", "top", 1,
+    [{ from: "tasks", where: [{ field: "status", op: "eq", value: "open" }], orderBy: [{ field: "due", dir: "asc" }] }], [],
+    `export default function (clay) {
+  const tones = { low: "gray", medium: "accent", high: "red" };
+  const q = { from: "tasks", where: [{ field: "status", op: "eq", value: "open" }], orderBy: [{ field: "due", dir: "asc" }] };
+  clay.db.watch(q, (rows) => {
+    clay.ui.render(rows.length === 0 ? h(EmptyState, { label: "No open follow-ups — nice" })
+      : h(Table, { rows, columns: [
+        { field: "title", label: "Task" }, { field: "deal", label: "Deal" },
+        { field: "due", label: "Due", format: "date" },
+        { field: "priority", label: "Priority", badge: { field: "priority", map: { low: "gray", medium: "accent", high: "red" } } }] }));
   });
 }`),
   panel("crm_pipeline", "Deal pipeline", "main", 0, [{ from: "deals" }], [],
     `export default function (clay) {
-  const stages = ["lead", "qualified", "proposal", "won", "lost"];
-  const tones = { lead: "gray", qualified: "accent", proposal: "amber", won: "green", lost: "red" };
+  const stages = ${DEAL_STAGES};
+  const tones = ${DEAL_TONES};
   clay.db.watch({ from: "deals" }, (rows) => {
     const groups = stages.map((s) => ({ key: s, label: s, tone: tones[s],
-      cards: rows.filter((r) => r.stage === s).map((r) => ({ title: r.title, subtitle: r.contact,
+      cards: rows.filter((r) => r.stage === s).map((r) => ({
+        title: r.title, subtitle: (r.company || r.contact || "") + (r.probability ? " · " + r.probability + "%" : ""),
         badge: r.value ? clay.compute.formatCurrency(r.value) : null })) }));
     clay.ui.render(h(Board, { groups }));
   });
 }`),
   panel("crm_deals_table", "All deals", "main", 1,
-    [{ from: "deals", orderBy: [{ field: "close_date", dir: "asc" }] }], [],
+    [{ from: "deals", orderBy: [{ field: "expected_close", dir: "asc" }] }], [],
     `export default function (clay) {
-  clay.db.watch({ from: "deals", orderBy: [{ field: "close_date", dir: "asc" }] }, (rows) => {
+  clay.db.watch({ from: "deals", orderBy: [{ field: "expected_close", dir: "asc" }] }, (rows) => {
     clay.ui.render(rows.length === 0 ? h(EmptyState, { label: "No deals yet" })
       : h(Table, { sortable: true, rows, columns: [
-        { field: "title", label: "Deal" }, { field: "contact", label: "Contact" },
-        { field: "stage", label: "Stage", badge: { field: "stage", map: { lead: "gray", qualified: "accent", proposal: "amber", won: "green", lost: "red" } } },
+        { field: "title", label: "Deal" }, { field: "company", label: "Company" },
+        { field: "stage", label: "Stage", badge: { field: "stage", map: ${DEAL_TONES} } },
         { field: "value", label: "Value", format: "currency" },
-        { field: "close_date", label: "Close", format: "date" }] }));
+        { field: "probability", label: "Prob %" },
+        { field: "expected_close", label: "Close", format: "date" }] }));
   });
 }`),
-  panel("crm_activities", "Upcoming activities", "main", 2,
-    [{ from: "activities", where: [{ field: "on", op: "within_days", value: 14 }], orderBy: [{ field: "on", dir: "asc" }] }], [],
+  panel("crm_forecast", "Pipeline by stage", "main", 2, [{ from: "deals" }], [],
     `export default function (clay) {
-  const q = { from: "activities", where: [{ field: "on", op: "within_days", value: 14 }], orderBy: [{ field: "on", dir: "asc" }] };
-  clay.db.watch(q, (rows) => {
-    clay.ui.render(rows.length === 0 ? h(EmptyState, { label: "No upcoming activities" })
+  const order = ${DEAL_STAGES};
+  clay.db.watch({ from: "deals" }, (rows) => {
+    const byStage = {};
+    for (const d of rows) { if (d.stage === "won" || d.stage === "lost") continue; byStage[d.stage] = (byStage[d.stage] || 0) + (d.value || 0); }
+    const data = order.filter((s) => byStage[s]).map((s) => ({ x: s, y: byStage[s] }));
+    clay.ui.render(data.length === 0 ? h(EmptyState, { label: "Open-deal value by stage appears here" })
+      : h(Chart, { kind: "bar", data, xLabel: "Stage", yLabel: "Value", height: 200 }));
+  });
+}`),
+  panel("crm_activities", "Recent activity", "main", 3,
+    [{ from: "activities", orderBy: [{ field: "on", dir: "desc" }] }], [],
+    `export default function (clay) {
+  clay.db.watch({ from: "activities", orderBy: [{ field: "on", dir: "desc" }] }, (rows) => {
+    clay.ui.render(rows.length === 0 ? h(EmptyState, { label: "Log calls, emails, and meetings here" })
       : h(Table, { rows, columns: [
-        { field: "subject", label: "Activity" }, { field: "contact", label: "Contact" },
-        { field: "type", label: "Type" }, { field: "on", label: "When", format: "date" }] }));
+        { field: "on", label: "When", format: "date" }, { field: "type", label: "Type" },
+        { field: "subject", label: "Subject" }, { field: "contact", label: "Contact" }] }));
   });
 }`),
   panel("crm_contacts", "Contacts", "side", 0,
@@ -417,8 +449,8 @@ const crm = [
     `export default function (clay) {
   clay.db.watch({ from: "contacts", orderBy: [{ field: "name", dir: "asc" }] }, (rows) => {
     clay.ui.render(rows.length === 0 ? h(EmptyState, { label: "No contacts yet" })
-      : h(Cards, { items: rows.map((c) => ({ title: c.name, subtitle: c.company,
-          fields: [{ label: "Email", value: c.email || "-" }] })) }));
+      : h(Cards, { items: rows.map((c) => ({ title: c.name, subtitle: c.title ? c.title + " · " + (c.company || "") : c.company,
+          fields: [{ label: "Email", value: c.email || "-" }, { label: "Phone", value: c.phone || "-" }] })) }));
   });
 }`),
   panel("crm_add_deal", "New deal", "side", 1, [], ["deals"],
@@ -426,10 +458,22 @@ const crm = [
   clay.ui.render(h(Form, { submitLabel: "Add deal", fields: [
     { name: "title", label: "Deal", kind: "text", required: true },
     { name: "contact", label: "Contact", kind: "text" },
+    { name: "company", label: "Company", kind: "text" },
     { name: "stage", label: "Stage", kind: "select", fromSchema: "deals.stage" },
     { name: "value", label: "Value", kind: "number" },
-    { name: "close_date", label: "Close date", kind: "date" }],
+    { name: "source", label: "Source", kind: "select", fromSchema: "deals.source" },
+    { name: "expected_close", label: "Expected close", kind: "date" }],
     onSubmit: async (v) => { try { await clay.db.insert("deals", v); clay.ui.toast("Deal added", "success"); }
+      catch (e) { clay.ui.toast("Could not add: " + e.message, "danger"); } } }));
+}`),
+  panel("crm_add_task", "New follow-up", "side", 2, [], ["tasks"],
+    `export default function (clay) {
+  clay.ui.render(h(Form, { submitLabel: "Add task", fields: [
+    { name: "title", label: "Task", kind: "text", required: true },
+    { name: "deal", label: "Deal", kind: "text" },
+    { name: "due", label: "Due", kind: "date" },
+    { name: "priority", label: "Priority", kind: "select", fromSchema: "tasks.priority" }],
+    onSubmit: async (v) => { try { await clay.db.insert("tasks", { status: "open", ...v }); clay.ui.toast("Task added", "success"); }
       catch (e) { clay.ui.toast("Could not add: " + e.message, "danger"); } } }));
 }`),
 ];
