@@ -193,7 +193,11 @@ export function ConversationRail(props: {
               return <div key={i} className="feed-item feed-info">{item.text}</div>;
           }
         })}
-        {props.busy ? <div className="feed-item feed-info">Reshaping…</div> : null}
+        {props.busy ? (
+          <div className="feed-item feed-info reshaping">
+            <span className="reshaping-dots"><i /><i /><i /></span>Reshaping…
+          </div>
+        ) : null}
       </div>
 
       {props.suggestions.length > 0 && !props.preview ? (

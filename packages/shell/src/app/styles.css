@@ -385,6 +385,19 @@ button.link.danger { color: var(--danger); }
 /* toasts (shell-rendered so panels cannot spoof them, doc 06 §4) */
 .toasts { position: fixed; bottom: 18px; left: 18px; display: flex; flex-direction: column; gap: 8px; z-index: 20; }
 .toast { border-radius: 11px; padding: 10px 15px; background: var(--text); color: #fff;
-  font-size: 13px; font-weight: 500; box-shadow: var(--shadow-md); }
+  font-size: 13px; font-weight: 500; box-shadow: var(--shadow-md);
+  animation: clay-toast-in .22s cubic-bezier(.2,.8,.2,1) both; }
+@keyframes clay-toast-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+/* animated "Reshaping…" indicator — the app is thinking */
+.reshaping { display: flex; align-items: center; gap: 9px; }
+.reshaping-dots { display: inline-flex; gap: 3px; }
+.reshaping-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--accent);
+  animation: clay-pulse 1s ease-in-out infinite; }
+.reshaping-dots i:nth-child(2) { animation-delay: .15s; }
+.reshaping-dots i:nth-child(3) { animation-delay: .3s; }
+@keyframes clay-pulse { 0%, 100% { opacity: .25; transform: translateY(0); }
+  50% { opacity: 1; transform: translateY(-3px); } }
+@media (prefers-reduced-motion: reduce) {
+  .toast, .reshaping-dots i { animation: none; } }
 .toast-success { background: var(--ok); }
 .toast-danger { background: var(--danger); }
