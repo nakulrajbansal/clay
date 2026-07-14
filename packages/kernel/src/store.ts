@@ -182,9 +182,14 @@ export class ClayStore {
     try {
       return this.driver.tx(() => {
         // capture the pre-commit manifest for the G16 rename rewrite
-        const untouched = this.livePanels().filter(p =>
+        const preLive = this.livePanels();
+        const untouched = preLive.filter(p =>
           !(input.panels ?? []).some(np => np.panel_id === p.panel_id)
           && !(input.removePanels ?? []).includes(p.panel_id));
+        // Layout width (ADR-017) is a direct-manipulation concern; a model
+        // reshape re-emits placement WITHOUT w, so preserve the panel's
+        // existing span unless the plan explicitly sets one.
+        const priorW = new Map(preLive.map(p => [p.panel_id, p.placement.w]));
 
         if (input.migration) {
           validateMigrationPlan(input.migration, this.reg);
@@ -201,7 +206,13 @@ export class ClayStore {
            input.migration ? JSON.stringify(input.migration.operations) : null,
            input.migration ? JSON.stringify(input.migration.inverse) : null]);
 
-        for (const p of input.panels ?? []) this.writePanelBlob(version, p);
+        for (const p of input.panels ?? []) {
+          const w = p.placement.w ?? priorW.get(p.panel_id);
+          const merged = w && w !== 1
+            ? { ...p, placement: { ...p.placement, w } }
+            : p;
+          this.writePanelBlob(version, merged);
+        }
         for (const id of input.removePanels ?? [])
           this.driver.exec(
             "INSERT INTO sys.panel_tombstones(version, panel_id) VALUES (?, ?)",

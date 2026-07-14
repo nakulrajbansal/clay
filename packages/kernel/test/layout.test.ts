@@ -87,6 +87,22 @@ describe("commitLayout (direct manipulation)", () => {
     store.close();
   });
 
+  it("a content reshape preserves a panel's width (the model omits w)", async () => {
+    const store = await seededStore();
+    store.commit({
+      intent: "panels", summary: "Adds a wide panel.", migration: null,
+      panels: [{ ...panel("a", "main", 0), placement: { region: "main", order: 0, w: 2 } }],
+    });
+    expect(store.livePanels().find(p => p.panel_id === "a")!.placement.w).toBe(2);
+    // a model reshape re-commits the same panel with placement {region,order}
+    store.commit({
+      intent: "reshape", summary: "Tweaks a.", migration: null,
+      panels: [panel("a", "main", 0)],   // no w — as the model would emit
+    });
+    expect(store.livePanels().find(p => p.panel_id === "a")!.placement.w).toBe(2);   // kept
+    store.close();
+  });
+
   it("appears in history as a hand-rearrange", async () => {
     const store = await seededStore();
     store.commit({
