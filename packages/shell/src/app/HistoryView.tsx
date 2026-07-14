@@ -66,6 +66,13 @@ export function HistoryView(props: {
                     <p className="tl-intent">“{e.intent_text}”</p>
                   ) : null}
                   <p className="tl-summary">{e.summary}</p>
+                  {e.diff && e.diff.length > 0 ? (
+                    <ul className="tl-diff">
+                      {e.diff.slice(0, 6).map((d, i) => (
+                        <li key={i} className={`tl-diff-${d.kind}`}>{d.detail}</li>
+                      ))}
+                    </ul>
+                  ) : null}
                   {editing === e.version ? (
                     <div className="tl-name">
                       <input

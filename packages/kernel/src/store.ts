@@ -66,9 +66,24 @@ export type VersionEntry = {
   migration: MigrationPlanT | null;
 };
 
-export type HistoryEntry = Omit<VersionEntry, "migration"> & { label?: string };
+export type HistoryEntry = Omit<VersionEntry, "migration"> & {
+  label?: string;
+  diff?: { kind: string; detail: string }[];   // what changed at this version
+};
 
 const qid = (name: string): string => `"${name}"`;
+
+/** Parse a stored diff_json into user-facing {kind, detail} lines, tolerantly. */
+function parseDiff(json: string): { kind: string; detail: string }[] {
+  try {
+    const arr = JSON.parse(json) as unknown;
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter((d): d is { kind?: unknown; detail?: unknown } => !!d && typeof d === "object")
+      .map(d => ({ kind: String(d.kind ?? "change"), detail: String(d.detail ?? "") }))
+      .filter(d => d.detail !== "");
+  } catch { return []; }
+}
 
 export class ClayStore {
   private reg: Registry = new Map();
@@ -331,7 +346,7 @@ export class ClayStore {
    * Joins any user-set checkpoint label (named moments on the timeline). */
   history(): HistoryEntry[] {
     return this.driver.select(
-      `SELECT v.version, v.parent, v.created_at, v.intent_text, v.summary, c.label
+      `SELECT v.version, v.parent, v.created_at, v.intent_text, v.summary, v.diff_json, c.label
        FROM sys.version_log v
        LEFT JOIN sys.checkpoints c ON c.version = v.version
        ORDER BY v.version`).map(r => ({
@@ -339,6 +354,7 @@ export class ClayStore {
       created_at: String(r.created_at), intent_text: String(r.intent_text),
       summary: String(r.summary),
       ...(r.label != null ? { label: String(r.label) } : {}),
+      ...(r.diff_json != null ? { diff: parseDiff(String(r.diff_json)) } : {}),
     }));
   }
 
