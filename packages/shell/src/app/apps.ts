@@ -86,7 +86,7 @@ export function ensureLegacyAdopted(seeded: boolean, shellId: string | null): vo
 
 export function shellName(shellId: string | null): string {
   const map: Record<string, string> = {
-    tracker: "Tracker", log: "Log", dashboard: "Dashboard",
+    blank: "My app", tracker: "Tracker", log: "Log", dashboard: "Dashboard",
     small_business: "Small Business", crm: "Sales CRM",
     financials: "Bookkeeping", staff: "Staff & Scheduling",
   };

@@ -10,6 +10,7 @@ import { ClayStore, deriveInverse, type MigrationPlanT } from "@clay/kernel";
 import { SEED_PANELS } from "./seed-panels";
 
 export type StarterShellId =
+  | "blank"
   | "tracker" | "log" | "dashboard" | "small_business"
   | "crm" | "financials" | "staff";
 
@@ -36,6 +37,11 @@ const col = (name: string, type: ShellColumn["type"],
   ({ name, type, required, ...(values ? { values } : {}) });
 
 export const STARTER_SHELLS: StarterShell[] = [
+  {
+    id: "blank", name: "Blank canvas",
+    tagline: "Start from nothing — describe the app you want and watch it build itself.",
+    tables: [],
+  },
   {
     id: "tracker", name: "Tracker",
     tagline: "Projects, tasks, anything with a status",
@@ -361,11 +367,14 @@ export function seedStarterShell(store: ClayStore, id: StarterShellId): void {
     });
   }
 
-  // All panels in one commit.
+  // All panels in one commit (a blank canvas commits an empty first version
+  // so the app is "started" but carries nothing to reshape from).
+  const isBlank = shell.tables.length === 0;
   store.commit({
-    intent: "first run", summary: `Creates your ${shell.name} views.`,
-    migration: null, panels: SEED_PANELS[shell.id]!,
-    diff: [{ kind: "add_panel", detail: `${shell.name} starter panels` }],
+    intent: "first run",
+    summary: isBlank ? "Starts a blank canvas." : `Creates your ${shell.name} views.`,
+    migration: null, panels: SEED_PANELS[shell.id] ?? [],
+    diff: isBlank ? [] : [{ kind: "add_panel", detail: `${shell.name} starter panels` }],
   });
 
   // Sample rows, flagged for one-click removal.

@@ -640,6 +640,7 @@ const staff = [
 ];
 
 export const SEED_PANELS: Record<string, PanelBlobInput[]> = {
+  blank: [],
   tracker: [items_table, status_counts, add_item_form],
   log: [entries_table, per_week_chart, quick_add_form],
   dashboard: [metrics_row, records_table, by_category_chart],

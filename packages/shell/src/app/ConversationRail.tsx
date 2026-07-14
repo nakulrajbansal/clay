@@ -1,7 +1,7 @@
 // ConversationRail (doc 02 §1): intent input, attempt feed, the diff card
 // with Keep/Discard (S5/S6), clarify and amber failure cards, and the
 // minimal settings (BYO key, P3: stored locally, sent only to Anthropic).
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Suggestion } from "@clay/kernel";
 import type { PreviewInfo } from "../worker/db-worker";
 import type { StatusInfo } from "./worker-client";
@@ -34,12 +34,25 @@ export function ConversationRail(props: {
   onDismissSuggestion: (s: Suggestion) => void;
   loadStatus: () => Promise<StatusInfo>;
   onCopyDiagnostics: () => void;
+  seed?: { text: string; n: number };
 }): React.JSX.Element {
   const [text, setText] = useState("");
   const [keyDraft, setKeyDraft] = useState("");
   const [backendDraft, setBackendDraft] = useState("");
   const [showSettings, setShowSettings] = useState(!props.hasKey);
   const [status, setStatus] = useState<StatusInfo | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Empty-canvas example chips seed the input (and focus it) so the user can
+  // send or edit — the moat, one click away.
+  const seedN = props.seed?.n ?? 0;
+  useEffect(() => {
+    if (props.seed && props.seed.text) {
+      setText(props.seed.text);
+      inputRef.current?.focus();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seedN]);
 
   useEffect(() => {
     if (showSettings) void props.loadStatus().then(setStatus).catch(() => setStatus(null));
@@ -220,6 +233,7 @@ export function ConversationRail(props: {
       ) : (
         <div className="rail-input">
           <textarea
+            ref={inputRef}
             value={text}
             placeholder='Describe a change… e.g. "add a priority field and show it as a colored badge"'
             maxLength={500}

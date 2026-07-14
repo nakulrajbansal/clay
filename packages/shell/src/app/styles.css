@@ -122,6 +122,41 @@ button.link.danger { color: var(--danger); }
   text-overflow: ellipsis; white-space: nowrap; }
 .timeslider-actions { display: flex; gap: 8px; }
 
+/* empty canvas — the moat, front and center (nothing → describe → app) */
+.empty-canvas { grid-column: 1 / -1; display: flex; flex-direction: column;
+  align-items: center; text-align: center; padding: 8vh 24px 40px; }
+.empty-canvas-spark { font-size: 30px; color: var(--accent);
+  background: var(--accent-soft); width: 64px; height: 64px; border-radius: 20px;
+  display: grid; place-items: center; margin-bottom: 22px; box-shadow: var(--shadow); }
+.empty-canvas h2 { font-family: var(--font-display); font-size: 30px; font-weight: 620;
+  letter-spacing: -.03em; margin: 0 0 10px; }
+.empty-canvas p { color: var(--text-2); font-size: 15px; max-width: 480px; margin: 0 0 28px; }
+.empty-canvas-chips { display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 560px; }
+.empty-chip { text-align: left; padding: 14px 16px; border: 1px solid var(--border);
+  border-radius: 14px; background: var(--panel); color: var(--text); font: inherit;
+  box-shadow: var(--shadow); cursor: pointer; transition: transform .12s, box-shadow .12s, border-color .12s; }
+.empty-chip::before { content: "✦"; color: var(--accent); margin-right: 10px; font-size: 12px; }
+.empty-chip:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--shadow-md); border-color: #d7d5f0; }
+.empty-chip:disabled { opacity: .5; cursor: default; }
+.empty-canvas-busy { color: var(--accent-text); font-weight: 600; margin-top: 20px; }
+
+/* onboarding hero (start from scratch) */
+.onboarding-hero { display: flex; align-items: center; gap: 16px; width: 100%;
+  text-align: left; padding: 20px 22px; border: 1px solid var(--border-strong);
+  border-radius: 18px; background: linear-gradient(180deg, #ffffff, #fbfbff);
+  box-shadow: var(--shadow); cursor: pointer; margin-bottom: 26px;
+  transition: transform .12s, box-shadow .12s, border-color .12s; }
+.onboarding-hero:hover:not(:disabled) { transform: translateY(-2px); box-shadow: var(--shadow-md); border-color: #cdc9f2; }
+.onboarding-hero-spark { font-size: 22px; color: var(--accent); background: var(--accent-soft);
+  width: 52px; height: 52px; border-radius: 15px; display: grid; place-items: center; flex: none; }
+.onboarding-hero-text { display: flex; flex-direction: column; gap: 3px; flex: 1; }
+.onboarding-hero-title { font-family: var(--font-display); font-weight: 640; font-size: 18px; letter-spacing: -.01em; }
+.onboarding-hero-sub { color: var(--text-2); font-size: 13px; }
+.onboarding-hero-go { color: var(--accent); font-weight: 650; white-space: nowrap; }
+.onboarding-or { display: flex; align-items: center; gap: 12px; color: var(--text-3);
+  font-size: 12px; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 16px; }
+.onboarding-or::before, .onboarding-or::after { content: ""; flex: 1; height: 1px; background: var(--border-strong); }
+
 .region-top { grid-area: top; display: flex; gap: 16px; flex-wrap: wrap; }
 /* main is a 2-column dashboard grid; a wide panel spans both (ADR-017) */
 .region-main { grid-area: main; display: grid; gap: 16px; align-content: start;

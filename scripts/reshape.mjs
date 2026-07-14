@@ -32,7 +32,8 @@ page.on("console", (m) => {
 page.on("pageerror", (e) => logs.push("pageerror: " + e.message));
 
 await page.goto(url, { waitUntil: "domcontentloaded" });
-await page.getByText(NAMES[shell] || shell, { exact: false }).first().click({ timeout: 10000 });
+const pickLabel = shell === "blank" ? "Start from scratch" : (NAMES[shell] || shell);
+await page.getByText(pickLabel, { exact: false }).first().click({ timeout: 10000 });
 await page.waitForTimeout(3000);   // seed + boot
 
 await page.getByPlaceholder("Describe a change", { exact: false }).fill(prompt);

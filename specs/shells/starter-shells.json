@@ -2,6 +2,14 @@
   "$comment": "Static seeds (gap G9). Panels are hand-written, validator-passing. Sample rows carry sample:true; 'Remove samples' is a kernel-local commit.",
   "shells": [
     {
+      "shell_id": "blank",
+      "name": "Blank canvas",
+      "tagline": "Start from nothing — describe the app you want and watch it build itself.",
+      "registry": [],
+      "seed_panels": [],
+      "sample_rows": {}
+    },
+    {
       "shell_id": "tracker",
       "name": "Tracker",
       "tagline": "Projects, tasks, anything with a status",

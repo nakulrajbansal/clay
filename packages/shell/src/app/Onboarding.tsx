@@ -1,5 +1,6 @@
-// First run (G9/US-01): pick one of three starter shells; seeding is local
-// and instant — the model is never involved (doc 09 W4, G9).
+// First run (G9/US-01): the empty-slate "Blank canvas" is featured first —
+// the moat, front and center (nothing → describe → it becomes an app) —
+// then the ready-made templates. Seeding is local and instant.
 import { STARTER_SHELLS, type StarterShellId } from "../shells/seed";
 
 export function Onboarding(props: {
@@ -7,18 +8,34 @@ export function Onboarding(props: {
   busy: boolean;
   onCancel?: () => void;
 }): React.JSX.Element {
+  const blank = STARTER_SHELLS.find(s => s.id === "blank")!;
+  const templates = STARTER_SHELLS.filter(s => s.id !== "blank");
   return (
     <div className="onboarding">
       <h1>{props.onCancel ? "New app" : "Clay"}</h1>
       <p className="onboarding-sub">
         {props.onCancel
-          ? "Pick a template for your new app. Your other apps are untouched."
-          : "One app that reshapes itself when you describe a change. "
-            + "Start from a template — everything about it can change later, "
-            + "and your data survives every change."}
+          ? "Start blank and describe it, or begin from a template. Your other apps are untouched."
+          : "One app that becomes whatever you describe — in plain language — while your "
+            + "data outlives every version of it. Start from nothing, or a template."}
       </p>
+
+      <button
+        className="onboarding-hero"
+        disabled={props.busy}
+        onClick={() => props.onPick("blank")}
+      >
+        <span className="onboarding-hero-spark">✦</span>
+        <span className="onboarding-hero-text">
+          <span className="onboarding-hero-title">Start from scratch</span>
+          <span className="onboarding-hero-sub">{blank.tagline}</span>
+        </span>
+        <span className="onboarding-hero-go">Build →</span>
+      </button>
+
+      <div className="onboarding-or">or begin from a template</div>
       <div className="onboarding-cards">
-        {STARTER_SHELLS.map(shell => (
+        {templates.map(shell => (
           <button
             key={shell.id}
             className="shell-card"

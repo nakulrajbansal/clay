@@ -65,6 +65,8 @@ export function App(): React.JSX.Element {
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
+  const [intentSeed, setIntentSeed] = useState<{ text: string; n: number }>({ text: "", n: 0 });
+  const seedIntent = (t: string): void => setIntentSeed(s => ({ text: t, n: s.n + 1 }));
   const [persistent, setPersistent] = useState(true);
   const [panels, setPanels] = useState<LivePanel[]>([]);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
@@ -534,9 +536,33 @@ export function App(): React.JSX.Element {
           onScrub={v => void scrubTo(v)}
           onMakeLatest={() => void makeLatest()}
         />
-        <div className="region-top" onDragOver={dragOver} onDrop={e => onRegionDrop("top", e)}>{region("top")}</div>
-        <div className="region-main" onDragOver={dragOver} onDrop={e => onRegionDrop("main", e)}>{region("main")}</div>
-        <div className="region-side" onDragOver={dragOver} onDrop={e => onRegionDrop("side", e)}>{region("side")}</div>
+        {display.length === 0 && !preview && !scrub ? (
+          <div className="empty-canvas">
+            <div className="empty-canvas-spark">✦</div>
+            <h2>What do you want to build?</h2>
+            <p>Describe it in plain words — a tracker, a CRM, a planner, anything.
+              Clay builds it, and every change is reversible.</p>
+            <div className="empty-canvas-chips">
+              {[
+                "Build a habit tracker with a daily check-off and a streak count",
+                "A simple client CRM with contacts and a deal pipeline board",
+                "A reading list with a shelf of book cards and a rating",
+                "A weekly meal planner with a board by day of the week",
+                "An expense tracker with a category chart and a running total",
+              ].map(ex => (
+                <button key={ex} className="empty-chip" disabled={busy}
+                  onClick={() => seedIntent(ex)}>{ex}</button>
+              ))}
+            </div>
+            {busy ? <p className="empty-canvas-busy">Building…</p> : null}
+          </div>
+        ) : (
+          <>
+            <div className="region-top" onDragOver={dragOver} onDrop={e => onRegionDrop("top", e)}>{region("top")}</div>
+            <div className="region-main" onDragOver={dragOver} onDrop={e => onRegionDrop("main", e)}>{region("main")}</div>
+            <div className="region-side" onDragOver={dragOver} onDrop={e => onRegionDrop("side", e)}>{region("side")}</div>
+          </>
+        )}
       </main>
       {showData && dataStoreRef.current && workerRef.current ? (
         <DataView
@@ -557,6 +583,7 @@ export function App(): React.JSX.Element {
         onAcceptSuggestion={acceptSuggestion}
         onDismissSuggestion={dismissSuggestion}
         loadStatus={() => client().status()}
+        seed={intentSeed}
         onIntent={t => void runIntent(t)}
         onKeep={() => void keep()}
         onDiscard={() => void discard()}

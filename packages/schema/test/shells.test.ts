@@ -19,10 +19,10 @@ const { shells } = JSON.parse(readFileSync(shellsPath, "utf8")) as {
 };
 
 describe("starter shells validate against the constitution", () => {
-  it("the seed shells (3 generic + 4 business templates)", () => {
-    expect(shells).toHaveLength(7);
+  it("the seed shells (blank + 3 generic + 4 business templates)", () => {
+    expect(shells).toHaveLength(8);
     expect(shells.map(s => s.shell_id)).toEqual([
-      "tracker", "log", "dashboard", "small_business", "crm", "financials", "staff"]);
+      "blank", "tracker", "log", "dashboard", "small_business", "crm", "financials", "staff"]);
   });
 
   for (const shell of shells) {

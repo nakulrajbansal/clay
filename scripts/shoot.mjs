@@ -21,9 +21,18 @@ page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
 
 await page.goto(url, { waitUntil: "domcontentloaded" });
 
-// onboarding -> pick the template card
+if (shell === "onboarding") {
+  await page.waitForTimeout(800);
+  await page.screenshot({ path: out, fullPage: true });
+  console.log("wrote", out);
+  await browser.close();
+  process.exit(0);
+}
+
+// onboarding -> pick the blank hero or a template card
 try {
-  await page.getByText(NAMES[shell] || shell, { exact: false }).first().click({ timeout: 8000 });
+  const label = shell === "blank" ? "Start from scratch" : (NAMES[shell] || shell);
+  await page.getByText(label, { exact: false }).first().click({ timeout: 8000 });
 } catch {
   console.log("(no onboarding card — already seeded)");
 }
