@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 import apiSchema from "@clay/schema/mutation-plan-api.json";
 import {
-  DEFAULT_MODEL, MutationClient, REPAIR_MODEL, type S1Context,
+  DEFAULT_MODEL, MutationClient, REPAIR_MODEL, hydrateApiPlan, type S1Context,
 } from "../src/index";
 
 const VALID_PLAN = JSON.stringify({
@@ -161,6 +161,35 @@ describe("BYO request shape", () => {
     const client = new MutationClient({ mode: "byo", apiKey: "k" }, { fetchFn });
     expect(await client.requestPlan(ctx())).toMatchObject({
       ok: false, error: { code: "E_PARSE" } });
+  });
+});
+
+describe("hydrateApiPlan: auto-widen board/timeline panels", () => {
+  const panel = (code: string, w?: number): unknown => hydrateApiPlan({
+    api: 1, panels: [{
+      panel_id: "p", title: "P",
+      placement: w === undefined ? { region: "main", order: 0 } : { region: "main", order: 0, w },
+      code, declared_queries: [],
+    }],
+  });
+  const wOf = (plan: unknown): unknown =>
+    ((plan as { panels: { placement: { w?: unknown } }[] }).panels[0]!.placement.w);
+
+  it("widens a Board panel to w:2 (a half-width kanban clips)", () => {
+    expect(wOf(panel("export default (clay)=>clay.ui.render(h(Board,{}))"))).toBe(2);
+  });
+  it("widens a Timeline panel to w:2", () => {
+    expect(wOf(panel("h(Timeline,{items})"))).toBe(2);
+  });
+  it("leaves a plain table/chart panel at default width", () => {
+    expect(wOf(panel("h(Table,{rows})"))).toBeUndefined();
+    expect(wOf(panel("h(Chart,{kind:'bar'})"))).toBeUndefined();
+  });
+  it("does not match 'Dashboard' (lowercase board, no boundary)", () => {
+    expect(wOf(panel("const Dashboard = 1; h(Table,{})"))).toBeUndefined();
+  });
+  it("respects an explicit width the plan already set", () => {
+    expect(wOf(panel("h(Board,{})", 1))).toBe(1);
   });
 });
 

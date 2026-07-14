@@ -3,7 +3,7 @@
 // compose into layouts the named components can't express (a Gantt).
 import { describe, expect, it } from "vitest";
 import {
-  h, render, Box, Text, Bar, Scene, Stack, Board, Cards, Timeline, Badge, Button,
+  h, render, Box, Text, Bar, Scene, Stack, Board, Cards, Timeline, Badge, Button, Chart,
 } from "../src/index";
 
 function mount(vnode: Parameters<typeof render>[0]): HTMLElement {
@@ -248,5 +248,54 @@ describe("composition: a Gantt the named components can't express", () => {
     expect(parseFloat(fills[1]!.style.marginLeft)).toBeCloseTo(25);   // Design starts at 0.25
     // Stack still works too (regression)
     expect(() => mount(h(Stack, {}, h(Text, { value: "x" })))).not.toThrow();
+  });
+});
+
+describe("Chart multi-series (from live diagnostic: planned vs actual)", () => {
+  // The model reaches for {label, data:[{x,y}]}[] to compare two things on one
+  // chart. Before the fix the single-series filter dropped it → empty SVG.
+  const series = [
+    { label: "Planned", data: [{ x: "2026-01-06", y: 12 }, { x: "2026-01-13", y: 15 }] },
+    { label: "Actual", data: [{ x: "2026-01-06", y: 10 }, { x: "2026-01-13", y: 18 }] },
+  ];
+
+  it("renders grouped bars (one per series per category) with a legend", () => {
+    const c = mount(h(Chart, { kind: "bar", data: series, height: 260 }));
+    // 2 series × 2 categories = 4 bars, not zero.
+    expect(c.querySelectorAll("rect")).toHaveLength(4);
+    // Legend names both series.
+    expect(c.textContent).toContain("Planned");
+    expect(c.textContent).toContain("Actual");
+    expect(c.querySelectorAll(".clay-chart-legend .sw")).toHaveLength(2);
+    // Distinct colours per series.
+    const fills = new Set([...c.querySelectorAll("rect")].map(r => r.getAttribute("fill")));
+    expect(fills.size).toBe(2);
+    // Shortened date ticks.
+    expect(c.textContent).toContain("1/6");
+  });
+
+  it("renders one polyline per series for kind:line", () => {
+    const c = mount(h(Chart, { kind: "line", data: series, height: 260 }));
+    expect(c.querySelectorAll("polyline")).toHaveLength(2);
+    expect(c.querySelectorAll(".clay-chart-legend .lg")).toHaveLength(2);
+  });
+
+  it("still renders a plain single-series bar chart unchanged", () => {
+    const c = mount(h(Chart, { kind: "bar", data: [{ x: "a", y: 3 }, { x: "b", y: 7 }] }));
+    expect(c.querySelectorAll(".clay-chart-bar")).toHaveLength(2);
+    expect(c.querySelector(".clay-chart-legend")).toBeNull();
+  });
+
+  it("pie: distinct colour per slice + a legend of categories", () => {
+    const c = mount(h(Chart, { kind: "pie", data: [
+      { x: "rent", y: 1200 }, { x: "food", y: 145 }, { x: "fun", y: 25 },
+    ] }));
+    const slices = [...c.querySelectorAll<SVGElement>(".clay-chart-slice")];
+    expect(slices).toHaveLength(3);
+    expect(new Set(slices.map(s => s.getAttribute("fill"))).size).toBe(3); // not monochrome
+    expect(c.querySelectorAll(".clay-chart-legend .lg")).toHaveLength(3);
+    expect(c.textContent).toContain("rent");
+    // tooltip carries the share
+    expect(slices[0]!.querySelector("title")?.textContent).toContain("%");
   });
 });

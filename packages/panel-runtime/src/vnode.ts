@@ -401,11 +401,39 @@ function buildFilterBar(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
 const SVG_NS = "http://www.w3.org/2000/svg";
 const CHART_W = 400;
 const MAX_POINTS = 200;
+// Series palette for multi-series (comparison) charts — planned vs actual,
+// this year vs last, etc. First colour is the accent so single-series stays
+// on-brand; the rest are legible against it.
+const SERIES_COLORS = ["#6a67e6", "#f0a54e", "#34c05f", "#e5688b", "#37b6c4", "#b07de8"];
+
+// A "point" is {x, y:number}; a "series" is {label?, data:point[]}. The model
+// reaches for the series shape whenever it wants to compare two things on one
+// chart, so we must render it — a flat single-series array is the other case.
+function shortX(x: string): string {
+  const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(x);
+  if (d) return `${Number(d[2])}/${Number(d[3])}`;
+  const w = /^\d{4}-W(\d{1,2})$/.exec(x);          // ISO week key -> "W01"
+  if (w) return `W${w[1]!.padStart(2, "0")}`;
+  const ym = /^(\d{4})-(\d{2})$/.exec(x);          // year-month -> "Jan '26"
+  if (ym) {
+    const mo = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][Number(ym[2]) - 1];
+    if (mo) return `${mo} '${ym[1]!.slice(2)}`;
+  }
+  return x.length > 7 ? `${x.slice(0, 6)}…` : x;
+}
 
 function buildChart(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
   const kind = typeof props.kind === "string" ? props.kind : "bar";
   const height = typeof props.height === "number" ? props.height : 200;
-  const data = (Array.isArray(props.data) ? props.data : [])
+  const raw = Array.isArray(props.data) ? props.data : [];
+  // Multi-series: any element carries its own `data` array (e.g. planned vs
+  // actual). Route to the grouped/multi-line renderer so it doesn't silently
+  // vanish through the single-series filter below.
+  if (raw.some(d => d !== null && typeof d === "object" && Array.isArray((d as { data?: unknown }).data)))
+    return buildMultiSeriesChart(ctx, kind, height, raw);
+
+  const data = raw
     .filter((d): d is { x: unknown; y: number } =>
       typeof d === "object" && d !== null && typeof (d as { y: unknown }).y === "number")
     .slice(0, MAX_POINTS);
@@ -427,20 +455,37 @@ function buildChart(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
     const cx = CHART_W / 2; const cy = height / 2;
     const r = Math.min(cx, cy) - pad;
     let angle = -Math.PI / 2;
-    for (const d of data) {
+    data.forEach((d, i) => {
+      const color = SERIES_COLORS[i % SERIES_COLORS.length]!;
       const sweep = (Math.max(d.y, 0) / total) * Math.PI * 2;
       const x1 = cx + r * Math.cos(angle); const y1 = cy + r * Math.sin(angle);
       angle += sweep;
       const x2 = cx + r * Math.cos(angle); const y2 = cy + r * Math.sin(angle);
       const path = ctx.doc.createElementNS(SVG_NS, "path");
-      path.setAttribute("d",
-        `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${sweep > Math.PI ? 1 : 0} 1 ${x2} ${y2} Z`);
+      // A full circle (single slice) needs two arcs — one path to (x2,y2)
+      // when they coincide degenerates to nothing.
+      path.setAttribute("d", data.length === 1
+        ? `M ${cx} ${cy - r} A ${r} ${r} 0 1 1 ${cx - 0.01} ${cy - r} Z`
+        : `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${sweep > Math.PI ? 1 : 0} 1 ${x2} ${y2} Z`);
       path.setAttribute("class", "clay-chart-slice");
+      path.setAttribute("fill", color);          // distinct colour per category
       const title = ctx.doc.createElementNS(SVG_NS, "title");
-      title.textContent = `${String(d.x)}: ${d.y}`;
+      const share = Math.round((Math.max(d.y, 0) / total) * 100);
+      title.textContent = `${String(d.x)}: ${d.y} (${share}%)`;
       path.appendChild(title);
       svg.appendChild(path);
-    }
+    });
+    // Legend — a pie without one is unreadable.
+    const legend = el(ctx, "figcaption", "clay-chart-legend");
+    data.forEach((d, i) => {
+      const item = el(ctx, "span", "lg");
+      const sw = el(ctx, "span", "sw");
+      sw.style.background = SERIES_COLORS[i % SERIES_COLORS.length]!;
+      item.appendChild(sw);
+      item.appendChild(ctx.doc.createTextNode(String(d.x)));
+      legend.appendChild(item);
+    });
+    wrap.appendChild(legend);
     return wrap;
   }
 
@@ -471,6 +516,126 @@ function buildChart(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
     rect.appendChild(title);
     svg.appendChild(rect);
   });
+  return wrap;
+}
+
+// Grouped bars / overlaid lines for comparison charts, with a legend and
+// x-axis ticks. Shares the plot maths with buildChart but keeps single-series
+// (the common case) on its simpler, CSS-styled path.
+function buildMultiSeriesChart(
+  ctx: Ctx, kind: string, height: number, raw: unknown[],
+): HTMLElement {
+  const series = raw
+    .filter((s): s is { label?: unknown; data: unknown[] } =>
+      s !== null && typeof s === "object" && Array.isArray((s as { data?: unknown }).data))
+    .map((s, i) => ({
+      label: typeof s.label === "string" ? s.label : `Series ${i + 1}`,
+      points: s.data
+        .filter((p): p is { x: unknown; y: number } =>
+          p !== null && typeof p === "object" && typeof (p as { y: unknown }).y === "number")
+        .slice(0, MAX_POINTS),
+    }))
+    .filter(s => s.points.length > 0);
+
+  const wrap = el(ctx, "figure", "clay-chart");
+  if (series.length === 0) return wrap;
+
+  // Ordered union of x categories across all series.
+  const cats: string[] = [];
+  const seen = new Set<string>();
+  for (const s of series) for (const p of s.points) {
+    const k = String(p.x);
+    if (!seen.has(k)) { seen.add(k); cats.push(k); }
+  }
+  const valueOf = series.map(s => {
+    const m = new Map<string, number>();
+    for (const p of s.points) m.set(String(p.x), p.y);
+    return m;
+  });
+
+  const showTicks = cats.length > 0 && cats.length <= 12;
+  const axisH = showTicks ? 14 : 4;
+  const pad = 4;
+  const plotH = height - axisH - pad;
+  const maxY = Math.max(1, ...series.flatMap(s => s.points.map(p => Math.max(p.y, 0))));
+  const yFor = (y: number): number => pad + plotH - (Math.max(y, 0) / maxY) * plotH;
+  const baseY = yFor(0);
+
+  const svg = ctx.doc.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", `0 0 ${CHART_W} ${height}`);
+  svg.setAttribute("role", "img");
+  wrap.appendChild(svg);
+
+  const lineStep = cats.length > 1 ? (CHART_W - pad * 2) / (cats.length - 1) : 0;
+  const groupSlot = (CHART_W - pad * 2) / Math.max(cats.length, 1);
+
+  if (kind === "line" || kind === "area") {
+    series.forEach((s, si) => {
+      const color = SERIES_COLORS[si % SERIES_COLORS.length]!;
+      const map = valueOf[si]!;
+      const pts: string[] = [];
+      cats.forEach((c, i) => {
+        const y = map.get(c);
+        if (y != null) pts.push(`${pad + i * lineStep},${yFor(y)}`);
+      });
+      if (pts.length === 0) return;
+      const poly = ctx.doc.createElementNS(SVG_NS, "polyline");
+      poly.setAttribute("points", pts.join(" "));
+      poly.setAttribute("fill", "none");
+      poly.setAttribute("stroke", color);
+      poly.setAttribute("stroke-width", "2");
+      poly.setAttribute("stroke-linejoin", "round");
+      svg.appendChild(poly);
+    });
+  } else {
+    const barW = (groupSlot * 0.8) / series.length;
+    cats.forEach((c, i) => {
+      series.forEach((s, si) => {
+        const y = valueOf[si]!.get(c);
+        if (y == null) return;
+        const color = SERIES_COLORS[si % SERIES_COLORS.length]!;
+        const rect = ctx.doc.createElementNS(SVG_NS, "rect");
+        rect.setAttribute("x", String(pad + i * groupSlot + groupSlot * 0.1 + si * barW));
+        rect.setAttribute("width", String(Math.max(barW, 0.5)));
+        rect.setAttribute("y", String(yFor(y)));
+        rect.setAttribute("height", String(Math.max(baseY - yFor(y), 0)));
+        rect.setAttribute("rx", "2");
+        rect.setAttribute("fill", color);
+        const title = ctx.doc.createElementNS(SVG_NS, "title");
+        title.textContent = `${s.label} · ${c}: ${y}`;
+        rect.appendChild(title);
+        svg.appendChild(rect);
+      });
+    });
+  }
+
+  if (showTicks) {
+    cats.forEach((c, i) => {
+      const cx = kind === "line" || kind === "area"
+        ? pad + i * lineStep
+        : pad + i * groupSlot + groupSlot / 2;
+      const t = ctx.doc.createElementNS(SVG_NS, "text");
+      t.setAttribute("x", String(cx));
+      t.setAttribute("y", String(height - 3));
+      t.setAttribute("text-anchor", "middle");
+      t.setAttribute("font-size", "7");
+      t.setAttribute("fill", "#a6a4b1");
+      t.textContent = shortX(c);
+      svg.appendChild(t);
+    });
+  }
+
+  // Legend — the whole point of a comparison chart is telling series apart.
+  const legend = el(ctx, "figcaption", "clay-chart-legend");
+  series.forEach((s, si) => {
+    const item = el(ctx, "span", "lg");
+    const sw = el(ctx, "span", "sw");
+    sw.style.background = SERIES_COLORS[si % SERIES_COLORS.length]!;
+    item.appendChild(sw);
+    item.appendChild(ctx.doc.createTextNode(s.label));
+    legend.appendChild(item);
+  });
+  wrap.appendChild(legend);
   return wrap;
 }
 

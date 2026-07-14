@@ -19,6 +19,9 @@ type Shell = {
 const { shells } = JSON.parse(readFileSync(
   fileURLToPath(new URL("../../../specs/shells/starter-shells.json", import.meta.url)),
   "utf8")) as { shells: Shell[] };
+// The blank canvas ships with an empty registry on purpose (start-from-scratch);
+// the seed-a-table exercises below only apply to shells that define tables.
+const seedableShells = shells.filter(s => s.registry.length > 0);
 
 function tablePanelCode(table: string, columns: string[]): string {
   const cols = columns.map(c => `{ field: ${JSON.stringify(c)}, label: ${JSON.stringify(c)} }`);
@@ -131,7 +134,7 @@ class ScriptedPlanner implements Planner {
 const INTENT = "add a priority field to tasks and show it as a colored badge";
 
 describe("W2 EXIT: the priority sentence commits on all three shells", () => {
-  for (const shell of shells) {
+  for (const shell of seedableShells) {
     it(shell.shell_id, async () => {
       const { store, table, panelId } = await seedShellStore(shell);
       const columns = shell.registry[0]!.columns.map(c => c.name);
@@ -320,7 +323,7 @@ describe("pipeline stages", () => {
 
 describe("store: panels, tombstones, and the G16 rename rewrite", () => {
   it("remove_panels tombstones; a later blob revives the id", async () => {
-    const { store, panelId, table } = await seedShellStore(shells[0]!);
+    const { store, panelId, table } = await seedShellStore(seedableShells[0]!);
     store.commit({ intent: "remove", summary: "Removes the table panel.",
       migration: null, panels: [], removePanels: [panelId] });
     expect(store.livePanels()).toHaveLength(0);
@@ -363,7 +366,7 @@ describe("store: panels, tombstones, and the G16 rename rewrite", () => {
   });
 
   it("shadow copies are fully isolated from the live store", async () => {
-    const { store, table } = await seedShellStore(shells[0]!);
+    const { store, table } = await seedShellStore(seedableShells[0]!);
     const shadow = await store.shadowCopy();
     shadow.insert(table, { name: "shadow only" });
     store.insert(table, { name: "live only" });

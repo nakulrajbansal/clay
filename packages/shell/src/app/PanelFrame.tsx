@@ -58,11 +58,14 @@ const PANEL_CSS = `
   .clay-filterbar { display: flex; gap: 8px; }
   .clay-chart svg { width: 100%; height: auto; display: block; overflow: visible; }
   .clay-chart-bar { fill: var(--accent); rx: 3; }
-  .clay-chart-slice { fill: var(--accent); }
-  .clay-chart-slice:nth-of-type(2n) { fill: #9d99f5; }
-  .clay-chart-slice:nth-of-type(3n) { fill: #362fb8; }
+  /* slice colour is set inline (per category); CSS only draws separators */
+  .clay-chart-slice { stroke: #fff; stroke-width: 1.5; }
   .clay-chart-line { fill: none; stroke: var(--accent); stroke-width: 2; }
   .clay-chart-area { fill: #5b57eb22; stroke: var(--accent); }
+  .clay-chart-legend { display: flex; flex-wrap: wrap; gap: 6px 14px;
+    margin-top: 9px; font-size: 11.5px; color: var(--text-2); }
+  .clay-chart-legend .lg { display: inline-flex; align-items: center; gap: 6px; }
+  .clay-chart-legend .sw { width: 10px; height: 10px; border-radius: 3px; flex: none; }
   figure { margin: 0; }
 
   /* composable primitives (ADR-016) */
@@ -144,9 +147,17 @@ const PANEL_CSS = `
     background: #f5f5f4; border-radius: 6px; }
   .clay-timeline-bar { position: absolute; top: 3px; height: 14px; border-radius: 5px;
     min-width: 4px; font-size: 10px; color: #fff; line-height: 14px;
-    padding: 0 5px; overflow: hidden; white-space: nowrap; box-sizing: border-box; }
+    padding: 0 5px; overflow: hidden; white-space: nowrap; box-sizing: border-box;
+    background: var(--accent); box-shadow: 0 1px 2px rgba(91,87,235,.28); }
   .clay-timeline-marker { position: absolute; top: 3px; width: 14px; height: 14px;
-    border-radius: 50%; transform: translateX(-7px); border: 2px solid #fff; box-sizing: border-box; }
+    border-radius: 50%; transform: translateX(-7px); border: 2px solid #fff; box-sizing: border-box;
+    background: var(--accent); }
+  /* The bar/marker are <div>s, so the clay-fill-* (SVG fill) tone classes do
+     nothing — they need a real background. */
+  .clay-timeline-bar.clay-fill-green, .clay-timeline-marker.clay-fill-green { background: #34c05f; }
+  .clay-timeline-bar.clay-fill-amber, .clay-timeline-marker.clay-fill-amber { background: #f5a623; }
+  .clay-timeline-bar.clay-fill-red, .clay-timeline-marker.clay-fill-red { background: #ef5350; }
+  .clay-timeline-bar.clay-fill-gray, .clay-timeline-marker.clay-fill-gray { background: #b3b1c0; }
   .clay-timeline-caption { position: absolute; top: 2px; transform: translateX(10px);
     font-size: 11px; color: #57534e; white-space: nowrap; }
 

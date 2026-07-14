@@ -73,6 +73,15 @@ export function hydrateApiPlan(input: unknown): unknown {
         panel.declared_queries = panel.declared_queries.map(
           q => (typeof q === "string" ? JSON.parse(q) : q));
       }
+      // Boards and timelines lay out horizontally and clip in a half-width
+      // panel; the API grammar can't carry a width, so widen them here (the
+      // seed templates do the same by hand). Reversible like any placement.
+      if (typeof panel.code === "string"
+        && /\b(Board|Timeline)\b/.test(panel.code)
+        && panel.placement && typeof panel.placement === "object") {
+        const pl = panel.placement as Record<string, unknown>;
+        if (pl.w === undefined) panel.placement = { ...pl, w: 2 };
+      }
       return panel;
     });
   }
