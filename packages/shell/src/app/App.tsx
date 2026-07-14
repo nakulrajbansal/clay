@@ -19,7 +19,7 @@ import { TimeSlider } from "./TimeSlider";
 import { AppSwitcher } from "./AppSwitcher";
 import {
   addForkEntry, createApp, currentApp, ensureLegacyAdopted, listApps, removeApp,
-  setCurrentApp, shellName, type AppEntry,
+  renameApp, setCurrentApp, shellName, type AppEntry,
 } from "./apps";
 import {
   getApiKey, getBackendUrl, hasModelAccess, setApiKey, setBackendUrl,
@@ -551,6 +551,7 @@ export function App(): React.JSX.Element {
         onSwitch={switchApp}
         onNew={newApp}
         onFork={() => void forkApp()}
+        onRename={(id, name) => { renameApp(id, name); setApps(listApps()); }}
         onDelete={id => void deleteApp(id)}
       />
       {!persistent ? (

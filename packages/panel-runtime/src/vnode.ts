@@ -153,41 +153,78 @@ type TableColumn = {
 function buildTable(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
   const columns = (Array.isArray(props.columns) ? props.columns : []) as TableColumn[];
   const rows = (Array.isArray(props.rows) ? props.rows : []) as Record<string, unknown>[];
+  const sortable = props.sortable === true;
+  const onRowClick = props.onRowClick;
   const wrap = el(ctx, "div", "clay-table-wrap");
   const table = el(ctx, "table", "clay-table");
   // Give each column a floor so a narrow panel with many columns scrolls
   // horizontally (every column stays reachable) instead of cramming them.
   if (columns.length > 4) table.style.minWidth = `${columns.length * 96}px`;
+
+  // Click-to-sort (interactivity): headers toggle asc/desc; numeric columns
+  // sort numerically, everything else lexically. Sort is per-render (resets
+  // when the watch re-renders with fresh data) — no cross-render state.
+  let sortField: string | null = null;
+  let sortDir: 1 | -1 = 1;
+  const carets = new Map<string, Text>();
+  const compare = (a: Record<string, unknown>, b: Record<string, unknown>): number => {
+    const va = a[sortField!]; const vb = b[sortField!];
+    if (va == null || va === "") return vb == null || vb === "" ? 0 : 1;
+    if (vb == null || vb === "") return -1;
+    const na = Number(va); const nb = Number(vb);
+    const c = !Number.isNaN(na) && !Number.isNaN(nb)
+      ? na - nb : String(va).localeCompare(String(vb));
+    return c * sortDir;
+  };
+
+  const tbody = el(ctx, "tbody");
+  const fillBody = (): void => {
+    tbody.textContent = "";
+    const rr = sortField ? [...rows].sort(compare) : rows;
+    for (const row of rr) {
+      const tr = el(ctx, "tr");
+      if (typeof onRowClick === "function") {
+        tr.classList.add("clay-clickable");
+        tr.addEventListener("click", () => (onRowClick as (r: unknown) => void)(row));
+      }
+      for (const col of columns) {
+        const td = el(ctx, "td");
+        const value = row[col.field];
+        if (col.badge) {
+          const tone = resolveBadgeTone(row[col.badge.field], col.badge.map ?? {});
+          td.appendChild(buildBadge(ctx, formatCell(value, col.format), tone ?? "gray"));
+        } else {
+          td.textContent = formatCell(value, col.format);
+        }
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+  };
+
   const thead = el(ctx, "thead");
   const headRow = el(ctx, "tr");
   for (const col of columns) {
     const th = el(ctx, "th");
-    th.textContent = col.label ?? col.field;
+    th.appendChild(ctx.doc.createTextNode(col.label ?? col.field));
+    if (sortable) {
+      th.classList.add("clay-th-sort");
+      const caret = ctx.doc.createTextNode("");
+      carets.set(col.field, caret);
+      th.appendChild(caret);
+      th.addEventListener("click", () => {
+        if (sortField === col.field) sortDir = (sortDir === 1 ? -1 : 1) as 1 | -1;
+        else { sortField = col.field; sortDir = 1; }
+        for (const c of carets.values()) c.textContent = "";
+        caret.textContent = sortDir === 1 ? " ↑" : " ↓";
+        fillBody();
+      });
+    }
     headRow.appendChild(th);
   }
   thead.appendChild(headRow);
   table.appendChild(thead);
-  const tbody = el(ctx, "tbody");
-  for (const row of rows) {
-    const tr = el(ctx, "tr");
-    const onRowClick = props.onRowClick;
-    if (typeof onRowClick === "function") {
-      tr.classList.add("clay-clickable");   // pointer cursor + hover
-      tr.addEventListener("click", () => (onRowClick as (r: unknown) => void)(row));
-    }
-    for (const col of columns) {
-      const td = el(ctx, "td");
-      const value = row[col.field];
-      if (col.badge) {
-        const tone = resolveBadgeTone(row[col.badge.field], col.badge.map ?? {});
-        td.appendChild(buildBadge(ctx, formatCell(value, col.format), tone ?? "gray"));
-      } else {
-        td.textContent = formatCell(value, col.format);
-      }
-      tr.appendChild(td);
-    }
-    tbody.appendChild(tr);
-  }
+  fillBody();
   table.appendChild(tbody);
   wrap.appendChild(table);
   return wrap;
@@ -670,6 +707,7 @@ function buildMultiSeriesChart(
         rect.setAttribute("y", String(yFor(y)));
         rect.setAttribute("height", String(Math.max(baseY - yFor(y), 0)));
         rect.setAttribute("rx", "2");
+        rect.setAttribute("class", "clay-chart-mbar");
         rect.setAttribute("fill", color);
         const title = ctx.doc.createElementNS(SVG_NS, "title");
         title.textContent = `${s.label} · ${c}: ${y}`;

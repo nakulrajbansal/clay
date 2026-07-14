@@ -10,10 +10,18 @@ export function AppSwitcher(props: {
   onSwitch: (id: string) => void;
   onNew: () => void;
   onFork: () => void;
+  onRename: (id: string, name: string) => void;
   onDelete: (id: string) => void;
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState("");
   const current = props.apps.find(a => a.id === props.currentId) ?? null;
+  const startRename = (): void => { if (current) { setDraft(current.name); setRenaming(true); } };
+  const saveRename = (): void => {
+    if (current && draft.trim()) props.onRename(current.id, draft.trim());
+    setRenaming(false); setOpen(false);
+  };
 
   return (
     <header className="appbar">
@@ -38,6 +46,27 @@ export function AppSwitcher(props: {
                 </button>
               ))}
               <div className="appbar-sep" />
+              {current ? (
+                renaming ? (
+                  <div className="appbar-rename">
+                    <input
+                      autoFocus
+                      value={draft}
+                      maxLength={40}
+                      onChange={e => setDraft(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === "Enter") saveRename();
+                        if (e.key === "Escape") setRenaming(false);
+                      }}
+                    />
+                    <button className="appbar-item-inline" onClick={saveRename}>Save</button>
+                  </div>
+                ) : (
+                  <button className="appbar-item" onClick={startRename}>
+                    Rename “{current.name}”
+                  </button>
+                )
+              ) : null}
               <button className="appbar-item" onClick={() => { setOpen(false); props.onNew(); }}>
                 + New app
               </button>

@@ -3,7 +3,7 @@
 // compose into layouts the named components can't express (a Gantt).
 import { describe, expect, it } from "vitest";
 import {
-  h, render, Box, Text, Bar, Scene, Stack, Board, Cards, Timeline, Badge, Button, Chart,
+  h, render, Box, Text, Bar, Scene, Stack, Board, Cards, Timeline, Badge, Button, Chart, Table,
 } from "../src/index";
 
 function mount(vnode: Parameters<typeof render>[0]): HTMLElement {
@@ -314,5 +314,33 @@ describe("Chart multi-series (from live diagnostic: planned vs actual)", () => {
     expect(c.textContent).toContain("rent");
     // tooltip carries the share
     expect(slices[0]!.querySelector("title")?.textContent).toContain("%");
+  });
+});
+
+describe("Table sorting (interactivity)", () => {
+  it("clicking a sortable header sorts rows and toggles a caret", () => {
+    const c = mount(h(Table, {
+      sortable: true,
+      rows: [{ n: "b", v: 3 }, { n: "a", v: 1 }, { n: "c", v: 2 }],
+      columns: [{ field: "n", label: "Name" }, { field: "v", label: "Val" }],
+    }));
+    const ths = [...c.querySelectorAll("th")];
+    ths[1]!.click();                                   // sort by Val asc
+    expect(c.querySelector("tbody tr:first-child td:nth-child(2)")?.textContent).toBe("1");
+    expect(ths[1]!.textContent).toContain("↑");
+    ths[1]!.click();                                   // toggle desc
+    expect(c.querySelector("tbody tr:first-child td:nth-child(2)")?.textContent).toBe("3");
+    expect(ths[1]!.textContent).toContain("↓");
+  });
+
+  it("a non-sortable table has no caret and keeps insertion order on click", () => {
+    const c = mount(h(Table, {
+      rows: [{ n: "b" }, { n: "a" }],
+      columns: [{ field: "n", label: "N" }],
+    }));
+    const th = c.querySelector("th")!;
+    th.click();
+    expect(th.textContent).not.toContain("↑");
+    expect(c.querySelector("tbody tr:first-child td")?.textContent).toBe("b");
   });
 });
