@@ -84,3 +84,34 @@ Ordered; each ships tested and committed on its own.
 Steps 1–2 are the user's immediate asks and the fastest usefulness wins;
 3–5 are the differentiators that competitors structurally can't copy
 without also being liquid-over-permanent.
+
+## Initiative II — Make the moat *legible* (the pillars, on screen)
+
+The four moat pillars exist in the kernel but are unevenly surfaced. A moat
+you can't see isn't a moat a user feels. This initiative makes each pillar
+tangible in the trusted shell — no new capability surface (Bridge/Validator/
+migration vocabulary unchanged), so no ADR is required; these are read-only
+projections and reversible layout/state, all honoring P1–P5.
+
+Ordered by (moat value × achievability × verifiability):
+
+1. **Change-history as a first-class surface (pillar 3).** A navigable
+   *evolution timeline*: every version with the words you asked, what changed,
+   and when — jump to any moment (read-only render) or rewind to it. The thin
+   scrubber becomes a real, legible history. **[SHIPPED — HistoryView]**
+2. **Named checkpoints.** Let a user label a moment ("before invoicing") and
+   pin it on the timeline, so history has meaning, not just numbers. Needs a
+   small per-version label store (kept out of the data substrate).
+3. **Ambient reshaping v2 (B3).** Escalate the Observer from passive chips to
+   proactive, in-context, one-click transformation offers ("3 invoices are
+   overdue — add an Overdue view?"). The app meets you halfway. Local
+   heuristics only (P4): no extra model calls to notice.
+4. **One dataset ⇄ many views, made switchable (pillar 4).** A view-switcher
+   affordance so the same rows flip between board / table / chart in place —
+   the "same data, many lenses" claim you can touch.
+5. **Fork-and-explore (B5).** Duplicate an app (schema + data + panels at the
+   current version) into a new app via the existing multi-app + `.clay`
+   machinery, so a big redesign can be tried without risking the real app.
+   Time/branching as a canvas — the largest bet, sequenced last.
+
+Each ships tested (logic + a screenshot-verified render) and committed alone.

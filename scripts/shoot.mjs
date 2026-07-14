@@ -39,6 +39,12 @@ try {
 
 // let the worker seed + the panel iframes boot and render
 await page.waitForTimeout(4500);
+// optional: click a control (e.g. "History ↗") before the shot
+const clickText = process.argv[4];
+if (clickText) {
+  try { await page.getByText(clickText, { exact: false }).first().click({ timeout: 5000 }); await page.waitForTimeout(800); }
+  catch { console.log(`(could not click "${clickText}")`); }
+}
 await page.screenshot({ path: out, fullPage: true });
 console.log("wrote", out);
 if (errors.length) console.log("PAGE ERRORS:\n" + errors.slice(0, 15).join("\n"));

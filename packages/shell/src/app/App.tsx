@@ -12,6 +12,7 @@ import type { IntentOutcome, PreviewInfo } from "../worker/db-worker";
 import type { StarterShellId } from "../shells/seed";
 import { ConversationRail, type FeedItem } from "./ConversationRail";
 import { DataView } from "./DataView";
+import { HistoryView } from "./HistoryView";
 import { Onboarding } from "./Onboarding";
 import { PanelFrame } from "./PanelFrame";
 import { TimeSlider } from "./TimeSlider";
@@ -80,6 +81,7 @@ export function App(): React.JSX.Element {
   const [faults, setFaults] = useState<Record<string, PanelFault>>({});
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [showData, setShowData] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const dataStoreRef = useRef<StoreRpcClient | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastId = useRef(0);
@@ -360,17 +362,20 @@ export function App(): React.JSX.Element {
     setScrub({ version, panels: panelsAt });
   };
 
-  const makeLatest = async (): Promise<void> => {
-    if (!scrub) return;
-    const dropped = history.filter(h => h.version > scrub.version).length;
+  const restoreTo = async (version: number): Promise<void> => {
+    if (version >= head) return;
+    const dropped = history.filter(h => h.version > version).length;
     if (!window.confirm(
-      `Rewind your app to v${scrub.version}? The ${dropped} newer change${dropped === 1 ? "" : "s"} `
+      `Rewind your app to v${version}? The ${dropped} newer change${dropped === 1 ? "" : "s"} `
       + `will be removed from history. Data rows are always kept.`)) return;
-    const fresh = await client().makeLatest(scrub.version);
+    const fresh = await client().makeLatest(version);
     setScrub(null);
     setPanels(fresh);
     setHistory(await client().history());
-    setFeed(f => [...f, { kind: "info", text: `Rewound — v${scrub.version} is the latest again.` }]);
+    setFeed(f => [...f, { kind: "info", text: `Rewound — v${version} is the latest again.` }]);
+  };
+  const makeLatest = async (): Promise<void> => {
+    if (scrub) await restoreTo(scrub.version);
   };
 
   const resetApp = async (): Promise<void> => {
@@ -535,6 +540,7 @@ export function App(): React.JSX.Element {
           disabled={busy || preview !== null}
           onScrub={v => void scrubTo(v)}
           onMakeLatest={() => void makeLatest()}
+          onOpenHistory={() => setShowHistory(true)}
         />
         {display.length === 0 && !preview && !scrub ? (
           <div className="empty-canvas">
@@ -564,6 +570,16 @@ export function App(): React.JSX.Element {
           </>
         )}
       </main>
+      {showHistory ? (
+        <HistoryView
+          history={history}
+          head={head}
+          current={scrub?.version ?? head}
+          onJump={v => { void scrubTo(v); setShowHistory(false); }}
+          onRestore={v => void restoreTo(v)}
+          onClose={() => setShowHistory(false)}
+        />
+      ) : null}
       {showData && dataStoreRef.current && workerRef.current ? (
         <DataView
           worker={workerRef.current}

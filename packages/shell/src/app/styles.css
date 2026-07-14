@@ -123,6 +123,45 @@ button.link.danger { color: var(--danger); }
 .timeslider-summary { color: var(--text-2); max-width: 340px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
 .timeslider-actions { display: flex; gap: 8px; }
+.timeslider-history { border: 0; background: none; color: var(--accent);
+  font-weight: 600; font-size: 13px; padding: 4px 6px; border-radius: 8px; white-space: nowrap; }
+.timeslider-history:hover { background: var(--accent-soft); }
+
+/* History overlay — the evolution timeline (moat pillar: change-history) */
+.historyview {
+  position: fixed; inset: 24px 384px 24px 24px; z-index: 15;
+  background: var(--panel); border: 1px solid var(--border-strong); border-radius: 16px;
+  box-shadow: var(--shadow-lg); display: flex; flex-direction: column; overflow: hidden;
+}
+.historyview-header { display: flex; justify-content: space-between; align-items: flex-start;
+  padding: 18px 22px; border-bottom: 1px solid var(--border); }
+.historyview-title { margin: 0; font-family: var(--font-display); font-size: 20px;
+  font-weight: 640; letter-spacing: -.02em; }
+.historyview-sub { margin: 4px 0 0; font-size: 13px; color: var(--text-2); max-width: 620px; }
+.historyview-body { overflow-y: auto; padding: 20px 22px 28px; }
+.timeline { list-style: none; margin: 0; padding: 0; position: relative; }
+.tl-item { position: relative; padding: 0 0 18px 26px; }
+/* the connecting line */
+.tl-item::before { content: ""; position: absolute; left: 5px; top: 4px; bottom: -4px;
+  width: 2px; background: var(--border-strong); }
+.tl-item:last-child::before { display: none; }
+.tl-dot { position: absolute; left: 0; top: 4px; width: 12px; height: 12px; border-radius: 50%;
+  background: #fff; border: 2px solid var(--border-strong); box-sizing: border-box; z-index: 1; }
+.tl-head > .tl-dot { border-color: var(--accent); background: var(--accent); }
+.tl-current > .tl-dot { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.tl-card { border: 1px solid var(--border); border-radius: 12px; background: var(--panel);
+  padding: 12px 14px; transition: border-color .12s, box-shadow .12s; }
+.tl-current > .tl-card { border-color: #cdc9f2; box-shadow: var(--shadow); }
+.tl-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+.tl-ver { font-weight: 700; font-size: 13px; color: var(--accent-text); }
+.tl-now { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--ok); background: var(--ok-soft); border-radius: 999px; padding: 2px 8px; }
+.tl-viewing { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--accent-text); background: var(--accent-soft); border-radius: 999px; padding: 2px 8px; }
+.tl-time { margin-left: auto; font-size: 12px; color: var(--text-3); }
+.tl-intent { margin: 0 0 4px; font-size: 13.5px; color: var(--text); font-weight: 500; }
+.tl-summary { margin: 0; font-size: 13px; color: var(--text-2); line-height: 1.45; }
+.tl-actions { display: flex; gap: 14px; margin-top: 9px; }
 
 /* empty canvas — the moat, front and center (nothing → describe → app) */
 .empty-canvas { grid-column: 1 / -1; display: flex; flex-direction: column;

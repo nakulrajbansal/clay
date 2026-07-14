@@ -11,6 +11,7 @@ export function TimeSlider(props: {
   disabled: boolean;
   onScrub: (version: number) => void;
   onMakeLatest: () => void;
+  onOpenHistory?: () => void;
 }): React.JSX.Element | null {
   const { history } = props;
   if (history.length < 2) return null;
@@ -41,6 +42,10 @@ export function TimeSlider(props: {
             </button>
             <button onClick={() => props.onScrub(head)}>Back to now</button>
           </span>
+        ) : props.onOpenHistory ? (
+          <button className="timeslider-history" onClick={props.onOpenHistory}>
+            History ↗
+          </button>
         ) : null}
       </div>
     </div>
