@@ -111,8 +111,21 @@ Ordered by (moat value × achievability × verifiability):
    panels) into a new one via the validated `.clay` export/import path into a
    fresh OPFS namespace, then switch to it — try a big redesign without
    risking the real app. Time/branching as a canvas. **[SHIPPED]**
-5. **One dataset ⇄ many views, made switchable (pillar 4).** A view-switcher
-   affordance so the same rows flip between board / table / chart in place —
-   the "same data, many lenses" claim you can touch. **[next]**
+5. **One dataset ⇄ many views, made switchable (pillar 4).** Every data-backed
+   panel gets a "⇄ View as" menu (table / board / cards / chart / timeline);
+   picking one re-lenses that panel via a targeted, previewed, reversible
+   reshape. The honest one-click expression of "same data, many lenses".
+   **[SHIPPED]**
 
-Each ships tested (logic + a screenshot-verified render) and committed alone.
+All five Initiative II items shipped. Each ships tested (logic + a
+screenshot-verified render) and committed alone.
+
+## Initiative III — every generated UI is beautiful by default
+
+The reshape is only as good as what it renders. Rather than hope the model
+emits pretty markup, the shared component layer (PANEL_CSS + vnode) makes
+every generated panel beautiful, interactive, and futuristic on arrival:
+KPI metrics with accent bars, gradient buttons, sortable tables, animated
+charts, kanban with drag, and motion gated behind reduced-motion. Ongoing —
+each novel app built is reviewed and any rough component is refined so ALL
+future reshapes inherit the fix.
