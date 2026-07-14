@@ -167,8 +167,10 @@ function buildTable(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
   for (const row of rows) {
     const tr = el(ctx, "tr");
     const onRowClick = props.onRowClick;
-    if (typeof onRowClick === "function")
+    if (typeof onRowClick === "function") {
+      tr.classList.add("clay-clickable");   // pointer cursor + hover
       tr.addEventListener("click", () => (onRowClick as (r: unknown) => void)(row));
+    }
     for (const col of columns) {
       const td = el(ctx, "td");
       const value = row[col.field];

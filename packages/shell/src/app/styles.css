@@ -188,7 +188,7 @@ button.link.danger { color: #991b1b; }
 .dataview-tables { display: flex; gap: 8px; flex: 1; }
 .dataview-tables button { border: 1px solid #d6d3d1; background: #fff;
   border-radius: 8px; padding: 4px 10px; }
-.dataview-tables button.primary { border-color: #1c1917; }
+.dataview-tables button.primary { border-color: #1c1917; background: #1c1917; color: #fafaf9; }
 .dataview-body { overflow: auto; padding: 12px 16px; }
 .dataview-grid { width: 100%; border-collapse: collapse; font-size: 13px; }
 .dataview-grid th { text-align: left; font-size: 11px; text-transform: uppercase;

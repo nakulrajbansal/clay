@@ -114,6 +114,41 @@ describe("every seed panel boots and renders real data", () => {
   }
 });
 
+describe("template interactivity: click to act (end-to-end through the Bridge)", () => {
+  it("CRM: clicking a deal card advances its stage and re-renders", async () => {
+    const { store, container } = await bootShellPanel("crm", "crm_pipeline");
+    await waitFor(() => container.textContent!.includes("Northwind annual plan"), "board");
+    const card = [...container.querySelectorAll<HTMLElement>(".clay-card")]
+      .find(c => c.textContent!.includes("Northwind annual plan"))!;
+    expect(card.className).toContain("clay-clickable");   // shows it's actionable
+    card.click();
+    // Northwind was "proposal" -> advances to "negotiation" (declared_writes)
+    await waitFor(() => store.query({ from: "deals",
+      where: [{ field: "title", op: "eq", value: "Northwind annual plan" }] })[0]?.stage
+      === "negotiation", "stage advanced in store");
+    // and the board re-rendered the card into the negotiation column
+    await waitFor(() => {
+      const cols = [...container.querySelectorAll(".clay-board-col")];
+      const neg = cols.find(col => col.querySelector(".clay-board-label")?.textContent === "negotiation");
+      return neg?.textContent?.includes("Northwind annual plan") ?? false;
+    }, "card moved column");
+    store.close();
+    document.body.replaceChildren();
+  });
+
+  it("CRM: clicking a follow-up marks it done and drops it from the open list", async () => {
+    const { store, container } = await bootShellPanel("crm", "crm_today");
+    await waitFor(() => container.textContent!.includes("Follow up on proposal"), "tasks");
+    const row = [...container.querySelectorAll<HTMLElement>("tbody tr")]
+      .find(r => r.textContent!.includes("Follow up on proposal"))!;
+    row.click();
+    await waitFor(() => !container.textContent!.includes("Follow up on proposal"),
+      "task left the open list");
+    store.close();
+    document.body.replaceChildren();
+  });
+});
+
 describe("forms write through declared_writes end-to-end", () => {
   it("add_item_form inserts an item and re-renders the watchers", async () => {
     const { store, container, toasts } = await bootShellPanel("tracker", "add_item_form");

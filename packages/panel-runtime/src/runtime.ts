@@ -126,13 +126,14 @@ export function bootPanelRuntime(opts: PanelRuntimeOptions): void {
       const w = (typeof window !== "undefined" ? window : undefined) as
         (Window & typeof globalThis) | undefined;
       if (!w || w.parent === w) return;
-      // Measure the CONTENT container, not documentElement — the latter is
-      // clamped to the viewport, so once the iframe grows it could never
-      // report a smaller height. Add the body padding (srcdoc: 10px each
-      // side) so nothing is clipped.
-      const content = (container as HTMLElement).scrollHeight || 0;
-      const height = content + 20;
-      if (content > 0 && Math.abs(height - lastHeight) > 2) {
+      // Measure body.scrollHeight — the body's own content box INCLUDING its
+      // padding, and (unlike documentElement) never clamped to the viewport,
+      // so it shrinks as well as grows. Falls back to the container.
+      const body = w.document.body;
+      const height = Math.max(
+        body ? body.scrollHeight : 0,
+        (container as HTMLElement).scrollHeight || 0);
+      if (height > 0 && Math.abs(height - lastHeight) > 2) {
         lastHeight = height;
         w.parent.postMessage(
           { v: 1, kind: "clay_resize", panelId, height }, "*");

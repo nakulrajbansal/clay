@@ -385,37 +385,55 @@ const crm = [
       h(MetricCard, { label: "Win rate %", value: winRate })));
   });
 }`),
-  panel("crm_today", "Follow-ups", "top", 1,
-    [{ from: "tasks", where: [{ field: "status", op: "eq", value: "open" }], orderBy: [{ field: "due", dir: "asc" }] }], [],
+  panel("crm_today", "Follow-ups · click to complete", "top", 1,
+    [{ from: "tasks", where: [{ field: "status", op: "eq", value: "open" }], orderBy: [{ field: "due", dir: "asc" }] }], ["tasks"],
     `export default function (clay) {
-  const tones = { low: "gray", medium: "accent", high: "red" };
   const q = { from: "tasks", where: [{ field: "status", op: "eq", value: "open" }], orderBy: [{ field: "due", dir: "asc" }] };
+  const complete = async (row) => {
+    try { await clay.db.update("tasks", row.id, { status: "done" }); clay.ui.toast("Done: " + row.title, "success"); }
+    catch (e) { clay.ui.toast("Could not update: " + e.message, "danger"); }
+  };
   clay.db.watch(q, (rows) => {
     clay.ui.render(rows.length === 0 ? h(EmptyState, { label: "No open follow-ups — nice" })
-      : h(Table, { rows, columns: [
+      : h(Table, { rows, onRowClick: complete, columns: [
         { field: "title", label: "Task" }, { field: "deal", label: "Deal" },
         { field: "due", label: "Due", format: "date" },
         { field: "priority", label: "Priority", badge: { field: "priority", map: { low: "gray", medium: "accent", high: "red" } } }] }));
   });
 }`),
-  panel("crm_pipeline", "Deal pipeline", "main", 0, [{ from: "deals" }], [],
+  panel("crm_pipeline", "Pipeline · click a deal to advance it", "main", 0, [{ from: "deals" }], ["deals"],
     `export default function (clay) {
   const stages = ${DEAL_STAGES};
   const tones = ${DEAL_TONES};
+  const advance = async (card) => {
+    const i = stages.indexOf(card.stage);
+    const next = stages[Math.min(i + 1, stages.length - 1)];
+    if (next === card.stage) return;
+    try { await clay.db.update("deals", card.id, { stage: next }); clay.ui.toast(card.title + " → " + next, "success"); }
+    catch (e) { clay.ui.toast("Could not update: " + e.message, "danger"); }
+  };
   clay.db.watch({ from: "deals" }, (rows) => {
     const groups = stages.map((s) => ({ key: s, label: s, tone: tones[s],
-      cards: rows.filter((r) => r.stage === s).map((r) => ({
+      cards: rows.filter((r) => r.stage === s).map((r) => ({ id: r.id, stage: r.stage,
         title: r.title, subtitle: (r.company || r.contact || "") + (r.probability ? " · " + r.probability + "%" : ""),
         badge: r.value ? clay.compute.formatCurrency(r.value) : null })) }));
-    clay.ui.render(h(Board, { groups }));
+    clay.ui.render(h(Board, { groups, onCardClick: advance }));
   });
 }`),
-  panel("crm_deals_table", "All deals", "main", 1,
-    [{ from: "deals", orderBy: [{ field: "expected_close", dir: "asc" }] }], [],
+  panel("crm_deals_table", "All deals · click to advance stage", "main", 1,
+    [{ from: "deals", orderBy: [{ field: "expected_close", dir: "asc" }] }], ["deals"],
     `export default function (clay) {
+  const stages = ${DEAL_STAGES};
+  const advance = async (row) => {
+    const i = stages.indexOf(row.stage);
+    const next = stages[Math.min(i + 1, stages.length - 1)];
+    if (next === row.stage) return;
+    try { await clay.db.update("deals", row.id, { stage: next }); clay.ui.toast(row.title + " → " + next, "success"); }
+    catch (e) { clay.ui.toast("Could not update: " + e.message, "danger"); }
+  };
   clay.db.watch({ from: "deals", orderBy: [{ field: "expected_close", dir: "asc" }] }, (rows) => {
     clay.ui.render(rows.length === 0 ? h(EmptyState, { label: "No deals yet" })
-      : h(Table, { sortable: true, rows, columns: [
+      : h(Table, { sortable: true, rows, onRowClick: advance, columns: [
         { field: "title", label: "Deal" }, { field: "company", label: "Company" },
         { field: "stage", label: "Stage", badge: { field: "stage", map: ${DEAL_TONES} } },
         { field: "value", label: "Value", format: "currency" },
