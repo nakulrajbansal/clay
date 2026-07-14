@@ -36,7 +36,7 @@ button.link.danger { color: #991b1b; }
 .shell-tagline { color: #78716c; font-size: 13px; }
 
 /* main layout */
-.app { display: flex; flex-direction: column; height: 100%; }
+.app { display: flex; flex-direction: column; height: 100%; background: #faf9f8; }
 .app-body { display: flex; flex: 1; min-height: 0; }
 
 /* multi-app switcher bar (G4) */

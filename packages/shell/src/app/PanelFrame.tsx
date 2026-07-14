@@ -14,6 +14,8 @@ const PANEL_CSS = `
   .clay-table th { text-align: left; font-size: 11px; text-transform: uppercase;
     letter-spacing: .04em; color: #78716c; padding: 4px 8px; border-bottom: 1px solid #e7e5e4; }
   .clay-table td { padding: 6px 8px; border-bottom: 1px solid #f5f5f4; }
+  .clay-table tbody tr:last-child td { border-bottom: 0; }
+  .clay-table tbody tr:hover td { background: #fafaf9; }
   .clay-badge { display: inline-block; padding: 1px 8px; border-radius: 999px;
     font-size: 11px; font-weight: 600; background: #f5f5f4; }
   .clay-tone-green, .clay-tone-success { background: #dcfce7; color: #166534; }
@@ -24,10 +26,12 @@ const PANEL_CSS = `
   .clay-empty { color: #a8a29e; padding: 18px 6px; text-align: center; }
   .clay-stack > * + * { margin-top: 8px; }
   .clay-grid { display: flex; gap: 10px; flex-wrap: wrap; }
-  .clay-metric { display: flex; flex-direction: column; gap: 2px; padding: 10px 14px;
-    border: 1px solid #e7e5e4; border-radius: 10px; min-width: 90px; }
-  .clay-metric-label { font-size: 11px; color: #78716c; text-transform: uppercase; }
-  .clay-metric-value { font-size: 20px; font-weight: 700; }
+  /* metric cards grow to fill the row evenly (no awkward wrap gaps) */
+  .clay-metric { flex: 1 1 100px; display: flex; flex-direction: column; gap: 3px;
+    padding: 11px 14px; background: #fafaf9; border: 1px solid #eeecea; border-radius: 11px; }
+  .clay-metric-label { font-size: 10px; font-weight: 600; color: #a8a29e;
+    text-transform: uppercase; letter-spacing: .05em; }
+  .clay-metric-value { font-size: 22px; font-weight: 750; letter-spacing: -.01em; color: #1c1917; }
   .clay-form { display: flex; flex-direction: column; gap: 8px; }
   .clay-field { display: flex; flex-direction: column; gap: 3px; }
   .clay-field-label { font-size: 11px; color: #78716c; }
@@ -88,7 +92,8 @@ const PANEL_CSS = `
     padding: 0 7px; font-size: 11px; }
   .clay-board-cards { display: flex; flex-direction: column; gap: 6px; }
   .clay-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
-  .clay-card { background: #fff; border: 1px solid #e7e5e4; border-radius: 9px; padding: 8px 10px; }
+  .clay-card { background: #fff; border: 1px solid #e7e5e4; border-radius: 9px;
+    padding: 8px 10px; box-shadow: 0 1px 2px rgba(28,25,23,.03); }
   .clay-card-lg { padding: 12px 14px; }
   .clay-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
   .clay-card-title { font-weight: 600; font-size: 13px; }
