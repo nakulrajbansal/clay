@@ -87,7 +87,7 @@ if (kept && seed.length) {
     }
     console.log(`  seeded ${n} row(s) via "${spec.form}"`);
   }
-  await page.waitForTimeout(2500); // let watches refresh charts
+  await page.waitForTimeout(Number(process.env.WAIT || 2500)); // watches refresh (+ ambient nudges)
 }
 
 await page.screenshot({ path: out, fullPage: true });

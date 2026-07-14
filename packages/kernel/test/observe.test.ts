@@ -19,6 +19,33 @@ async function storeWithText(): Promise<ClayStore> {
   return store;
 }
 
+// An invoices table with a status enum + a due date, optionally already shown
+// by a table or board panel — for the overdue and status-not-boarded nudges.
+async function storeWithInvoices(
+  opts: { withPanel?: boolean; boardPanel?: boolean } = {},
+): Promise<ClayStore> {
+  const store = await ClayStore.openMemory();
+  const ops: MigrationPlanT["operations"] = [{
+    op: "create_table", table: "invoices",
+    columns: [
+      { name: "client", type: "text", required: true },
+      { name: "status", type: "enum", required: false,
+        values: ["draft", "sent", "paid", "overdue"] },
+      { name: "due_on", type: "date", required: false },
+    ],
+  }];
+  store.commit({
+    intent: "seed", summary: "Invoices.",
+    migration: { operations: ops, inverse: deriveInverse(ops, store.registrySnapshot()) },
+    panels: opts.withPanel ? [{
+      panel_id: "inv", title: "Invoices", placement: { region: "main", order: 0 },
+      code: opts.boardPanel ? "export default (c)=>h(Board,{})" : "export default (c)=>h(Table,{})",
+      declared_queries: [{ from: "invoices" }], declared_writes: [],
+    }] : [],
+  });
+  return store;
+}
+
 describe("token-promotion heuristic", () => {
   it("suggests promoting a repeating free-text column", async () => {
     const store = await storeWithText();
@@ -134,6 +161,47 @@ describe("repeated-filter heuristic", () => {
     const s = store.suggestions().find(x => x.kind === "pin_filtered_panel")!;
     store.acceptSuggestion(s.subject, s.kind);
     expect(store.suggestions().some(x => x.subject === s.subject)).toBe(false);
+    store.close();
+  });
+});
+
+describe("overdue heuristic (ambient reshaping v2)", () => {
+  it("flags items past their date on a non-terminal status", async () => {
+    const store = await storeWithInvoices();
+    store.insert("invoices", { client: "A", status: "sent", due_on: "2020-01-01" });
+    store.insert("invoices", { client: "B", status: "overdue", due_on: "2020-02-01" });
+    store.insert("invoices", { client: "C", status: "paid", due_on: "2020-03-01" }); // terminal — ignored
+    const s = store.suggestions().find(x => x.kind === "flag_overdue" && x.subject === "invoices");
+    expect(s).toBeDefined();
+    expect(s!.reason).toContain("past their due_on");
+    expect(s!.intent).toContain("overdue");
+    store.close();
+  });
+
+  it("stays quiet when only terminal statuses are past-due", async () => {
+    const store = await storeWithInvoices();
+    store.insert("invoices", { client: "A", status: "paid", due_on: "2020-01-01" });
+    store.insert("invoices", { client: "B", status: "sent", due_on: "2090-01-01" }); // future — not overdue
+    expect(store.suggestions().some(x => x.kind === "flag_overdue")).toBe(false);
+    store.close();
+  });
+});
+
+describe("status-not-boarded heuristic (ambient reshaping v2)", () => {
+  it("suggests a board for a viewed status table with no board", async () => {
+    const store = await storeWithInvoices({ withPanel: true });
+    for (let i = 0; i < 4; i++) store.insert("invoices", { client: `c${i}`, status: "draft" });
+    const s = store.suggestions().find(x => x.kind === "regroup_board");
+    expect(s).toBeDefined();
+    expect(s!.subject).toBe("invoices.status");
+    expect(s!.intent).toContain("board grouped by status");
+    store.close();
+  });
+
+  it("stays quiet when the table already has a board", async () => {
+    const store = await storeWithInvoices({ withPanel: true, boardPanel: true });
+    for (let i = 0; i < 4; i++) store.insert("invoices", { client: `c${i}`, status: "draft" });
+    expect(store.suggestions().some(x => x.kind === "regroup_board")).toBe(false);
     store.close();
   });
 });

@@ -16,7 +16,8 @@ export type UsageEvent = {
 
 export type Suggestion = {
   id: string;
-  kind: "promote_to_status" | "pin_filtered_panel" | "add_view";
+  kind: "promote_to_status" | "pin_filtered_panel" | "add_view"
+    | "flag_overdue" | "regroup_board";
   subject: string;
   /** the intent text prefilled into the rail if accepted */
   intent: string;
@@ -25,6 +26,15 @@ export type Suggestion = {
 };
 
 const USAGE_CAP = 50_000;          // ring buffer (doc 04 §3)
+const MAX_SUGGESTIONS = 4;         // don't wall the rail with chips
+// Statuses that mean "no longer outstanding" — a past date on one of these
+// isn't overdue. Lowercased match.
+// Only genuinely-settled statuses count as terminal — a "sent" but unpaid
+// invoice can still be overdue, so it must NOT be here.
+const TERMINAL_STATUS = new Set([
+  "done", "paid", "closed", "complete", "completed", "finished", "resolved",
+  "cancelled", "canceled", "archived", "delivered", "won",
+]);
 
 export class Observer {
   constructor(private readonly driver: DbDriver) {}
@@ -47,16 +57,82 @@ export class Observer {
   /** Suggestions not yet shown/accepted/dismissed, freshly derived.
    * `viewedTables` = tables that already have at least one panel; a table
    * with data but no view is the strongest ambient prompt. */
-  suggestions(reg: Registry, viewedTables: Set<string> = new Set()): Suggestion[] {
+  suggestions(
+    reg: Registry,
+    viewedTables: Set<string> = new Set(),
+    boardedTables: Set<string> = new Set(),
+  ): Suggestion[] {
     const out: Suggestion[] = [];
     out.push(...this.unviewedTable(reg, viewedTables));
+    out.push(...this.overdueItems(reg));
+    out.push(...this.statusNotBoarded(reg, viewedTables, boardedTables));
     out.push(...this.tokenPromotion(reg));
     out.push(...this.repeatedFilter());
     // suppress any the user already dismissed/accepted
     const seen = new Set(this.driver
       .select(`SELECT subject, kind FROM sys.suggestions WHERE state != 'shown'`)
       .map(r => `${String(r.kind)}:${String(r.subject)}`));
-    return out.filter(s => !seen.has(`${s.kind}:${s.subject}`));
+    return out.filter(s => !seen.has(`${s.kind}:${s.subject}`)).slice(0, MAX_SUGGESTIONS);
+  }
+
+  /**
+   * Overdue: a table with a date column and a status enum, where rows sit in
+   * the past on a non-terminal status. The app noticing "these are late" and
+   * offering to surface them is ambient reshaping at its most perceptive.
+   */
+  private overdueItems(reg: Registry): Suggestion[] {
+    const out: Suggestion[] = [];
+    const today = nowIso().slice(0, 10);
+    for (const table of reg.values()) {
+      const dateCol = table.columns.find(c => c.type === "date" && !c.hidden);
+      const statusCol = table.columns.find(c => c.type === "enum" && !c.hidden);
+      if (!dateCol || !statusCol) continue;
+      let rows;
+      try {
+        rows = this.driver.select(
+          `SELECT "${statusCol.name}" AS s, COUNT(*) AS n FROM "${table.name}"
+           WHERE "deleted_at" IS NULL AND "${dateCol.name}" IS NOT NULL
+             AND substr("${dateCol.name}", 1, 10) < ?
+           GROUP BY "${statusCol.name}"`, [today]);
+      } catch { continue; }
+      const late = rows.filter(r => !TERMINAL_STATUS.has(String(r.s).toLowerCase()));
+      const n = late.reduce((sum, r) => sum + Number(r.n), 0);
+      if (n < 2) continue;
+      out.push({
+        id: uuidv7(), kind: "flag_overdue", subject: table.name,
+        intent: `add a view of ${table.name} that are overdue — past their `
+          + `${dateCol.name} and not yet done — highlighted so they stand out`,
+        reason: `${n} ${table.name} are past their ${dateCol.name} and still open — surface the overdue ones?`,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Status-not-boarded: a table you already see (as a list) that has a status
+   * enum but no board — the classic "these want to be a kanban" nudge.
+   */
+  private statusNotBoarded(
+    reg: Registry, viewed: Set<string>, boarded: Set<string>,
+  ): Suggestion[] {
+    const out: Suggestion[] = [];
+    for (const table of reg.values()) {
+      if (!viewed.has(table.name) || boarded.has(table.name)) continue;
+      const statusCol = table.columns.find(c => c.type === "enum" && !c.hidden);
+      if (!statusCol) continue;
+      let n = 0;
+      try {
+        n = Number(this.driver.select(
+          `SELECT COUNT(*) AS n FROM "${table.name}" WHERE "deleted_at" IS NULL`)[0]?.n ?? 0);
+      } catch { continue; }
+      if (n < 3) continue;
+      out.push({
+        id: uuidv7(), kind: "regroup_board", subject: `${table.name}.${statusCol.name}`,
+        intent: `show my ${table.name} as a board grouped by ${statusCol.name}`,
+        reason: `your ${table.name} have a ${statusCol.name} field but you only see a list — view them as a board?`,
+      });
+    }
+    return out;
   }
 
   /**

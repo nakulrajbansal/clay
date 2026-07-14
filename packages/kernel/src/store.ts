@@ -436,9 +436,15 @@ export class ClayStore {
     // tables that already have at least one panel — so "table with data but
     // no view" can be offered (ambient reshaping, B3).
     const viewed = new Set<string>();
-    for (const p of this.livePanels())
-      for (const q of p.declared_queries) viewed.add(q.from);
-    return this.observer.suggestions(this.reg, viewed);
+    const boarded = new Set<string>();          // tables already shown as a board
+    for (const p of this.livePanels()) {
+      const isBoard = /\bBoard\b/.test(p.code ?? "");
+      for (const q of p.declared_queries) {
+        viewed.add(q.from);
+        if (isBoard) boarded.add(q.from);
+      }
+    }
+    return this.observer.suggestions(this.reg, viewed, boarded);
   }
   markSuggestionShown(subject: string, kind: string): void {
     this.observer.markShown(subject, kind);

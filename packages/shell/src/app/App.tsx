@@ -112,6 +112,18 @@ export function App(): React.JSX.Element {
     catch { /* pre-boot */ }
   }, []);
 
+  // Ambient: re-derive the Observer's nudges on a gentle idle cadence so a
+  // pattern that appears from data entry (e.g. invoices going overdue) is
+  // noticed on its own, not only right after a reshape. Local heuristics
+  // only — no model call (P4). Skipped while a preview is open.
+  useEffect(() => {
+    if (phase !== "main") return;
+    const id = setInterval(() => {
+      if (!preview) void refreshSuggestions();
+    }, 12000);
+    return () => clearInterval(id);
+  }, [phase, preview, refreshSuggestions]);
+
   // boot
   useEffect(() => {
     const worker = new Worker(new URL("../worker/db-worker.ts", import.meta.url),
