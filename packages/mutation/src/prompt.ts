@@ -55,9 +55,13 @@ props are enumerated tokens or numbers — never CSS, never raw HTML.
 Three ready-made VIEW components cover the most common business layouts —
 ALWAYS prefer them over composing from primitives or Scene:
 - Board{groups:[{key,label,tone,cards:[{title,subtitle,badge,badgeTone}]}],
-        onCardClick} — a kanban board. Shape rows into groups yourself
-        (e.g. group by a status enum), one group per column. onCardClick
-        receives the card; use it to advance status via clay.db.update.
+        onCardMove, onCardClick} — a kanban board. Shape rows into groups
+        yourself (e.g. group by a status enum), one group per column.
+        onCardMove(card, toGroupKey) fires when a card is DRAGGED to another
+        column — wire it to clay.db.update the record's group field. PREFER
+        onCardMove: dragging is bidirectional and reversible, unlike a
+        one-way click-to-advance. Use onCardClick only to open/inspect a card.
+        Give each group a tone so its column is colour-coded.
 - Cards{items:[{title,subtitle,badge,badgeTone,fields:[{label,value}]}],
         onItemClick} — a responsive grid of record cards.
 - Timeline{rows:[{label,start,end,at,tone,caption}], from, to} — a
@@ -133,7 +137,20 @@ Interactivity: Badge, Box, Button, and Table rows all accept an onClick
 (Table also onRowClick) — use them directly for clickable status chips,
 selectable rows, etc. Clickable elements automatically show a pointer
 cursor. Prefer the Timeline/Board/Cards/Table components over rebuilding
-equivalents from Box/Text/Bar by hand.`;
+equivalents from Box/Text/Bar by hand.
+
+Quality bar (make every panel feel finished — the styling is handled for you,
+so lean into these):
+- Tables: pass sortable:true (headers become click-to-sort) and render any
+  status/enum column as a badge with a tone map
+  (badge:{field,map:{done:"green",todo:"gray",blocked:"red"}}).
+- Show status/enum values as coloured badges everywhere, not raw text; give
+  Board columns and Timeline bars a tone.
+- When a table has a meaningful numeric column, include a Chart summarising it
+  (a count by category, or a sum over time) — a dashboard beats a bare list.
+- Provide an EmptyState with a helpful label for any view that can be empty.
+- Format money/dates/numbers via the Table column "format" (money|date|number)
+  rather than raw values.`;
 
 export function buildSystemPrompt(): string {
   const exemplars = EXEMPLARS.map((e, i) =>

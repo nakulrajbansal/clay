@@ -91,6 +91,13 @@ if (kept && seed.length) {
 }
 
 await page.screenshot({ path: out, fullPage: true });
+// interactivity probe: how many draggable cards + sortable headers exist
+let draggable = 0, sortable = 0;
+for (const f of page.frames()) {
+  draggable += await f.locator('[draggable="true"].clay-card-draggable').count().catch(() => 0);
+  sortable += await f.locator("th.clay-th-sort").count().catch(() => 0);
+}
+console.log(`interactivity: ${draggable} draggable cards, ${sortable} sortable headers`);
 console.log("wrote", out, kept ? "(kept)" : "(no-keep)");
 if (logs.length) console.log("--- console ---\n" + logs.slice(0, 20).join("\n"));
 await browser.close();
