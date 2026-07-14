@@ -56,6 +56,9 @@ export class WorkerClient {
     return this.call("commitLayout", { placements });
   }
   history(): Promise<HistoryEntry[]> { return this.call("history"); }
+  setCheckpoint(version: number, label: string): Promise<HistoryEntry[]> {
+    return this.call("setCheckpoint", { version, label });
+  }
   panelsAt(version: number): Promise<LivePanel[]> { return this.call("panelsAt", { version }); }
   makeLatest(version: number): Promise<LivePanel[]> { return this.call("makeLatest", { version }); }
   intent(text: string): Promise<IntentOutcome> { return this.call("intent", { text }); }

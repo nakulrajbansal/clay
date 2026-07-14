@@ -286,6 +286,8 @@ CREATE TABLE IF NOT EXISTS sys.suggestions(
   state TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sys.settings(
   key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS sys.checkpoints(
+  version INTEGER PRIMARY KEY, label TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sys.attempts(
   id TEXT PRIMARY KEY, at TEXT NOT NULL, intent_text TEXT NOT NULL,
   outcome TEXT NOT NULL, error_code TEXT);

@@ -3,6 +3,7 @@
 // jump to (render the app as it was, read-only) or restore to (rewind the
 // live app). No model call, no data risk — a trusted read over the version
 // log (created_at / intent_text / summary per version, ADR-007 linear).
+import { useState } from "react";
 import type { HistoryEntry } from "@clay/kernel";
 
 export function relTime(iso: string): string {
@@ -22,9 +23,14 @@ export function HistoryView(props: {
   current: number;               // scrubbed version, or head
   onJump: (version: number) => void;
   onRestore: (version: number) => void;
+  onSetCheckpoint: (version: number, label: string) => void;
   onClose: () => void;
 }): React.JSX.Element {
   const entries = [...props.history].reverse();   // newest first
+  const [editing, setEditing] = useState<number | null>(null);
+  const [draft, setDraft] = useState("");
+  const startEdit = (v: number, label: string): void => { setEditing(v); setDraft(label); };
+  const save = (v: number): void => { props.onSetCheckpoint(v, draft); setEditing(null); };
   return (
     <div className="historyview" role="dialog" aria-label="App history">
       <div className="historyview-header">
@@ -51,6 +57,7 @@ export function HistoryView(props: {
                 <div className="tl-card">
                   <div className="tl-meta">
                     <span className="tl-ver">v{e.version}</span>
+                    {e.label ? <span className="tl-label">{e.label}</span> : null}
                     {isHead ? <span className="tl-now">now</span> : null}
                     {isCurrent && !isHead ? <span className="tl-viewing">viewing</span> : null}
                     <span className="tl-time">{relTime(e.created_at)}</span>
@@ -59,16 +66,39 @@ export function HistoryView(props: {
                     <p className="tl-intent">“{e.intent_text}”</p>
                   ) : null}
                   <p className="tl-summary">{e.summary}</p>
-                  {!isHead ? (
-                    <div className="tl-actions">
-                      <button className="link" onClick={() => props.onJump(e.version)}>
-                        Jump here
-                      </button>
-                      <button className="link" onClick={() => props.onRestore(e.version)}>
-                        Rewind to here
-                      </button>
+                  {editing === e.version ? (
+                    <div className="tl-name">
+                      <input
+                        autoFocus
+                        value={draft}
+                        maxLength={60}
+                        placeholder="Name this moment…"
+                        onChange={ev => setDraft(ev.target.value)}
+                        onKeyDown={ev => {
+                          if (ev.key === "Enter") save(e.version);
+                          if (ev.key === "Escape") setEditing(null);
+                        }}
+                      />
+                      <button className="link" onClick={() => save(e.version)}>Save</button>
+                      <button className="link" onClick={() => setEditing(null)}>Cancel</button>
                     </div>
-                  ) : null}
+                  ) : (
+                    <div className="tl-actions">
+                      <button className="link" onClick={() => startEdit(e.version, e.label ?? "")}>
+                        {e.label ? "Rename" : "Name this"}
+                      </button>
+                      {!isHead ? (
+                        <>
+                          <button className="link" onClick={() => props.onJump(e.version)}>
+                            Jump here
+                          </button>
+                          <button className="link" onClick={() => props.onRestore(e.version)}>
+                            Rewind to here
+                          </button>
+                        </>
+                      ) : null}
+                    </div>
+                  )}
                 </div>
               </li>
             );

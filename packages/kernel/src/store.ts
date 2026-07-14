@@ -66,7 +66,7 @@ export type VersionEntry = {
   migration: MigrationPlanT | null;
 };
 
-export type HistoryEntry = Omit<VersionEntry, "migration">;
+export type HistoryEntry = Omit<VersionEntry, "migration"> & { label?: string };
 
 const qid = (name: string): string => `"${name}"`;
 
@@ -327,15 +327,33 @@ export class ClayStore {
     return out;
   }
 
-  /** The full linear chain, oldest first (history view / time slider). */
+  /** The full linear chain, oldest first (history view / time slider).
+   * Joins any user-set checkpoint label (named moments on the timeline). */
   history(): HistoryEntry[] {
     return this.driver.select(
-      `SELECT version, parent, created_at, intent_text, summary
-       FROM sys.version_log ORDER BY version`).map(r => ({
+      `SELECT v.version, v.parent, v.created_at, v.intent_text, v.summary, c.label
+       FROM sys.version_log v
+       LEFT JOIN sys.checkpoints c ON c.version = v.version
+       ORDER BY v.version`).map(r => ({
       version: Number(r.version), parent: Number(r.parent),
       created_at: String(r.created_at), intent_text: String(r.intent_text),
       summary: String(r.summary),
+      ...(r.label != null ? { label: String(r.label) } : {}),
     }));
+  }
+
+  /** Name a moment on the timeline (checkpoint). Empty label clears it.
+   * Labels live in sys, never in the data substrate (P1). */
+  setCheckpoint(version: number, label: string): void {
+    const trimmed = label.trim().slice(0, 60);
+    if (trimmed === "") {
+      this.driver.exec("DELETE FROM sys.checkpoints WHERE version = ?", [version]);
+      return;
+    }
+    this.driver.exec(
+      `INSERT INTO sys.checkpoints(version, label, created_at) VALUES (?, ?, ?)
+       ON CONFLICT(version) DO UPDATE SET label = excluded.label`,
+      [version, trimmed, nowIso()]);
   }
 
   /** Last n commit summaries, newest first (S1 context, doc 05 §1). */
@@ -384,6 +402,7 @@ export class ClayStore {
           this.driver.exec("DELETE FROM sys.version_log WHERE version > ?", [target]);
           this.driver.exec("DELETE FROM sys.panel_blobs WHERE version > ?", [target]);
           this.driver.exec("DELETE FROM sys.panel_tombstones WHERE version > ?", [target]);
+          this.driver.exec("DELETE FROM sys.checkpoints WHERE version > ?", [target]);
         }
         this.setCurrentVersion(target);
       });

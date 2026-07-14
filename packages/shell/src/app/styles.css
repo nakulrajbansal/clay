@@ -162,6 +162,12 @@ button.link.danger { color: var(--danger); }
 .tl-intent { margin: 0 0 4px; font-size: 13.5px; color: var(--text); font-weight: 500; }
 .tl-summary { margin: 0; font-size: 13px; color: var(--text-2); line-height: 1.45; }
 .tl-actions { display: flex; gap: 14px; margin-top: 9px; }
+.tl-label { font-size: 11px; font-weight: 700; color: var(--accent-text);
+  background: var(--accent-soft); border: 1px solid #e2e0fb; border-radius: 999px; padding: 2px 9px; }
+.tl-name { display: flex; gap: 10px; align-items: center; margin-top: 9px; }
+.tl-name input { flex: 1; min-width: 0; border: 1px solid var(--accent); border-radius: 8px;
+  padding: 6px 10px; font: inherit; }
+.tl-name input:focus { outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
 
 /* empty canvas — the moat, front and center (nothing → describe → app) */
 .empty-canvas { grid-column: 1 / -1; display: flex; flex-direction: column;

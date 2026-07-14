@@ -589,6 +589,7 @@ export function App(): React.JSX.Element {
           current={scrub?.version ?? head}
           onJump={v => { void scrubTo(v); setShowHistory(false); }}
           onRestore={v => void restoreTo(v)}
+          onSetCheckpoint={(v, label) => void client().setCheckpoint(v, label).then(setHistory)}
           onClose={() => setShowHistory(false)}
         />
       ) : null}

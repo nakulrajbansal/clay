@@ -156,6 +156,9 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       return mustStore().livePanels();
     case "history":
       return mustStore().history();
+    case "setCheckpoint":
+      mustStore().setCheckpoint(Number(p.version), String(p.label ?? ""));
+      return mustStore().history();
     case "panelsAt":
       return mustStore().livePanels(Number(p.version));
     case "makeLatest": {
