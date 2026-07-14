@@ -153,7 +153,11 @@ type TableColumn = {
 function buildTable(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
   const columns = (Array.isArray(props.columns) ? props.columns : []) as TableColumn[];
   const rows = (Array.isArray(props.rows) ? props.rows : []) as Record<string, unknown>[];
+  const wrap = el(ctx, "div", "clay-table-wrap");
   const table = el(ctx, "table", "clay-table");
+  // Give each column a floor so a narrow panel with many columns scrolls
+  // horizontally (every column stays reachable) instead of cramming them.
+  if (columns.length > 4) table.style.minWidth = `${columns.length * 96}px`;
   const thead = el(ctx, "thead");
   const headRow = el(ctx, "tr");
   for (const col of columns) {
@@ -185,7 +189,8 @@ function buildTable(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
     tbody.appendChild(tr);
   }
   table.appendChild(tbody);
-  return table;
+  wrap.appendChild(table);
+  return wrap;
 }
 
 function buildComponent(ctx: Ctx, node: VNode): HTMLElement {

@@ -17,6 +17,7 @@ const PANEL_CSS = `
   body { margin: 0; font: 13px/1.55 var(--font);
     color: var(--text); padding: 12px; -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility; }
+  .clay-table-wrap { width: 100%; overflow-x: auto; }
   .clay-table { width: 100%; border-collapse: collapse; }
   .clay-table th { text-align: left; font-size: 10.5px; text-transform: uppercase;
     letter-spacing: .05em; font-weight: 600; color: var(--text-3);
