@@ -3,6 +3,12 @@
 // then the ready-made templates. Seeding is local and instant.
 import { STARTER_SHELLS, type StarterShellId } from "../shells/seed";
 
+// A quiet icon per template — enough to make the choices inviting, not loud.
+const SHELL_ICONS: Record<string, string> = {
+  tracker: "🎯", log: "📆", dashboard: "📊",
+  small_business: "🏪", crm: "🤝", financials: "💰", staff: "🗓️",
+};
+
 export function Onboarding(props: {
   onPick: (id: StarterShellId) => void;
   busy: boolean;
@@ -42,6 +48,7 @@ export function Onboarding(props: {
             disabled={props.busy}
             onClick={() => props.onPick(shell.id)}
           >
+            <span className="shell-card-icon" aria-hidden="true">{SHELL_ICONS[shell.id] ?? "✦"}</span>
             <span className="shell-name">{shell.name}</span>
             <span className="shell-tagline">{shell.tagline}</span>
           </button>
