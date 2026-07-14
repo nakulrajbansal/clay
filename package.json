@@ -9,5 +9,8 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "regression": "pnpm --filter @clay/mutation regression"
+  },
+  "devDependencies": {
+    "playwright": "^1.61.1"
   }
 }

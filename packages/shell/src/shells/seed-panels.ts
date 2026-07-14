@@ -245,7 +245,7 @@ const JOB_STAGES = `["lead", "scheduled", "in_progress", "done", "invoiced"]`;
 
 const sb_jobs_board: PanelBlobInput = {
   panel_id: "sb_jobs_board", title: "Jobs board · drag a job between stages",
-  placement: { region: "main", order: 0 },
+  placement: { region: "main", order: 0, w: 2 },
   declared_queries: [{ from: "jobs" }],
   declared_writes: ["jobs"],
   code: `export default function (clay) {
@@ -365,9 +365,10 @@ const sb_add_job: PanelBlobInput = {
 type Q = PanelBlobInput["declared_queries"][number];
 const panel = (
   panel_id: string, title: string, region: "top" | "main" | "side", order: number,
-  declared_queries: Q[], declared_writes: string[], code: string,
+  declared_queries: Q[], declared_writes: string[], code: string, w?: 1 | 2,
 ): PanelBlobInput => ({
-  panel_id, title, placement: { region, order }, declared_queries, declared_writes, code,
+  panel_id, title, placement: { region, order, ...(w === 2 ? { w: 2 } : {}) },
+  declared_queries, declared_writes, code,
 });
 
 // ---------- Sales CRM ----------
@@ -418,7 +419,7 @@ const crm = [
         badge: r.value ? clay.compute.formatCurrency(r.value) : null })) }));
     clay.ui.render(h(Board, { groups, onCardMove: move }));
   });
-}`),
+}`, 2),
   panel("crm_deals_table", "All deals", "main", 1,
     [{ from: "deals", orderBy: [{ field: "expected_close", dir: "asc" }] }], [],
     `export default function (clay) {
@@ -539,7 +540,7 @@ const financials = [
         subtitle: r.due ? "due " + r.due : "", badge: r.amount ? clay.compute.formatCurrency(r.amount) : null })) }));
     clay.ui.render(h(Board, { groups, onCardMove: move }));
   });
-}`),
+}`, 2),
   panel("fin_bills", "Unpaid bills", "side", 0,
     [{ from: "bills", where: [{ field: "status", op: "eq", value: "unpaid" }], orderBy: [{ field: "due", dir: "asc" }] }], [],
     `export default function (clay) {
@@ -591,7 +592,7 @@ const staff = [
         subtitle: r.date + " " + (r.start_time || ""), badge: r.role })) }));
     clay.ui.render(h(Board, { groups, onCardMove: move }));
   });
-}`),
+}`, 2),
   panel("staff_shifts", "All shifts", "main", 1,
     [{ from: "shifts", orderBy: [{ field: "date", dir: "asc" }] }], [],
     `export default function (clay) {

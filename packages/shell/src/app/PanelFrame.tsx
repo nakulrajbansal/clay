@@ -78,9 +78,9 @@ const PANEL_CSS = `
   .clay-bar-fill.clay-tone-gray { background: #a8a29e; }
   .clay-bar-caption { font-size: 11px; color: #78716c; }
   /* view components: kanban board + card grid */
-  .clay-board { display: flex; gap: 10px; align-items: flex-start; overflow-x: auto; }
-  .clay-board-col { flex: 1; min-width: 150px; background: #fafaf9;
-    border: 1px solid #f0efed; border-radius: 10px; padding: 8px; }
+  .clay-board { display: flex; gap: 8px; align-items: flex-start; overflow-x: auto; }
+  .clay-board-col { flex: 1 1 0; min-width: 108px; background: #fafaf9;
+    border: 1px solid #f0efed; border-radius: 10px; padding: 7px; }
   .clay-board-header { display: flex; justify-content: space-between; align-items: center;
     font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
     color: #78716c; padding: 2px 4px 8px; }
