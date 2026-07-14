@@ -124,6 +124,33 @@ describe("BYO request shape", () => {
     expect(result.plan.panels[0]!.declared_queries[0]).toEqual({ from: "projects" });
   });
 
+  it("over-length summary/detail/assumptions are clipped, not failed", async () => {
+    // exactly the cascade seen in live traces: a merely-too-long assumption
+    // must NOT fail Zod (which would burn the repair round on a formatting
+    // slip and leave a real issue unrepairable).
+    const wire = JSON.stringify({
+      api: 1, summary: "S".repeat(400),
+      user_facing_diff: [{ kind: "add_panel", detail: "D".repeat(300) }],
+      clarifying_question: null,
+      assumptions: ["A".repeat(400), "B".repeat(400), "c", "d", "e", "f", "g"],
+      migration: null,
+      panels: [{
+        panel_id: "p_ok", title: "P", placement: { region: "main", order: 0 },
+        code: "export default function(clay){}",
+        declared_queries: [], declared_writes: [],
+      }],
+      remove_panels: [], confidence: 0.9,
+    });
+    const { fetchFn } = fakeFetch(200, anthropicBody(wire));
+    const client = new MutationClient({ mode: "byo", apiKey: "k" }, { fetchFn });
+    const result = await client.requestPlan(ctx());
+    if (!result.ok) throw new Error(`expected ok, got ${JSON.stringify(result.error)}`);
+    expect(result.plan.summary.length).toBeLessThanOrEqual(200);
+    expect(result.plan.user_facing_diff[0]!.detail.length).toBeLessThanOrEqual(120);
+    expect(result.plan.assumptions).toHaveLength(5);           // capped
+    expect(result.plan.assumptions[0]!.length).toBeLessThanOrEqual(150);
+  });
+
   it("malformed inner JSON -> E_PARSE", async () => {
     const wire = JSON.stringify({
       api: 1, summary: "x", user_facing_diff: [], clarifying_question: null,

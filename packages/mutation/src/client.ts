@@ -28,6 +28,30 @@ function stripAnnotations(node: unknown): unknown {
 const apiSchema = stripAnnotations(apiSchemaRaw);
 
 /**
+ * Trim display strings to the constitution's limits BEFORE Zod, so a merely
+ * over-long summary/detail/assumption never fails validation and burns the
+ * single repair round — which then leaves a REAL issue unrepairable and the
+ * whole reshape failing (observed repeatedly in live traces). Truncation is
+ * lossless in intent: these fields are human-facing prose, not data.
+ */
+function clip(s: unknown, max: number): unknown {
+  return typeof s === "string" && s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+export function normalizeApiPlan(input: unknown): unknown {
+  if (!input || typeof input !== "object") return input;
+  const p = { ...(input as Record<string, unknown>) };
+  if (typeof p.summary === "string") p.summary = clip(p.summary, 200);
+  if (Array.isArray(p.assumptions))
+    p.assumptions = p.assumptions.slice(0, 5).map(a => clip(a, 150));
+  if (Array.isArray(p.user_facing_diff))
+    p.user_facing_diff = p.user_facing_diff.map(d =>
+      d && typeof d === "object"
+        ? { ...(d as Record<string, unknown>), detail: clip((d as { detail?: unknown }).detail, 120) }
+        : d);
+  return p;
+}
+
+/**
  * The API grammar carries the variable-shape nested parts (migration, each
  * declared_queries entry) as JSON STRINGS to stay under the grammar cap
  * while every object stays closed (G1/ADR-013). Parse them back before Zod.
@@ -162,7 +186,7 @@ export class MutationClient {
 
     let json: unknown;
     try {
-      json = hydrateApiPlan(JSON.parse(raw));
+      json = normalizeApiPlan(hydrateApiPlan(JSON.parse(raw)));
     } catch (e) {
       return { ok: false, error: { code: "E_PARSE",
         message: `model output is not parseable: ${String(e)}`, raw } };

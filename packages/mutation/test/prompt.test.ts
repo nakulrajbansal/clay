@@ -27,6 +27,8 @@ describe("system prompt", () => {
       "NEVER emit destructive operations",
       "## Get it right the first time",             // preemptive constraints
       "panel_id is snake_case",
+      "MUST be in that panel's declared_writes",     // declared_writes discipline
+      "cannot resolve a variable to a literal",      // wildcard-for-id-filters guidance
       "## Output encoding",                         // wire note (JSON strings)
       "transmitted as JSON STRINGS",
       "## Exemplars",                               // §6

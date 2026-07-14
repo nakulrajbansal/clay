@@ -2,7 +2,9 @@
 // Composable primitives (ADR-016): Box/Text/Bar/Scene render safely and
 // compose into layouts the named components can't express (a Gantt).
 import { describe, expect, it } from "vitest";
-import { h, render, Box, Text, Bar, Scene, Stack, Board, Cards, Timeline } from "../src/index";
+import {
+  h, render, Box, Text, Bar, Scene, Stack, Board, Cards, Timeline, Badge, Button,
+} from "../src/index";
 
 function mount(vnode: Parameters<typeof render>[0]): HTMLElement {
   const c = document.createElement("div");
@@ -138,6 +140,40 @@ describe("Cards", () => {
     expect(fields).toHaveLength(2);
     expect(fields[1]!.textContent).toContain("Owed");
     expect(fields[1]!.textContent).toContain("$1,200");
+  });
+});
+
+describe("interactivity (from live diagnostics)", () => {
+  it("Badge fires onClick and marks itself clickable (was silently dropped)", () => {
+    let clicks = 0;
+    const c = mount(h(Badge, { label: "todo", tone: "gray", onClick: () => { clicks++; } }));
+    const badge = c.querySelector<HTMLElement>(".clay-badge")!;
+    expect(badge.className).toContain("clay-clickable");
+    badge.click();
+    expect(clicks).toBe(1);
+  });
+
+  it("a non-clickable Badge has no click affordance", () => {
+    const c = mount(h(Badge, { label: "done", tone: "green" }));
+    expect(c.querySelector(".clay-badge")!.className).not.toContain("clay-clickable");
+  });
+
+  it("a Box with onClick becomes clickable with a pointer cursor", () => {
+    let clicked = false;
+    const c = mount(h(Box, { onClick: () => { clicked = true; } }, h(Text, { value: "row" })));
+    const box = c.querySelector<HTMLElement>(".clay-box")!;
+    expect(box.className).toContain("clay-clickable");
+    box.click();
+    expect(clicked).toBe(true);
+  });
+
+  it("Button clicks still work and are clickable", () => {
+    let n = 0;
+    const c = mount(h(Button, { label: "Go", onClick: () => { n++; } }));
+    const btn = c.querySelector<HTMLElement>("button")!;
+    expect(btn.className).toContain("clay-clickable");
+    btn.click();
+    expect(n).toBe(1);
   });
 });
 

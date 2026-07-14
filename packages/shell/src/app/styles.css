@@ -73,8 +73,11 @@ button.link.danger { color: #991b1b; }
   text-transform: uppercase; letter-spacing: .05em; color: #78716c;
   border-bottom: 1px solid #f5f5f4;
 }
-.panel-frame iframe { display: block; width: 100%; height: 260px; border: 0; }
-.region-top .panel-frame iframe { height: 130px; }
+/* height is a fallback only until the panel reports its content height
+   (PanelFrame sets an inline height from the clay_resize message) */
+.panel-frame iframe { display: block; width: 100%; height: 180px; border: 0;
+  transition: height .12s ease; }
+.region-top .panel-frame iframe { height: 90px; }
 .panel-preview { border: 2px dashed #6366f1; }
 .panel-frame { position: relative; }
 .panel-boundary {

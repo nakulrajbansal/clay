@@ -118,16 +118,30 @@ function applyTokensAndHandlers(node: HTMLElement, props: Record<string, unknown
   if (emphasis === "solid" || emphasis === "soft") node.classList.add(`clay-emphasis-${emphasis}`);
   for (const [prop, event] of Object.entries(HANDLERS)) {
     const fn = props[prop];
-    if (typeof fn === "function")
+    if (typeof fn === "function") {
       node.addEventListener(event, (e) => { e.preventDefault(); (fn as (e: Event) => void)(e); });
+      // interactive elements get the pointer cursor + hover affordance
+      if (event === "click") node.classList.add("clay-clickable");
+    }
   }
   // style/class/id and anything else are deliberately ignored (doc 03 §2)
 }
 
-function buildBadge(ctx: Ctx, label: unknown, tone: unknown): HTMLElement {
+function buildBadge(ctx: Ctx, label: unknown, tone: unknown,
+  onClick?: unknown): HTMLElement {
   const node = el(ctx, "span", "clay-badge");
   if (typeof tone === "string" && TONES.has(tone)) node.classList.add(`clay-tone-${tone}`);
   node.textContent = String(label ?? "");
+  // Badges are commonly used as click targets (cycle status, filter). Wire
+  // the handler and show it is interactive — silently dropping onClick was
+  // a real defect (clickable badges did nothing).
+  if (typeof onClick === "function") {
+    node.classList.add("clay-clickable", "clay-badge-clickable");
+    node.addEventListener("click", (e) => {
+      e.preventDefault();
+      (onClick as (e: Event) => void)(e);
+    });
+  }
   return node;
 }
 
@@ -176,7 +190,7 @@ function buildComponent(ctx: Ctx, node: VNode): HTMLElement {
   const { tag, props } = node;
   switch (tag) {
     case Table: return buildTable(ctx, props);
-    case Badge: return buildBadge(ctx, props.label, props.tone);
+    case Badge: return buildBadge(ctx, props.label, props.tone, props.onClick);
     case EmptyState: {
       const div = el(ctx, "div", "clay-empty");
       div.textContent = String(props.label ?? "");

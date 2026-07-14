@@ -2,7 +2,7 @@
 // sandbox="allow-scripts" gives an opaque origin — no cookies, storage, or
 // parent DOM; the CSP leaves no network path (doc 06 §2). The only channel
 // is one transferred MessagePort speaking the Bridge protocol.
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { portFromMessagePort, type Bridge, type LivePanel } from "@clay/kernel";
 // The fixed bootstrap, built to a single file and inlined (doc 06 §2).
 import runtimeBundle from "@clay/panel-runtime/iframe-bundle?raw";
@@ -96,7 +96,10 @@ const PANEL_CSS = `
   .clay-card-field { display: flex; justify-content: space-between; font-size: 12px; margin-top: 4px; }
   .clay-card-field-label { color: #a8a29e; }
   .clay-clickable { cursor: pointer; }
-  .clay-clickable:hover { border-color: #a8a29e; background: #fafaf9; }
+  /* subtle, color-safe hover — brightness works on tinted badges/boxes too */
+  .clay-clickable:hover { filter: brightness(0.96); }
+  .clay-card.clay-clickable:hover { border-color: #a8a29e; }
+  .clay-badge-clickable:hover { filter: brightness(0.92); }
 
   /* timeline / gantt */
   .clay-timeline { display: flex; flex-direction: column; gap: 6px; }
@@ -145,6 +148,7 @@ export function PanelFrame(props: {
 }): React.JSX.Element {
   const { panel, bridge, preview } = props;
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [height, setHeight] = useState<number | null>(null);
 
   useEffect(() => {
     const iframe = iframeRef.current;
@@ -162,9 +166,22 @@ export function PanelFrame(props: {
       }, portFromMessagePort(channel.port1));
     };
     iframe.addEventListener("load", onLoad);
+
+    // Auto-height: size the iframe to its content (no scrollbars, no
+    // wasted space). The panel posts clay_resize from inside the sandbox.
+    const onMessage = (e: MessageEvent): void => {
+      if (e.source !== iframe.contentWindow) return;
+      const d = e.data as { kind?: string; height?: number } | null;
+      if (d && d.kind === "clay_resize" && typeof d.height === "number") {
+        setHeight(Math.max(48, Math.min(4000, Math.ceil(d.height))));
+      }
+    };
+    window.addEventListener("message", onMessage);
+
     return (): void => {
       detached = true;
       iframe.removeEventListener("load", onLoad);
+      window.removeEventListener("message", onMessage);
       bridge.detachPanel(panel.panel_id);
     };
   }, [panel, bridge]);
@@ -180,6 +197,7 @@ export function PanelFrame(props: {
         title={panel.panel_id}
         sandbox="allow-scripts"
         srcDoc={buildSrcdoc()}
+        style={height !== null ? { height: `${height}px` } : undefined}
       />
       {props.fault ? (
         <div className="panel-boundary">

@@ -116,6 +116,29 @@ export function bootPanelRuntime(opts: PanelRuntimeOptions): void {
   let booted = false;
   let panelId = "";
   let seq = 0;
+  let lastHeight = -1;
+  // Auto-height: after each render, tell the shell how tall the content is
+  // so it can size the iframe to fit (no scrollbars, no wasted space). A
+  // no-op under jsdom/tests (window.parent === window) and guarded against
+  // resize churn (only report a meaningful change).
+  const reportHeight = (): void => {
+    try {
+      const w = (typeof window !== "undefined" ? window : undefined) as
+        (Window & typeof globalThis) | undefined;
+      if (!w || w.parent === w) return;
+      // Measure the CONTENT container, not documentElement — the latter is
+      // clamped to the viewport, so once the iframe grows it could never
+      // report a smaller height. Add the body padding (srcdoc: 10px each
+      // side) so nothing is clipped.
+      const content = (container as HTMLElement).scrollHeight || 0;
+      const height = content + 20;
+      if (content > 0 && Math.abs(height - lastHeight) > 2) {
+        lastHeight = height;
+        w.parent.postMessage(
+          { v: 1, kind: "clay_resize", panelId, height }, "*");
+      }
+    } catch { /* sizing is best-effort */ }
+  };
   const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
   const watchCbs = new Map<string, (rows: Record<string, unknown>[]) => void>();
   const eventCbs = new Map<string, Set<(payload: unknown) => void>>();
@@ -159,6 +182,7 @@ export function bootPanelRuntime(opts: PanelRuntimeOptions): void {
         render: (vnode: VChild): void => {
           rendered = true;
           render(vnode, container, { schema: boot.meta.schema as SchemaTable[] });
+          reportHeight();
         },
         toast: (msg: unknown, kind?: unknown): void => {
           call("ui.toast", kind === undefined ? [msg] : [msg, kind]).catch(reportError);

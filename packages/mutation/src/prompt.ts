@@ -113,8 +113,27 @@ Your plan is validated against a strict schema. Follow these exactly:
   null. Prefer adding a view over changing the schema.
 - Every db.query/db.watch shape you use appears in declared_queries;
   every table you insert/update/softDelete appears in declared_writes.
+  If ANY panel code path calls db.update/insert/softDelete on a table,
+  that table MUST be in that panel's declared_writes — this is the most
+  common validation failure. A panel that only reads has declared_writes
+  omitted or [].
+- When a watch/query filters by a value from a VARIABLE (a row id, a
+  captured constant, anything not a literal in the query object), declare
+  that query with the wildcard value {"$var": true}, e.g.
+  {"from":"items","where":[{"field":"id","op":"eq","value":{"$var":true}}]}.
+  The Validator cannot resolve a variable to a literal, so a concrete
+  declared value will NOT match and validation fails.
+- When you REVISE an existing panel, PRESERVE its working behavior — keep
+  its click handlers, forms, filters, and events unless the request is to
+  change them. Don't drop interactivity while restyling.
 - confidence < 0.5 => set clarifying_question and leave the plan empty;
-  otherwise decide and record the choice in assumptions.`;
+  otherwise decide and record the choice in assumptions.
+
+Interactivity: Badge, Box, Button, and Table rows all accept an onClick
+(Table also onRowClick) — use them directly for clickable status chips,
+selectable rows, etc. Clickable elements automatically show a pointer
+cursor. Prefer the Timeline/Board/Cards/Table components over rebuilding
+equivalents from Box/Text/Bar by hand.`;
 
 export function buildSystemPrompt(): string {
   const exemplars = EXEMPLARS.map((e, i) =>
