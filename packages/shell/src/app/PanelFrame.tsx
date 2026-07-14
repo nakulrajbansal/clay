@@ -36,7 +36,10 @@ const PANEL_CSS = `
   .clay-tone-red, .clay-tone-danger { background: #fdeaea; color: #c02626; }
   .clay-tone-gray, .clay-tone-default { background: #f0f0f3; color: var(--text-2); }
   .clay-tone-accent { background: var(--accent-soft); color: var(--accent-text); }
-  .clay-empty { color: var(--text-3); padding: 22px 6px; text-align: center; }
+  .clay-empty { color: var(--text-3); padding: 26px 12px; text-align: center;
+    font-size: 12.5px; }
+  .clay-empty::before { content: "◇"; display: block; font-size: 18px; color: var(--border-2);
+    margin: 0 auto 8px; }
   .clay-stack > * + * { margin-top: 8px; }
   /* KPIs sit in one row when there's room, wrap cleanly otherwise */
   .clay-grid { display: grid; gap: 12px;
@@ -56,11 +59,15 @@ const PANEL_CSS = `
     font-variant-numeric: tabular-nums; white-space: nowrap; }
   .clay-form { display: flex; flex-direction: column; gap: 11px; }
   .clay-field { display: flex; flex-direction: column; gap: 4px; }
-  .clay-field-label { font-size: 11px; font-weight: 500; color: var(--text-2); }
-  .clay-input, .clay-select { border: 1px solid var(--border-2); border-radius: 8px;
-    padding: 8px 10px; font: inherit; background: #fff; transition: border-color .1s, box-shadow .1s; }
-  .clay-input:focus, .clay-select:focus { outline: none; border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-soft); }
+  .clay-field-label { font-size: 11px; font-weight: 600; color: var(--text-2);
+    letter-spacing: .01em; }
+  .clay-input, .clay-select, .clay-form textarea {
+    border: 1px solid var(--border-2); border-radius: 9px;
+    padding: 9px 11px; font: inherit; background: #fff; color: var(--text);
+    transition: border-color .12s, box-shadow .12s; }
+  .clay-input:hover, .clay-select:hover, .clay-form textarea:hover { border-color: #d7d5e6; }
+  .clay-input:focus, .clay-select:focus, .clay-form textarea:focus { outline: none;
+    border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   .clay-button { border: 0; border-radius: 10px; padding: 9px 15px; font: inherit;
     font-weight: 600; background: linear-gradient(180deg, #7d7aec, #5f5cdf); color: #fff;
     cursor: pointer; box-shadow: 0 2px 8px rgba(91,87,235,.35), inset 0 1px 0 rgba(255,255,255,.18);
