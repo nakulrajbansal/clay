@@ -241,37 +241,54 @@ const sb_upcoming: PanelBlobInput = {
 };
 
 // The multi-view star: jobs as a KANBAN...
+const JOB_STAGES = `["lead", "scheduled", "in_progress", "done", "invoiced"]`;
+
 const sb_jobs_board: PanelBlobInput = {
-  panel_id: "sb_jobs_board", title: "Jobs board",
+  panel_id: "sb_jobs_board", title: "Jobs board · click a job to advance",
   placement: { region: "main", order: 0 },
   declared_queries: [{ from: "jobs" }],
-  declared_writes: [],
+  declared_writes: ["jobs"],
   code: `export default function (clay) {
-  const cols = ["lead", "scheduled", "in_progress", "done", "invoiced"];
+  const cols = ${JOB_STAGES};
   const tones = ${JOB_TONES};
+  const advance = async (card) => {
+    const i = cols.indexOf(card.status);
+    const next = cols[Math.min(i + 1, cols.length - 1)];
+    if (next === card.status) return;
+    try { await clay.db.update("jobs", card.id, { status: next }); clay.ui.toast(card.title + " → " + next.split("_").join(" "), "success"); }
+    catch (e) { clay.ui.toast("Could not update: " + e.message, "danger"); }
+  };
   clay.db.watch({ from: "jobs" }, (rows) => {
     const groups = cols.map((s) => ({
       key: s, label: s.split("_").join(" "), tone: tones[s],
       cards: rows.filter((r) => r.status === s).map((r) => ({
-        title: r.title, subtitle: r.customer,
+        id: r.id, status: r.status, title: r.title, subtitle: r.customer,
         badge: r.price ? clay.compute.formatCurrency(r.price) : null })),
     }));
-    clay.ui.render(h(Board, { groups }));
+    clay.ui.render(h(Board, { groups, onCardClick: advance }));
   });
 }`,
 };
 
 // ...and the SAME jobs as a TABLE (multi-view over one dataset).
 const sb_jobs_table: PanelBlobInput = {
-  panel_id: "sb_jobs_table", title: "All jobs",
+  panel_id: "sb_jobs_table", title: "All jobs · click to advance stage",
   placement: { region: "main", order: 1 },
   declared_queries: [{ from: "jobs", orderBy: [{ field: "scheduled", dir: "asc" }] }],
-  declared_writes: [],
+  declared_writes: ["jobs"],
   code: `export default function (clay) {
+  const cols = ${JOB_STAGES};
+  const advance = async (row) => {
+    const i = cols.indexOf(row.status);
+    const next = cols[Math.min(i + 1, cols.length - 1)];
+    if (next === row.status) return;
+    try { await clay.db.update("jobs", row.id, { status: next }); clay.ui.toast(row.title + " → " + next.split("_").join(" "), "success"); }
+    catch (e) { clay.ui.toast("Could not update: " + e.message, "danger"); }
+  };
   clay.db.watch({ from: "jobs", orderBy: [{ field: "scheduled", dir: "asc" }] }, (rows) => {
     clay.ui.render(rows.length === 0
       ? h(EmptyState, { label: "Add your first job on the right" })
-      : h(Table, { sortable: true, rows, columns: [
+      : h(Table, { sortable: true, rows, onRowClick: advance, columns: [
           { field: "title", label: "Job" },
           { field: "customer", label: "Customer" },
           { field: "status", label: "Status", badge: { field: "status", map: ${JOB_TONES} } },
@@ -533,24 +550,35 @@ const financials = [
         { field: "on", label: "Date", format: "date" }] }));
   });
 }`),
-  panel("fin_invoices", "Invoices", "main", 2,
-    [{ from: "invoices", orderBy: [{ field: "due", dir: "asc" }] }], [],
+  panel("fin_invoices", "Invoices · click to advance status", "main", 2,
+    [{ from: "invoices", orderBy: [{ field: "due", dir: "asc" }] }], ["invoices"],
     `export default function (clay) {
+  const flow = { draft: "sent", sent: "paid", overdue: "paid", paid: "paid" };
+  const advance = async (row) => {
+    const next = flow[row.status] || "sent";
+    if (next === row.status) return;
+    try { await clay.db.update("invoices", row.id, { status: next }); clay.ui.toast(row.customer + " → " + next, "success"); }
+    catch (e) { clay.ui.toast("Could not update: " + e.message, "danger"); }
+  };
   clay.db.watch({ from: "invoices", orderBy: [{ field: "due", dir: "asc" }] }, (rows) => {
     clay.ui.render(rows.length === 0 ? h(EmptyState, { label: "No invoices yet" })
-      : h(Table, { sortable: true, rows, columns: [
+      : h(Table, { sortable: true, rows, onRowClick: advance, columns: [
         { field: "customer", label: "Customer" }, { field: "amount", label: "Amount", format: "currency" },
         { field: "status", label: "Status", badge: { field: "status", map: { draft: "gray", sent: "amber", paid: "green", overdue: "red" } } },
         { field: "due", label: "Due", format: "date" }] }));
   });
 }`),
-  panel("fin_bills", "Unpaid bills", "side", 0,
-    [{ from: "bills", where: [{ field: "status", op: "eq", value: "unpaid" }], orderBy: [{ field: "due", dir: "asc" }] }], [],
+  panel("fin_bills", "Unpaid bills · click to mark paid", "side", 0,
+    [{ from: "bills", where: [{ field: "status", op: "eq", value: "unpaid" }], orderBy: [{ field: "due", dir: "asc" }] }], ["bills"],
     `export default function (clay) {
   const q = { from: "bills", where: [{ field: "status", op: "eq", value: "unpaid" }], orderBy: [{ field: "due", dir: "asc" }] };
+  const pay = async (item) => {
+    try { await clay.db.update("bills", item.id, { status: "paid" }); clay.ui.toast("Paid: " + item.title, "success"); }
+    catch (e) { clay.ui.toast("Could not update: " + e.message, "danger"); }
+  };
   clay.db.watch(q, (rows) => {
     clay.ui.render(rows.length === 0 ? h(EmptyState, { label: "No unpaid bills" })
-      : h(Cards, { items: rows.map((b) => ({ title: b.vendor, subtitle: clay.compute.formatCurrency(b.amount || 0),
+      : h(Cards, { onItemClick: pay, items: rows.map((b) => ({ id: b.id, title: b.vendor, subtitle: clay.compute.formatCurrency(b.amount || 0),
           fields: [{ label: "Due", value: b.due || "-" }] })) }));
   });
 }`),
@@ -581,15 +609,22 @@ const staff = [
         { field: "start_time", label: "Start" }, { field: "end_time", label: "End" }] }));
   });
 }`),
-  panel("staff_board", "Shift board", "main", 0, [{ from: "shifts" }], [],
+  panel("staff_board", "Shift board · click to advance", "main", 0, [{ from: "shifts" }], ["shifts"],
     `export default function (clay) {
   const cols = ["scheduled", "confirmed", "completed"];
   const tones = { scheduled: "gray", confirmed: "accent", completed: "green" };
+  const advance = async (card) => {
+    const i = cols.indexOf(card.status);
+    const next = cols[Math.min(i + 1, cols.length - 1)];
+    if (next === card.status) return;
+    try { await clay.db.update("shifts", card.id, { status: next }); clay.ui.toast(card.title + " → " + next, "success"); }
+    catch (e) { clay.ui.toast("Could not update: " + e.message, "danger"); }
+  };
   clay.db.watch({ from: "shifts" }, (rows) => {
     const groups = cols.map((s) => ({ key: s, label: s, tone: tones[s],
-      cards: rows.filter((r) => r.status === s).map((r) => ({ title: r.employee,
+      cards: rows.filter((r) => r.status === s).map((r) => ({ id: r.id, status: r.status, title: r.employee,
         subtitle: r.date + " " + (r.start_time || ""), badge: r.role })) }));
-    clay.ui.render(h(Board, { groups }));
+    clay.ui.render(h(Board, { groups, onCardClick: advance }));
   });
 }`),
   panel("staff_shifts", "All shifts", "main", 1,

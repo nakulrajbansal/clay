@@ -136,6 +136,31 @@ describe("template interactivity: click to act (end-to-end through the Bridge)",
     document.body.replaceChildren();
   });
 
+  it("Small Business: clicking a job on the board advances its stage", async () => {
+    const { store, container } = await bootShellPanel("small_business", "sb_jobs_board");
+    await waitFor(() => container.textContent!.includes("Kitchen faucet fix"), "board");
+    // "Kitchen faucet fix" starts scheduled -> in_progress
+    [...container.querySelectorAll<HTMLElement>(".clay-card")]
+      .find(c => c.textContent!.includes("Kitchen faucet fix"))!.click();
+    await waitFor(() => store.query({ from: "jobs",
+      where: [{ field: "title", op: "eq", value: "Kitchen faucet fix" }] })[0]?.status
+      === "in_progress", "job advanced");
+    store.close();
+    document.body.replaceChildren();
+  });
+
+  it("Bookkeeping: clicking an unpaid bill marks it paid and removes it", async () => {
+    const { store, container } = await bootShellPanel("financials", "fin_bills");
+    await waitFor(() => container.textContent!.includes("Supply Co"), "bills");
+    [...container.querySelectorAll<HTMLElement>(".clay-card")]
+      .find(c => c.textContent!.includes("Supply Co"))!.click();
+    await waitFor(() => !container.textContent!.includes("Supply Co"), "bill left unpaid list");
+    expect(store.query({ from: "bills",
+      where: [{ field: "vendor", op: "eq", value: "Supply Co" }] })[0]?.status).toBe("paid");
+    store.close();
+    document.body.replaceChildren();
+  });
+
   it("CRM: clicking a follow-up marks it done and drops it from the open list", async () => {
     const { store, container } = await bootShellPanel("crm", "crm_today");
     await waitFor(() => container.textContent!.includes("Follow up on proposal"), "tasks");
