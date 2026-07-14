@@ -102,7 +102,7 @@ export class Observer {
         id: uuidv7(), kind: "flag_overdue", subject: table.name,
         intent: `add a view of ${table.name} that are overdue — past their `
           + `${dateCol.name} and not yet done — highlighted so they stand out`,
-        reason: `${n} ${table.name} are past their ${dateCol.name} and still open — surface the overdue ones?`,
+        reason: `${n} ${table.name} are overdue and still open — surface the overdue ones?`,
       });
     }
     return out;

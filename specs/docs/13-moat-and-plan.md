@@ -99,19 +99,20 @@ Ordered by (moat value × achievability × verifiability):
    *evolution timeline*: every version with the words you asked, what changed,
    and when — jump to any moment (read-only render) or rewind to it. The thin
    scrubber becomes a real, legible history. **[SHIPPED — HistoryView]**
-2. **Named checkpoints.** Let a user label a moment ("before invoicing") and
-   pin it on the timeline, so history has meaning, not just numbers. Needs a
-   small per-version label store (kept out of the data substrate).
+2. **Named checkpoints.** Label a moment ("before invoicing") and pin it on
+   the timeline, so history has meaning, not just numbers. A per-version
+   label store in sys (out of the data substrate). **[SHIPPED]**
 3. **Ambient reshaping v2 (B3).** Escalate the Observer from passive chips to
-   proactive, in-context, one-click transformation offers ("3 invoices are
-   overdue — add an Overdue view?"). The app meets you halfway. Local
-   heuristics only (P4): no extra model calls to notice.
-4. **One dataset ⇄ many views, made switchable (pillar 4).** A view-switcher
+   proactive, one-click offers ("3 tasks are overdue — surface them?";
+   "you only see a list — view them as a board?"), re-derived on a gentle
+   idle cadence so patterns from data entry are noticed on their own. Local
+   heuristics only (P4). **[SHIPPED]**
+4. **Fork-and-explore (B5).** Duplicate an app (schema + data + history +
+   panels) into a new one via the validated `.clay` export/import path into a
+   fresh OPFS namespace, then switch to it — try a big redesign without
+   risking the real app. Time/branching as a canvas. **[SHIPPED]**
+5. **One dataset ⇄ many views, made switchable (pillar 4).** A view-switcher
    affordance so the same rows flip between board / table / chart in place —
-   the "same data, many lenses" claim you can touch.
-5. **Fork-and-explore (B5).** Duplicate an app (schema + data + panels at the
-   current version) into a new app via the existing multi-app + `.clay`
-   machinery, so a big redesign can be tried without risking the real app.
-   Time/branching as a canvas — the largest bet, sequenced last.
+   the "same data, many lenses" claim you can touch. **[next]**
 
 Each ships tested (logic + a screenshot-verified render) and committed alone.

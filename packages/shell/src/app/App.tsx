@@ -18,7 +18,7 @@ import { PanelFrame } from "./PanelFrame";
 import { TimeSlider } from "./TimeSlider";
 import { AppSwitcher } from "./AppSwitcher";
 import {
-  createApp, currentApp, ensureLegacyAdopted, listApps, removeApp,
+  addForkEntry, createApp, currentApp, ensureLegacyAdopted, listApps, removeApp,
   setCurrentApp, shellName, type AppEntry,
 } from "./apps";
 import {
@@ -210,6 +210,21 @@ export function App(): React.JSX.Element {
   };
   const switchApp = (id: string): void => { setCurrentApp(id); reloadApp(); };
   const newApp = (): void => setPhase("onboarding");
+  // B5 fork-and-explore: duplicate the current app (data + history + panels)
+  // into a new one, then switch to it — experiment freely without risking the
+  // original. Uses the validated .clay export/import path in the worker.
+  const forkApp = async (): Promise<void> => {
+    const cur = currentApp();
+    const entry = addForkEntry(`${cur?.name ?? "My app"} (copy)`, cur?.shellId ?? "blank");
+    try {
+      await withTimeout(client().forkApp(entry.id), 20000, "Duplicating the app");
+    } catch {
+      removeApp(entry.id);
+      pushToast("Couldn’t duplicate this app.", "danger");
+      return;
+    }
+    reloadApp();   // boot the fork (its OPFS files are now populated)
+  };
   const deleteApp = async (id: string): Promise<void> => {
     const entry = apps.find(a => a.id === id);
     if (!window.confirm(
@@ -535,6 +550,7 @@ export function App(): React.JSX.Element {
         currentId={currentId}
         onSwitch={switchApp}
         onNew={newApp}
+        onFork={() => void forkApp()}
         onDelete={id => void deleteApp(id)}
       />
       {!persistent ? (

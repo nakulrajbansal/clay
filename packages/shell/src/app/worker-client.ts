@@ -49,6 +49,7 @@ export class WorkerClient {
       { apiKey: apiKey ?? undefined, backendUrl: backendUrl ?? undefined });
   }
   deleteApp(appId: string): Promise<null> { return this.call("deleteApp", { appId }); }
+  forkApp(newAppId: string): Promise<null> { return this.call("forkApp", { newAppId }); }
   status(): Promise<StatusInfo> { return this.call("status"); }
   seed(shellId: string): Promise<null> { return this.call("seed", { shellId }); }
   panels(): Promise<LivePanel[]> { return this.call("panels"); }

@@ -173,7 +173,7 @@ describe("overdue heuristic (ambient reshaping v2)", () => {
     store.insert("invoices", { client: "C", status: "paid", due_on: "2020-03-01" }); // terminal — ignored
     const s = store.suggestions().find(x => x.kind === "flag_overdue" && x.subject === "invoices");
     expect(s).toBeDefined();
-    expect(s!.reason).toContain("past their due_on");
+    expect(s!.reason).toContain("overdue");
     expect(s!.intent).toContain("overdue");
     store.close();
   });

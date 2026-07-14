@@ -133,6 +133,19 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       };
       return null;
     }
+    case "forkApp": {
+      // B5 fork-and-explore: copy the CURRENT app (schema + data + history +
+      // panels) into a brand-new app's OPFS files, via the same validated
+      // .clay export/import path. The current app is left untouched — the
+      // client boots the fork after a reload.
+      const newId = String(p.newAppId);
+      const s = mustStore();
+      const bytes = await s.exportArchive(s.getSetting<string>("shell_id") ?? "clay");
+      const openNew = async (): Promise<DbDriver> => (await openBrowserDriver(newId)).driver;
+      const result = await ClayStore.importArchive(bytes, openNew);
+      result.store.close();          // populated on disk; not the live store
+      return null;
+    }
     case "deleteApp": {
       // G4: delete one app's files. If it's the open one, close first.
       const appId = String(p.appId);

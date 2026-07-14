@@ -9,6 +9,7 @@ export function AppSwitcher(props: {
   currentId: string | null;
   onSwitch: (id: string) => void;
   onNew: () => void;
+  onFork: () => void;
   onDelete: (id: string) => void;
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);
@@ -40,6 +41,11 @@ export function AppSwitcher(props: {
               <button className="appbar-item" onClick={() => { setOpen(false); props.onNew(); }}>
                 + New app
               </button>
+              {current ? (
+                <button className="appbar-item" onClick={() => { setOpen(false); props.onFork(); }}>
+                  Duplicate “{current.name}”
+                </button>
+              ) : null}
               {current ? (
                 <button
                   className="appbar-item danger"

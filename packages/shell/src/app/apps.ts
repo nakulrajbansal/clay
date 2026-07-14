@@ -52,6 +52,15 @@ export function createApp(name: string, shellId: string): AppEntry {
   return entry;
 }
 
+/** Register a forked copy with a fresh id and make it current. Always a uuid
+ * (a fork is never the first app), so its OPFS files are its own. */
+export function addForkEntry(name: string, shellId: string): AppEntry {
+  const entry: AppEntry = { id: uuid(), name, shellId };
+  saveApps([...listApps(), entry]);
+  setCurrentApp(entry.id);
+  return entry;
+}
+
 export function renameApp(id: string, name: string): void {
   saveApps(listApps().map(a => (a.id === id ? { ...a, name } : a)));
 }
