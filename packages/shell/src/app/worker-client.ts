@@ -44,6 +44,10 @@ export class WorkerClient {
   terminate(): void { try { this.worker.terminate(); } catch { /* already gone */ } }
 
   boot(appId?: string): Promise<BootInfo> { return this.call("boot", { appId }); }
+  setModelAccess(apiKey: string | null, backendUrl: string | null): Promise<null> {
+    return this.call("setModelAccess",
+      { apiKey: apiKey ?? undefined, backendUrl: backendUrl ?? undefined });
+  }
   deleteApp(appId: string): Promise<null> { return this.call("deleteApp", { appId }); }
   status(): Promise<StatusInfo> { return this.call("status"); }
   seed(shellId: string): Promise<null> { return this.call("seed", { shellId }); }

@@ -20,6 +20,9 @@ import {
   createApp, currentApp, ensureLegacyAdopted, listApps, removeApp,
   setCurrentApp, shellName, type AppEntry,
 } from "./apps";
+import {
+  getApiKey, getBackendUrl, hasModelAccess, setApiKey, setBackendUrl,
+} from "./settings";
 
 type Phase = "loading" | "onboarding" | "main" | "error";
 
@@ -114,8 +117,20 @@ export function App(): React.JSX.Element {
         const cur = currentApp();                     // registry entry or null
         const boot = await withTimeout(wc.boot(cur?.id), 20_000, "Opening the app");
         setPersistent(boot.persistent);
-        setHasKey((await wc.getSetting<string>("byo_api_key")) !== null
-          || (await wc.getSetting<string>("backend_url")) !== null);
+
+        // Device-global model access (B1): migrate any legacy per-app key up
+        // to localStorage once, then push it to the worker. Shared by every
+        // app — no re-entry on switch.
+        if (!getApiKey()) {
+          const legacy = await wc.getSetting<string>("byo_api_key");
+          if (legacy) setApiKey(legacy);
+        }
+        if (!getBackendUrl()) {
+          const legacyB = await wc.getSetting<string>("backend_url");
+          if (legacyB) setBackendUrl(legacyB);
+        }
+        await wc.setModelAccess(getApiKey(), getBackendUrl());
+        setHasKey(hasModelAccess());
 
         // Existing single-app user with data but no registry: adopt it (G4).
         if (boot.seeded) ensureLegacyAdopted(true, boot.shellId);
@@ -320,15 +335,17 @@ export function App(): React.JSX.Element {
   };
 
   const saveKey = async (key: string): Promise<void> => {
-    await client().setSetting("byo_api_key", key);
-    setHasKey(true);
-    pushToast("API key saved locally", "success");
+    setApiKey(key || null);                                   // device-global
+    await client().setModelAccess(getApiKey(), getBackendUrl());
+    setHasKey(hasModelAccess());
+    pushToast("API key saved on this device — used by all your apps", "success");
   };
 
   const saveBackend = async (url: string): Promise<void> => {
-    await client().setSetting("backend_url", url || null);
-    setHasKey(url !== "" || (await client().getSetting<string>("byo_api_key")) !== null);
-    pushToast(url ? "Hosted backend set" : "Hosted backend cleared", "success");
+    setBackendUrl(url || null);                               // device-global
+    await client().setModelAccess(getApiKey(), getBackendUrl());
+    setHasKey(hasModelAccess());
+    pushToast(url ? "Hosted backend set for all apps" : "Hosted backend cleared", "success");
   };
 
   const head = history.length > 0 ? history[history.length - 1]!.version : 0;

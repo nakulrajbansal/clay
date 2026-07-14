@@ -32,6 +32,9 @@ let persistent = false;
 let persistRequested = false;
 let pending: PreviewHandle | null = null;
 let currentAppId: string | undefined;   // which app's OPFS files are open (G4)
+// Device-global model access (B1): set by the main thread from localStorage,
+// shared across every app, never persisted in an app DB.
+let modelAccess: { apiKey?: string; backendUrl?: string } = {};
 
 // A ring of recent pipeline traces the user can review/copy (the user
 // asked for logs of inputs -> processing -> outputs). Also mirrored to the
@@ -57,8 +60,8 @@ function dropPending(): void {
 async function runPipelineText(text: string): Promise<IntentOutcome> {
   dropPending();   // one mutation in flight per app (doc 05 §6)
   const s = mustStore();
-  const backendUrl = s.getSetting<string>("backend_url");
-  const apiKey = s.getSetting<string>("byo_api_key");
+  const backendUrl = modelAccess.backendUrl;
+  const apiKey = modelAccess.apiKey;
   // Hosted first (ADR-011): if a backend is configured, use it and no
   // browser key is needed. Otherwise fall back to BYO.
   const client = backendUrl
@@ -122,6 +125,13 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
         seeded: store.headVersion() > 0,
         shellId: store.getSetting<string>("shell_id") ?? null,
       };
+    }
+    case "setModelAccess": {
+      modelAccess = {
+        apiKey: p.apiKey ? String(p.apiKey) : undefined,
+        backendUrl: p.backendUrl ? String(p.backendUrl) : undefined,
+      };
+      return null;
     }
     case "deleteApp": {
       // G4: delete one app's files. If it's the open one, close first.
