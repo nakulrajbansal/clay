@@ -175,11 +175,11 @@ describe("hydrateApiPlan: auto-widen board/timeline panels", () => {
   const wOf = (plan: unknown): unknown =>
     ((plan as { panels: { placement: { w?: unknown } }[] }).panels[0]!.placement.w);
 
-  it("widens a Board panel to w:2 (a half-width kanban clips)", () => {
-    expect(wOf(panel("export default (clay)=>clay.ui.render(h(Board,{}))"))).toBe(2);
+  it("widens a Board panel to full width w:4 (a narrow kanban clips)", () => {
+    expect(wOf(panel("export default (clay)=>clay.ui.render(h(Board,{}))"))).toBe(4);
   });
-  it("widens a Timeline panel to w:2", () => {
-    expect(wOf(panel("h(Timeline,{items})"))).toBe(2);
+  it("widens a Timeline panel to full width w:4", () => {
+    expect(wOf(panel("h(Timeline,{items})"))).toBe(4);
   });
   it("leaves a plain table/chart panel at default width", () => {
     expect(wOf(panel("h(Table,{rows})"))).toBeUndefined();

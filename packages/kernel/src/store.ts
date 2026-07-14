@@ -26,7 +26,7 @@ type QueryT = import("@clay/schema").Query;
 export type PanelBlobInput = {
   panel_id: string;
   title: string;
-  placement: { region: "top" | "main" | "side"; order: number; w?: number };
+  placement: { region: "top" | "main" | "side"; order: number; w?: number; h?: number };
   code: string;
   declared_queries: QueryT[];
   declared_writes: string[];
@@ -105,8 +105,35 @@ export class ClayStore {
       "id" TEXT PRIMARY KEY, "table" TEXT NOT NULL, "row_id" TEXT NOT NULL,
       "at" TEXT NOT NULL, "before_json" TEXT NOT NULL)`);
     const store = new ClayStore(driver);
+    store.migrateLayoutScheme();
     store.loadRegistry();
     return store;
+  }
+
+  /**
+   * ADR-018: the main region went from a 2-column to a 4-column grid, so a
+   * stored width means a different fraction. Remap every panel blob's width
+   * ONCE (old half w:1 -> w:2, old full w:2 -> w:4) so existing layouts keep
+   * their proportions. Guarded by a settings flag; new apps skip it.
+   */
+  private migrateLayoutScheme(): void {
+    const done = this.driver.select(
+      "SELECT value_json FROM sys.settings WHERE key = 'layout_scheme'")[0];
+    if (done && String(done.value_json) === "2") return;
+    const rows = this.driver.select(
+      "SELECT version, panel_id, placement_json FROM sys.panel_blobs");
+    for (const r of rows) {
+      let pl: { w?: number } & Record<string, unknown>;
+      try { pl = JSON.parse(String(r.placement_json)); } catch { continue; }
+      const remap = pl.w === 1 ? 2 : pl.w === 2 ? 4 : undefined;
+      if (remap === undefined) continue;
+      pl.w = remap;
+      this.driver.exec(
+        "UPDATE sys.panel_blobs SET placement_json = ? WHERE version = ? AND panel_id = ?",
+        [JSON.stringify(pl), Number(r.version), String(r.panel_id)]);
+    }
+    this.driver.exec(
+      "INSERT OR REPLACE INTO sys.settings(key, value_json) VALUES ('layout_scheme', '2')");
   }
 
   /** G6 ring cap; public so tests can lower it. */
@@ -201,10 +228,11 @@ export class ClayStore {
         const untouched = preLive.filter(p =>
           !(input.panels ?? []).some(np => np.panel_id === p.panel_id)
           && !(input.removePanels ?? []).includes(p.panel_id));
-        // Layout width (ADR-017) is a direct-manipulation concern; a model
-        // reshape re-emits placement WITHOUT w, so preserve the panel's
-        // existing span unless the plan explicitly sets one.
-        const priorW = new Map(preLive.map(p => [p.panel_id, p.placement.w]));
+        // Layout size (ADR-017/018) is a direct-manipulation concern; a model
+        // reshape re-emits placement WITHOUT w/h, so preserve the panel's
+        // existing span AND height unless the plan explicitly sets one.
+        const priorSize = new Map(preLive.map(p =>
+          [p.panel_id, { w: p.placement.w, h: p.placement.h }]));
 
         if (input.migration) {
           validateMigrationPlan(input.migration, this.reg);
@@ -222,11 +250,13 @@ export class ClayStore {
            input.migration ? JSON.stringify(input.migration.inverse) : null]);
 
         for (const p of input.panels ?? []) {
-          const w = p.placement.w ?? priorW.get(p.panel_id);
-          const merged = w && w !== 1
-            ? { ...p, placement: { ...p.placement, w } }
-            : p;
-          this.writePanelBlob(version, merged);
+          const prior = priorSize.get(p.panel_id);
+          const w = p.placement.w ?? prior?.w;   // undefined = default (half)
+          const h = p.placement.h ?? prior?.h;
+          const placement = { ...p.placement };
+          if (w) placement.w = w; else delete placement.w;
+          if (h) placement.h = h; else delete placement.h;
+          this.writePanelBlob(version, { ...p, placement });
         }
         for (const id of input.removePanels ?? [])
           this.driver.exec(
@@ -278,20 +308,25 @@ export class ClayStore {
    * reshape by language share one history.
    */
   commitLayout(
-    placements: { panel_id: string; region: "top" | "main" | "side"; order: number; w?: number }[],
+    placements: { panel_id: string; region: "top" | "main" | "side"; order: number;
+      w?: number; h?: number }[],
   ): number {
     const live = new Map(this.livePanels().map(p => [p.panel_id, p]));
     const moved: PanelBlobInput[] = [];
     for (const pl of placements) {
       const p = live.get(pl.panel_id);
       if (!p) continue;
-      // width defaults to the panel's current span (preserved across reorder)
-      const w = pl.w ?? p.placement.w ?? 1;
-      const curW = p.placement.w ?? 1;
-      if (p.placement.region === pl.region && p.placement.order === pl.order && curW === w) continue;
+      // width/height default to the panel's current size (preserved across
+      // reorder); undefined width = default half (ADR-018)
+      const w = pl.w ?? p.placement.w;
+      const h = pl.h ?? p.placement.h;
+      if (p.placement.region === pl.region && p.placement.order === pl.order
+        && p.placement.w === w && p.placement.h === h) continue;
+      const placement: PanelBlobInput["placement"] = { region: pl.region, order: pl.order };
+      if (w) placement.w = w;
+      if (h) placement.h = h;
       moved.push({
-        panel_id: p.panel_id, title: p.title,
-        placement: { region: pl.region, order: pl.order, ...(w !== 1 ? { w } : {}) },
+        panel_id: p.panel_id, title: p.title, placement,
         code: p.code, declared_queries: p.declared_queries, declared_writes: p.declared_writes,
       });
     }

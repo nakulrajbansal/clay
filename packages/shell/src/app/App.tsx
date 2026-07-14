@@ -485,17 +485,19 @@ export function App(): React.JSX.Element {
   };
   // Resize (B4/ADR-017): toggle a panel between 1 and 2 columns — a
   // reversible commit, same timeline as everything else.
-  const setWidth = async (panelId: string, w: number): Promise<void> => {
+  const setSize = async (panelId: string, dim: { w?: number; h?: number }): Promise<void> => {
     const p = panels.find(x => x.panel_id === panelId);
-    if (!p || (p.placement.w ?? 1) === w) return;
+    if (!p) return;
+    if (dim.w !== undefined && (p.placement.w ?? 2) === dim.w) return;   // default = half
+    if (dim.h !== undefined && p.placement.h === dim.h) return;
     const updated = await client().commitLayout(
-      [{ panel_id: panelId, region: p.placement.region, order: p.placement.order, w }]);
+      [{ panel_id: panelId, region: p.placement.region, order: p.placement.order, ...dim }]);
     setPanels(updated);
     setHistory(await client().history());
   };
   const toggleWidth = (panelId: string): Promise<void> => {
-    const cur = panels.find(x => x.panel_id === panelId)?.placement.w ?? 1;
-    return setWidth(panelId, cur === 2 ? 1 : 2);
+    const cur = panels.find(x => x.panel_id === panelId)?.placement.w ?? 2;
+    return setSize(panelId, { w: cur >= 3 ? 2 : 4 });   // toggle half <-> full
   };
 
   // View switcher (moat pillar 4): re-lens one panel's data as a different
@@ -570,11 +572,13 @@ export function App(): React.JSX.Element {
             onDragStart={canDrag && !d.isPreview ? setDragId : undefined}
             onDragEnd={(): void => { setDragId(null); setDropTarget(null); }}
             draggingSrc={dragId === d.panel.panel_id}
-            wide={(d.panel.placement.w ?? 1) === 2}
+            wide={(d.panel.placement.w ?? 2) >= 3}
             onResize={canDrag && !d.isPreview && d.panel.placement.region === "main"
               ? (): void => void toggleWidth(d.panel.panel_id) : undefined}
             onSetWidth={canDrag && !d.isPreview && d.panel.placement.region === "main"
-              ? (w): void => void setWidth(d.panel.panel_id, w) : undefined}
+              ? (w): void => void setSize(d.panel.panel_id, { w }) : undefined}
+            onSetHeight={canDrag && !d.isPreview && d.panel.placement.region !== "top"
+              ? (h): void => void setSize(d.panel.panel_id, { h }) : undefined}
             onViewAs={canDrag && !d.isPreview && d.panel.declared_queries.length > 0
               ? (view): void => viewAs(d.panel, view) : undefined}
           />

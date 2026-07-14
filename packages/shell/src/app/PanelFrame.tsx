@@ -241,34 +241,49 @@ export function PanelFrame(props: {
   wide?: boolean;
   onResize?: () => void;
   onSetWidth?: (w: number) => void;
+  onSetHeight?: (h: number) => void;
   onViewAs?: (view: string) => void;
 }): React.JSX.Element {
   const { panel, bridge, preview } = props;
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState<number | null>(null);
   const [viewsOpen, setViewsOpen] = useState(false);
-  const [dragW, setDragW] = useState<number | null>(null);   // live resize preview (1|2)
-  // Edge-drag width resize: grab the right edge and drag; the panel snaps to
-  // half (1 col) or full (2 cols) with a live preview, committed on release.
-  // Pointer capture keeps events flowing even over the iframe.
-  const startWidthDrag = (e: React.PointerEvent<HTMLDivElement>): void => {
-    if (!props.onSetWidth) return;
-    e.preventDefault();
+  const [dragW, setDragW] = useState<number | null>(null);   // live width preview (cols 1–4)
+  const [dragH, setDragH] = useState<number | null>(null);   // live height preview (px)
+  // Edge/corner drag-resize (ADR-018). Width snaps to 1–4 columns from the
+  // cursor's distance across the region; height is continuous. Pointer capture
+  // keeps events flowing even over the sandboxed iframe.
+  const startResize = (
+    e: React.PointerEvent<HTMLDivElement>, dims: { width?: boolean; height?: boolean },
+  ): void => {
+    e.preventDefault(); e.stopPropagation();
     const handle = e.currentTarget;
     handle.setPointerCapture(e.pointerId);
-    const region = handle.closest(".panel-frame")?.parentElement ?? null;
-    const wFor = (clientX: number): number => {
+    const section = handle.closest(".panel-frame") as HTMLElement | null;
+    const region = section?.parentElement ?? null;
+    const rect = section?.getBoundingClientRect();
+    const startLeft = rect?.left ?? 0; const startTop = rect?.top ?? 0;
+    const spanFrom = (x: number): number => {
       const r = region?.getBoundingClientRect();
-      if (!r) return props.wide ? 2 : 1;
-      return clientX > r.left + r.width * 0.5 ? 2 : 1;
+      if (!r) return 2;
+      return Math.max(1, Math.min(4, Math.round((x - startLeft) / (r.width / 4))));
     };
-    handle.onpointermove = (ev): void => setDragW(wFor(ev.clientX));
+    const hFrom = (y: number): number => Math.max(120, Math.min(1600, Math.round(y - startTop)));
+    const apply = (ev: PointerEvent, commit: boolean): void => {
+      const w = dims.width ? spanFrom(ev.clientX) : null;
+      const h = dims.height ? hFrom(ev.clientY) : null;
+      if (w !== null) setDragW(commit ? null : w);
+      if (h !== null) setDragH(commit ? null : h);
+      if (commit) {
+        if (w !== null) props.onSetWidth?.(w);
+        if (h !== null) props.onSetHeight?.(h);
+      }
+    };
+    handle.onpointermove = (ev): void => apply(ev, false);
     handle.onpointerup = (ev): void => {
-      const w = wFor(ev.clientX);
       handle.onpointermove = null; handle.onpointerup = null;
       try { handle.releasePointerCapture(ev.pointerId); } catch { /* already released */ }
-      setDragW(null);
-      props.onSetWidth?.(w);
+      apply(ev, true);
     };
   };
   const [viewsPos, setViewsPos] = useState<{ top: number; left: number } | null>(null);
@@ -320,12 +335,18 @@ export function PanelFrame(props: {
     };
   }, [panel, bridge]);
 
-  // during an edge-drag, preview the target span live (overrides `wide`)
-  const previewWide = dragW !== null ? dragW === 2 : props.wide;
+  // live size: dragW/dragH preview, then the stored placement, then defaults.
+  // Width (cols 1–4) only applies in the main region; default is half (2).
+  const inMain = panel.placement.region === "main";
+  const span = inMain ? (dragW ?? panel.placement.w ?? 2) : null;
+  const effHeight = dragH ?? panel.placement.h ?? height;
+  const resizing = dragW !== null || dragH !== null;
+  const sectionStyle: React.CSSProperties = {};
+  if (span !== null) sectionStyle.gridColumn = `span ${span}`;
   return (
     <section
-      className={`panel-frame${preview ? " panel-preview" : ""}${props.draggingSrc ? " panel-drag-src" : ""}${previewWide ? " panel-wide" : ""}${dragW !== null ? " panel-resizing" : ""}`}
-      style={dragW !== null ? { gridColumn: dragW === 2 ? "1 / -1" : "auto" } : undefined}
+      className={`panel-frame${preview ? " panel-preview" : ""}${props.draggingSrc ? " panel-drag-src" : ""}${resizing ? " panel-resizing" : ""}`}
+      style={sectionStyle}
     >
       <header className="panel-title">
         {props.onDragStart ? (
@@ -387,14 +408,19 @@ export function PanelFrame(props: {
         title={panel.panel_id}
         sandbox="allow-scripts"
         srcDoc={buildSrcdoc()}
-        style={height !== null ? { height: `${height}px` } : undefined}
+        style={effHeight !== null ? { height: `${effHeight}px` } : undefined}
       />
       {props.onSetWidth ? (
-        <div
-          className="panel-edge-resize"
-          title="Drag to resize (half / full width)"
-          onPointerDown={startWidthDrag}
-        ><span className="panel-edge-grip" /></div>
+        <div className="panel-edge-resize e" title="Drag to resize width"
+          onPointerDown={e => startResize(e, { width: true })}><span className="panel-edge-grip" /></div>
+      ) : null}
+      {props.onSetHeight ? (
+        <div className="panel-edge-resize s" title="Drag to resize height"
+          onPointerDown={e => startResize(e, { height: true })}><span className="panel-edge-grip" /></div>
+      ) : null}
+      {props.onSetWidth && props.onSetHeight ? (
+        <div className="panel-corner-resize" title="Drag to resize"
+          onPointerDown={e => startResize(e, { width: true, height: true })} />
       ) : null}
       {props.fault ? (
         <div className="panel-boundary">

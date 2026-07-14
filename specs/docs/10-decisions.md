@@ -141,3 +141,23 @@ ADR-017 Panel placement gains an optional width span (direct-manip resize).
   a 2-col span already resolves the "everything in one column" complaint.
   Consequence: schema placement + PanelBlobInput gain optional w; the grid
   CSS and a header resize toggle honor it; reorder preserves each panel's w.
+
+ADR-018 Finer panel widths (4-col grid) and a resizable height.
+  Context: ADR-017's w ∈ {1,2} gave only half/full — users asked to grab an
+  edge/corner and resize more freely (and to see where a drag will land).
+  DECISION: the main region becomes a 4-COLUMN grid; placement.w ∈ {1,2,3,4}
+  is the column span (quarter/half/three-quarter/full), default HALF (2) when
+  absent. placement also gains an optional h (pixel height, 80–2000) for
+  continuous vertical resize (main + side panels). Both are set by edge/corner
+  drag and committed via commitLayout as normal reversible versions; the API
+  grammar is UNCHANGED (the model still never emits w/h — auto-widen now sets
+  boards/timelines to w=4). A ONE-TIME store migration (guarded by a
+  sys.settings 'layout_scheme' flag) remaps every stored blob's old width so
+  proportions are preserved: w:1 (old half) → 2, w:2 (old full) → 4. This is
+  safe because pre-018 apps only ever stored w ∈ {1,2}.
+  Alt: full free-form {x,y,w,h} grid — still deferred as too heavy; a 4-col
+  span + height covers the resize asks. Alt: store height in localStorage
+  (non-versioned) — rejected; layout is part of the reversible history (P2).
+  Consequence: schema/PanelBlobInput placement gain wider w + h; seed panels
+  and hydrate auto-widen use w=4 for full; PanelFrame renders per-span grid
+  columns and applies h; edge/bottom/corner handles drive commitLayout.
