@@ -448,6 +448,18 @@ export function App(): React.JSX.Element {
     setHistory(await client().history());
     pushToast("Rearranged — rewind any time in the timeline", "success");
   };
+  // Resize (B4/ADR-017): toggle a panel between 1 and 2 columns — a
+  // reversible commit, same timeline as everything else.
+  const toggleWidth = async (panelId: string): Promise<void> => {
+    const p = panels.find(x => x.panel_id === panelId);
+    if (!p) return;
+    const w = (p.placement.w ?? 1) === 2 ? 1 : 2;
+    const updated = await client().commitLayout(
+      [{ panel_id: panelId, region: p.placement.region, order: p.placement.order, w }]);
+    setPanels(updated);
+    setHistory(await client().history());
+  };
+
   const onRegionDrop = (regionName: "top" | "main" | "side", e: React.DragEvent): void => {
     if (!dragId) return;
     e.preventDefault();
@@ -488,6 +500,9 @@ export function App(): React.JSX.Element {
             onDragStart={canDrag && !d.isPreview ? setDragId : undefined}
             onDragEnd={(): void => setDragId(null)}
             draggingSrc={dragId === d.panel.panel_id}
+            wide={(d.panel.placement.w ?? 1) === 2}
+            onResize={canDrag && !d.isPreview && d.panel.placement.region === "main"
+              ? (): void => void toggleWidth(d.panel.panel_id) : undefined}
           />
         );
       });

@@ -2,8 +2,8 @@
 import { describe, expect, it } from "vitest";
 import { reorder, type Region } from "../src/app/layout";
 
-const p = (id: string, region: Region, order: number) =>
-  ({ panel_id: id, placement: { region, order } });
+const p = (id: string, region: Region, order: number, w?: number) =>
+  ({ panel_id: id, placement: { region, order, ...(w ? { w } : {}) } });
 
 describe("reorder", () => {
   it("moves a panel up within a region and reindexes", () => {
@@ -27,6 +27,13 @@ describe("reorder", () => {
     const out = reorder(panels, "a", "top", 99);
     expect(out.filter(x => x.region === "top").sort((m, n) => m.order - n.order)
       .map(x => x.panel_id)).toEqual(["b", "a"]);
+  });
+
+  it("preserves each panel's width across a reorder (ADR-017)", () => {
+    const panels = [p("a", "main", 0, 2), p("b", "main", 1)];   // a is wide
+    const out = reorder(panels, "b", "main", 0);                // move b above a
+    expect(out.find(x => x.panel_id === "a")!.w).toBe(2);       // a stays wide
+    expect(out.find(x => x.panel_id === "b")!.w).toBeUndefined();
   });
 
   it("dropping in place is a no-op ordering", () => {

@@ -124,3 +124,20 @@ ADR-016 Expand the vnode vocabulary with composable primitives (revises
   them; the Validator needs no change (it never allow-listed tags, and the
   primitives add no query/write surface). Model quality at composing novel
   layouts is a prompt-tuning loop, watched via the new diagnostics.
+
+ADR-017 Panel placement gains an optional width span (direct-manip resize).
+  Context: the layout was a single main column; users want panels side by
+  side and resizable (B4/doc 13). A free 2D grid with per-panel {x,y,w,h}
+  would be a large migration of the placement shape and the reshape
+  vocabulary.
+  DECISION: extend placement with an OPTIONAL w ∈ {1,2} (column span);
+  default 1 when absent, so all existing panels/exemplars are unchanged.
+  The main region renders as a 2-column grid; a w=2 panel spans both. Width
+  is set by direct manipulation and committed via commitLayout as a normal
+  reversible version (same one-history moat as reorder). The API grammar
+  schema is UNCHANGED (the model still emits only region+order); w is a
+  client/direct-manipulation concern only.
+  Alt: full free-form grid ({x,y,w,h}). Deferred — heavier migration, and
+  a 2-col span already resolves the "everything in one column" complaint.
+  Consequence: schema placement + PanelBlobInput gain optional w; the grid
+  CSS and a header resize toggle honor it; reorder preserves each panel's w.

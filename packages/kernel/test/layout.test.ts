@@ -64,6 +64,29 @@ describe("commitLayout (direct manipulation)", () => {
     store.close();
   });
 
+  it("width is a reversible commit and survives a reorder (ADR-017)", async () => {
+    const store = await seededStore();
+    store.commit({
+      intent: "panels", summary: "Adds panels.", migration: null,
+      panels: [panel("a", "main", 0), panel("b", "main", 1)],
+    });
+    const before = store.headVersion();
+
+    store.commitLayout([{ panel_id: "a", region: "main", order: 0, w: 2 }]);
+    expect(store.livePanels().find(p => p.panel_id === "a")!.placement.w).toBe(2);
+
+    // reorder without specifying w keeps a's width
+    store.commitLayout([
+      { panel_id: "b", region: "main", order: 0 },
+      { panel_id: "a", region: "main", order: 1 },
+    ]);
+    expect(store.livePanels().find(p => p.panel_id === "a")!.placement.w).toBe(2);
+
+    store.rollbackTo(before);   // rewind removes the width
+    expect(store.livePanels().find(p => p.panel_id === "a")!.placement.w ?? 1).toBe(1);
+    store.close();
+  });
+
   it("appears in history as a hand-rearrange", async () => {
     const store = await seededStore();
     store.commit({

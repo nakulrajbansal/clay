@@ -151,6 +151,8 @@ export function PanelFrame(props: {
   onDragStart?: (id: string) => void;
   onDragEnd?: () => void;
   draggingSrc?: boolean;
+  wide?: boolean;
+  onResize?: () => void;
 }): React.JSX.Element {
   const { panel, bridge, preview } = props;
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -193,7 +195,7 @@ export function PanelFrame(props: {
   }, [panel, bridge]);
 
   return (
-    <section className={`panel-frame${preview ? " panel-preview" : ""}${props.draggingSrc ? " panel-drag-src" : ""}`}>
+    <section className={`panel-frame${preview ? " panel-preview" : ""}${props.draggingSrc ? " panel-drag-src" : ""}${props.wide ? " panel-wide" : ""}`}>
       <header className="panel-title">
         {props.onDragStart ? (
           <span
@@ -212,6 +214,13 @@ export function PanelFrame(props: {
         ) : null}
         {panel.title}
         {preview ? <span className="panel-proposed">proposed</span> : null}
+        {props.onResize ? (
+          <button
+            className="panel-resize"
+            title={props.wide ? "Make narrow" : "Make wide"}
+            onClick={props.onResize}
+          >{props.wide ? "◨" : "▭"}</button>
+        ) : null}
       </header>
       <iframe
         ref={iframeRef}

@@ -88,14 +88,26 @@ button.link.danger { color: #991b1b; }
 .timeslider-actions { display: flex; gap: 8px; }
 
 .region-top { grid-area: top; display: flex; gap: 14px; flex-wrap: wrap; }
-.region-main { grid-area: main; display: flex; flex-direction: column; gap: 14px; }
+/* main is a 2-column dashboard grid so panels sit side by side, not in one
+   stack (ADR-017); a wide panel spans both columns */
+.region-main { grid-area: main; display: grid; gap: 14px; align-content: start;
+  grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.region-main .panel-frame.panel-wide { grid-column: 1 / -1; }
 .region-side { grid-area: side; display: flex; flex-direction: column; gap: 14px; }
+@media (max-width: 980px) { .region-main { grid-template-columns: 1fr; } }
 
 /* panel frames (shell-drawn; nothing a panel renders escapes its frame) */
 .panel-frame {
   border: 1px solid #e7e5e4; border-radius: 14px; background: #fff;
-  overflow: hidden; min-width: 220px; flex: 1;
+  overflow: hidden; min-width: 0; align-self: start;
+  box-shadow: 0 1px 2px rgba(28, 25, 23, .04);
 }
+.region-top .panel-frame, .region-side .panel-frame { flex: 1; }
+.panel-resize {
+  margin-left: auto; border: 0; background: none; cursor: pointer;
+  color: #d6d3d1; font-size: 13px; line-height: 1; padding: 0 2px;
+}
+.panel-resize:hover { color: #57534e; }
 /* direct manipulation: drag panels to rearrange (B4) */
 .panel-grip { cursor: grab; color: #d6d3d1; user-select: none; padding-right: 2px;
   font-size: 14px; line-height: 1; }

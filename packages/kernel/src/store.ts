@@ -26,7 +26,7 @@ type QueryT = import("@clay/schema").Query;
 export type PanelBlobInput = {
   panel_id: string;
   title: string;
-  placement: { region: "top" | "main" | "side"; order: number };
+  placement: { region: "top" | "main" | "side"; order: number; w?: number };
   code: string;
   declared_queries: QueryT[];
   declared_writes: string[];
@@ -252,17 +252,20 @@ export class ClayStore {
    * reshape by language share one history.
    */
   commitLayout(
-    placements: { panel_id: string; region: "top" | "main" | "side"; order: number }[],
+    placements: { panel_id: string; region: "top" | "main" | "side"; order: number; w?: number }[],
   ): number {
     const live = new Map(this.livePanels().map(p => [p.panel_id, p]));
     const moved: PanelBlobInput[] = [];
     for (const pl of placements) {
       const p = live.get(pl.panel_id);
       if (!p) continue;
-      if (p.placement.region === pl.region && p.placement.order === pl.order) continue;
+      // width defaults to the panel's current span (preserved across reorder)
+      const w = pl.w ?? p.placement.w ?? 1;
+      const curW = p.placement.w ?? 1;
+      if (p.placement.region === pl.region && p.placement.order === pl.order && curW === w) continue;
       moved.push({
         panel_id: p.panel_id, title: p.title,
-        placement: { region: pl.region, order: pl.order },
+        placement: { region: pl.region, order: pl.order, ...(w !== 1 ? { w } : {}) },
         code: p.code, declared_queries: p.declared_queries, declared_writes: p.declared_writes,
       });
     }

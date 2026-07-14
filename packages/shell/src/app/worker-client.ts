@@ -52,7 +52,7 @@ export class WorkerClient {
   status(): Promise<StatusInfo> { return this.call("status"); }
   seed(shellId: string): Promise<null> { return this.call("seed", { shellId }); }
   panels(): Promise<LivePanel[]> { return this.call("panels"); }
-  commitLayout(placements: { panel_id: string; region: "top" | "main" | "side"; order: number }[]): Promise<LivePanel[]> {
+  commitLayout(placements: { panel_id: string; region: "top" | "main" | "side"; order: number; w?: number }[]): Promise<LivePanel[]> {
     return this.call("commitLayout", { placements });
   }
   history(): Promise<HistoryEntry[]> { return this.call("history"); }
