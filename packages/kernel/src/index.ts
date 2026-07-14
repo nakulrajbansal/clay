@@ -12,8 +12,8 @@ export {
   type ColumnKind, type RegColumn, type RegTable, type Registry,
 } from "./registry";
 export {
-  copyDatabase, createSystemTables, openBrowserDriver, openDriverFromBytes,
-  openMemoryDriver, wipeBrowserStorage,
+  copyDatabase, createSystemTables, deleteAppStorage, openBrowserDriver,
+  openDriverFromBytes, openMemoryDriver, wipeBrowserStorage,
   type DbDriver, type SqlRow, type SqlValue,
 } from "./db";
 export { crc32, zipRead, zipWrite, type ZipEntry } from "./zip";

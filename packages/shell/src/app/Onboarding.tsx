@@ -5,14 +5,17 @@ import { STARTER_SHELLS, type StarterShellId } from "../shells/seed";
 export function Onboarding(props: {
   onPick: (id: StarterShellId) => void;
   busy: boolean;
+  onCancel?: () => void;
 }): React.JSX.Element {
   return (
     <div className="onboarding">
-      <h1>Clay</h1>
+      <h1>{props.onCancel ? "New app" : "Clay"}</h1>
       <p className="onboarding-sub">
-        One app that reshapes itself when you describe a change.
-        Start from a shell — everything about it can change later,
-        and your data survives every change.
+        {props.onCancel
+          ? "Pick a template for your new app. Your other apps are untouched."
+          : "One app that reshapes itself when you describe a change. "
+            + "Start from a template — everything about it can change later, "
+            + "and your data survives every change."}
       </p>
       <div className="onboarding-cards">
         {STARTER_SHELLS.map(shell => (
@@ -27,6 +30,11 @@ export function Onboarding(props: {
           </button>
         ))}
       </div>
+      {props.onCancel ? (
+        <button className="link onboarding-cancel" onClick={props.onCancel}>
+          ← Back to my apps
+        </button>
+      ) : null}
     </div>
   );
 }

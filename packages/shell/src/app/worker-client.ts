@@ -39,7 +39,8 @@ export class WorkerClient {
     });
   }
 
-  boot(): Promise<BootInfo> { return this.call("boot"); }
+  boot(appId?: string): Promise<BootInfo> { return this.call("boot", { appId }); }
+  deleteApp(appId: string): Promise<null> { return this.call("deleteApp", { appId }); }
   status(): Promise<StatusInfo> { return this.call("status"); }
   seed(shellId: string): Promise<null> { return this.call("seed", { shellId }); }
   panels(): Promise<LivePanel[]> { return this.call("panels"); }

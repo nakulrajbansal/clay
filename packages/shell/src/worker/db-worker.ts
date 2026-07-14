@@ -4,8 +4,8 @@
 // serveStore RPC ports for the Bridge's AsyncStore (live and shadow).
 // Records never leave this worker except over those ports to the Bridge.
 import {
-  ClayStore, MutationPipeline, openBrowserDriver, portFromMessagePort,
-  serveStore, wipeBrowserStorage,
+  ClayStore, MutationPipeline, deleteAppStorage, openBrowserDriver,
+  portFromMessagePort, serveStore, wipeBrowserStorage,
   type DbDriver, type DebugEvent, type LivePanel, type PreviewHandle,
 } from "@clay/kernel";
 import { MutationClient } from "@clay/mutation";
@@ -31,6 +31,7 @@ let store: ClayStore | null = null;
 let persistent = false;
 let persistRequested = false;
 let pending: PreviewHandle | null = null;
+let currentAppId: string | undefined;   // which app's OPFS files are open (G4)
 
 // A ring of recent pipeline traces the user can review/copy (the user
 // asked for logs of inputs -> processing -> outputs). Also mirrored to the
@@ -109,9 +110,11 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
   const p = req.payload ?? {};
   switch (req.op) {
     case "boot": {
+      const appId = p.appId === undefined ? undefined : String(p.appId);
       if (!store) {
-        const opened = await openBrowserDriver();
+        const opened = await openBrowserDriver(appId);
         persistent = opened.persistent;
+        currentAppId = appId;
         store = ClayStore.fromDriver(opened.driver);
       }
       return {
@@ -119,6 +122,18 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
         seeded: store.headVersion() > 0,
         shellId: store.getSetting<string>("shell_id") ?? null,
       };
+    }
+    case "deleteApp": {
+      // G4: delete one app's files. If it's the open one, close first.
+      const appId = String(p.appId);
+      if (appId === currentAppId || (appId === "default" && currentAppId === undefined)) {
+        dropPending();
+        store?.close();
+        store = null;
+        currentAppId = undefined;
+      }
+      await deleteAppStorage(appId);
+      return null;
     }
     case "seed":
       seedStarterShell(mustStore(), p.shellId as StarterShellId);

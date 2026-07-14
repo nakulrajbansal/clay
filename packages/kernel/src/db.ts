@@ -201,10 +201,22 @@ export async function openMemoryDriver(): Promise<DbDriver> {
 type PoolUtil = {
   OpfsSAHPoolDb: new (filename: string) => Database;
   wipeFiles(): Promise<number>;
+  unlink?(name: string): boolean;
 };
 let activePool: PoolUtil | null = null;
 
-export async function openBrowserDriver(): Promise<{ driver: DbDriver; persistent: boolean }> {
+/** Per-app OPFS filenames (G4 multi-app). The legacy single-app files
+ * (/user.db, /system.db) are kept as the "default" app so existing data
+ * is never orphaned; additional apps get namespaced files. */
+function appFiles(appId?: string): { user: string; system: string } {
+  if (!appId || appId === "default") return { user: "/user.db", system: "/system.db" };
+  const safe = appId.replace(/[^a-zA-Z0-9_-]/g, "");
+  return { user: `/app-${safe}-user.db`, system: `/app-${safe}-system.db` };
+}
+
+export async function openBrowserDriver(
+  appId?: string,
+): Promise<{ driver: DbDriver; persistent: boolean }> {
   const s = await sqlite3();
   try {
     const withPool = s as unknown as {
@@ -212,21 +224,31 @@ export async function openBrowserDriver(): Promise<{ driver: DbDriver; persisten
     };
     const pool = await withPool.installOpfsSAHPoolVfs({});
     activePool = pool;
-    const db = new pool.OpfsSAHPoolDb("/user.db");
+    const files = appFiles(appId);
+    const db = new pool.OpfsSAHPoolDb(files.user);
     db.exec("PRAGMA foreign_keys = ON");
-    db.exec("ATTACH 'file:/system.db?vfs=opfs-sahpool' AS sys");
+    db.exec(`ATTACH 'file:${files.system}?vfs=opfs-sahpool' AS sys`);
     return { driver: new SqliteWasmDriver(db), persistent: true };
   } catch {
     return { driver: await openMemoryDriver(), persistent: false };
   }
 }
 
-/** Erase the OPFS databases (G14-adjacent "start over"; caller closes the
- * store first and reboots). Returns false when nothing was persistent. */
+/** Erase ALL OPFS databases (full "start over"; caller closes stores and
+ * reboots). Returns false when nothing was persistent. */
 export async function wipeBrowserStorage(): Promise<boolean> {
   if (!activePool) return false;
   await activePool.wipeFiles();
   return true;
+}
+
+/** Delete one app's OPFS files (G4). The app must not be the currently
+ * open one (caller closes its store first). Best-effort. */
+export async function deleteAppStorage(appId: string): Promise<void> {
+  if (!activePool?.unlink) return;
+  const files = appFiles(appId);
+  try { activePool.unlink(files.user); } catch { /* already gone */ }
+  try { activePool.unlink(files.system); } catch { /* already gone */ }
 }
 
 export function systemSchemaSql(prefix: string): string {

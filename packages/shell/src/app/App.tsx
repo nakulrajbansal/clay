@@ -15,6 +15,11 @@ import { DataView } from "./DataView";
 import { Onboarding } from "./Onboarding";
 import { PanelFrame } from "./PanelFrame";
 import { TimeSlider } from "./TimeSlider";
+import { AppSwitcher } from "./AppSwitcher";
+import {
+  createApp, currentApp, ensureLegacyAdopted, listApps, removeApp,
+  setCurrentApp, shellName, type AppEntry,
+} from "./apps";
 
 type Phase = "loading" | "onboarding" | "main";
 type Toast = { id: number; msg: string; kind: string };
@@ -42,6 +47,8 @@ function makeBridge(client: WorkerClient, target: "live" | "shadow",
 export function App(): React.JSX.Element {
   const workerRef = useRef<WorkerClient | null>(null);
   const [phase, setPhase] = useState<Phase>("loading");
+  const [apps, setApps] = useState<AppEntry[]>([]);
+  const [currentId, setCurrentId] = useState<string | null>(null);
   const [persistent, setPersistent] = useState(true);
   const [panels, setPanels] = useState<LivePanel[]>([]);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
@@ -92,11 +99,26 @@ export function App(): React.JSX.Element {
     const wc = new WorkerClient(worker);
     workerRef.current = wc;
     void (async () => {
-      const boot = await wc.boot();
+      const cur = currentApp();                       // registry entry or null
+      const boot = await wc.boot(cur?.id);
       setPersistent(boot.persistent);
       setHasKey((await wc.getSetting<string>("byo_api_key")) !== null
         || (await wc.getSetting<string>("backend_url")) !== null);
-      if (!boot.seeded) { setPhase("onboarding"); return; }
+
+      // Existing single-app user with data but no registry: adopt it (G4).
+      if (boot.seeded) ensureLegacyAdopted(true, boot.shellId);
+
+      if (!boot.seeded) {
+        if (cur) {
+          // a freshly created additional app pending its first seed
+          await wc.seed(cur.shellId as StarterShellId);
+        } else {
+          setPhase("onboarding");           // first run ever — pick a template
+          return;
+        }
+      }
+      setApps(listApps());
+      setCurrentId(currentApp()?.id ?? null);
       setLiveBridge(makeBridge(wc, "live", pushToast, recordFault));
       setPanels(await wc.panels());
       setHistory(await wc.history());
@@ -108,12 +130,34 @@ export function App(): React.JSX.Element {
 
   const pickShell = async (id: StarterShellId): Promise<void> => {
     setBusy(true);
-    await client().seed(id);
-    setLiveBridge(makeBridge(client(), "live", pushToast, recordFault));
-    await refreshPanels();
-    setFeed([{ kind: "info", text: "Your app is ready. Describe any change to reshape it." }]);
-    setBusy(false);
-    setPhase("main");
+    const first = listApps().length === 0;
+    createApp(shellName(id), id);
+    if (first) {
+      // the worker already holds this app's (empty, "default") files open
+      await client().seed(id);
+      setApps(listApps());
+      setCurrentId(currentApp()?.id ?? null);
+      setLiveBridge(makeBridge(client(), "live", pushToast, recordFault));
+      await refreshPanels();
+      setFeed([{ kind: "info", text: "Your app is ready. Describe any change to reshape it." }]);
+      setBusy(false);
+      setPhase("main");
+    } else {
+      // an additional app: reboot so the worker opens its own files, then seed
+      window.location.reload();
+    }
+  };
+
+  const switchApp = (id: string): void => { setCurrentApp(id); window.location.reload(); };
+  const newApp = (): void => setPhase("onboarding");
+  const deleteApp = async (id: string): Promise<void> => {
+    const entry = apps.find(a => a.id === id);
+    if (!window.confirm(
+      `Delete “${entry?.name ?? "this app"}” and all of its data? `
+      + "This cannot be undone. (Export a .clay backup first if unsure.)")) return;
+    removeApp(id);
+    await client().deleteApp(id);
+    window.location.reload();
   };
 
   const handleOutcome = (outcome: IntentOutcome): void => {
@@ -283,9 +327,11 @@ export function App(): React.JSX.Element {
 
   const resetApp = async (): Promise<void> => {
     if (!window.confirm(
-      "Erase this app and start over? All data in it is deleted. "
+      "Erase EVERYTHING and start over? All apps and their data are deleted. "
       + "This is the one action Clay cannot undo.")) return;
     await client().reset();
+    try { localStorage.removeItem("clay_apps"); localStorage.removeItem("clay_current_app"); }
+    catch { /* ignore */ }
     window.location.reload();
   };
 
@@ -318,7 +364,14 @@ export function App(): React.JSX.Element {
   }, [panels, preview, scrub]);
 
   if (phase === "loading") return <div className="boot">Opening your app…</div>;
-  if (phase === "onboarding") return <Onboarding onPick={id => void pickShell(id)} busy={busy} />;
+  if (phase === "onboarding")
+    return (
+      <Onboarding
+        onPick={id => void pickShell(id)}
+        busy={busy}
+        onCancel={listApps().length > 0 ? () => setPhase("main") : undefined}
+      />
+    );
 
   const region = (name: "top" | "main" | "side"): React.JSX.Element[] =>
     display
@@ -350,12 +403,20 @@ export function App(): React.JSX.Element {
 
   return (
     <div className="app">
+      <AppSwitcher
+        apps={apps}
+        currentId={currentId}
+        onSwitch={switchApp}
+        onNew={newApp}
+        onDelete={id => void deleteApp(id)}
+      />
       {!persistent ? (
         <div className="banner">
           This browser can’t persist data (no OPFS) — your work will vanish
           when the tab closes. Export early, export often.
         </div>
       ) : null}
+      <div className="app-body">
       <main className="regions">
         <TimeSlider
           history={history}
@@ -399,6 +460,7 @@ export function App(): React.JSX.Element {
         onImport={file => void importArchive(file)}
         onCopyDiagnostics={() => void copyDiagnostics()}
       />
+      </div>
       <div className="toasts">
         {toasts.map(t => (
           <div key={t.id} className={`toast toast-${t.kind}`}>{t.msg}</div>
