@@ -18,9 +18,12 @@ import { PanelFrame } from "./PanelFrame";
 import { TimeSlider } from "./TimeSlider";
 import { AppSwitcher } from "./AppSwitcher";
 import {
-  addForkEntry, createApp, currentApp, ensureLegacyAdopted, listApps, removeApp,
+  addForkEntry, createApp, currentApp, currentAppId, ensureLegacyAdopted, listApps, removeApp,
   renameApp, setCurrentApp, shellName, type AppEntry,
 } from "./apps";
+import {
+  THEMES, applyThemeToRoot, getThemeId, panelThemeCss, setThemeId as saveThemeId, themeById,
+} from "./themes";
 import {
   getApiKey, getBackendUrl, hasModelAccess, setApiKey, setBackendUrl,
 } from "./settings";
@@ -67,6 +70,7 @@ export function App(): React.JSX.Element {
   const [bootError, setBootError] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{ region: Region; index: number } | null>(null);
+  const [themeId, setThemeId] = useState<string>(() => getThemeId(currentAppId()));
   const [intentSeed, setIntentSeed] = useState<{ text: string; n: number }>({ text: "", n: 0 });
   const seedIntent = (t: string): void => setIntentSeed(s => ({ text: t, n: s.n + 1 }));
   const [persistent, setPersistent] = useState(true);
@@ -124,6 +128,16 @@ export function App(): React.JSX.Element {
     }, 12000);
     return () => clearInterval(id);
   }, [phase, preview, refreshSuggestions]);
+
+  // Color scheme (per app). Apply to the trusted shell root live; the token
+  // block for the sandboxed panels is memoised and passed into each iframe.
+  useEffect(() => { applyThemeToRoot(themeById(themeId)); }, [themeId]);
+  const themeCss = useMemo(() => panelThemeCss(themeById(themeId)), [themeId]);
+  const selectTheme = (id: string): void => {
+    const appId = currentId ?? currentAppId() ?? "default";
+    saveThemeId(appId, id);
+    setThemeId(id);
+  };
 
   // boot
   useEffect(() => {
@@ -561,9 +575,10 @@ export function App(): React.JSX.Element {
         }
         return (
           <PanelFrame
-            key={`${d.panel.panel_id}@${d.panel.version}${d.isPreview ? ":preview" : ""}`}
+            key={`${d.panel.panel_id}@${d.panel.version}${d.isPreview ? ":preview" : ""}:t${themeId}`}
             panel={d.panel}
             bridge={bridge}
+            themeCss={themeCss}
             preview={d.isPreview}
             fault={faults[d.panel.panel_id]}
             onRepair={d.isPreview ? undefined : (): void => void repairPanel(d.panel.panel_id)}
@@ -679,6 +694,9 @@ export function App(): React.JSX.Element {
         onDismissSuggestion={dismissSuggestion}
         loadStatus={() => client().status()}
         seed={intentSeed}
+        themes={THEMES}
+        themeId={themeId}
+        onSelectTheme={selectTheme}
         onIntent={t => void runIntent(t)}
         onKeep={() => void keep()}
         onDiscard={() => void discard()}

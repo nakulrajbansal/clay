@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Suggestion } from "@clay/kernel";
 import type { PreviewInfo } from "../worker/db-worker";
 import type { StatusInfo } from "./worker-client";
+import type { Theme } from "./themes";
 
 export type FeedItem =
   | { kind: "intent"; text: string }
@@ -35,6 +36,9 @@ export function ConversationRail(props: {
   loadStatus: () => Promise<StatusInfo>;
   onCopyDiagnostics: () => void;
   seed?: { text: string; n: number };
+  themes: Theme[];
+  themeId: string;
+  onSelectTheme: (id: string) => void;
 }): React.JSX.Element {
   const [text, setText] = useState("");
   const [keyDraft, setKeyDraft] = useState("");
@@ -82,6 +86,23 @@ export function ConversationRail(props: {
 
       {showSettings ? (
         <div className="rail-settings">
+          <div className="theme-picker">
+            <span className="rail-label" style={{ marginBottom: 6 }}>Color scheme</span>
+            <div className="theme-swatches">
+              {props.themes.map(t => (
+                <button
+                  key={t.id}
+                  className={`theme-swatch${t.id === props.themeId ? " selected" : ""}`}
+                  title={t.name}
+                  onClick={() => props.onSelectTheme(t.id)}
+                  style={{ background: t.vars.bg }}
+                >
+                  <span className="theme-dot" style={{ background: t.vars.accent }} />
+                  <span className="theme-name">{t.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
           {status ? (
             <div className="rail-status">
               <div>

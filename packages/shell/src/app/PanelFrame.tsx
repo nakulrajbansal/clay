@@ -12,10 +12,11 @@ const PANEL_CSS = `
   :root { color-scheme: light;
     --font: "Segoe UI Variable Text", "SF Pro Text", -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
     --font-display: "Segoe UI Variable Display", "SF Pro Display", -apple-system, system-ui, "Segoe UI", sans-serif;
-    --text: #2b2a33; --text-2: #6d6b78; --text-3: #a6a4b1;
+    --panel: #ffffff; --text: #2b2a33; --text-2: #6d6b78; --text-3: #a6a4b1;
     --border: #efeef3; --border-2: #e7e5ee; --bg-soft: #f8f7fb;
-    --accent: #6a67e6; --accent-soft: #f1f0fc; --accent-text: #4b47c4; }
-  body { margin: 0; font: 13px/1.55 var(--font);
+    --accent: #6a67e6; --accent-soft: #f1f0fc; --accent-text: #4b47c4;
+    --chart-area: rgba(106,103,230,.12); }
+  body { margin: 0; font: 13px/1.55 var(--font); background: var(--panel);
     color: var(--text); padding: 12px; -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility; }
   .clay-table-wrap { width: 100%; overflow-x: auto; }
@@ -46,7 +47,7 @@ const PANEL_CSS = `
     grid-template-columns: repeat(auto-fit, minmax(108px, 1fr)); }
   .clay-grid { grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); }
   .clay-metric { position: relative; display: flex; flex-direction: column; gap: 6px;
-    padding: 13px 13px 12px 15px; background: linear-gradient(180deg, #ffffff, #fbfaff);
+    padding: 13px 13px 12px 15px; background: linear-gradient(180deg, var(--panel), var(--bg-soft));
     border: 1px solid var(--border); border-radius: 14px; min-width: 0; overflow: hidden;
     box-shadow: 0 1px 2px rgba(40,38,60,.04); transition: transform .16s ease, box-shadow .16s ease; }
   .clay-metric::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
@@ -63,16 +64,17 @@ const PANEL_CSS = `
     letter-spacing: .01em; }
   .clay-input, .clay-select, .clay-form textarea {
     border: 1px solid var(--border-2); border-radius: 9px;
-    padding: 9px 11px; font: inherit; background: #fff; color: var(--text);
+    padding: 9px 11px; font: inherit; background: var(--panel); color: var(--text);
     transition: border-color .12s, box-shadow .12s; }
   .clay-input:hover, .clay-select:hover, .clay-form textarea:hover { border-color: #d7d5e6; }
   .clay-input:focus, .clay-select:focus, .clay-form textarea:focus { outline: none;
     border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   .clay-button { border: 0; border-radius: 10px; padding: 9px 15px; font: inherit;
-    font-weight: 600; background: linear-gradient(180deg, #7d7aec, #5f5cdf); color: #fff;
-    cursor: pointer; box-shadow: 0 2px 8px rgba(91,87,235,.35), inset 0 1px 0 rgba(255,255,255,.18);
+    font-weight: 600; color: #fff; cursor: pointer;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 86%, #fff), var(--accent));
+    box-shadow: 0 2px 9px color-mix(in srgb, var(--accent) 38%, transparent), inset 0 1px 0 rgba(255,255,255,.18);
     transition: transform .08s ease, box-shadow .12s ease, filter .12s ease; }
-  .clay-button:hover { filter: brightness(1.05); box-shadow: 0 4px 14px rgba(91,87,235,.42); }
+  .clay-button:hover { filter: brightness(1.06); box-shadow: 0 4px 15px color-mix(in srgb, var(--accent) 45%, transparent); }
   .clay-button:active { transform: translateY(1px); box-shadow: 0 1px 4px rgba(91,87,235,.35); }
   .clay-filterbar { display: flex; gap: 8px; }
   .clay-chart svg { width: 100%; height: auto; display: block; overflow: visible;
@@ -89,8 +91,10 @@ const PANEL_CSS = `
   .clay-chart-axis { stroke: var(--border-2); stroke-width: 1; }
   .clay-chart-line { fill: none; stroke: var(--accent); stroke-width: 2.25;
     stroke-linejoin: round; stroke-linecap: round; }
-  .clay-chart-areafill { fill: rgba(106,103,230,.12); stroke: none; }
-  .clay-chart-dot { fill: #fff; stroke: var(--accent); stroke-width: 1.75; }
+  .clay-chart-areafill { fill: var(--chart-area); stroke: none; }
+  .clay-chart-dot { fill: var(--panel); stroke: var(--accent); stroke-width: 1.75; }
+  .clay-chart-val { fill: var(--text-2); }
+  .clay-chart-xtick { fill: var(--text-3); }
   .clay-chart-legend { display: flex; flex-wrap: wrap; gap: 6px 14px;
     margin-top: 9px; font-size: 11.5px; color: var(--text-2); }
   .clay-chart-legend .lg { display: inline-flex; align-items: center; gap: 6px; }
@@ -124,7 +128,7 @@ const PANEL_CSS = `
   .clay-tone-fg-gray { color: #78716c; }
   .clay-bar { display: flex; align-items: center; gap: 8px; }
   .clay-bar-label { font-size: 12px; min-width: 90px; color: #57534e; }
-  .clay-bar-track { flex: 1; height: 14px; background: #f5f5f4; border-radius: 999px; overflow: hidden; }
+  .clay-bar-track { flex: 1; height: 14px; background: var(--bg-soft); border-radius: 999px; overflow: hidden; }
   .clay-bar-fill { height: 100%; border-radius: 999px; background: #6366f1; }
   .clay-bar-fill.clay-tone-green { background: #22c55e; } .clay-bar-fill.clay-tone-amber { background: #f59e0b; }
   .clay-bar-fill.clay-tone-red { background: #ef4444; } .clay-bar-fill.clay-tone-accent { background: #6366f1; }
@@ -144,11 +148,11 @@ const PANEL_CSS = `
   .clay-board-header { display: flex; justify-content: space-between; align-items: center;
     font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
     color: var(--text-2); padding: 3px 5px 9px; }
-  .clay-board-count { background: #e6e7ec; color: var(--text-2); border-radius: 999px;
+  .clay-board-count { background: var(--border-2); color: var(--text-2); border-radius: 999px;
     padding: 1px 8px; font-size: 11px; font-weight: 600; }
   .clay-board-cards { display: flex; flex-direction: column; gap: 7px; }
   .clay-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
-  .clay-card { background: #fff; border: 1px solid var(--border-2); border-radius: 10px;
+  .clay-card { background: var(--panel); border: 1px solid var(--border-2); border-radius: 10px;
     padding: 9px 11px; box-shadow: 0 1px 2px rgba(16,24,40,.04); transition: box-shadow .1s, border-color .1s; }
   .clay-card-lg { padding: 13px 15px; }
   /* title takes the full width and wraps cleanly; a value/badge drops onto its
@@ -181,7 +185,7 @@ const PANEL_CSS = `
   .clay-timeline-label { width: 132px; flex: none; font-size: 12px; color: #57534e;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .clay-timeline-track { position: relative; flex: 1; height: 20px;
-    background: #f5f5f4; border-radius: 6px; }
+    background: var(--bg-soft); border-radius: 6px; }
   .clay-timeline-bar { position: absolute; top: 3px; height: 14px; border-radius: 5px;
     min-width: 4px; font-size: 10px; color: #fff; line-height: 14px;
     padding: 0 5px; overflow: hidden; white-space: nowrap; box-sizing: border-box;
@@ -207,11 +211,11 @@ const PANEL_CSS = `
   .clay-scene-text { font-size: 11px; stroke: none; }
 `;
 
-function buildSrcdoc(): string {
+function buildSrcdoc(themeCss: string): string {
   const script = runtimeBundle.replace(/<\/script>/g, "<\\/script>");
   return `<!doctype html><html><head>
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob:; connect-src 'none'; img-src data:; style-src 'unsafe-inline'">
-<style>${PANEL_CSS}</style>
+<style>${PANEL_CSS}${themeCss}</style>
 </head><body><div id="root"></div><script>${script}</script></body></html>`;
 }
 
@@ -243,6 +247,7 @@ export function PanelFrame(props: {
   onSetWidth?: (w: number) => void;
   onSetHeight?: (h: number) => void;
   onViewAs?: (view: string) => void;
+  themeCss?: string;
 }): React.JSX.Element {
   const { panel, bridge, preview } = props;
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -407,7 +412,7 @@ export function PanelFrame(props: {
         ref={iframeRef}
         title={panel.panel_id}
         sandbox="allow-scripts"
-        srcDoc={buildSrcdoc()}
+        srcDoc={buildSrcdoc(props.themeCss ?? "")}
         style={effHeight !== null ? { height: `${effHeight}px` } : undefined}
       />
       {props.onSetWidth ? (
