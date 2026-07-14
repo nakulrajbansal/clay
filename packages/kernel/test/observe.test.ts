@@ -58,6 +58,56 @@ describe("token-promotion heuristic", () => {
   });
 });
 
+describe("unviewed-table heuristic (ambient reshaping)", () => {
+  it("offers a view for a table with data but no panel", async () => {
+    const store = await storeWithText();
+    for (let i = 0; i < 4; i++) store.insert("tasks", { name: `t${i}`, stage: "todo" });
+    // no panels reference "tasks" -> should be offered a view
+    const s = store.suggestions().find(x => x.kind === "add_view" && x.subject === "tasks");
+    expect(s).toBeDefined();
+    // tasks has an enum-free schema here (stage is text) -> plain table intent
+    expect(s!.intent).toContain("tasks");
+    store.close();
+  });
+
+  it("does not offer a view for a table that already has a panel", async () => {
+    const store = await storeWithText();
+    for (let i = 0; i < 4; i++) store.insert("tasks", { name: `t${i}` });
+    store.commit({
+      intent: "view", summary: "Adds a tasks view.", migration: null,
+      panels: [{
+        panel_id: "tasks_view", title: "Tasks",
+        placement: { region: "main", order: 0 },
+        code: "export default function(clay){ clay.db.watch({from:\"tasks\"},(r)=>clay.ui.render(h(EmptyState,{label:\"x\"}))); }",
+        declared_queries: [{ from: "tasks" }], declared_writes: [],
+      }],
+    });
+    expect(store.suggestions().some(x => x.kind === "add_view" && x.subject === "tasks")).toBe(false);
+    store.close();
+  });
+
+  it("stays quiet for a near-empty table", async () => {
+    const store = await storeWithText();
+    store.insert("tasks", { name: "one" });
+    expect(store.suggestions().some(x => x.kind === "add_view")).toBe(false);
+    store.close();
+  });
+
+  it("suggests a board when the table has a status enum", async () => {
+    const store = await ClayStore.openMemory();
+    const ops = [{ op: "create_table" as const, table: "leads",
+      columns: [
+        { name: "name", type: "text" as const, required: true },
+        { name: "stage", type: "enum" as const, required: false, values: ["new", "won"] }] }];
+    store.commit({ intent: "seed", summary: "Leads.",
+      migration: { operations: ops, inverse: deriveInverse(ops, store.registrySnapshot()) } });
+    for (let i = 0; i < 3; i++) store.insert("leads", { name: `L${i}`, stage: "new" });
+    const s = store.suggestions().find(x => x.kind === "add_view" && x.subject === "leads");
+    expect(s!.intent).toContain("board");
+    store.close();
+  });
+});
+
 describe("repeated-filter heuristic", () => {
   it("suggests pinning a filter fired 3+ times", async () => {
     const store = await storeWithText();

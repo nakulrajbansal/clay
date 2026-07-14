@@ -418,7 +418,14 @@ export class ClayStore {
 
   // ---------- Observer (doc 02 §1) ----------
   recordUsage(ev: UsageEvent): void { this.observer.record(ev); }
-  suggestions(): Suggestion[] { return this.observer.suggestions(this.reg); }
+  suggestions(): Suggestion[] {
+    // tables that already have at least one panel — so "table with data but
+    // no view" can be offered (ambient reshaping, B3).
+    const viewed = new Set<string>();
+    for (const p of this.livePanels())
+      for (const q of p.declared_queries) viewed.add(q.from);
+    return this.observer.suggestions(this.reg, viewed);
+  }
   markSuggestionShown(subject: string, kind: string): void {
     this.observer.markShown(subject, kind);
   }

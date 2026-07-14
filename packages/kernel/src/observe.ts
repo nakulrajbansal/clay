@@ -16,7 +16,7 @@ export type UsageEvent = {
 
 export type Suggestion = {
   id: string;
-  kind: "promote_to_status" | "pin_filtered_panel";
+  kind: "promote_to_status" | "pin_filtered_panel" | "add_view";
   subject: string;
   /** the intent text prefilled into the rail if accepted */
   intent: string;
@@ -44,9 +44,12 @@ export class Observer {
         [n - USAGE_CAP]);
   }
 
-  /** Suggestions not yet shown/accepted/dismissed, freshly derived. */
-  suggestions(reg: Registry): Suggestion[] {
+  /** Suggestions not yet shown/accepted/dismissed, freshly derived.
+   * `viewedTables` = tables that already have at least one panel; a table
+   * with data but no view is the strongest ambient prompt. */
+  suggestions(reg: Registry, viewedTables: Set<string> = new Set()): Suggestion[] {
     const out: Suggestion[] = [];
+    out.push(...this.unviewedTable(reg, viewedTables));
     out.push(...this.tokenPromotion(reg));
     out.push(...this.repeatedFilter());
     // suppress any the user already dismissed/accepted
@@ -54,6 +57,33 @@ export class Observer {
       .select(`SELECT subject, kind FROM sys.suggestions WHERE state != 'shown'`)
       .map(r => `${String(r.kind)}:${String(r.subject)}`));
     return out.filter(s => !seen.has(`${s.kind}:${s.subject}`));
+  }
+
+  /**
+   * Unviewed-table: a table holding real data but rendered by NO panel is
+   * data the user can't see — offer to build a view. The clearest ambient
+   * reshape: the app notices and meets you halfway.
+   */
+  private unviewedTable(reg: Registry, viewed: Set<string>): Suggestion[] {
+    const out: Suggestion[] = [];
+    for (const table of reg.values()) {
+      if (viewed.has(table.name)) continue;
+      let n = 0;
+      try {
+        n = Number(this.driver.select(
+          `SELECT COUNT(*) AS n FROM "${table.name}" WHERE "deleted_at" IS NULL`)[0]?.n ?? 0);
+      } catch { continue; }
+      if (n < 3) continue;
+      const hasStatus = table.columns.some(c => c.type === "enum" && !c.hidden);
+      out.push({
+        id: uuidv7(), kind: "add_view", subject: table.name,
+        intent: hasStatus
+          ? `show my ${table.name} as a board grouped by status, and a table`
+          : `add a table view of my ${table.name}`,
+        reason: `You have ${n} ${table.name} but nothing shows them yet — add a view?`,
+      });
+    }
+    return out;
   }
 
   /**
