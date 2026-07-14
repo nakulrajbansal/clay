@@ -157,9 +157,10 @@ function buildTable(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
   const onRowClick = props.onRowClick;
   const wrap = el(ctx, "div", "clay-table-wrap");
   const table = el(ctx, "table", "clay-table");
-  // Give each column a floor so a narrow panel with many columns scrolls
-  // horizontally (every column stays reachable) instead of cramming them.
-  if (columns.length > 4) table.style.minWidth = `${columns.length * 96}px`;
+  // Give each column a floor so a narrow (half-width) panel scrolls
+  // horizontally with every column readable, instead of cramming/clipping
+  // them. Kicks in at 4+ columns (roughly the point a w:1 panel overflows).
+  if (columns.length >= 4) table.style.minWidth = `${columns.length * 94}px`;
 
   // Click-to-sort (interactivity): headers toggle asc/desc; numeric columns
   // sort numerically, everything else lexically. Sort is per-render (resets
