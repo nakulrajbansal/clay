@@ -689,7 +689,10 @@ function buildBoard(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
     const label = el(ctx, "span", "clay-board-label");
     label.textContent = String(g.label ?? g.key ?? "");
     const tone = clampTone(g.tone);
-    if (tone) label.classList.add(`clay-tone-fg-${tone}`);
+    if (tone) {
+      label.classList.add(`clay-tone-fg-${tone}`);
+      col.classList.add(`tcol-${tone}`);   // colored top accent per column
+    }
     const cards = Array.isArray(g.cards) ? g.cards : [];
     const count = el(ctx, "span", "clay-board-count");
     count.textContent = String(cards.length);
