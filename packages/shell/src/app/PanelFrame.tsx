@@ -25,9 +25,11 @@ const PANEL_CSS = `
   .clay-tone-accent { background: #e0e7ff; color: #3730a3; }
   .clay-empty { color: #a8a29e; padding: 18px 6px; text-align: center; }
   .clay-stack > * + * { margin-top: 8px; }
-  .clay-grid { display: flex; gap: 10px; flex-wrap: wrap; }
-  /* metric cards grow to fill the row evenly (no awkward wrap gaps) */
-  .clay-metric { flex: 1 1 100px; display: flex; flex-direction: column; gap: 3px;
+  /* responsive: as many even columns as fit (KPIs sit in one row when
+     there's room, wrap cleanly otherwise) */
+  .clay-grid { display: grid; gap: 10px;
+    grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); }
+  .clay-metric { display: flex; flex-direction: column; gap: 3px;
     padding: 11px 14px; background: #fafaf9; border: 1px solid #eeecea; border-radius: 11px; }
   .clay-metric-label { font-size: 10px; font-weight: 600; color: #a8a29e;
     text-transform: uppercase; letter-spacing: .05em; }
