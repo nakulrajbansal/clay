@@ -280,12 +280,27 @@ describe("Chart multi-series (from live diagnostic: planned vs actual)", () => {
     expect(c.querySelectorAll(".clay-chart-legend .lg")).toHaveLength(2);
   });
 
-  it("still renders a plain single-series bar chart, now with x-axis labels", () => {
+  it("still renders a plain single-series bar chart, now with axis + labels", () => {
     const c = mount(h(Chart, { kind: "bar", data: [{ x: "a", y: 3 }, { x: "b", y: 7 }] }));
     expect(c.querySelectorAll(".clay-chart-bar")).toHaveLength(2);
     expect(c.querySelector(".clay-chart-legend")).toBeNull();
-    const ticks = [...c.querySelectorAll("text")].map(t => t.textContent);
+    expect(c.querySelector(".clay-chart-axis")).not.toBeNull();         // baseline
+    const ticks = [...c.querySelectorAll(".clay-chart-xtick")].map(t => t.textContent);
     expect(ticks).toEqual(["a", "b"]);
+    const vals = [...c.querySelectorAll(".clay-chart-val")].map(t => t.textContent);
+    expect(vals).toEqual(["3", "7"]);                                   // value labels
+  });
+
+  it("line chart draws an area fill and a point dot per value", () => {
+    const c = mount(h(Chart, { kind: "line", data: [{ x: "a", y: 3 }, { x: "b", y: 7 }, { x: "c", y: 5 }] }));
+    expect(c.querySelectorAll(".clay-chart-dot")).toHaveLength(3);
+    expect(c.querySelector(".clay-chart-areafill")).not.toBeNull();
+    expect(c.querySelector(".clay-chart-line")).not.toBeNull();
+  });
+
+  it("bar value labels compact large numbers (1500 -> 1.5k)", () => {
+    const c = mount(h(Chart, { kind: "bar", data: [{ x: "q", y: 1500 }] }));
+    expect(c.querySelector(".clay-chart-val")?.textContent).toBe("1.5k");
   });
 
   it("pie: distinct colour per slice + a legend of categories", () => {

@@ -57,11 +57,14 @@ const PANEL_CSS = `
   .clay-button:hover { filter: brightness(1.06); }
   .clay-filterbar { display: flex; gap: 8px; }
   .clay-chart svg { width: 100%; height: auto; display: block; overflow: visible; }
-  .clay-chart-bar { fill: var(--accent); rx: 3; }
+  .clay-chart-bar { fill: var(--accent); }
   /* slice colour is set inline (per category); CSS only draws separators */
   .clay-chart-slice { stroke: #fff; stroke-width: 1.5; }
-  .clay-chart-line { fill: none; stroke: var(--accent); stroke-width: 2; }
-  .clay-chart-area { fill: #5b57eb22; stroke: var(--accent); }
+  .clay-chart-axis { stroke: var(--border-2); stroke-width: 1; }
+  .clay-chart-line { fill: none; stroke: var(--accent); stroke-width: 2.25;
+    stroke-linejoin: round; stroke-linecap: round; }
+  .clay-chart-areafill { fill: rgba(106,103,230,.12); stroke: none; }
+  .clay-chart-dot { fill: #fff; stroke: var(--accent); stroke-width: 1.75; }
   .clay-chart-legend { display: flex; flex-wrap: wrap; gap: 6px 14px;
     margin-top: 9px; font-size: 11.5px; color: var(--text-2); }
   .clay-chart-legend .lg { display: inline-flex; align-items: center; gap: 6px; }
@@ -122,8 +125,16 @@ const PANEL_CSS = `
   .clay-card { background: #fff; border: 1px solid var(--border-2); border-radius: 10px;
     padding: 9px 11px; box-shadow: 0 1px 2px rgba(16,24,40,.04); transition: box-shadow .1s, border-color .1s; }
   .clay-card-lg { padding: 13px 15px; }
-  .clay-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
-  .clay-card-title { font-weight: 600; font-size: 13px; letter-spacing: -.005em; }
+  /* title takes the full width and wraps cleanly; a value/badge drops onto its
+     own line below rather than crushing the title in a narrow kanban card */
+  .clay-card-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 8px; }
+  .clay-card-title { flex: 1 1 100%; font-weight: 600; font-size: 13px;
+    letter-spacing: -.005em; line-height: 1.32; }
+  .clay-card-head .clay-badge { flex: none; }
+  /* a neutral value (e.g. a money amount) reads better as plain bold text than
+     a chunky pill; keep coloured tones as pills (they signal status) */
+  .clay-card-head .clay-badge.clay-tone-gray, .clay-card-head .clay-badge.clay-tone-default {
+    background: transparent; color: var(--text-2); font-weight: 700; padding: 0; font-size: 12px; }
   .clay-card-subtitle { font-size: 12px; color: var(--text-2); margin-top: 3px; }
   .clay-card-field { display: flex; justify-content: space-between; font-size: 12px; margin-top: 5px; }
   .clay-card-field-label { color: var(--text-3); }

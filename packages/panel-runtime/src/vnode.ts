@@ -423,6 +423,15 @@ function shortX(x: string): string {
   return x.length > 7 ? `${x.slice(0, 6)}…` : x;
 }
 
+// Compact value label for bar tops: 1500 -> "1.5k", 12 -> "12", 3.25 -> "3.3".
+function fmtNum(n: number): string {
+  const a = Math.abs(n);
+  if (a >= 1e6) return `${(n / 1e6).toFixed(1).replace(/\.0$/, "")}M`;
+  if (a >= 1e3) return `${(n / 1e3).toFixed(1).replace(/\.0$/, "")}k`;
+  if (Number.isInteger(n)) return String(n);
+  return String(Math.round(n * 10) / 10);
+}
+
 function buildChart(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
   const kind = typeof props.kind === "string" ? props.kind : "bar";
   const height = typeof props.height === "number" ? props.height : 200;
@@ -445,7 +454,9 @@ function buildChart(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
   wrap.appendChild(svg);
   if (data.length === 0) return wrap;
 
-  const maxY = Math.max(...data.map(d => d.y), 0) || 1;
+  const rawMax = Math.max(...data.map(d => d.y), 0) || 1;
+  // Headroom above the tallest bar so value labels have room to breathe.
+  const maxY = kind === "pie" ? rawMax : rawMax * 1.16;
   const pad = 4;
   // Reserve a strip for x-axis labels on bar/line/area (pie doesn't use yFor).
   const showTicks = kind !== "pie" && data.length <= 12;
@@ -456,7 +467,8 @@ function buildChart(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
     const t = ctx.doc.createElementNS(SVG_NS, "text");
     t.setAttribute("x", String(cx)); t.setAttribute("y", String(height - 3));
     t.setAttribute("text-anchor", "middle"); t.setAttribute("font-size", "7");
-    t.setAttribute("fill", "#a6a4b1"); t.textContent = shortX(String(label));
+    t.setAttribute("fill", "#a6a4b1"); t.setAttribute("class", "clay-chart-xtick");
+    t.textContent = shortX(String(label));
     svg.appendChild(t);
   };
 
@@ -499,34 +511,69 @@ function buildChart(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
     return wrap;
   }
 
+  // baseline (bar/line/area share it)
+  const baseline = ctx.doc.createElementNS(SVG_NS, "line");
+  baseline.setAttribute("x1", String(pad)); baseline.setAttribute("x2", String(CHART_W - pad));
+  baseline.setAttribute("y1", String(yFor(0))); baseline.setAttribute("y2", String(yFor(0)));
+  baseline.setAttribute("class", "clay-chart-axis");
+  svg.appendChild(baseline);
+
   if (kind === "line" || kind === "area") {
     const step = data.length > 1 ? (CHART_W - pad * 2) / (data.length - 1) : 0;
-    const points = data.map((d, i) => `${pad + i * step},${yFor(d.y)}`);
-    const node = ctx.doc.createElementNS(SVG_NS, kind === "area" ? "polygon" : "polyline");
-    const path = kind === "area"
-      ? `${pad},${yFor(0)} ${points.join(" ")} ${pad + (data.length - 1) * step},${yFor(0)}`
-      : points.join(" ");
-    node.setAttribute("points", path);
-    node.setAttribute("class", `clay-chart-${kind}`);
-    svg.appendChild(node);
-    if (showTicks) data.forEach((d, i) => xTick(pad + i * step, String(d.x)));
+    const xs = data.map((_, i) => pad + i * step);
+    const poly = data.map((d, i) => `${xs[i]},${yFor(d.y)}`).join(" ");
+    // soft filled area beneath the line
+    const fill = ctx.doc.createElementNS(SVG_NS, "polygon");
+    fill.setAttribute("points", `${pad},${yFor(0)} ${poly} ${xs[data.length - 1]},${yFor(0)}`);
+    fill.setAttribute("class", "clay-chart-areafill");
+    svg.appendChild(fill);
+    // crisp line on top
+    const line = ctx.doc.createElementNS(SVG_NS, "polyline");
+    line.setAttribute("points", poly);
+    line.setAttribute("class", "clay-chart-line");
+    svg.appendChild(line);
+    // point dots
+    data.forEach((d, i) => {
+      const dot = ctx.doc.createElementNS(SVG_NS, "circle");
+      dot.setAttribute("cx", String(xs[i])); dot.setAttribute("cy", String(yFor(d.y)));
+      dot.setAttribute("r", "2.6"); dot.setAttribute("class", "clay-chart-dot");
+      const title = ctx.doc.createElementNS(SVG_NS, "title");
+      title.textContent = `${String(d.x)}: ${d.y}`;
+      dot.appendChild(title);
+      svg.appendChild(dot);
+    });
+    if (showTicks) data.forEach((d, i) => xTick(xs[i]!, String(d.x)));
     return wrap;
   }
 
   // bar (default)
   const slot = (CHART_W - pad * 2) / data.length;
+  const showVals = data.length <= 10;
   data.forEach((d, i) => {
+    const bx = pad + i * slot + slot * 0.12;
+    const bw = slot * 0.76;
+    const by = yFor(d.y);
     const rect = ctx.doc.createElementNS(SVG_NS, "rect");
-    rect.setAttribute("x", String(pad + i * slot + slot * 0.1));
-    rect.setAttribute("width", String(slot * 0.8));
-    rect.setAttribute("y", String(yFor(d.y)));
-    rect.setAttribute("height", String(Math.max(yFor(0) - yFor(d.y), 0)));
+    rect.setAttribute("x", String(bx));
+    rect.setAttribute("width", String(bw));
+    rect.setAttribute("y", String(by));
+    rect.setAttribute("height", String(Math.max(yFor(0) - by, 0)));
+    rect.setAttribute("rx", "4");
     rect.setAttribute("class", "clay-chart-bar");
     const title = ctx.doc.createElementNS(SVG_NS, "title");
     title.textContent = `${String(d.x)}: ${d.y}`;
     rect.appendChild(title);
     svg.appendChild(rect);
-    if (showTicks) xTick(pad + i * slot + slot / 2, String(d.x));
+    if (showVals && d.y > 0) {
+      const val = ctx.doc.createElementNS(SVG_NS, "text");
+      val.setAttribute("x", String(bx + bw / 2)); val.setAttribute("y", String(by - 3));
+      val.setAttribute("text-anchor", "middle"); val.setAttribute("font-size", "8");
+      val.setAttribute("font-weight", "600"); val.setAttribute("fill", "#6d6b78");
+      val.setAttribute("class", "clay-chart-val");
+      val.textContent = fmtNum(d.y);
+      svg.appendChild(val);
+    }
+    if (showTicks) xTick(bx + bw / 2, String(d.x));
   });
   return wrap;
 }
@@ -577,6 +624,12 @@ function buildMultiSeriesChart(
   svg.setAttribute("viewBox", `0 0 ${CHART_W} ${height}`);
   svg.setAttribute("role", "img");
   wrap.appendChild(svg);
+
+  const baseline = ctx.doc.createElementNS(SVG_NS, "line");
+  baseline.setAttribute("x1", String(pad)); baseline.setAttribute("x2", String(CHART_W - pad));
+  baseline.setAttribute("y1", String(baseY)); baseline.setAttribute("y2", String(baseY));
+  baseline.setAttribute("class", "clay-chart-axis");
+  svg.appendChild(baseline);
 
   const lineStep = cats.length > 1 ? (CHART_W - pad * 2) / (cats.length - 1) : 0;
   const groupSlot = (CHART_W - pad * 2) / Math.max(cats.length, 1);
@@ -632,6 +685,7 @@ function buildMultiSeriesChart(
       t.setAttribute("text-anchor", "middle");
       t.setAttribute("font-size", "7");
       t.setAttribute("fill", "#a6a4b1");
+      t.setAttribute("class", "clay-chart-xtick");
       t.textContent = shortX(c);
       svg.appendChild(t);
     });
