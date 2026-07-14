@@ -202,6 +202,8 @@ type PoolUtil = {
   OpfsSAHPoolDb: new (filename: string) => Database;
   wipeFiles(): Promise<number>;
   unlink?(name: string): boolean;
+  getCapacity?(): number;
+  addCapacity?(n: number): Promise<number>;
 };
 let activePool: PoolUtil | null = null;
 
@@ -220,10 +222,16 @@ export async function openBrowserDriver(
   const s = await sqlite3();
   try {
     const withPool = s as unknown as {
-      installOpfsSAHPoolVfs(opts?: { name?: string }): Promise<PoolUtil>;
+      installOpfsSAHPoolVfs(opts?: { name?: string; initialCapacity?: number }): Promise<PoolUtil>;
     };
-    const pool = await withPool.installOpfsSAHPoolVfs({});
+    // Each app uses 2 files (user + system); the default pool has few slots.
+    // Reserve headroom so several apps (G4) fit without exhausting handles.
+    const pool = await withPool.installOpfsSAHPoolVfs({ initialCapacity: 24 });
     activePool = pool;
+    if (typeof pool.getCapacity === "function" && typeof pool.addCapacity === "function"
+        && pool.getCapacity() < 24) {
+      try { await pool.addCapacity(24 - pool.getCapacity()); } catch { /* best effort */ }
+    }
     const files = appFiles(appId);
     const db = new pool.OpfsSAHPoolDb(files.user);
     db.exec("PRAGMA foreign_keys = ON");

@@ -21,7 +21,17 @@ import {
   setCurrentApp, shellName, type AppEntry,
 } from "./apps";
 
-type Phase = "loading" | "onboarding" | "main";
+type Phase = "loading" | "onboarding" | "main" | "error";
+
+/** Reject if a promise doesn't settle in time — turns a silent OPFS/worker
+ * stall into a visible, recoverable error instead of an eternal spinner. */
+function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`${what} timed out after ${ms / 1000}s`)), ms)),
+  ]);
+}
 type Toast = { id: number; msg: string; kind: string };
 
 type PanelFault = { code: string; message: string };
@@ -49,6 +59,7 @@ export function App(): React.JSX.Element {
   const [phase, setPhase] = useState<Phase>("loading");
   const [apps, setApps] = useState<AppEntry[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
+  const [bootError, setBootError] = useState<string | null>(null);
   const [persistent, setPersistent] = useState(true);
   const [panels, setPanels] = useState<LivePanel[]>([]);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
@@ -99,31 +110,41 @@ export function App(): React.JSX.Element {
     const wc = new WorkerClient(worker);
     workerRef.current = wc;
     void (async () => {
-      const cur = currentApp();                       // registry entry or null
-      const boot = await wc.boot(cur?.id);
-      setPersistent(boot.persistent);
-      setHasKey((await wc.getSetting<string>("byo_api_key")) !== null
-        || (await wc.getSetting<string>("backend_url")) !== null);
+      try {
+        const cur = currentApp();                     // registry entry or null
+        const boot = await withTimeout(wc.boot(cur?.id), 20_000, "Opening the app");
+        setPersistent(boot.persistent);
+        setHasKey((await wc.getSetting<string>("byo_api_key")) !== null
+          || (await wc.getSetting<string>("backend_url")) !== null);
 
-      // Existing single-app user with data but no registry: adopt it (G4).
-      if (boot.seeded) ensureLegacyAdopted(true, boot.shellId);
+        // Existing single-app user with data but no registry: adopt it (G4).
+        if (boot.seeded) ensureLegacyAdopted(true, boot.shellId);
 
-      if (!boot.seeded) {
-        if (cur) {
-          // a freshly created additional app pending its first seed
-          await wc.seed(cur.shellId as StarterShellId);
-        } else {
-          setPhase("onboarding");           // first run ever — pick a template
-          return;
+        if (!boot.seeded) {
+          if (cur) {
+            // a freshly created additional app pending its first seed
+            await withTimeout(wc.seed(cur.shellId as StarterShellId), 20_000, "Setting up the app");
+          } else {
+            setPhase("onboarding");         // first run ever — pick a template
+            return;
+          }
         }
+        setApps(listApps());
+        setCurrentId(currentApp()?.id ?? null);
+        setLiveBridge(makeBridge(wc, "live", pushToast, recordFault));
+        setPanels(await wc.panels());
+        setHistory(await wc.history());
+        setSuggestions(await wc.suggestions());
+        setPhase("main");
+      } catch (e) {
+        // Never hang on the spinner: surface the failure and let the user
+        // recover (retry, switch to another app, or start over).
+        console.error("[clay boot]", e);
+        setApps(listApps());
+        setCurrentId(currentApp()?.id ?? null);
+        setBootError(e instanceof Error ? e.message : String(e));
+        setPhase("error");
       }
-      setApps(listApps());
-      setCurrentId(currentApp()?.id ?? null);
-      setLiveBridge(makeBridge(wc, "live", pushToast, recordFault));
-      setPanels(await wc.panels());
-      setHistory(await wc.history());
-      setSuggestions(await wc.suggestions());
-      setPhase("main");
     })();
     return (): void => worker.terminate();
   }, [pushToast, recordFault]);
@@ -144,11 +165,17 @@ export function App(): React.JSX.Element {
       setPhase("main");
     } else {
       // an additional app: reboot so the worker opens its own files, then seed
-      window.location.reload();
+      reloadApp();
     }
   };
 
-  const switchApp = (id: string): void => { setCurrentApp(id); window.location.reload(); };
+  // Reload after terminating the worker so the next one can re-acquire the
+  // OPFS pool without lock contention (a stuck cause on fast reloads).
+  const reloadApp = (): void => {
+    try { workerRef.current?.terminate(); } catch { /* ignore */ }
+    setTimeout(() => window.location.reload(), 150);
+  };
+  const switchApp = (id: string): void => { setCurrentApp(id); reloadApp(); };
   const newApp = (): void => setPhase("onboarding");
   const deleteApp = async (id: string): Promise<void> => {
     const entry = apps.find(a => a.id === id);
@@ -156,8 +183,8 @@ export function App(): React.JSX.Element {
       `Delete “${entry?.name ?? "this app"}” and all of its data? `
       + "This cannot be undone. (Export a .clay backup first if unsure.)")) return;
     removeApp(id);
-    await client().deleteApp(id);
-    window.location.reload();
+    try { await client().deleteApp(id); } catch { /* files may already be gone */ }
+    reloadApp();
   };
 
   const handleOutcome = (outcome: IntentOutcome): void => {
@@ -364,6 +391,24 @@ export function App(): React.JSX.Element {
   }, [panels, preview, scrub]);
 
   if (phase === "loading") return <div className="boot">Opening your app…</div>;
+  if (phase === "error")
+    return (
+      <div className="boot boot-error">
+        <h2>This app didn’t open</h2>
+        <p className="boot-error-msg">{bootError}</p>
+        <div className="rail-actions">
+          <button className="primary" onClick={() => window.location.reload()}>Try again</button>
+          {apps.filter(a => a.id !== currentId).map(a => (
+            <button key={a.id} onClick={() => switchApp(a.id)}>Open “{a.name}”</button>
+          ))}
+          <button className="link danger" onClick={() => void resetApp()}>Start over…</button>
+        </div>
+        <p className="boot-error-hint">
+          Tip: this often clears on a second try. If it keeps failing, open the
+          console (F12) and send the [clay boot] error.
+        </p>
+      </div>
+    );
   if (phase === "onboarding")
     return (
       <Onboarding

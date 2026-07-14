@@ -39,6 +39,10 @@ export class WorkerClient {
     });
   }
 
+  /** Terminate the worker, releasing its OPFS access handles. Call before a
+   * reload so the next worker can acquire the pool without contention. */
+  terminate(): void { try { this.worker.terminate(); } catch { /* already gone */ } }
+
   boot(appId?: string): Promise<BootInfo> { return this.call("boot", { appId }); }
   deleteApp(appId: string): Promise<null> { return this.call("deleteApp", { appId }); }
   status(): Promise<StatusInfo> { return this.call("status"); }
