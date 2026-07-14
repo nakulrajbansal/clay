@@ -240,12 +240,37 @@ export function PanelFrame(props: {
   draggingSrc?: boolean;
   wide?: boolean;
   onResize?: () => void;
+  onSetWidth?: (w: number) => void;
   onViewAs?: (view: string) => void;
 }): React.JSX.Element {
   const { panel, bridge, preview } = props;
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState<number | null>(null);
   const [viewsOpen, setViewsOpen] = useState(false);
+  const [dragW, setDragW] = useState<number | null>(null);   // live resize preview (1|2)
+  // Edge-drag width resize: grab the right edge and drag; the panel snaps to
+  // half (1 col) or full (2 cols) with a live preview, committed on release.
+  // Pointer capture keeps events flowing even over the iframe.
+  const startWidthDrag = (e: React.PointerEvent<HTMLDivElement>): void => {
+    if (!props.onSetWidth) return;
+    e.preventDefault();
+    const handle = e.currentTarget;
+    handle.setPointerCapture(e.pointerId);
+    const region = handle.closest(".panel-frame")?.parentElement ?? null;
+    const wFor = (clientX: number): number => {
+      const r = region?.getBoundingClientRect();
+      if (!r) return props.wide ? 2 : 1;
+      return clientX > r.left + r.width * 0.5 ? 2 : 1;
+    };
+    handle.onpointermove = (ev): void => setDragW(wFor(ev.clientX));
+    handle.onpointerup = (ev): void => {
+      const w = wFor(ev.clientX);
+      handle.onpointermove = null; handle.onpointerup = null;
+      try { handle.releasePointerCapture(ev.pointerId); } catch { /* already released */ }
+      setDragW(null);
+      props.onSetWidth?.(w);
+    };
+  };
   const [viewsPos, setViewsPos] = useState<{ top: number; left: number } | null>(null);
   const viewsBtnRef = useRef<HTMLButtonElement>(null);
   const openViews = (): void => {
@@ -295,8 +320,13 @@ export function PanelFrame(props: {
     };
   }, [panel, bridge]);
 
+  // during an edge-drag, preview the target span live (overrides `wide`)
+  const previewWide = dragW !== null ? dragW === 2 : props.wide;
   return (
-    <section className={`panel-frame${preview ? " panel-preview" : ""}${props.draggingSrc ? " panel-drag-src" : ""}${props.wide ? " panel-wide" : ""}`}>
+    <section
+      className={`panel-frame${preview ? " panel-preview" : ""}${props.draggingSrc ? " panel-drag-src" : ""}${previewWide ? " panel-wide" : ""}${dragW !== null ? " panel-resizing" : ""}`}
+      style={dragW !== null ? { gridColumn: dragW === 2 ? "1 / -1" : "auto" } : undefined}
+    >
       <header className="panel-title">
         {props.onDragStart ? (
           <span
@@ -359,6 +389,13 @@ export function PanelFrame(props: {
         srcDoc={buildSrcdoc()}
         style={height !== null ? { height: `${height}px` } : undefined}
       />
+      {props.onSetWidth ? (
+        <div
+          className="panel-edge-resize"
+          title="Drag to resize (half / full width)"
+          onPointerDown={startWidthDrag}
+        ><span className="panel-edge-grip" /></div>
+      ) : null}
       {props.fault ? (
         <div className="panel-boundary">
           <p className="panel-boundary-title">This panel hit a problem.</p>

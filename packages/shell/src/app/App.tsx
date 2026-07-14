@@ -24,7 +24,7 @@ import {
 import {
   getApiKey, getBackendUrl, hasModelAccess, setApiKey, setBackendUrl,
 } from "./settings";
-import { reorder } from "./layout";
+import { reorder, type Region } from "./layout";
 
 type Phase = "loading" | "onboarding" | "main" | "error";
 
@@ -66,6 +66,7 @@ export function App(): React.JSX.Element {
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ region: Region; index: number } | null>(null);
   const [intentSeed, setIntentSeed] = useState<{ text: string; n: number }>({ text: "", n: 0 });
   const seedIntent = (t: string): void => setIntentSeed(s => ({ text: t, n: s.n + 1 }));
   const [persistent, setPersistent] = useState(true);
@@ -484,14 +485,17 @@ export function App(): React.JSX.Element {
   };
   // Resize (B4/ADR-017): toggle a panel between 1 and 2 columns — a
   // reversible commit, same timeline as everything else.
-  const toggleWidth = async (panelId: string): Promise<void> => {
+  const setWidth = async (panelId: string, w: number): Promise<void> => {
     const p = panels.find(x => x.panel_id === panelId);
-    if (!p) return;
-    const w = (p.placement.w ?? 1) === 2 ? 1 : 2;
+    if (!p || (p.placement.w ?? 1) === w) return;
     const updated = await client().commitLayout(
       [{ panel_id: panelId, region: p.placement.region, order: p.placement.order, w }]);
     setPanels(updated);
     setHistory(await client().history());
+  };
+  const toggleWidth = (panelId: string): Promise<void> => {
+    const cur = panels.find(x => x.panel_id === panelId)?.placement.w ?? 1;
+    return setWidth(panelId, cur === 2 ? 1 : 2);
   };
 
   // View switcher (moat pillar 4): re-lens one panel's data as a different
@@ -510,21 +514,37 @@ export function App(): React.JSX.Element {
     if (intent) void runIntent(intent);
   };
 
-  const onRegionDrop = (regionName: "top" | "main" | "side", e: React.DragEvent): void => {
-    if (!dragId) return;
-    e.preventDefault();
-    const frames = [...e.currentTarget.querySelectorAll(".panel-frame")];
-    let index = frames.findIndex(f => {
-      const r = f.getBoundingClientRect();
-      return e.clientY < r.top + r.height / 2;
-    });
-    if (index < 0) index = frames.length;
-    const placements = reorder(panels, dragId, regionName, index);
-    void applyLayout(placements);
+  // Reading-order drop index: insert before the first panel the cursor sits
+  // above (earlier row) or left-of-centre within (same row). Works for the
+  // flex regions and the 2-col main grid alike.
+  const dropIndexAt = (container: Element, x: number, y: number): number => {
+    const frames = [...container.querySelectorAll(".panel-frame")];
+    for (let i = 0; i < frames.length; i++) {
+      const r = frames[i]!.getBoundingClientRect();
+      if (y < r.top) return i;
+      if (y <= r.bottom && x < r.left + r.width / 2) return i;
+    }
+    return frames.length;
   };
 
-  const region = (name: "top" | "main" | "side"): React.JSX.Element[] =>
-    display
+  const onRegionDragOver = (regionName: Region, e: React.DragEvent): void => {
+    if (!dragId) return;
+    e.preventDefault();
+    const index = dropIndexAt(e.currentTarget, e.clientX, e.clientY);
+    setDropTarget(prev =>
+      prev && prev.region === regionName && prev.index === index ? prev : { region: regionName, index });
+  };
+
+  const onRegionDrop = (regionName: Region, e: React.DragEvent): void => {
+    if (!dragId) return;
+    e.preventDefault();
+    const index = dropIndexAt(e.currentTarget, e.clientX, e.clientY);
+    setDropTarget(null);
+    void applyLayout(reorder(panels, dragId, regionName, index));
+  };
+
+  const region = (name: "top" | "main" | "side"): React.JSX.Element[] => {
+    const els = display
       .filter(d => d.panel.placement.region === name)
       .map(d => {
         const bridge = d.isPreview ? shadowBridge : liveBridge;
@@ -548,18 +568,25 @@ export function App(): React.JSX.Element {
             onRevert={d.isPreview ? undefined : (): void => void revertPanel(d.panel.panel_id)}
             onDismiss={(): void => dismissFault(d.panel.panel_id)}
             onDragStart={canDrag && !d.isPreview ? setDragId : undefined}
-            onDragEnd={(): void => setDragId(null)}
+            onDragEnd={(): void => { setDragId(null); setDropTarget(null); }}
             draggingSrc={dragId === d.panel.panel_id}
             wide={(d.panel.placement.w ?? 1) === 2}
             onResize={canDrag && !d.isPreview && d.panel.placement.region === "main"
               ? (): void => void toggleWidth(d.panel.panel_id) : undefined}
+            onSetWidth={canDrag && !d.isPreview && d.panel.placement.region === "main"
+              ? (w): void => void setWidth(d.panel.panel_id, w) : undefined}
             onViewAs={canDrag && !d.isPreview && d.panel.declared_queries.length > 0
               ? (view): void => viewAs(d.panel, view) : undefined}
           />
         );
       });
-
-  const dragOver = (e: React.DragEvent): void => { if (dragId) e.preventDefault(); };
+    // a clear placeholder marking exactly where the dragged panel will land
+    if (dragId && dropTarget && dropTarget.region === name) {
+      const i = Math.max(0, Math.min(dropTarget.index, els.length));
+      els.splice(i, 0, <div key="drop-slot" className="drop-slot" aria-hidden="true" />);
+    }
+    return els;
+  };
 
   return (
     <div className={`app${dragId ? " app-dragging" : ""}`}>
@@ -611,9 +638,9 @@ export function App(): React.JSX.Element {
           </div>
         ) : (
           <>
-            <div className="region-top" onDragOver={dragOver} onDrop={e => onRegionDrop("top", e)}>{region("top")}</div>
-            <div className="region-main" onDragOver={dragOver} onDrop={e => onRegionDrop("main", e)}>{region("main")}</div>
-            <div className="region-side" onDragOver={dragOver} onDrop={e => onRegionDrop("side", e)}>{region("side")}</div>
+            <div className="region-top" onDragOver={e => onRegionDragOver("top", e)} onDrop={e => onRegionDrop("top", e)}>{region("top")}</div>
+            <div className="region-main" onDragOver={e => onRegionDragOver("main", e)} onDrop={e => onRegionDrop("main", e)}>{region("main")}</div>
+            <div className="region-side" onDragOver={e => onRegionDragOver("side", e)} onDrop={e => onRegionDrop("side", e)}>{region("side")}</div>
           </>
         )}
       </main>

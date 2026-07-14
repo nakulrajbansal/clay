@@ -264,12 +264,29 @@ button.link.danger { color: var(--danger); }
   font-size: 14px; line-height: 1; }
 .panel-grip:hover { color: var(--text-2); }
 .panel-grip:active { cursor: grabbing; }
-.panel-drag-src { opacity: .4; }
+.panel-drag-src { opacity: .34; }
 .app-dragging .panel-frame iframe { pointer-events: none; }
 .app-dragging .region-top, .app-dragging .region-main, .app-dragging .region-side {
   outline: 2px dashed transparent; outline-offset: -6px; border-radius: 12px; transition: outline-color .1s; }
 .app-dragging .region-top:hover, .app-dragging .region-main:hover, .app-dragging .region-side:hover {
-  outline-color: #c9c7f0; }
+  outline-color: #d7d5f5; }
+/* the exact spot a dragged panel will land */
+.drop-slot { border: 2px dashed var(--accent); border-radius: var(--radius);
+  background: var(--accent-soft); min-height: 100px; align-self: stretch;
+  animation: clay-slot-in .14s ease; }
+.region-top .drop-slot, .region-side .drop-slot { flex: 1; min-width: 120px; }
+@keyframes clay-slot-in { from { opacity: 0; transform: scale(.985); } to { opacity: 1; transform: none; } }
+/* edge-drag resize handle (right edge of main-region panels) */
+.panel-edge-resize { position: absolute; top: 0; right: 0; bottom: 0; width: 11px;
+  display: flex; align-items: center; justify-content: center; cursor: ew-resize;
+  z-index: 4; opacity: 0; transition: opacity .12s; touch-action: none; }
+.panel-frame:hover .panel-edge-resize { opacity: 1; }
+.panel-edge-grip { width: 3px; height: 32px; border-radius: 999px; background: var(--border-strong);
+  transition: background .12s, height .12s; }
+.panel-edge-resize:hover .panel-edge-grip, .panel-resizing .panel-edge-grip {
+  background: var(--accent); height: 48px; }
+.panel-resizing { box-shadow: 0 0 0 2px var(--accent), var(--shadow-md); z-index: 6; }
+.panel-resizing iframe { pointer-events: none; }
 .panel-title {
   display: flex; align-items: center; gap: 8px; font-family: var(--font-display);
   padding: 13px 16px; font-size: 13px; font-weight: 600; letter-spacing: -.01em;
