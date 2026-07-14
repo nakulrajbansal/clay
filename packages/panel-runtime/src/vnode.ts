@@ -447,8 +447,18 @@ function buildChart(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
 
   const maxY = Math.max(...data.map(d => d.y), 0) || 1;
   const pad = 4;
-  const plotH = height - pad * 2;
+  // Reserve a strip for x-axis labels on bar/line/area (pie doesn't use yFor).
+  const showTicks = kind !== "pie" && data.length <= 12;
+  const axisH = showTicks ? 14 : pad;
+  const plotH = height - pad - axisH;
   const yFor = (y: number): number => pad + plotH - (Math.max(y, 0) / maxY) * plotH;
+  const xTick = (cx: number, label: string): void => {
+    const t = ctx.doc.createElementNS(SVG_NS, "text");
+    t.setAttribute("x", String(cx)); t.setAttribute("y", String(height - 3));
+    t.setAttribute("text-anchor", "middle"); t.setAttribute("font-size", "7");
+    t.setAttribute("fill", "#a6a4b1"); t.textContent = shortX(String(label));
+    svg.appendChild(t);
+  };
 
   if (kind === "pie") {
     const total = data.reduce((s, d) => s + Math.max(d.y, 0), 0) || 1;
@@ -499,6 +509,7 @@ function buildChart(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
     node.setAttribute("points", path);
     node.setAttribute("class", `clay-chart-${kind}`);
     svg.appendChild(node);
+    if (showTicks) data.forEach((d, i) => xTick(pad + i * step, String(d.x)));
     return wrap;
   }
 
@@ -515,6 +526,7 @@ function buildChart(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
     title.textContent = `${String(d.x)}: ${d.y}`;
     rect.appendChild(title);
     svg.appendChild(rect);
+    if (showTicks) xTick(pad + i * slot + slot / 2, String(d.x));
   });
   return wrap;
 }

@@ -60,8 +60,11 @@ async function fillOnce(spec, values) {
     if (!ok) continue;
     for (const [n, v] of Object.entries(values)) {
       const ctrl = f.locator(`[name="${n}"]`).first();
-      const tag = await ctrl.evaluate(el => el.tagName.toLowerCase()).catch(() => "");
-      if (tag === "select") await ctrl.selectOption({ label: String(v) }).catch(() => ctrl.selectOption(String(v)));
+      const meta = await ctrl.evaluate(el => ({
+        tag: el.tagName.toLowerCase(), type: el.getAttribute("type") || "",
+      })).catch(() => ({ tag: "", type: "" }));
+      if (meta.tag === "select") await ctrl.selectOption({ label: String(v) }).catch(() => ctrl.selectOption(String(v)));
+      else if (meta.type === "checkbox") await ctrl.setChecked(v === true || v === "true" || v === 1);
       else await ctrl.fill(String(v));
     }
     const named = f.getByRole("button", { name: spec.form, exact: false });
@@ -78,7 +81,10 @@ if (kept && seed.length) {
   for (const spec of seed) {
     const rows = spec.times || [spec.fields];
     let n = 0;
-    for (const r of rows) if (await fillOnce(spec, r)) n++;
+    for (const r of rows) {
+      try { if (await fillOnce(spec, r)) n++; }
+      catch (e) { console.log(`  seed row failed: ${String(e).split("\n")[0]}`); }
+    }
     console.log(`  seeded ${n} row(s) via "${spec.form}"`);
   }
   await page.waitForTimeout(2500); // let watches refresh charts

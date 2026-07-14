@@ -280,10 +280,12 @@ describe("Chart multi-series (from live diagnostic: planned vs actual)", () => {
     expect(c.querySelectorAll(".clay-chart-legend .lg")).toHaveLength(2);
   });
 
-  it("still renders a plain single-series bar chart unchanged", () => {
+  it("still renders a plain single-series bar chart, now with x-axis labels", () => {
     const c = mount(h(Chart, { kind: "bar", data: [{ x: "a", y: 3 }, { x: "b", y: 7 }] }));
     expect(c.querySelectorAll(".clay-chart-bar")).toHaveLength(2);
     expect(c.querySelector(".clay-chart-legend")).toBeNull();
+    const ticks = [...c.querySelectorAll("text")].map(t => t.textContent);
+    expect(ticks).toEqual(["a", "b"]);
   });
 
   it("pie: distinct colour per slice + a legend of categories", () => {
