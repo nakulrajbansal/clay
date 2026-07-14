@@ -494,6 +494,22 @@ export function App(): React.JSX.Element {
     setHistory(await client().history());
   };
 
+  // View switcher (moat pillar 4): re-lens one panel's data as a different
+  // view via a targeted reshape (previewed + reversible like any change).
+  const viewAs = (panel: LivePanel, view: string): void => {
+    const table = panel.declared_queries[0]?.from;
+    const subject = table ? `my ${table}` : `the “${panel.title}” data`;
+    const intents: Record<string, string> = {
+      table: `Change the “${panel.title}” panel to a sortable table of ${subject}.`,
+      board: `Change the “${panel.title}” panel to a board of ${subject} grouped by its status.`,
+      cards: `Change the “${panel.title}” panel to a grid of cards for ${subject}.`,
+      chart: `Change the “${panel.title}” panel to a chart summarising ${subject}.`,
+      timeline: `Change the “${panel.title}” panel to a timeline of ${subject} by date.`,
+    };
+    const intent = intents[view];
+    if (intent) void runIntent(intent);
+  };
+
   const onRegionDrop = (regionName: "top" | "main" | "side", e: React.DragEvent): void => {
     if (!dragId) return;
     e.preventDefault();
@@ -537,6 +553,8 @@ export function App(): React.JSX.Element {
             wide={(d.panel.placement.w ?? 1) === 2}
             onResize={canDrag && !d.isPreview && d.panel.placement.region === "main"
               ? (): void => void toggleWidth(d.panel.panel_id) : undefined}
+            onViewAs={canDrag && !d.isPreview && d.panel.declared_queries.length > 0
+              ? (view): void => viewAs(d.panel, view) : undefined}
           />
         );
       });

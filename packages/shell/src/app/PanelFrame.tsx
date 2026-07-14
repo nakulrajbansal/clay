@@ -3,6 +3,7 @@
 // parent DOM; the CSP leaves no network path (doc 06 §2). The only channel
 // is one transferred MessagePort speaking the Bridge protocol.
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { portFromMessagePort, type Bridge, type LivePanel } from "@clay/kernel";
 // The fixed bootstrap, built to a single file and inlined (doc 06 §2).
 import runtimeBundle from "@clay/panel-runtime/iframe-bundle?raw";
@@ -209,6 +210,16 @@ function buildSrcdoc(): string {
 
 export type PanelFaultInfo = { code: string; message: string };
 
+// View-switcher options (moat pillar 4: one dataset, many lenses). Picking one
+// fires a targeted reshape of just this panel via the normal preview→keep flow.
+const VIEW_OPTIONS: { key: string; label: string; icon: string }[] = [
+  { key: "table", label: "Table", icon: "▤" },
+  { key: "board", label: "Board", icon: "▦" },
+  { key: "cards", label: "Cards", icon: "▢" },
+  { key: "chart", label: "Chart", icon: "▮" },
+  { key: "timeline", label: "Timeline", icon: "▬" },
+];
+
 export function PanelFrame(props: {
   panel: LivePanel;
   bridge: Bridge;
@@ -222,10 +233,24 @@ export function PanelFrame(props: {
   draggingSrc?: boolean;
   wide?: boolean;
   onResize?: () => void;
+  onViewAs?: (view: string) => void;
 }): React.JSX.Element {
   const { panel, bridge, preview } = props;
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState<number | null>(null);
+  const [viewsOpen, setViewsOpen] = useState(false);
+  const [viewsPos, setViewsPos] = useState<{ top: number; left: number } | null>(null);
+  const viewsBtnRef = useRef<HTMLButtonElement>(null);
+  const openViews = (): void => {
+    const r = viewsBtnRef.current?.getBoundingClientRect();
+    if (r) {
+      const w = 152; const h = 224;
+      const left = Math.min(Math.max(8, r.right - w), window.innerWidth - w - 8);
+      const top = Math.min(r.bottom + 6, window.innerHeight - h - 8);
+      setViewsPos({ top, left });
+    }
+    setViewsOpen(o => !o);
+  };
 
   useEffect(() => {
     const iframe = iframeRef.current;
@@ -283,13 +308,42 @@ export function PanelFrame(props: {
         ) : null}
         {panel.title}
         {preview ? <span className="panel-proposed">proposed</span> : null}
-        {props.onResize ? (
-          <button
-            className="panel-resize"
-            title={props.wide ? "Make narrow" : "Make wide"}
-            onClick={props.onResize}
-          >{props.wide ? "◨" : "▭"}</button>
-        ) : null}
+        <span className="panel-tools">
+          {props.onViewAs ? (
+            <span className="panel-views">
+              <button
+                ref={viewsBtnRef}
+                className="panel-tool"
+                title="Show this data another way"
+                onClick={openViews}
+              >⇄</button>
+              {viewsOpen && viewsPos ? createPortal(
+                <>
+                  <div className="panel-views-backdrop" onClick={() => setViewsOpen(false)} />
+                  <div className="panel-views-menu"
+                    style={{ position: "fixed", top: viewsPos.top, left: viewsPos.left }}>
+                    <span className="panel-views-head">View as</span>
+                    {VIEW_OPTIONS.map(v => (
+                      <button
+                        key={v.key}
+                        className="panel-views-item"
+                        onClick={() => { setViewsOpen(false); props.onViewAs!(v.key); }}
+                      >{v.icon} {v.label}</button>
+                    ))}
+                  </div>
+                </>,
+                document.body,
+              ) : null}
+            </span>
+          ) : null}
+          {props.onResize ? (
+            <button
+              className="panel-resize panel-tool"
+              title={props.wide ? "Make narrow" : "Make wide"}
+              onClick={props.onResize}
+            >{props.wide ? "◨" : "▭"}</button>
+          ) : null}
+        </span>
       </header>
       <iframe
         ref={iframeRef}
