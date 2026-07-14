@@ -244,6 +244,40 @@ export class ClayStore {
        })]);
   }
 
+  /**
+   * Direct manipulation (B4/doc 13): apply new panel placements as a
+   * reversible commit — no model, no migration. Only the moved panels are
+   * re-committed (code and queries unchanged), so it's a normal version in
+   * the log and fully rewindable via the time slider. Reshape by touch and
+   * reshape by language share one history.
+   */
+  commitLayout(
+    placements: { panel_id: string; region: "top" | "main" | "side"; order: number }[],
+  ): number {
+    const live = new Map(this.livePanels().map(p => [p.panel_id, p]));
+    const moved: PanelBlobInput[] = [];
+    for (const pl of placements) {
+      const p = live.get(pl.panel_id);
+      if (!p) continue;
+      if (p.placement.region === pl.region && p.placement.order === pl.order) continue;
+      moved.push({
+        panel_id: p.panel_id, title: p.title,
+        placement: { region: pl.region, order: pl.order },
+        code: p.code, declared_queries: p.declared_queries, declared_writes: p.declared_writes,
+      });
+    }
+    if (moved.length === 0) return this.headVersion();
+    return this.commit({
+      intent: "rearrange layout",
+      summary: "Rearranged the layout by hand.",
+      migration: null, panels: moved,
+      diff: moved.map(p => ({
+        kind: "change_panel",
+        detail: `Moved ${p.title} to ${p.placement.region}`,
+      })),
+    });
+  }
+
   /** Live panels at a version (default: current): latest blob per id, minus
    * panels whose latest tombstone is newer than their latest blob
    * (doc 04 §5). Passing an older version powers scrub-preview — panels AT

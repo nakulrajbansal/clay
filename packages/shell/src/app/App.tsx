@@ -23,6 +23,7 @@ import {
 import {
   getApiKey, getBackendUrl, hasModelAccess, setApiKey, setBackendUrl,
 } from "./settings";
+import { reorder } from "./layout";
 
 type Phase = "loading" | "onboarding" | "main" | "error";
 
@@ -63,6 +64,7 @@ export function App(): React.JSX.Element {
   const [apps, setApps] = useState<AppEntry[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
+  const [dragId, setDragId] = useState<string | null>(null);
   const [persistent, setPersistent] = useState(true);
   const [panels, setPanels] = useState<LivePanel[]>([]);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
@@ -435,6 +437,30 @@ export function App(): React.JSX.Element {
       />
     );
 
+  // Direct manipulation (B4): drag a panel by its grip to rearrange. Each
+  // drop is a reversible commit — same timeline as language reshapes. Only
+  // live (non-preview, non-scrub) panels are draggable.
+  const canDrag = !scrub && !preview && busy === false;
+  const applyLayout = async (placements: ReturnType<typeof reorder>): Promise<void> => {
+    setDragId(null);
+    const updated = await client().commitLayout(placements);
+    setPanels(updated);
+    setHistory(await client().history());
+    pushToast("Rearranged — rewind any time in the timeline", "success");
+  };
+  const onRegionDrop = (regionName: "top" | "main" | "side", e: React.DragEvent): void => {
+    if (!dragId) return;
+    e.preventDefault();
+    const frames = [...e.currentTarget.querySelectorAll(".panel-frame")];
+    let index = frames.findIndex(f => {
+      const r = f.getBoundingClientRect();
+      return e.clientY < r.top + r.height / 2;
+    });
+    if (index < 0) index = frames.length;
+    const placements = reorder(panels, dragId, regionName, index);
+    void applyLayout(placements);
+  };
+
   const region = (name: "top" | "main" | "side"): React.JSX.Element[] =>
     display
       .filter(d => d.panel.placement.region === name)
@@ -459,12 +485,17 @@ export function App(): React.JSX.Element {
             onRepair={d.isPreview ? undefined : (): void => void repairPanel(d.panel.panel_id)}
             onRevert={d.isPreview ? undefined : (): void => void revertPanel(d.panel.panel_id)}
             onDismiss={(): void => dismissFault(d.panel.panel_id)}
+            onDragStart={canDrag && !d.isPreview ? setDragId : undefined}
+            onDragEnd={(): void => setDragId(null)}
+            draggingSrc={dragId === d.panel.panel_id}
           />
         );
       });
 
+  const dragOver = (e: React.DragEvent): void => { if (dragId) e.preventDefault(); };
+
   return (
-    <div className="app">
+    <div className={`app${dragId ? " app-dragging" : ""}`}>
       <AppSwitcher
         apps={apps}
         currentId={currentId}
@@ -488,9 +519,9 @@ export function App(): React.JSX.Element {
           onScrub={v => void scrubTo(v)}
           onMakeLatest={() => void makeLatest()}
         />
-        <div className="region-top">{region("top")}</div>
-        <div className="region-main">{region("main")}</div>
-        <div className="region-side">{region("side")}</div>
+        <div className="region-top" onDragOver={dragOver} onDrop={e => onRegionDrop("top", e)}>{region("top")}</div>
+        <div className="region-main" onDragOver={dragOver} onDrop={e => onRegionDrop("main", e)}>{region("main")}</div>
+        <div className="region-side" onDragOver={dragOver} onDrop={e => onRegionDrop("side", e)}>{region("side")}</div>
       </main>
       {showData && dataStoreRef.current && workerRef.current ? (
         <DataView

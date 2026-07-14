@@ -145,6 +145,9 @@ export function PanelFrame(props: {
   onRepair?: () => void;
   onRevert?: () => void;
   onDismiss?: () => void;
+  onDragStart?: (id: string) => void;
+  onDragEnd?: () => void;
+  draggingSrc?: boolean;
 }): React.JSX.Element {
   const { panel, bridge, preview } = props;
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -187,8 +190,23 @@ export function PanelFrame(props: {
   }, [panel, bridge]);
 
   return (
-    <section className={`panel-frame${preview ? " panel-preview" : ""}`}>
+    <section className={`panel-frame${preview ? " panel-preview" : ""}${props.draggingSrc ? " panel-drag-src" : ""}`}>
       <header className="panel-title">
+        {props.onDragStart ? (
+          <span
+            className="panel-grip"
+            draggable
+            title="Drag to rearrange"
+            onDragStart={e => {
+              e.dataTransfer.effectAllowed = "move";
+              e.dataTransfer.setData("text/plain", panel.panel_id);
+              const section = e.currentTarget.closest(".panel-frame");
+              if (section) e.dataTransfer.setDragImage(section as Element, 24, 16);
+              props.onDragStart!(panel.panel_id);
+            }}
+            onDragEnd={() => props.onDragEnd?.()}
+          >⠿</span>
+        ) : null}
         {panel.title}
         {preview ? <span className="panel-proposed">proposed</span> : null}
       </header>

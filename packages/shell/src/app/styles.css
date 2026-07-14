@@ -96,6 +96,18 @@ button.link.danger { color: #991b1b; }
   border: 1px solid #e7e5e4; border-radius: 14px; background: #fff;
   overflow: hidden; min-width: 220px; flex: 1;
 }
+/* direct manipulation: drag panels to rearrange (B4) */
+.panel-grip { cursor: grab; color: #d6d3d1; user-select: none; padding-right: 2px;
+  font-size: 14px; line-height: 1; }
+.panel-grip:hover { color: #78716c; }
+.panel-grip:active { cursor: grabbing; }
+.panel-drag-src { opacity: .4; }
+/* while dragging, let drag events fall through the iframes to the regions */
+.app-dragging .panel-frame iframe { pointer-events: none; }
+.app-dragging .region-top, .app-dragging .region-main, .app-dragging .region-side {
+  outline: 2px dashed transparent; outline-offset: -6px; border-radius: 12px; transition: outline-color .1s; }
+.app-dragging .region-top:hover, .app-dragging .region-main:hover, .app-dragging .region-side:hover {
+  outline-color: #c7d2fe; }
 .panel-title {
   display: flex; align-items: center; gap: 8px;
   padding: 8px 12px; font-size: 12px; font-weight: 700;

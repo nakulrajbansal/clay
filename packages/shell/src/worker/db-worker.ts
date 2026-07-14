@@ -150,6 +150,10 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       return null;
     case "panels":
       return mustStore().livePanels();
+    case "commitLayout":
+      mustStore().commitLayout(
+        p.placements as { panel_id: string; region: "top" | "main" | "side"; order: number }[]);
+      return mustStore().livePanels();
     case "history":
       return mustStore().history();
     case "panelsAt":
