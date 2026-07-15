@@ -9,7 +9,7 @@ const out = process.argv[3] || "shot.png";
 
 const NAMES = {
   crm: "Sales CRM", small_business: "Small Business", financials: "Bookkeeping",
-  staff: "Staff & Scheduling", tracker: "Tracker", log: "Log", dashboard: "Dashboard",
+  staff: "Staff & Scheduling", habits: "Habits", tracker: "Tracker", log: "Log", dashboard: "Dashboard",
 };
 
 const browser = await chromium.launch();

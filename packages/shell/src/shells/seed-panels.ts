@@ -639,6 +639,76 @@ const staff = [
 }`),
 ];
 
+// ---------- habits ----------
+const habits_overview = panel(
+  "habits_overview", "This week", "top", 0,
+  [{ from: "habits" }], [],
+  `export default function (clay) {
+  clay.db.watch({ from: "habits" }, (rows) => {
+    const total = rows.length;
+    const active = rows.filter((r) => (r.streak || 0) > 0).length;
+    const avg = total ? Math.round(rows.reduce((s, r) => s + (r.streak || 0), 0) / total) : 0;
+    clay.ui.render(h(Grid, {},
+      h(MetricCard, { label: "Habits", value: total }),
+      h(MetricCard, { label: "On a streak", value: active }),
+      h(MetricCard, { label: "Avg streak (days)", value: avg })));
+  });
+}`);
+
+const habits_board = panel(
+  "habits_board", "By area · drag to recategorise", "main", 0,
+  [{ from: "habits" }], ["habits"],
+  `export default function (clay) {
+  const cats = ["health", "mind", "work", "social"];
+  clay.db.watch({ from: "habits" }, (rows) => {
+    const groups = cats.map((c) => ({ key: c, label: c, tone: "accent",
+      cards: rows.filter((r) => r.category === c).map((r) => ({
+        id: r.id, title: r.name, subtitle: (r.streak || 0) + " day streak" })) }));
+    clay.ui.render(h(Board, { groups, onCardMove: async (card, toKey) => {
+      await clay.db.update("habits", card.id, { category: toKey });
+    } }));
+  });
+}`, 4);
+
+const habits_table = panel(
+  "habits_table", "All habits", "main", 1,
+  [{ from: "habits", orderBy: [{ field: "streak", dir: "desc" }] }], [],
+  `export default function (clay) {
+  clay.db.watch({ from: "habits", orderBy: [{ field: "streak", dir: "desc" }] }, (rows) => {
+    clay.ui.render(rows.length === 0
+      ? h(EmptyState, { label: "Add a habit to start a streak" })
+      : h(Table, { sortable: true, rows, columns: [
+          { field: "name", label: "Habit" },
+          { field: "category", label: "Area",
+            badge: { field: "category", map: { health: "green", mind: "accent", work: "amber", social: "red" } } },
+          { field: "streak", label: "Streak", format: "number" },
+          { field: "best", label: "Best", format: "number" },
+          { field: "last_done", label: "Last done", format: "date" }] }));
+  });
+}`, 4);
+
+const add_habit_form = panel(
+  "add_habit_form", "Add habit", "side", 0,
+  [], ["habits"],
+  `export default function (clay) {
+  clay.ui.render(h(Form, {
+    submitLabel: "Add habit",
+    fields: [
+      { name: "name", label: "Habit", kind: "text", required: true },
+      { name: "category", label: "Area", kind: "select", fromSchema: "habits.category" },
+      { name: "streak", label: "Current streak", kind: "number" },
+      { name: "best", label: "Best streak", kind: "number" },
+      { name: "last_done", label: "Last done", kind: "date" }],
+    onSubmit: async (v) => {
+      try {
+        await clay.db.insert("habits", v);
+        clay.ui.toast("Habit added", "success");
+      } catch (e) {
+        clay.ui.toast("Could not add: " + e.message, "danger");
+      }
+    } }));
+}`);
+
 export const SEED_PANELS: Record<string, PanelBlobInput[]> = {
   blank: [],
   tracker: [items_table, status_counts, add_item_form],
@@ -651,4 +721,5 @@ export const SEED_PANELS: Record<string, PanelBlobInput[]> = {
   crm,
   financials,
   staff,
+  habits: [habits_overview, habits_board, habits_table, add_habit_form],
 };

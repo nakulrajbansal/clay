@@ -4,7 +4,7 @@
     {
       "shell_id": "blank",
       "name": "Blank canvas",
-      "tagline": "Start from nothing — describe the app you want and watch it build itself.",
+      "tagline": "Start from nothing \u2014 describe the app you want and watch it build itself.",
       "registry": [],
       "seed_panels": [],
       "sample_rows": {}
@@ -14,217 +14,817 @@
       "name": "Tracker",
       "tagline": "Projects, tasks, anything with a status",
       "registry": [
-        {"table": "items",
-         "columns": [
-           {"name": "name", "type": "text", "required": true},
-           {"name": "owner", "type": "text"},
-           {"name": "status", "type": "enum", "values": ["todo", "doing", "done"]},
-           {"name": "due", "type": "date"},
-           {"name": "notes", "type": "text"}]}
+        {
+          "table": "items",
+          "columns": [
+            {
+              "name": "name",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "owner",
+              "type": "text"
+            },
+            {
+              "name": "status",
+              "type": "enum",
+              "values": [
+                "todo",
+                "doing",
+                "done"
+              ]
+            },
+            {
+              "name": "due",
+              "type": "date"
+            },
+            {
+              "name": "notes",
+              "type": "text"
+            }
+          ]
+        }
       ],
-      "seed_panels": ["items_table:main:0", "status_counts:top:0", "add_item_form:side:0"],
-      "sample_rows": {"items": 3}
+      "seed_panels": [
+        "items_table:main:0",
+        "status_counts:top:0",
+        "add_item_form:side:0"
+      ],
+      "sample_rows": {
+        "items": 3
+      }
     },
     {
       "shell_id": "log",
       "name": "Log",
       "tagline": "Entries over time: reading, workouts, anything",
       "registry": [
-        {"table": "entries",
-         "columns": [
-           {"name": "title", "type": "text", "required": true},
-           {"name": "on", "type": "date", "required": true},
-           {"name": "amount", "type": "number"},
-           {"name": "rating", "type": "integer"},
-           {"name": "notes", "type": "text"}]}
+        {
+          "table": "entries",
+          "columns": [
+            {
+              "name": "title",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "on",
+              "type": "date",
+              "required": true
+            },
+            {
+              "name": "amount",
+              "type": "number"
+            },
+            {
+              "name": "rating",
+              "type": "integer"
+            },
+            {
+              "name": "notes",
+              "type": "text"
+            }
+          ]
+        }
       ],
-      "seed_panels": ["entries_table:main:0", "per_week_chart:main:1", "quick_add_form:side:0"],
-      "sample_rows": {"entries": 3}
+      "seed_panels": [
+        "entries_table:main:0",
+        "per_week_chart:main:1",
+        "quick_add_form:side:0"
+      ],
+      "sample_rows": {
+        "entries": 3
+      }
     },
     {
       "shell_id": "dashboard",
       "name": "Dashboard",
       "tagline": "Records plus the numbers that matter",
       "registry": [
-        {"table": "records",
-         "columns": [
-           {"name": "name", "type": "text", "required": true},
-           {"name": "category", "type": "enum", "values": ["a", "b", "c"]},
-           {"name": "value", "type": "number"},
-           {"name": "on", "type": "date"}]}
+        {
+          "table": "records",
+          "columns": [
+            {
+              "name": "name",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "category",
+              "type": "enum",
+              "values": [
+                "a",
+                "b",
+                "c"
+              ]
+            },
+            {
+              "name": "value",
+              "type": "number"
+            },
+            {
+              "name": "on",
+              "type": "date"
+            }
+          ]
+        }
       ],
-      "seed_panels": ["metrics_row:top:0", "records_table:main:0", "by_category_chart:main:1"],
-      "sample_rows": {"records": 5}
+      "seed_panels": [
+        "metrics_row:top:0",
+        "records_table:main:0",
+        "by_category_chart:main:1"
+      ],
+      "sample_rows": {
+        "records": 5
+      }
     },
     {
       "shell_id": "small_business",
       "name": "Small Business",
-      "tagline": "Customers, jobs, invoices, money — your whole business in one app",
+      "tagline": "Customers, jobs, invoices, money \u2014 your whole business in one app",
       "registry": [
-        {"table": "customers",
-         "columns": [
-           {"name": "name", "type": "text", "required": true},
-           {"name": "phone", "type": "text"},
-           {"name": "email", "type": "text"},
-           {"name": "address", "type": "text"},
-           {"name": "notes", "type": "text"}]},
-        {"table": "jobs",
-         "columns": [
-           {"name": "title", "type": "text", "required": true},
-           {"name": "customer", "type": "text"},
-           {"name": "status", "type": "enum", "values": ["lead", "scheduled", "in_progress", "done", "invoiced"]},
-           {"name": "scheduled", "type": "date"},
-           {"name": "price", "type": "number"},
-           {"name": "notes", "type": "text"}]},
-        {"table": "invoices",
-         "columns": [
-           {"name": "customer", "type": "text"},
-           {"name": "job", "type": "text"},
-           {"name": "amount", "type": "number"},
-           {"name": "status", "type": "enum", "values": ["draft", "sent", "paid"]},
-           {"name": "issued", "type": "date"},
-           {"name": "due", "type": "date"}]},
-        {"table": "items",
-         "columns": [
-           {"name": "name", "type": "text", "required": true},
-           {"name": "price", "type": "number"},
-           {"name": "category", "type": "enum", "values": ["service", "product", "material"]}]},
-        {"table": "expenses",
-         "columns": [
-           {"name": "description", "type": "text", "required": true},
-           {"name": "amount", "type": "number"},
-           {"name": "category", "type": "enum", "values": ["supplies", "fuel", "tools", "other"]},
-           {"name": "on", "type": "date"}]}
+        {
+          "table": "customers",
+          "columns": [
+            {
+              "name": "name",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "phone",
+              "type": "text"
+            },
+            {
+              "name": "email",
+              "type": "text"
+            },
+            {
+              "name": "address",
+              "type": "text"
+            },
+            {
+              "name": "notes",
+              "type": "text"
+            }
+          ]
+        },
+        {
+          "table": "jobs",
+          "columns": [
+            {
+              "name": "title",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "customer",
+              "type": "text"
+            },
+            {
+              "name": "status",
+              "type": "enum",
+              "values": [
+                "lead",
+                "scheduled",
+                "in_progress",
+                "done",
+                "invoiced"
+              ]
+            },
+            {
+              "name": "scheduled",
+              "type": "date"
+            },
+            {
+              "name": "price",
+              "type": "number"
+            },
+            {
+              "name": "notes",
+              "type": "text"
+            }
+          ]
+        },
+        {
+          "table": "invoices",
+          "columns": [
+            {
+              "name": "customer",
+              "type": "text"
+            },
+            {
+              "name": "job",
+              "type": "text"
+            },
+            {
+              "name": "amount",
+              "type": "number"
+            },
+            {
+              "name": "status",
+              "type": "enum",
+              "values": [
+                "draft",
+                "sent",
+                "paid"
+              ]
+            },
+            {
+              "name": "issued",
+              "type": "date"
+            },
+            {
+              "name": "due",
+              "type": "date"
+            }
+          ]
+        },
+        {
+          "table": "items",
+          "columns": [
+            {
+              "name": "name",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "price",
+              "type": "number"
+            },
+            {
+              "name": "category",
+              "type": "enum",
+              "values": [
+                "service",
+                "product",
+                "material"
+              ]
+            }
+          ]
+        },
+        {
+          "table": "expenses",
+          "columns": [
+            {
+              "name": "description",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "amount",
+              "type": "number"
+            },
+            {
+              "name": "category",
+              "type": "enum",
+              "values": [
+                "supplies",
+                "fuel",
+                "tools",
+                "other"
+              ]
+            },
+            {
+              "name": "on",
+              "type": "date"
+            }
+          ]
+        }
       ],
       "seed_panels": [
-        "sb_dashboard:top:0", "sb_upcoming:top:1",
-        "sb_jobs_board:main:0", "sb_jobs_table:main:1", "sb_revenue:main:2", "sb_invoices:main:3",
-        "sb_customers:side:0", "sb_add_job:side:1"],
-      "sample_rows": {"customers": 3, "jobs": 5, "invoices": 3, "items": 3, "expenses": 2}
+        "sb_dashboard:top:0",
+        "sb_upcoming:top:1",
+        "sb_jobs_board:main:0",
+        "sb_jobs_table:main:1",
+        "sb_revenue:main:2",
+        "sb_invoices:main:3",
+        "sb_customers:side:0",
+        "sb_add_job:side:1"
+      ],
+      "sample_rows": {
+        "customers": 3,
+        "jobs": 5,
+        "invoices": 3,
+        "items": 3,
+        "expenses": 2
+      }
     },
     {
       "shell_id": "crm",
       "name": "Sales CRM",
       "tagline": "Contacts, companies, and a deal pipeline (like HubSpot or Pipedrive)",
       "registry": [
-        {"table": "contacts",
-         "columns": [
-           {"name": "name", "type": "text", "required": true},
-           {"name": "email", "type": "text"},
-           {"name": "phone", "type": "text"},
-           {"name": "company", "type": "text"},
-           {"name": "title", "type": "text"}]},
-        {"table": "companies",
-         "columns": [
-           {"name": "name", "type": "text", "required": true},
-           {"name": "industry", "type": "text"},
-           {"name": "website", "type": "text"},
-           {"name": "size", "type": "enum", "values": ["small", "medium", "large"]}]},
-        {"table": "deals",
-         "columns": [
-           {"name": "title", "type": "text", "required": true},
-           {"name": "contact", "type": "text"},
-           {"name": "company", "type": "text"},
-           {"name": "stage", "type": "enum", "values": ["lead", "qualified", "proposal", "negotiation", "won", "lost"]},
-           {"name": "value", "type": "number"},
-           {"name": "owner", "type": "text"},
-           {"name": "source", "type": "enum", "values": ["inbound", "outbound", "referral", "event"]},
-           {"name": "probability", "type": "integer"},
-           {"name": "expected_close", "type": "date"}]},
-        {"table": "activities",
-         "columns": [
-           {"name": "subject", "type": "text", "required": true},
-           {"name": "contact", "type": "text"},
-           {"name": "deal", "type": "text"},
-           {"name": "type", "type": "enum", "values": ["call", "email", "meeting", "note"]},
-           {"name": "on", "type": "date"}]},
-        {"table": "tasks",
-         "columns": [
-           {"name": "title", "type": "text", "required": true},
-           {"name": "deal", "type": "text"},
-           {"name": "owner", "type": "text"},
-           {"name": "due", "type": "date"},
-           {"name": "priority", "type": "enum", "values": ["low", "medium", "high"]},
-           {"name": "status", "type": "enum", "values": ["open", "done"]}]}
+        {
+          "table": "contacts",
+          "columns": [
+            {
+              "name": "name",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "email",
+              "type": "text"
+            },
+            {
+              "name": "phone",
+              "type": "text"
+            },
+            {
+              "name": "company",
+              "type": "text"
+            },
+            {
+              "name": "title",
+              "type": "text"
+            }
+          ]
+        },
+        {
+          "table": "companies",
+          "columns": [
+            {
+              "name": "name",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "industry",
+              "type": "text"
+            },
+            {
+              "name": "website",
+              "type": "text"
+            },
+            {
+              "name": "size",
+              "type": "enum",
+              "values": [
+                "small",
+                "medium",
+                "large"
+              ]
+            }
+          ]
+        },
+        {
+          "table": "deals",
+          "columns": [
+            {
+              "name": "title",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "contact",
+              "type": "text"
+            },
+            {
+              "name": "company",
+              "type": "text"
+            },
+            {
+              "name": "stage",
+              "type": "enum",
+              "values": [
+                "lead",
+                "qualified",
+                "proposal",
+                "negotiation",
+                "won",
+                "lost"
+              ]
+            },
+            {
+              "name": "value",
+              "type": "number"
+            },
+            {
+              "name": "owner",
+              "type": "text"
+            },
+            {
+              "name": "source",
+              "type": "enum",
+              "values": [
+                "inbound",
+                "outbound",
+                "referral",
+                "event"
+              ]
+            },
+            {
+              "name": "probability",
+              "type": "integer"
+            },
+            {
+              "name": "expected_close",
+              "type": "date"
+            }
+          ]
+        },
+        {
+          "table": "activities",
+          "columns": [
+            {
+              "name": "subject",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "contact",
+              "type": "text"
+            },
+            {
+              "name": "deal",
+              "type": "text"
+            },
+            {
+              "name": "type",
+              "type": "enum",
+              "values": [
+                "call",
+                "email",
+                "meeting",
+                "note"
+              ]
+            },
+            {
+              "name": "on",
+              "type": "date"
+            }
+          ]
+        },
+        {
+          "table": "tasks",
+          "columns": [
+            {
+              "name": "title",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "deal",
+              "type": "text"
+            },
+            {
+              "name": "owner",
+              "type": "text"
+            },
+            {
+              "name": "due",
+              "type": "date"
+            },
+            {
+              "name": "priority",
+              "type": "enum",
+              "values": [
+                "low",
+                "medium",
+                "high"
+              ]
+            },
+            {
+              "name": "status",
+              "type": "enum",
+              "values": [
+                "open",
+                "done"
+              ]
+            }
+          ]
+        }
       ],
       "seed_panels": [
-        "crm_metrics:top:0", "crm_today:top:1",
-        "crm_pipeline:main:0", "crm_deals_table:main:1", "crm_forecast:main:2", "crm_activities:main:3",
-        "crm_contacts:side:0", "crm_add_deal:side:1", "crm_add_task:side:2"],
-      "sample_rows": {"contacts": 3, "companies": 2, "deals": 5, "activities": 3, "tasks": 4}
+        "crm_metrics:top:0",
+        "crm_today:top:1",
+        "crm_pipeline:main:0",
+        "crm_deals_table:main:1",
+        "crm_forecast:main:2",
+        "crm_activities:main:3",
+        "crm_contacts:side:0",
+        "crm_add_deal:side:1",
+        "crm_add_task:side:2"
+      ],
+      "sample_rows": {
+        "contacts": 3,
+        "companies": 2,
+        "deals": 5,
+        "activities": 3,
+        "tasks": 4
+      }
     },
     {
       "shell_id": "financials",
       "name": "Bookkeeping",
       "tagline": "Accounts, income and expenses, invoices and bills (like QuickBooks or Wave)",
       "registry": [
-        {"table": "accounts",
-         "columns": [
-           {"name": "name", "type": "text", "required": true},
-           {"name": "type", "type": "enum", "values": ["checking", "savings", "credit", "cash"]},
-           {"name": "balance", "type": "number"}]},
-        {"table": "transactions",
-         "columns": [
-           {"name": "description", "type": "text", "required": true},
-           {"name": "account", "type": "text"},
-           {"name": "amount", "type": "number"},
-           {"name": "kind", "type": "enum", "values": ["income", "expense"]},
-           {"name": "category", "type": "text"},
-           {"name": "on", "type": "date"}]},
-        {"table": "invoices",
-         "columns": [
-           {"name": "customer", "type": "text"},
-           {"name": "amount", "type": "number"},
-           {"name": "status", "type": "enum", "values": ["draft", "sent", "paid", "overdue"]},
-           {"name": "issued", "type": "date"},
-           {"name": "due", "type": "date"}]},
-        {"table": "bills",
-         "columns": [
-           {"name": "vendor", "type": "text", "required": true},
-           {"name": "amount", "type": "number"},
-           {"name": "status", "type": "enum", "values": ["unpaid", "paid"]},
-           {"name": "due", "type": "date"}]}
+        {
+          "table": "accounts",
+          "columns": [
+            {
+              "name": "name",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "type",
+              "type": "enum",
+              "values": [
+                "checking",
+                "savings",
+                "credit",
+                "cash"
+              ]
+            },
+            {
+              "name": "balance",
+              "type": "number"
+            }
+          ]
+        },
+        {
+          "table": "transactions",
+          "columns": [
+            {
+              "name": "description",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "account",
+              "type": "text"
+            },
+            {
+              "name": "amount",
+              "type": "number"
+            },
+            {
+              "name": "kind",
+              "type": "enum",
+              "values": [
+                "income",
+                "expense"
+              ]
+            },
+            {
+              "name": "category",
+              "type": "text"
+            },
+            {
+              "name": "on",
+              "type": "date"
+            }
+          ]
+        },
+        {
+          "table": "invoices",
+          "columns": [
+            {
+              "name": "customer",
+              "type": "text"
+            },
+            {
+              "name": "amount",
+              "type": "number"
+            },
+            {
+              "name": "status",
+              "type": "enum",
+              "values": [
+                "draft",
+                "sent",
+                "paid",
+                "overdue"
+              ]
+            },
+            {
+              "name": "issued",
+              "type": "date"
+            },
+            {
+              "name": "due",
+              "type": "date"
+            }
+          ]
+        },
+        {
+          "table": "bills",
+          "columns": [
+            {
+              "name": "vendor",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "amount",
+              "type": "number"
+            },
+            {
+              "name": "status",
+              "type": "enum",
+              "values": [
+                "unpaid",
+                "paid"
+              ]
+            },
+            {
+              "name": "due",
+              "type": "date"
+            }
+          ]
+        }
       ],
       "seed_panels": [
         "fin_summary:top:0",
-        "fin_spending:main:0", "fin_transactions:main:1", "fin_invoices:main:2",
-        "fin_bills:side:0", "fin_add_txn:side:1"],
-      "sample_rows": {"accounts": 2, "transactions": 4, "invoices": 3, "bills": 2}
+        "fin_spending:main:0",
+        "fin_transactions:main:1",
+        "fin_invoices:main:2",
+        "fin_bills:side:0",
+        "fin_add_txn:side:1"
+      ],
+      "sample_rows": {
+        "accounts": 2,
+        "transactions": 4,
+        "invoices": 3,
+        "bills": 2
+      }
     },
     {
       "shell_id": "staff",
       "name": "Staff & Scheduling",
       "tagline": "Employees, shifts, and time-off (like Deputy or When I Work)",
       "registry": [
-        {"table": "employees",
-         "columns": [
-           {"name": "name", "type": "text", "required": true},
-           {"name": "role", "type": "text"},
-           {"name": "phone", "type": "text"},
-           {"name": "email", "type": "text"},
-           {"name": "status", "type": "enum", "values": ["active", "on_leave", "inactive"]}]},
-        {"table": "shifts",
-         "columns": [
-           {"name": "employee", "type": "text"},
-           {"name": "date", "type": "date", "required": true},
-           {"name": "start_time", "type": "text"},
-           {"name": "end_time", "type": "text"},
-           {"name": "role", "type": "text"},
-           {"name": "status", "type": "enum", "values": ["scheduled", "confirmed", "completed"]}]},
-        {"table": "time_off",
-         "columns": [
-           {"name": "employee", "type": "text"},
-           {"name": "kind", "type": "enum", "values": ["vacation", "sick", "personal"]},
-           {"name": "start_date", "type": "date"},
-           {"name": "end_date", "type": "date"},
-           {"name": "status", "type": "enum", "values": ["pending", "approved", "denied"]}]}
+        {
+          "table": "employees",
+          "columns": [
+            {
+              "name": "name",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "role",
+              "type": "text"
+            },
+            {
+              "name": "phone",
+              "type": "text"
+            },
+            {
+              "name": "email",
+              "type": "text"
+            },
+            {
+              "name": "status",
+              "type": "enum",
+              "values": [
+                "active",
+                "on_leave",
+                "inactive"
+              ]
+            }
+          ]
+        },
+        {
+          "table": "shifts",
+          "columns": [
+            {
+              "name": "employee",
+              "type": "text"
+            },
+            {
+              "name": "date",
+              "type": "date",
+              "required": true
+            },
+            {
+              "name": "start_time",
+              "type": "text"
+            },
+            {
+              "name": "end_time",
+              "type": "text"
+            },
+            {
+              "name": "role",
+              "type": "text"
+            },
+            {
+              "name": "status",
+              "type": "enum",
+              "values": [
+                "scheduled",
+                "confirmed",
+                "completed"
+              ]
+            }
+          ]
+        },
+        {
+          "table": "time_off",
+          "columns": [
+            {
+              "name": "employee",
+              "type": "text"
+            },
+            {
+              "name": "kind",
+              "type": "enum",
+              "values": [
+                "vacation",
+                "sick",
+                "personal"
+              ]
+            },
+            {
+              "name": "start_date",
+              "type": "date"
+            },
+            {
+              "name": "end_date",
+              "type": "date"
+            },
+            {
+              "name": "status",
+              "type": "enum",
+              "values": [
+                "pending",
+                "approved",
+                "denied"
+              ]
+            }
+          ]
+        }
       ],
       "seed_panels": [
         "staff_today:top:0",
-        "staff_board:main:0", "staff_shifts:main:1", "staff_timeoff:main:2",
-        "staff_roster:side:0", "staff_add_shift:side:1"],
-      "sample_rows": {"employees": 3, "shifts": 3, "time_off": 2}
+        "staff_board:main:0",
+        "staff_shifts:main:1",
+        "staff_timeoff:main:2",
+        "staff_roster:side:0",
+        "staff_add_shift:side:1"
+      ],
+      "sample_rows": {
+        "employees": 3,
+        "shifts": 3,
+        "time_off": 2
+      }
+    },
+    {
+      "shell_id": "habits",
+      "name": "Habits",
+      "tagline": "Daily habits with streaks (like Streaks or Habitica)",
+      "registry": [
+        {
+          "table": "habits",
+          "columns": [
+            {
+              "name": "name",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "category",
+              "type": "enum",
+              "values": [
+                "health",
+                "mind",
+                "work",
+                "social"
+              ]
+            },
+            {
+              "name": "streak",
+              "type": "number"
+            },
+            {
+              "name": "best",
+              "type": "number"
+            },
+            {
+              "name": "last_done",
+              "type": "date"
+            },
+            {
+              "name": "notes",
+              "type": "text"
+            }
+          ]
+        }
+      ],
+      "seed_panels": [
+        "habits_overview:top:0",
+        "habits_board:main:0",
+        "habits_table:main:1",
+        "add_habit_form:side:0"
+      ],
+      "sample_rows": {
+        "habits": 6
+      }
     }
   ],
-  "note": "Seed panel code lives in the shell package; the registries, ids, and placements here are binding. Multi-table templates map to real small-business software (CRM, bookkeeping, staff scheduling) and show one dataset through many views — a board AND a table AND dashboard counts."
+  "note": "Seed panel code lives in the shell package; the registries, ids, and placements here are binding. Multi-table templates map to real small-business software (CRM, bookkeeping, staff scheduling) and show one dataset through many views \u2014 a board AND a table AND dashboard counts."
 }

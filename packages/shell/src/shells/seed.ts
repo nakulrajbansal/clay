@@ -12,7 +12,7 @@ import { SEED_PANELS } from "./seed-panels";
 export type StarterShellId =
   | "blank"
   | "tracker" | "log" | "dashboard" | "small_business"
-  | "crm" | "financials" | "staff";
+  | "crm" | "financials" | "staff" | "habits";
 
 export type ShellColumn = {
   name: string;
@@ -343,6 +343,29 @@ export const STARTER_SHELLS: StarterShell[] = [
         sampleRows: [
           { employee: "Ivy Ross", kind: "vacation", start_date: soon(3), end_date: soon(10), status: "approved" },
           { employee: "Leo Park", kind: "personal", start_date: soon(6), end_date: soon(6), status: "pending" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "habits", name: "Habits",
+    tagline: "Daily habits with streaks (like Streaks or Habitica)",
+    tables: [
+      {
+        name: "habits",
+        columns: [
+          col("name", "text", true),
+          col("category", "enum", false, ["health", "mind", "work", "social"]),
+          col("streak", "number"), col("best", "number"),
+          col("last_done", "date"), col("notes", "text"),
+        ],
+        sampleRows: [
+          { name: "Morning run", category: "health", streak: 12, best: 20, last_done: soon(0) },
+          { name: "Read 20 min", category: "mind", streak: 5, best: 14, last_done: soon(-1) },
+          { name: "Inbox to zero", category: "work", streak: 3, best: 9, last_done: soon(0) },
+          { name: "Call a friend", category: "social", streak: 0, best: 6, last_done: soon(-4) },
+          { name: "Meditate", category: "mind", streak: 8, best: 8, last_done: soon(0) },
+          { name: "Meal prep", category: "health", streak: 2, best: 5, last_done: soon(-2) },
         ],
       },
     ],
