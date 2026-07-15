@@ -1,6 +1,8 @@
 // The Data view (doc 01/W3): trusted, shell-rendered table editing —
 // see every row, edit cells, add rows, soft-delete, and restore (G6:
 // per-row snapshots from row_history; soft-deleted rows come back too).
+// Designed as a spreadsheet the user already knows: tabs per table,
+// click-any-cell editing, a search box, and a clear add-row.
 import { useCallback, useEffect, useState } from "react";
 import type { AsyncStore, QueryRow, RegTable } from "@clay/kernel";
 import type { WorkerClient } from "./worker-client";
@@ -14,11 +16,17 @@ function coerceDraft(type: string, draft: string): unknown {
   return draft;
 }
 
+const TYPE_HINT: Record<string, string> = {
+  number: "123", integer: "123", date: "date", enum: "pick",
+  boolean: "y/n", computed: "auto",
+};
+
 export function DataView(props: {
   worker: WorkerClient;
   store: AsyncStore;
   initialTable?: string | null;
   onWrite: (table: string) => void;
+  onImport: (file: File) => void;
   onClose: () => void;
   onError: (msg: string) => void;
 }): React.JSX.Element {
@@ -30,6 +38,7 @@ export function DataView(props: {
   const [restorable, setRestorable] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<EditingCell | null>(null);
   const [draftRow, setDraftRow] = useState<Record<string, string>>({});
+  const [search, setSearch] = useState("");
 
   const table = tables.find(t => t.name === selected) ?? null;
   const columns = table?.columns.filter(c => !c.hidden) ?? [];
@@ -56,10 +65,26 @@ export function DataView(props: {
     })();
   }, [worker, reload, props.initialTable]);
 
+  // Esc: cancel a cell edit first; a second Esc closes the editor.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== "Escape") return;
+      setEditing(ed => {
+        if (ed) return null;
+        props.onClose();
+        return ed;
+      });
+    };
+    window.addEventListener("keydown", onKey);
+    return (): void => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const pick = async (name: string): Promise<void> => {
     setSelected(name);
     setEditing(null);
     setDraftRow({});
+    setSearch("");
     await reload(name);
   };
 
@@ -102,7 +127,8 @@ export function DataView(props: {
     commit?: () => void): React.JSX.Element => {
     if (c.type === "enum") {
       return (
-        <select value={value} onChange={e => { onChange(e.target.value); }} onBlur={commit}>
+        <select value={value} autoFocus={commit !== undefined}
+          onChange={e => { onChange(e.target.value); }} onBlur={commit}>
           <option value="">—</option>
           {(c.values ?? []).map(v => <option key={v} value={v}>{v}</option>)}
         </select>
@@ -116,24 +142,58 @@ export function DataView(props: {
         autoFocus={commit !== undefined}
         onChange={e => onChange(e.target.value)}
         onBlur={commit}
-        onKeyDown={e => { if (e.key === "Enter" && commit) commit(); }}
+        onKeyDown={e => {
+          if (e.key === "Enter" && commit) commit();
+          if (e.key === "Escape") { e.stopPropagation(); setEditing(null); }
+        }}
       />
     );
   };
 
+  const q = search.trim().toLowerCase();
+  const visible = q === "" ? rows : rows.filter(r =>
+    columns.some(c => String(r[c.name] ?? "").toLowerCase().includes(q)));
+
   return (
     <div className="dataview">
       <header className="dataview-header">
-        <strong>Data</strong>
-        <div className="dataview-tables">
-          {tables.map(t => (
-            <button key={t.name}
-              className={t.name === selected ? "primary" : ""}
-              onClick={() => void pick(t.name)}>{t.name}</button>
-          ))}
+        <div className="dataview-title">
+          <strong>Your data</strong>
+          <span className="dataview-hint">click any cell to edit — every change is saved and reversible</span>
         </div>
-        <button className="link" onClick={props.onClose}>close</button>
+        <div className="dataview-header-actions">
+          <label className="dataview-import file-label" title="Add a CSV or JSON file as a new table">
+            ⬆ Import file
+            <input type="file" accept=".csv,.tsv,.txt,.json" style={{ display: "none" }}
+              onChange={e => { const f = e.target.files?.[0]; if (f) props.onImport(f); e.target.value = ""; }} />
+          </label>
+          <button className="dataview-close" title="Close (Esc)" onClick={props.onClose}>✕</button>
+        </div>
       </header>
+
+      {tables.length > 0 ? (
+        <div className="dataview-toolbar">
+          <div className="dataview-tables">
+            {tables.map(t => (
+              <button key={t.name}
+                className={`dataview-tab${t.name === selected ? " selected" : ""}`}
+                onClick={() => void pick(t.name)}>{t.name}</button>
+            ))}
+          </div>
+          <div className="dataview-toolbar-right">
+            <input
+              className="dataview-search"
+              type="search"
+              placeholder={`Search ${selected ?? ""}…`}
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+            <span className="dataview-count">
+              {q !== "" ? `${visible.length} of ${rows.length}` : `${rows.length} row${rows.length === 1 ? "" : "s"}`}
+            </span>
+          </div>
+        </div>
+      ) : null}
 
       {table ? (
         <div className="dataview-body">
@@ -141,13 +201,16 @@ export function DataView(props: {
             <thead>
               <tr>
                 {columns.map(c => (
-                  <th key={c.name}>{c.name}{c.type === "computed" ? " ⨍" : ""}</th>
+                  <th key={c.name} title={c.type}>
+                    {c.name}
+                    {TYPE_HINT[c.type] ? <span className="dataview-type">{TYPE_HINT[c.type]}</span> : null}
+                  </th>
                 ))}
                 <th />
               </tr>
             </thead>
             <tbody>
-              {rows.map(r => (
+              {visible.map(r => (
                 <tr key={String(r.id)}>
                   {columns.map(c => {
                     const isEditing = editing
@@ -184,6 +247,11 @@ export function DataView(props: {
                   </td>
                 </tr>
               ))}
+              {visible.length === 0 && q !== "" ? (
+                <tr><td className="dataview-nomatch" colSpan={columns.length + 1}>
+                  No rows match “{search}”.
+                </td></tr>
+              ) : null}
               <tr className="dataview-new">
                 {columns.map(c => (
                   <td key={c.name}>
@@ -192,15 +260,17 @@ export function DataView(props: {
                   </td>
                 ))}
                 <td className="cell-actions">
-                  <button className="primary" onClick={() => void addRow()}>Add</button>
+                  <button className="primary" onClick={() => void addRow()}>+ Add</button>
                 </td>
               </tr>
             </tbody>
           </table>
 
           {deleted.length > 0 ? (
-            <div className="dataview-deleted">
-              <strong>Deleted rows</strong> (kept — restore any time)
+            <details className="dataview-deleted">
+              <summary>
+                {deleted.length} deleted row{deleted.length === 1 ? "" : "s"} — kept, restore any time
+              </summary>
               {deleted.map(r => (
                 <div key={String(r.id)} className="dataview-deleted-row">
                   <span>{columns.slice(0, 3).map(c => String(r[c.name] ?? "")).join(" · ")}</span>
@@ -210,10 +280,20 @@ export function DataView(props: {
                   </button>
                 </div>
               ))}
-            </div>
+            </details>
           ) : null}
         </div>
-      ) : <p className="dataview-empty">No tables yet.</p>}
+      ) : (
+        <div className="dataview-empty">
+          <p>No data yet.</p>
+          <p className="dataview-empty-sub">Import a spreadsheet, or describe an app and Clay creates the tables for you.</p>
+          <label className="empty-upload file-label">
+            ⬆ Upload a spreadsheet (CSV or JSON)
+            <input type="file" accept=".csv,.tsv,.txt,.json" style={{ display: "none" }}
+              onChange={e => { const f = e.target.files?.[0]; if (f) props.onImport(f); e.target.value = ""; }} />
+          </label>
+        </div>
+      )}
     </div>
   );
 }

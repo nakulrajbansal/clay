@@ -203,9 +203,40 @@ type PoolUtil = {
   wipeFiles(): Promise<number>;
   unlink?(name: string): boolean;
   getCapacity?(): number;
+  getFileCount?(): number;
   addCapacity?(n: number): Promise<number>;
 };
 let activePool: PoolUtil | null = null;
+
+// Every open app consumes 2 pool slots (user.db + system.db), and SQLite
+// briefly needs additional slots for journal files during writes. Without
+// free headroom, opening one more app — or even the first write in an
+// existing one — fails with SQLITE_CANTOPEN. Keep this many slots free.
+const POOL_HEADROOM = 6;
+
+async function ensureHeadroom(pool: PoolUtil): Promise<void> {
+  if (!pool.getCapacity || !pool.getFileCount || !pool.addCapacity) return;
+  try {
+    const free = pool.getCapacity() - pool.getFileCount();
+    if (free < POOL_HEADROOM) await pool.addCapacity(POOL_HEADROOM - free);
+  } catch { /* best effort; the open below will surface a real failure */ }
+}
+
+async function openOnPool(pool: PoolUtil, appId?: string): Promise<DbDriver> {
+  await ensureHeadroom(pool);
+  const files = appFiles(appId);
+  const db = new pool.OpfsSAHPoolDb(files.user);
+  try {
+    db.exec("PRAGMA foreign_keys = ON");
+    db.exec(`ATTACH 'file:${files.system}?vfs=opfs-sahpool' AS sys`);
+  } catch (e) {
+    // Close, or the half-open user.db handle pins a pool slot and blocks
+    // every retry that follows.
+    try { db.close(); } catch { /* already closed */ }
+    throw e;
+  }
+  return new SqliteWasmDriver(db);
+}
 
 /** Per-app OPFS filenames (G4 multi-app). The legacy single-app files
  * (/user.db, /system.db) are kept as the "default" app so existing data
@@ -241,11 +272,7 @@ export async function openBrowserDriver(
   // worker must not re-install the singleton VFS).
   if (activePool) {
     try {
-      const files = appFiles(appId);
-      const db = new activePool.OpfsSAHPoolDb(files.user);
-      db.exec("PRAGMA foreign_keys = ON");
-      db.exec(`ATTACH 'file:${files.system}?vfs=opfs-sahpool' AS sys`);
-      return { driver: new SqliteWasmDriver(db), persistent: true };
+      return { driver: await openOnPool(activePool, appId), persistent: true };
     } catch { /* fall through to (re)install */ }
   }
   if (!opfsSupported()) {
@@ -262,15 +289,7 @@ export async function openBrowserDriver(
     try {
       const pool = await withPool.installOpfsSAHPoolVfs({ initialCapacity: 24 });
       activePool = pool;
-      if (typeof pool.getCapacity === "function" && typeof pool.addCapacity === "function"
-          && pool.getCapacity() < 24) {
-        try { await pool.addCapacity(24 - pool.getCapacity()); } catch { /* best effort */ }
-      }
-      const files = appFiles(appId);
-      const db = new pool.OpfsSAHPoolDb(files.user);
-      db.exec("PRAGMA foreign_keys = ON");
-      db.exec(`ATTACH 'file:${files.system}?vfs=opfs-sahpool' AS sys`);
-      return { driver: new SqliteWasmDriver(db), persistent: true };
+      return { driver: await openOnPool(pool, appId), persistent: true };
     } catch (e) {
       lastErr = e;
       if (attempt < 4) await sleep(250 * (attempt + 1));   // 250,500,750,1000ms

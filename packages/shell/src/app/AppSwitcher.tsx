@@ -14,6 +14,7 @@ export function AppSwitcher(props: {
   onFork: () => void;
   onRename: (id: string, name: string) => void;
   onDelete: (id: string) => void;
+  onOpenData: () => void;
   themes: Theme[];
   themeId: string;
   onSelectTheme: (id: string) => void;
@@ -95,6 +96,14 @@ export function AppSwitcher(props: {
         ) : null}
       </div>
 
+      <button
+        className="appbar-theme-btn appbar-data-btn"
+        title="See, edit, and import your data"
+        onClick={props.onOpenData}
+      >
+        <span className="appbar-data-icon">▦</span>
+        Data
+      </button>
       <div className="appbar-theme">
         <button
           className="appbar-theme-btn"

@@ -106,8 +106,11 @@ button.link.danger { color: var(--danger); }
 .appbar-item.danger { color: var(--danger); }
 .appbar-check { color: var(--accent); }
 .appbar-sep { height: 1px; background: var(--border); margin: 6px 4px; }
+/* Data button (right of the app bar, before Theme) */
+.appbar-data-btn { margin-left: auto; margin-right: 10px; }
+.appbar-data-icon { color: var(--accent); font-size: 13px; }
 /* theme quick-switch (right of the app bar) */
-.appbar-theme { position: relative; margin-left: auto; }
+.appbar-theme { position: relative; }
 .appbar-theme-btn { display: flex; align-items: center; gap: 7px;
   border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--panel);
   padding: 6px 12px; font: inherit; font-weight: 600; color: var(--text); cursor: pointer;
@@ -416,31 +419,72 @@ button.link.danger { color: var(--danger); }
   display: flex; flex-direction: column; overflow: hidden;
 }
 .dataview-header {
-  display: flex; align-items: center; gap: 14px;
-  padding: 14px 18px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding: 13px 18px; border-bottom: 1px solid var(--border);
 }
-.dataview-tables { display: flex; gap: 8px; flex: 1; flex-wrap: wrap; }
-.dataview-tables button { border: 1px solid var(--border-strong); background: var(--panel);
-  border-radius: 8px; padding: 5px 11px; color: var(--text-2); font-weight: 500; }
-.dataview-tables button.primary { border-color: var(--accent); background: var(--accent); color: #fff; }
-.dataview-body { overflow: auto; padding: 14px 18px; }
-.dataview-grid { width: 100%; border-collapse: collapse; font-size: 13px; }
-.dataview-grid th { text-align: left; font-size: 11px; text-transform: uppercase;
-  letter-spacing: .04em; color: var(--text-3); padding: 7px 8px; border-bottom: 1px solid var(--border); }
-.dataview-grid td { padding: 5px 8px; border-bottom: 1px solid var(--border); }
+.dataview-title { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.dataview-title strong { font-size: 15px; letter-spacing: -.01em; }
+.dataview-hint { font-size: 12px; color: var(--text-3); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+.dataview-header-actions { display: flex; align-items: center; gap: 10px; flex: none; }
+.dataview-import { display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  border: 1px solid var(--accent); border-radius: 9px; padding: 6px 13px;
+  background: var(--accent-soft); color: var(--accent-text); font-weight: 600; font-size: 12.5px; }
+.dataview-import:hover { filter: brightness(1.03); }
+.dataview-close { border: 0; background: none; color: var(--text-3); font-size: 15px;
+  cursor: pointer; padding: 4px 8px; border-radius: 8px; }
+.dataview-close:hover { background: var(--bg); color: var(--text); }
+.dataview-toolbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding: 10px 18px; border-bottom: 1px solid var(--border); background: var(--bg);
+}
+.dataview-tables { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.dataview-tab { border: 1px solid transparent; background: none;
+  border-radius: 8px; padding: 5px 12px; color: var(--text-2); font-weight: 550; cursor: pointer; }
+.dataview-tab:hover { background: var(--panel); color: var(--text); }
+.dataview-tab.selected { border-color: var(--accent); background: var(--panel);
+  color: var(--accent-text); font-weight: 650; }
+.dataview-toolbar-right { display: flex; align-items: center; gap: 10px; flex: none; }
+.dataview-search { border: 1px solid var(--border-strong); border-radius: 9px;
+  padding: 6px 11px; font: inherit; font-size: 12.5px; width: 190px;
+  background: var(--panel); color: var(--text); }
+.dataview-search:focus { outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft); }
+.dataview-count { font-size: 12px; color: var(--text-3); white-space: nowrap;
+  font-variant-numeric: tabular-nums; }
+.dataview-body { overflow: auto; padding: 0 18px 14px; }
+.dataview-grid { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
+.dataview-grid th { position: sticky; top: 0; z-index: 1; background: var(--panel);
+  text-align: left; font-size: 11px; text-transform: uppercase;
+  letter-spacing: .04em; color: var(--text-3); padding: 11px 8px 7px;
+  border-bottom: 1px solid var(--border-strong); }
+.dataview-type { margin-left: 6px; font-size: 9.5px; text-transform: none;
+  letter-spacing: 0; color: var(--text-3); opacity: .75;
+  border: 1px solid var(--border); border-radius: 5px; padding: 0 4px; }
+.dataview-grid td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.dataview-grid tbody tr:hover td { background: var(--bg); }
 .cell-editable { cursor: text; border-radius: 4px; }
-.cell-editable:hover { background: var(--accent-soft); }
+.cell-editable:hover { box-shadow: inset 0 0 0 1.5px var(--accent);
+  background: var(--accent-soft) !important; }
 .cell-computed { color: var(--text-3); font-style: italic; }
 .cell-actions { white-space: nowrap; display: flex; gap: 8px; }
+.dataview-grid tbody tr .cell-actions .link { opacity: 0; transition: opacity .1s; }
+.dataview-grid tbody tr:hover .cell-actions .link,
+.dataview-grid tr.dataview-new .cell-actions * { opacity: 1; }
 .dataview-grid input, .dataview-grid select {
   width: 100%; border: 1px solid var(--accent); border-radius: 6px;
-  padding: 4px 7px; font: inherit;
+  padding: 4px 7px; font: inherit; background: var(--panel); color: var(--text);
 }
-.dataview-new td { background: var(--bg); }
+.dataview-nomatch { text-align: center; color: var(--text-3); padding: 22px 8px !important; }
+.dataview-new td { background: var(--bg); padding: 8px; }
+.dataview-new input, .dataview-new select { border-color: var(--border-strong); }
+.dataview-new input:focus, .dataview-new select:focus { border-color: var(--accent); outline: none; }
 .dataview-deleted { margin-top: 16px; font-size: 13px; color: var(--text-2); }
+.dataview-deleted summary { cursor: pointer; font-weight: 550; padding: 4px 0; }
 .dataview-deleted-row { display: flex; justify-content: space-between;
   padding: 5px 0; border-bottom: 1px solid var(--border); }
-.dataview-empty { padding: 24px; color: var(--text-2); }
+.dataview-empty { padding: 44px 24px; color: var(--text-2); text-align: center; }
+.dataview-empty-sub { color: var(--text-3); font-size: 12.5px; margin: 6px 0 18px; }
 
 /* toasts (shell-rendered so panels cannot spoof them, doc 06 §4) */
 .toasts { position: fixed; bottom: 18px; left: 18px; display: flex; flex-direction: column; gap: 8px; z-index: 20; }

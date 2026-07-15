@@ -27,8 +27,6 @@ export function ConversationRail(props: {
   onSaveBackend: (url: string) => void;
   onRemoveSamples: () => void;
   onReset: () => void;
-  onOpenData: () => void;
-  onImportData: (file: File) => void;
   onExport: () => void;
   onImport: (file: File) => void;
   suggestions: Suggestion[];
@@ -78,14 +76,8 @@ export function ConversationRail(props: {
       <header className="rail-header">
         <span>Reshape</span>
         <span className="rail-header-links">
-          <label className="link file-label" title="Import a CSV or JSON data file">
-            import
-            <input type="file" accept=".csv,.tsv,.txt,.json" style={{ display: "none" }}
-              onChange={e => { const f = e.target.files?.[0]; if (f) props.onImportData(f); e.target.value = ""; }} />
-          </label>
-          <button className="link" onClick={props.onOpenData}>edit data</button>
           <button className="link" onClick={() => setShowSettings(s => !s)}>
-            settings
+            ⚙ settings
           </button>
         </span>
       </header>

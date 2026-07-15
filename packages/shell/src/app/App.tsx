@@ -152,6 +152,7 @@ export function App(): React.JSX.Element {
       const res = await client().importTable(
         { table: parsed.table, columns: parsed.columns, rows: parsed.rows });
       await refreshPanels();
+      setDataTable(res.table);   // if the Data editor is open, jump to the new table
       setFeed(f => [...f, { kind: "info", text: `Imported ${res.imported} row${res.imported === 1 ? "" : "s"} into “${res.table}”.` }]);
       setBusy(false);
       void refreshSuggestions();
@@ -665,6 +666,7 @@ export function App(): React.JSX.Element {
         onFork={() => void forkApp()}
         onRename={(id, name) => { renameApp(id, name); setApps(listApps()); }}
         onDelete={id => void deleteApp(id)}
+        onOpenData={() => openData()}
         themes={THEMES}
         themeId={themeId}
         onSelectTheme={selectTheme}
@@ -743,6 +745,7 @@ export function App(): React.JSX.Element {
           worker={workerRef.current}
           store={dataStoreRef.current}
           initialTable={dataTable}
+          onImport={file => void importFile(file)}
           onWrite={table => liveBridge?.notifyWrite(table)}
           onClose={() => setShowData(false)}
           onError={msg => pushToast(msg, "danger")}
@@ -752,8 +755,6 @@ export function App(): React.JSX.Element {
         feed={feed}
         preview={preview}
         busy={busy || scrub !== null}
-        onOpenData={openData}
-        onImportData={file => void importFile(file)}
         hasKey={hasKey}
         suggestions={suggestions}
         onAcceptSuggestion={acceptSuggestion}
