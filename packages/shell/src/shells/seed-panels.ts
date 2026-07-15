@@ -709,6 +709,78 @@ const add_habit_form = panel(
     } }));
 }`);
 
+// ---------- inventory ----------
+const inv_overview = panel(
+  "inv_overview", "Stock at a glance", "top", 0,
+  [{ from: "products" }], [],
+  `export default function (clay) {
+  clay.db.watch({ from: "products" }, (rows) => {
+    const total = rows.length;
+    const low = rows.filter((r) => (r.stock || 0) <= (r.reorder_at || 0)).length;
+    const units = rows.reduce((s, r) => s + (r.stock || 0), 0);
+    clay.ui.render(h(Grid, {},
+      h(MetricCard, { label: "Products", value: total }),
+      h(MetricCard, { label: "Need reorder", value: low }),
+      h(MetricCard, { label: "Units in stock", value: units })));
+  });
+}`);
+
+const inv_low = panel(
+  "inv_low", "Reorder soon", "main", 0,
+  [{ from: "products", orderBy: [{ field: "stock", dir: "asc" }] }], [],
+  `export default function (clay) {
+  clay.db.watch({ from: "products", orderBy: [{ field: "stock", dir: "asc" }] }, (rows) => {
+    const low = rows.filter((r) => (r.stock || 0) <= (r.reorder_at || 0));
+    clay.ui.render(low.length === 0
+      ? h(EmptyState, { label: "All stocked up" })
+      : h(Table, { sortable: true, rows: low, columns: [
+          { field: "name", label: "Product" },
+          { field: "sku", label: "SKU" },
+          { field: "stock", label: "In stock", format: "number" },
+          { field: "reorder_at", label: "Reorder at", format: "number" }] }));
+  });
+}`, 4);
+
+const inv_table = panel(
+  "inv_table", "All products", "main", 1,
+  [{ from: "products", orderBy: [{ field: "name", dir: "asc" }] }], [],
+  `export default function (clay) {
+  clay.db.watch({ from: "products", orderBy: [{ field: "name", dir: "asc" }] }, (rows) => {
+    clay.ui.render(rows.length === 0
+      ? h(EmptyState, { label: "Add a product on the right" })
+      : h(Table, { sortable: true, rows, columns: [
+          { field: "name", label: "Product" },
+          { field: "sku", label: "SKU" },
+          { field: "category", label: "Category",
+            badge: { field: "category", map: { retail: "accent", food: "green", supplies: "amber", other: "gray" } } },
+          { field: "price", label: "Price", format: "currency" },
+          { field: "stock", label: "Stock", format: "number" }] }));
+  });
+}`, 4);
+
+const add_product = panel(
+  "add_product", "Add product", "side", 0,
+  [], ["products"],
+  `export default function (clay) {
+  clay.ui.render(h(Form, {
+    submitLabel: "Add product",
+    fields: [
+      { name: "name", label: "Product", kind: "text", required: true },
+      { name: "sku", label: "SKU", kind: "text" },
+      { name: "category", label: "Category", kind: "select", fromSchema: "products.category" },
+      { name: "price", label: "Price", kind: "number" },
+      { name: "stock", label: "In stock", kind: "number" },
+      { name: "reorder_at", label: "Reorder at", kind: "number" }],
+    onSubmit: async (v) => {
+      try {
+        await clay.db.insert("products", v);
+        clay.ui.toast("Product added", "success");
+      } catch (e) {
+        clay.ui.toast("Could not add: " + e.message, "danger");
+      }
+    } }));
+}`);
+
 export const SEED_PANELS: Record<string, PanelBlobInput[]> = {
   blank: [],
   tracker: [items_table, status_counts, add_item_form],
@@ -722,4 +794,5 @@ export const SEED_PANELS: Record<string, PanelBlobInput[]> = {
   financials,
   staff,
   habits: [habits_overview, habits_board, habits_table, add_habit_form],
+  inventory: [inv_overview, inv_low, inv_table, add_product],
 };

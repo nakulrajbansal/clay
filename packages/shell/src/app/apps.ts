@@ -97,7 +97,7 @@ export function shellName(shellId: string | null): string {
   const map: Record<string, string> = {
     blank: "My app", tracker: "Tracker", log: "Log", dashboard: "Dashboard",
     small_business: "Small Business", crm: "Sales CRM",
-    financials: "Bookkeeping", staff: "Staff & Scheduling", habits: "Habits",
+    financials: "Bookkeeping", staff: "Staff & Scheduling", habits: "Habits", inventory: "Inventory",
   };
   return (shellId && map[shellId]) || "My app";
 }

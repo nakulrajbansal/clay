@@ -14,7 +14,7 @@ const key = readFileSync(new URL("../claude key.txt", import.meta.url), "utf8").
 
 const NAMES = {
   crm: "Sales CRM", small_business: "Small Business", financials: "Bookkeeping",
-  staff: "Staff & Scheduling", habits: "Habits", tracker: "Tracker", log: "Log", dashboard: "Dashboard",
+  staff: "Staff & Scheduling", habits: "Habits", inventory: "Inventory", tracker: "Tracker", log: "Log", dashboard: "Dashboard",
 };
 
 const browser = await chromium.launch();

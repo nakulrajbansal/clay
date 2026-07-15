@@ -12,7 +12,7 @@ import { SEED_PANELS } from "./seed-panels";
 export type StarterShellId =
   | "blank"
   | "tracker" | "log" | "dashboard" | "small_business"
-  | "crm" | "financials" | "staff" | "habits";
+  | "crm" | "financials" | "staff" | "habits" | "inventory";
 
 export type ShellColumn = {
   name: string;
@@ -366,6 +366,28 @@ export const STARTER_SHELLS: StarterShell[] = [
           { name: "Call a friend", category: "social", streak: 0, best: 6, last_done: soon(-4) },
           { name: "Meditate", category: "mind", streak: 8, best: 8, last_done: soon(0) },
           { name: "Meal prep", category: "health", streak: 2, best: 5, last_done: soon(-2) },
+        ],
+      },
+    ],
+  },
+  {
+    id: "inventory", name: "Inventory",
+    tagline: "Products, stock levels, and reorder alerts",
+    tables: [
+      {
+        name: "products",
+        columns: [
+          col("name", "text", true), col("sku", "text"),
+          col("category", "enum", false, ["retail", "food", "supplies", "other"]),
+          col("price", "number"), col("stock", "number"), col("reorder_at", "number"),
+        ],
+        sampleRows: [
+          { name: "House blend beans 1kg", sku: "COF-001", category: "food", price: 18, stock: 4, reorder_at: 6 },
+          { name: "Oat milk carton", sku: "MLK-002", category: "food", price: 3, stock: 24, reorder_at: 12 },
+          { name: "Ceramic mug", sku: "MUG-010", category: "retail", price: 14, stock: 2, reorder_at: 5 },
+          { name: "Paper cups (sleeve)", sku: "CUP-050", category: "supplies", price: 6, stock: 40, reorder_at: 15 },
+          { name: "Tote bag", sku: "BAG-003", category: "retail", price: 22, stock: 9, reorder_at: 4 },
+          { name: "Cleaning spray", sku: "CLN-007", category: "supplies", price: 5, stock: 1, reorder_at: 3 },
         ],
       },
     ],

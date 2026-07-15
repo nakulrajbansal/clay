@@ -6,7 +6,7 @@ import { STARTER_SHELLS, type StarterShellId } from "../shells/seed";
 // A quiet icon per template — enough to make the choices inviting, not loud.
 const SHELL_ICONS: Record<string, string> = {
   tracker: "🎯", log: "📆", dashboard: "📊",
-  small_business: "🏪", crm: "🤝", financials: "💰", staff: "🗓️", habits: "🔥",
+  small_business: "🏪", crm: "🤝", financials: "💰", staff: "🗓️", habits: "🔥", inventory: "📦",
 };
 
 export function Onboarding(props: {

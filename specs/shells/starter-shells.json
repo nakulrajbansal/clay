@@ -824,6 +824,58 @@
       "sample_rows": {
         "habits": 6
       }
+    },
+    {
+      "shell_id": "inventory",
+      "name": "Inventory",
+      "tagline": "Products, stock levels, and reorder alerts",
+      "registry": [
+        {
+          "table": "products",
+          "columns": [
+            {
+              "name": "name",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "sku",
+              "type": "text"
+            },
+            {
+              "name": "category",
+              "type": "enum",
+              "values": [
+                "retail",
+                "food",
+                "supplies",
+                "other"
+              ]
+            },
+            {
+              "name": "price",
+              "type": "number"
+            },
+            {
+              "name": "stock",
+              "type": "number"
+            },
+            {
+              "name": "reorder_at",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "seed_panels": [
+        "inv_overview:top:0",
+        "inv_low:main:0",
+        "inv_table:main:1",
+        "add_product:side:0"
+      ],
+      "sample_rows": {
+        "products": 6
+      }
     }
   ],
   "note": "Seed panel code lives in the shell package; the registries, ids, and placements here are binding. Multi-table templates map to real small-business software (CRM, bookkeeping, staff scheduling) and show one dataset through many views \u2014 a board AND a table AND dashboard counts."
