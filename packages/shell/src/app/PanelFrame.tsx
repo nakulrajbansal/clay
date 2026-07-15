@@ -237,6 +237,8 @@ const PANEL_CSS = `
     transition: filter .1s, transform .08s; white-space: nowrap; }
   .clay-flow-advance:hover { filter: brightness(1.05); }
   .clay-flow-advance:active { transform: translateY(1px); }
+  .clay-flow-advance.clay-flow-armed { background: #fdf0d5; color: #b45309;
+    box-shadow: 0 0 0 2px #f5a62366; }
   .clay-flow-back { border: 1px solid var(--border-2); border-radius: 8px;
     background: none; color: var(--text-3); font: inherit; font-size: 12px;
     width: 24px; height: 24px; line-height: 1; cursor: pointer; padding: 0; }

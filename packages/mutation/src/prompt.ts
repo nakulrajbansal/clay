@@ -64,7 +64,14 @@ ALWAYS prefer them over composing from primitives or Scene:
        approval chain / intake queue / move things through stages" request:
        Board shows STATE you drag between; Flow shows a PROCESS with
        one-click advancing and progress. Apps that track work through steps
-       deserve a Flow panel, not only tables and charts.
+       deserve a Flow panel, not only tables and charts. Advance buttons are
+       two-step by design (click arms, click again confirms) — never add
+       your own confirm dialog on top. WORKFLOWS DESERVE AN AUDIT TRAIL:
+       give the app an activity table ({item, from_stage, to_stage, date}),
+       have onAdvance insert a transition row after the stage update and
+       toast the move, and add a compact Activity panel listing recent
+       transitions (newest first). Both written tables go in
+       declared_writes.
 - Board{groups:[{key,label,tone,cards:[{title,subtitle,badge,badgeTone}]}],
         onCardMove, onCardClick} — a kanban board. Shape rows into groups
         yourself (e.g. group by a status enum), one group per column.

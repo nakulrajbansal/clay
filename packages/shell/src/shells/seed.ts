@@ -413,6 +413,18 @@ export const STARTER_SHELLS: StarterShell[] = [
           { title: "Laptop replacement", requester: "Zoe Ahmed", category: "equipment", amount: 1400, stage: "paid", decision_note: "Paid 07/02", submitted_on: soon(-14) },
         ],
       },
+      {
+        name: "request_activity",
+        columns: [
+          col("request", "text", true), col("from_stage", "text"),
+          col("to_stage", "text"), col("moved_on", "date"),
+        ],
+        sampleRows: [
+          { request: "Laptop replacement", from_stage: "in_review", to_stage: "approved", moved_on: soon(-10) },
+          { request: "Laptop replacement", from_stage: "approved", to_stage: "paid", moved_on: soon(-7) },
+          { request: "Team offsite venue deposit", from_stage: "in_review", to_stage: "approved", moved_on: soon(-2) },
+        ],
+      },
     ],
   },
 ];

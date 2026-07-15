@@ -1248,11 +1248,32 @@ function buildFlow(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
         actions.appendChild(back);
       }
       if (canAct && i < stages.length - 1) {
+        // Two-step advance: the first click ARMS the button (visible state
+        // change), the second confirms. Guards against accidental one-click
+        // stage transitions; auto-disarms after a beat.
+        const nextLabel = labelOf(stages[i + 1]!);
         const adv = el(ctx, "button", "clay-flow-advance") as HTMLButtonElement;
         adv.type = "button";
-        adv.textContent = `${labelOf(stages[i + 1]!)} →`;
+        adv.textContent = `${nextLabel} →`;
+        adv.title = `Move to ${nextLabel} (click again to confirm)`;
+        let armed = false;
+        let disarmTimer: ReturnType<typeof setTimeout> | null = null;
+        const disarm = (): void => {
+          armed = false;
+          adv.classList.remove("clay-flow-armed");
+          adv.textContent = `${nextLabel} →`;
+          if (disarmTimer !== null) { clearTimeout(disarmTimer); disarmTimer = null; }
+        };
         adv.addEventListener("click", (e) => {
           e.stopPropagation();
+          if (!armed) {
+            armed = true;
+            adv.classList.add("clay-flow-armed");
+            adv.textContent = `Move to ${nextLabel}?`;
+            disarmTimer = setTimeout(disarm, 4000);
+            return;
+          }
+          disarm();
           (onAdvance as (x: Item, k: string) => void)(it, keyOf(stages[i + 1]!));
         });
         actions.appendChild(adv);

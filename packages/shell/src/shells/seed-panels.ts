@@ -815,13 +815,14 @@ const request_flow: PanelBlobInput = {
   declared_queries: [
     { from: "requests", orderBy: [{ field: "submitted_on", dir: "asc" }] },
   ],
-  declared_writes: ["requests"],
+  declared_writes: ["requests", "request_activity"],
   code: `export default function (clay) {
   const stages = [
     { key: "submitted", label: "Submitted", tone: "gray" },
     { key: "in_review", label: "In review", tone: "amber" },
     { key: "approved", label: "Approved", tone: "green" },
     { key: "paid", label: "Paid", tone: "accent" }];
+  const label = (k) => { const s = stages.find((x) => x.key === k); return s ? s.label : k; };
   const q = { from: "requests", orderBy: [{ field: "submitted_on", dir: "asc" }] };
   clay.db.watch(q, (rows) => {
     const items = rows.map((r) => ({ id: r.id, title: r.title,
@@ -829,9 +830,37 @@ const request_flow: PanelBlobInput = {
       badge: clay.compute.formatCurrency(r.amount || 0), badgeTone: "gray" }));
     clay.ui.render(h(Flow, { stages, items,
       onAdvance: async (item, toKey) => {
-        try { await clay.db.update("requests", item.id, { stage: toKey }); }
-        catch (e) { clay.ui.toast("Could not move the request", "danger"); }
+        try {
+          await clay.db.update("requests", item.id, { stage: toKey });
+          await clay.db.insert("request_activity", { request: item.title,
+            from_stage: item.stage, to_stage: toKey,
+            moved_on: clay.compute.now().slice(0, 10) });
+          clay.ui.toast("\\u201C" + item.title + "\\u201D moved to " + label(toKey), "success");
+        } catch (e) { clay.ui.toast("Could not move the request", "danger"); }
       } }));
+  });
+}`,
+};
+
+const activity_log: PanelBlobInput = {
+  panel_id: "activity_log", title: "Activity",
+  placement: { region: "main", order: 2 },
+  declared_queries: [
+    { from: "request_activity",
+      orderBy: [{ field: "created_at", dir: "desc" }], limit: 12 },
+  ],
+  declared_writes: [],
+  code: `export default function (clay) {
+  const q = { from: "request_activity",
+    orderBy: [{ field: "created_at", dir: "desc" }], limit: 12 };
+  clay.db.watch(q, (rows) => {
+    clay.ui.render(rows.length === 0
+      ? h(EmptyState, { label: "No moves yet - advance a request and it lands here" })
+      : h(Stack, {}, rows.map((r) =>
+          h(Box, { direction: "row", gap: "sm", align: "center" },
+            h(Text, { value: r.request, weight: "bold", size: "sm" }),
+            h(Badge, { label: r.from_stage + " \\u2192 " + r.to_stage, tone: "accent" }),
+            h(Text, { value: r.moved_on || "", size: "xs", muted: true })))));
   });
 }`,
 };
@@ -898,5 +927,5 @@ export const SEED_PANELS: Record<string, PanelBlobInput[]> = {
   staff,
   habits: [habits_overview, habits_board, habits_table, add_habit_form],
   inventory: [inv_overview, inv_low, inv_table, add_product],
-  approvals: [approvals_overview, request_flow, requests_table, new_request_form],
+  approvals: [approvals_overview, request_flow, requests_table, activity_log, new_request_form],
 };

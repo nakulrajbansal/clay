@@ -440,15 +440,30 @@ describe("Flow (ADR-024: workflows, not just dashboards)", () => {
       .toBe("33%");
   });
 
-  it("advance fires onAdvance with the NEXT stage key; back with the previous", () => {
+  it("advance is TWO-STEP: first click arms (no move), second confirms with the NEXT stage key", () => {
     const moves: [string, string][] = [];
     const c = mount(h(FlowTag, {
       stages: STAGES, items: ITEMS,
       onAdvance: (it: { id: string }, to: string) => moves.push([it.id, to]),
     }));
-    (c.querySelector(".clay-flow-advance") as HTMLButtonElement).click();     // item 1 -> in_review
+    const adv = c.querySelector(".clay-flow-advance") as HTMLButtonElement;
+    adv.click();                                    // arms only — no accidental move
+    expect(moves).toEqual([]);
+    expect(adv.className).toContain("clay-flow-armed");
+    expect(adv.textContent).toBe("Move to In review?");
+    adv.click();                                    // confirms
+    expect(moves).toEqual([["1", "in_review"]]);
+    expect(adv.className).not.toContain("clay-flow-armed");   // disarmed after firing
+  });
+
+  it("back is the corrective control and fires on a single click", () => {
+    const moves: [string, string][] = [];
+    const c = mount(h(FlowTag, {
+      stages: STAGES, items: ITEMS,
+      onAdvance: (it: { id: string }, to: string) => moves.push([it.id, to]),
+    }));
     (c.querySelector(".clay-flow-back") as HTMLButtonElement).click();        // item 2 -> submitted
-    expect(moves).toEqual([["1", "in_review"], ["2", "submitted"]]);
+    expect(moves).toEqual([["2", "submitted"]]);
   });
 
   it("final-stage items show a done mark and no advance button", () => {

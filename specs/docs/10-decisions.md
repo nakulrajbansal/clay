@@ -321,3 +321,32 @@ ADR-024 Workflows: the Flow view component, taught + templated.
   under dark themes; it now uses var(--panel)/var(--bg-soft)/var(--text).
   Consequence: 6 Flow unit tests (rail order+counts, progress, advance/
   back keys, done state, read-only, empty) + 4 approvals seed-boot tests.
+
+ADR-025 Workflow guardrails: two-step advance + audit trail (revises
+  ADR-024 after user review).
+  Context: first-hand review of the Flow component - "you click on a
+  button and it goes to the next step without any warning and no way to
+  tell history of what was moved forward." Two real defects: advancing
+  was a single accidental click, and transitions left no visible record
+  (kernel row_history is an UNDO mechanism, not a queryable audit
+  surface, and is reserved from panel queries by design).
+  DECISION:
+  (a) The Flow component's advance button is TWO-STEP: first click arms
+      it (amber "Move to <stage>?" state), second click confirms;
+      auto-disarms after 4s. This lives in the trusted component so every
+      workflow gets it - panels must not stack dialogs on top (the
+      ui.confirm rate limit would also make that path unusable). The
+      back button stays single-click: it IS the corrective control.
+  (b) Audit trail as DATA (data outlives interface): the approvals
+      template gains a request_activity table (request, from_stage,
+      to_stage, moved_on); onAdvance inserts a transition row after the
+      stage update and toasts the move; a new Activity panel lists recent
+      transitions newest-first. The exemplar + prompt vocabulary teach
+      the same pattern (activity table + insert + toast + Activity
+      panel, both tables in declared_writes) so GENERATED workflows ship
+      with history, not only the template.
+  Consequence: Flow unit tests assert arm-then-confirm (first click must
+  NOT fire) and single-click back; seed-boot asserts the seeded activity
+  renders. Verified live: counts 1/2/1/1 unchanged after the first click,
+  0/3/1/1 after confirm, new "submitted -> in_review" row in Activity,
+  toast shown.

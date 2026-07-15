@@ -111,6 +111,9 @@ describe("every seed panel boots and renders real data", () => {
     ["approvals", "approvals_overview", c =>
       c.textContent!.includes("Awaiting review") && c.querySelectorAll(".clay-metric").length === 4],
     ["approvals", "requests_table", c => c.querySelectorAll("tbody tr").length === 5],
+    ["approvals", "activity_log", c =>
+      c.textContent!.includes("Laptop replacement")
+      && c.textContent!.includes("approved → paid")],
     ["approvals", "new_request_form", c =>
       c.querySelectorAll("form.clay-form input, form.clay-form select").length === 4],
   ];

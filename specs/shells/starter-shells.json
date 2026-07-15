@@ -927,16 +927,40 @@
               "type": "date"
             }
           ]
+        },
+        {
+          "table": "request_activity",
+          "columns": [
+            {
+              "name": "request",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "from_stage",
+              "type": "text"
+            },
+            {
+              "name": "to_stage",
+              "type": "text"
+            },
+            {
+              "name": "moved_on",
+              "type": "date"
+            }
+          ]
         }
       ],
       "seed_panels": [
         "approvals_overview:top:0",
         "request_flow:main:0",
         "requests_table:main:1",
+        "activity_log:main:2",
         "new_request_form:side:0"
       ],
       "sample_rows": {
-        "requests": 5
+        "requests": 5,
+        "request_activity": 3
       }
     }
   ],
