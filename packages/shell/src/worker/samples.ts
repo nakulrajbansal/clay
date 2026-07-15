@@ -63,7 +63,9 @@ function valueFor(col: RegColumn, i: number, rng: () => number): unknown {
     case "integer": {
       const int = col.type === "integer";
       let v: number;
-      if (/budget|revenue|price|amount|cost|spend|value|total/.test(n)) v = (Math.floor(rng() * 90) + 5) * 1000;
+      // spend-side money runs lower than budget-side so utilisation reads sane
+      if (/cost|spen[dt]|paid|expense/.test(n)) v = (Math.floor(rng() * 45) + 2) * 1000;
+      else if (/budget|revenue|price|amount|value|total/.test(n)) v = (Math.floor(rng() * 90) + 5) * 1000;
       else if (/percent|pct|progress|utili/.test(n)) v = Math.floor(rng() * 101);
       else if (/score|rating|stars/.test(n)) v = Math.floor(rng() * 5) + 1;
       else if (/hours|days|weeks|duration/.test(n)) v = Math.floor(rng() * 39) + 1;
