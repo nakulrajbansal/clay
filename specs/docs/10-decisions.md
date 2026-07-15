@@ -161,3 +161,22 @@ ADR-018 Finer panel widths (4-col grid) and a resizable height.
   Consequence: schema/PanelBlobInput placement gain wider w + h; seed panels
   and hydrate auto-widen use w=4 for full; PanelFrame renders per-span grid
   columns and applies h; edge/bottom/corner handles drive commitLayout.
+
+ADR-019 2D-lite grid placement: drag a panel to a specific column, gaps OK.
+  Context: users want to place panels freely (e.g. top-right, leaving a gap),
+  not just reorder a linear sequence. A full free-form {x,y} tile grid with a
+  collision/compaction engine fights Clay's content-auto-sized panels (a rigid
+  row grid forces fixed tile heights and scroll-in-tile, losing the nice
+  auto-height).
+  DECISION: placement gains an OPTIONAL col ∈ {0..3} — the start column in the
+  4-col main grid. Set by dragging (snaps to the column under the cursor,
+  clamped so the panel's width fits); absent = auto-flow (unchanged default).
+  Rows still auto-flow (auto-height preserved), so this adds column pinning and
+  HORIZONTAL gaps (leave a column empty) without a collision engine or a
+  migration — existing panels simply have no col and flow as before. Committed
+  via commitLayout as a reversible version; col:null clears a pin.
+  Alt: full react-grid-layout {x,y,w,h} with compaction — deferred; heavier and
+  it forces fixed tile heights, worse for Clay's variable content.
+  Consequence: schema/PanelBlobInput placement gain optional col; reorder sets
+  it on the dragged panel; PanelFrame renders grid-column start; the drop
+  indicator shows the target column at the dragged width.

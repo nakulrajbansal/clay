@@ -26,7 +26,7 @@ type QueryT = import("@clay/schema").Query;
 export type PanelBlobInput = {
   panel_id: string;
   title: string;
-  placement: { region: "top" | "main" | "side"; order: number; w?: number; h?: number };
+  placement: { region: "top" | "main" | "side"; order: number; w?: number; h?: number; col?: number };
   code: string;
   declared_queries: QueryT[];
   declared_writes: string[];
@@ -232,7 +232,7 @@ export class ClayStore {
         // reshape re-emits placement WITHOUT w/h, so preserve the panel's
         // existing span AND height unless the plan explicitly sets one.
         const priorSize = new Map(preLive.map(p =>
-          [p.panel_id, { w: p.placement.w, h: p.placement.h }]));
+          [p.panel_id, { w: p.placement.w, h: p.placement.h, col: p.placement.col }]));
 
         if (input.migration) {
           validateMigrationPlan(input.migration, this.reg);
@@ -253,9 +253,11 @@ export class ClayStore {
           const prior = priorSize.get(p.panel_id);
           const w = p.placement.w ?? prior?.w;   // undefined = default (half)
           const h = p.placement.h ?? prior?.h;
+          const col = p.placement.col ?? prior?.col;
           const placement = { ...p.placement };
           if (w) placement.w = w; else delete placement.w;
           if (h) placement.h = h; else delete placement.h;
+          if (col !== undefined) placement.col = col; else delete placement.col;
           this.writePanelBlob(version, { ...p, placement });
         }
         for (const id of input.removePanels ?? [])
@@ -309,22 +311,24 @@ export class ClayStore {
    */
   commitLayout(
     placements: { panel_id: string; region: "top" | "main" | "side"; order: number;
-      w?: number; h?: number }[],
+      w?: number; h?: number; col?: number | null }[],
   ): number {
     const live = new Map(this.livePanels().map(p => [p.panel_id, p]));
     const moved: PanelBlobInput[] = [];
     for (const pl of placements) {
       const p = live.get(pl.panel_id);
       if (!p) continue;
-      // width/height default to the panel's current size (preserved across
-      // reorder); undefined width = default half (ADR-018)
+      // width/height/col default to current (preserved across reorder);
+      // undefined width = default half (ADR-018). col:null clears the pin.
       const w = pl.w ?? p.placement.w;
       const h = pl.h ?? p.placement.h;
+      const col = pl.col === null ? undefined : (pl.col ?? p.placement.col);
       if (p.placement.region === pl.region && p.placement.order === pl.order
-        && p.placement.w === w && p.placement.h === h) continue;
+        && p.placement.w === w && p.placement.h === h && p.placement.col === col) continue;
       const placement: PanelBlobInput["placement"] = { region: pl.region, order: pl.order };
       if (w) placement.w = w;
       if (h) placement.h = h;
+      if (col !== undefined) placement.col = col;
       moved.push({
         panel_id: p.panel_id, title: p.title, placement,
         code: p.code, declared_queries: p.declared_queries, declared_writes: p.declared_writes,

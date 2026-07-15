@@ -122,7 +122,8 @@ export const PanelArtifact = z.object({
   placement: z.object({ region: z.enum(["top","main","side"]),
                         order: z.number().int().min(0).max(50),
                         w: z.number().int().min(1).max(4).optional(),   // cols out of 4 (ADR-018)
-                        h: z.number().int().min(80).max(2000).optional() }),   // pixel height (ADR-018)
+                        h: z.number().int().min(80).max(2000).optional(),   // pixel height (ADR-018)
+                        col: z.number().int().min(0).max(3).optional() }),   // start column (ADR-019)
   code: z.string().max(65_536),
   declared_queries: z.array(Query).max(8),
   declared_writes: z.array(Ident).max(4).default([]),   // G22 / ADR-014
@@ -191,7 +192,8 @@ export const BridgePush = z.discriminatedUnion("kind", [
                placement: z.object({ region: z.enum(["top","main","side"]),
                                      order: z.number().int(),
                                      w: z.number().int().min(1).max(4).optional(),
-                                     h: z.number().int().min(80).max(2000).optional() }),
+                                     h: z.number().int().min(80).max(2000).optional(),
+                                     col: z.number().int().min(0).max(3).optional() }),
              }),
              tokens: z.record(z.string()) }),       // design tokens (G21)
 ]);

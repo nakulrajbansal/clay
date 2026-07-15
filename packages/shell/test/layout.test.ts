@@ -42,4 +42,29 @@ describe("reorder", () => {
     expect(out).toContainEqual({ panel_id: "a", region: "main", order: 0 });
     expect(out).toContainEqual({ panel_id: "b", region: "main", order: 1 });
   });
+
+  it("pins the dragged panel to the target column, others unchanged (ADR-019)", () => {
+    const panels = [p("a", "main", 0), p("b", "main", 1)];
+    const out = reorder(panels, "a", "main", 0, 2);          // drop a into column 2
+    expect(out.find(x => x.panel_id === "a")!.col).toBe(2);
+    expect(out.find(x => x.panel_id === "b")!.col).toBeUndefined();
+  });
+
+  it("clears a pin when the panel leaves the main grid", () => {
+    const panels = [
+      { panel_id: "a", placement: { region: "main" as Region, order: 0, col: 2 } },
+      p("b", "side", 0),
+    ];
+    const out = reorder(panels, "a", "side", 0);
+    expect(out.find(x => x.panel_id === "a")!.col).toBeNull();
+  });
+
+  it("a column pin survives a plain reorder that doesn't set a column", () => {
+    const panels = [
+      { panel_id: "a", placement: { region: "main" as Region, order: 0, col: 3 } },
+      p("b", "main", 1),
+    ];
+    const out = reorder(panels, "b", "main", 0);             // move b, don't touch a
+    expect(out.find(x => x.panel_id === "a")!.col).toBe(3);
+  });
 });

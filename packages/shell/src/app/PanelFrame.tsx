@@ -347,7 +347,11 @@ export function PanelFrame(props: {
   const effHeight = dragH ?? panel.placement.h ?? height;
   const resizing = dragW !== null || dragH !== null;
   const sectionStyle: React.CSSProperties = {};
-  if (span !== null) sectionStyle.gridColumn = `span ${span}`;
+  if (span !== null) {
+    // pinned to a start column (2D, ADR-019) or auto-flow
+    const col = panel.placement.col;
+    sectionStyle.gridColumn = col != null ? `${col + 1} / span ${span}` : `span ${span}`;
+  }
   return (
     <section
       className={`panel-frame${preview ? " panel-preview" : ""}${props.draggingSrc ? " panel-drag-src" : ""}${resizing ? " panel-resizing" : ""}`}

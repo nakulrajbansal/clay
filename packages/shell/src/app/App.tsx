@@ -69,7 +69,7 @@ export function App(): React.JSX.Element {
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
-  const [dropTarget, setDropTarget] = useState<{ region: Region; index: number } | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ region: Region; index: number; col: number | null } | null>(null);
   const [themeId, setThemeId] = useState<string>(() => getThemeId(currentAppId()));
   const [intentSeed, setIntentSeed] = useState<{ text: string; n: number }>({ text: "", n: 0 });
   const seedIntent = (t: string): void => setIntentSeed(s => ({ text: t, n: s.n + 1 }));
@@ -543,20 +543,33 @@ export function App(): React.JSX.Element {
     return frames.length;
   };
 
+  // In the 4-col main region, snap to a start column (ADR-019), clamped so the
+  // dragged panel's width fits. Elsewhere col is null (auto-flow).
+  const colAt = (regionName: Region, container: Element, x: number): number | null => {
+    if (regionName !== "main") return null;
+    const r = container.getBoundingClientRect();
+    const w = panels.find(p => p.panel_id === dragId)?.placement.w ?? 2;
+    const raw = Math.floor((x - r.left) / (r.width / 4));
+    return Math.max(0, Math.min(raw, 4 - w));
+  };
+
   const onRegionDragOver = (regionName: Region, e: React.DragEvent): void => {
     if (!dragId) return;
     e.preventDefault();
     const index = dropIndexAt(e.currentTarget, e.clientX, e.clientY);
+    const col = colAt(regionName, e.currentTarget, e.clientX);
     setDropTarget(prev =>
-      prev && prev.region === regionName && prev.index === index ? prev : { region: regionName, index });
+      prev && prev.region === regionName && prev.index === index && prev.col === col
+        ? prev : { region: regionName, index, col });
   };
 
   const onRegionDrop = (regionName: Region, e: React.DragEvent): void => {
     if (!dragId) return;
     e.preventDefault();
     const index = dropIndexAt(e.currentTarget, e.clientX, e.clientY);
+    const col = colAt(regionName, e.currentTarget, e.clientX);
     setDropTarget(null);
-    void applyLayout(reorder(panels, dragId, regionName, index));
+    void applyLayout(reorder(panels, dragId, regionName, index, col ?? undefined));
   };
 
   const region = (name: "top" | "main" | "side"): React.JSX.Element[] => {
@@ -599,10 +612,14 @@ export function App(): React.JSX.Element {
           />
         );
       });
-    // a clear placeholder marking exactly where the dragged panel will land
+    // a clear placeholder marking exactly where the dragged panel will land —
+    // in the target column, at the dragged panel's width (2D snap, ADR-019)
     if (dragId && dropTarget && dropTarget.region === name) {
       const i = Math.max(0, Math.min(dropTarget.index, els.length));
-      els.splice(i, 0, <div key="drop-slot" className="drop-slot" aria-hidden="true" />);
+      const dw = panels.find(p => p.panel_id === dragId)?.placement.w ?? 2;
+      const slotStyle = name === "main" && dropTarget.col !== null
+        ? { gridColumn: `${dropTarget.col + 1} / span ${dw}` } : undefined;
+      els.splice(i, 0, <div key="drop-slot" className="drop-slot" style={slotStyle} aria-hidden="true" />);
     }
     return els;
   };
