@@ -427,6 +427,11 @@ button.link.danger { color: var(--danger); }
 .dataview-hint { font-size: 12px; color: var(--text-3); white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; }
 .dataview-header-actions { display: flex; align-items: center; gap: 10px; flex: none; }
+.dataview-sample { display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  border: 1px solid var(--border-strong); border-radius: 9px; padding: 6px 13px;
+  background: var(--panel); color: var(--text); font-weight: 600; font-size: 12.5px; }
+.dataview-sample:hover { border-color: var(--accent); color: var(--accent-text); }
+.dataview-sample-clear { color: var(--text-2); font-weight: 500; }
 .dataview-import { display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
   border: 1px solid var(--accent); border-radius: 9px; padding: 6px 13px;
   background: var(--accent-soft); color: var(--accent-text); font-weight: 600; font-size: 12.5px; }

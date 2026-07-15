@@ -180,3 +180,28 @@ ADR-019 2D-lite grid placement: drag a panel to a specific column, gaps OK.
   Consequence: schema/PanelBlobInput placement gain optional col; reorder sets
   it on the dragged panel; PanelFrame renders grid-column start; the drop
   indicator shows the target column at the dragged width.
+
+ADR-020 Kernel-derived inverses: the pipeline normalizes migration.inverse.
+  Context: live traces show the model repeatedly writing migration inverses
+  "undo-style" (reverse order) or with minor drift; V5/I2 then rejects the
+  whole plan, and because panel checks fall back to the pre-migration
+  registry, one root issue cascades into a wall of bogus V4 unknown-table
+  issues — burning the single repair round on a formality the kernel can
+  compute itself.
+  DECISION: before S3 validation, MutationPipeline replaces plan.migration.
+  inverse with deriveInverse(operations, registry) — the exact list the I2
+  check demands. If deriveInverse throws (the forward ops themselves are
+  invalid), the plan is left untouched so V5 reports the real problem. The
+  schema still requires the model to emit an inverse (keeps reversibility in
+  the plan contract and the model's attention on it); it is now advisory.
+  Additionally, when validation fails with migration-level issues present,
+  the repair prompt carries ONLY those (panel issues computed against the
+  stale registry are downstream noise).
+  Alt: drop inverse from the schema — rejected, schema change (constitution)
+  with no grammar benefit; keeping it costs nothing. Alt: teach ordering in
+  the prompt — tried implicitly via repair; nondeterministic and wastes the
+  repair budget.
+  Consequence: V5/I2 still guards hand-written and imported plans (store
+  commits, exemplars, tests) — only model plans are normalized. Fixtures:
+  pipeline.test.ts "model-mangled inverse" + "repair focuses on
+  migration-level issues".

@@ -10,6 +10,7 @@ import {
 } from "@clay/kernel";
 import { MutationClient } from "@clay/mutation";
 import { removeSampleRows, seedStarterShell, type StarterShellId } from "../shells/seed";
+import { fillSampleRows, sampleRowCount } from "./samples";
 
 export type PreviewInfo = {
   summary: string;
@@ -278,6 +279,10 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "removeSamples":
       removeSampleRows(mustStore());
       return null;
+    case "fillSamples":
+      return fillSampleRows(mustStore());
+    case "sampleCount":
+      return sampleRowCount(mustStore());
     case "restoreRow":
       mustStore().restoreRow(String(p.table), String(p.id));
       return null;

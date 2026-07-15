@@ -8,6 +8,7 @@
 import { MutationPlan as MutationPlanSchema } from "@clay/schema";
 import type { z } from "zod";
 import { ClayError } from "./errors";
+import { deriveInverse } from "./migrate";
 import type { ClayStore, PanelBlobInput } from "./store";
 import { validateMutationPlan, type ValidationIssue } from "./validate";
 
@@ -180,6 +181,24 @@ export class MutationPipeline {
         return fail("plan", reasons, code);
       }
 
+      // Reversibility is kernel-owned: replace the model's hand-written
+      // inverse with the canonical derivation (exactly what the I2 check
+      // demands). Models routinely order inverse ops "undo-style" (reversed),
+      // which used to fail V5 and then cascade into bogus V4 unknown-table
+      // issues because panel checks fell back to the pre-migration registry.
+      // If the forward ops themselves are invalid, deriveInverse throws and
+      // we leave the plan untouched so V5 reports the real problem.
+      {
+        const p = result.plan as { migration?: MutationPlanT["migration"] } | null;
+        if (p && typeof p === "object" && p.migration
+            && Array.isArray(p.migration.operations)) {
+          try {
+            p.migration.inverse =
+              deriveInverse(p.migration.operations, this.store.registrySnapshot());
+          } catch { /* invalid op sequence — V5 below states it */ }
+        }
+      }
+
       // S3: the Validator (V1–V7)
       const issues = validateMutationPlan(result.plan, {
         registry: this.store.registrySnapshot(),
@@ -189,8 +208,14 @@ export class MutationPipeline {
         debug({ stage: "validate", issues: issueStrings(issues) });
         if (repairUsed) return fail("validate", issueStrings(issues), "E_VALIDATION");
         repairUsed = true;
-        debug({ stage: "repair", trigger: "validate", reasons: issueStrings(issues) });
-        result = await this.planner.requestRepair(ctx, result.raw, issueStrings(issues));
+        // Focus the single repair round on the root cause: when the
+        // migration itself failed, panel checks ran against the stale
+        // registry, so their "unknown table/column" issues are downstream
+        // noise that only distracts the repair model.
+        const migrationIssues = issues.filter(i => i.panel === undefined);
+        const repairIssues = migrationIssues.length > 0 ? migrationIssues : issues;
+        debug({ stage: "repair", trigger: "validate", reasons: issueStrings(repairIssues) });
+        result = await this.planner.requestRepair(ctx, result.raw, issueStrings(repairIssues));
         debug({ stage: "plan", ok: result.ok,
           raw: result.ok ? result.raw : (result.error.raw ?? null),
           error: result.ok ? undefined : result.error.message });

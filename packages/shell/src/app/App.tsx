@@ -293,6 +293,40 @@ export function App(): React.JSX.Element {
 
   const runIntent = async (text: string): Promise<void> => {
     setFeed(f => [...f, { kind: "intent", text }]);
+    // Dummy/sample-data intents are handled by the trusted shell, not the
+    // planner — the model can't insert rows by design, so routing these to
+    // it dead-ends (it can only offer a form). Instant, free, reversible.
+    // Guarded: only plain fill/clear asks, not UI requests that mention
+    // sample data ("add a button to load demo data" still goes to the model).
+    const sampley = /\b(dummy|sample|demo|fake)[- ]?(data|rows|records|entries)\b/i;
+    const uiAsk = /\b(button|panel|form|chart|view|field|column|badge|dashboard)\b/i;
+    const clearVerb = /\b(clear|remove|delete|drop|reset|clean)\b/i;
+    const fillVerb = /\b(populate|fill|add|insert|seed|generate|create|load|simulate|put)\b/i;
+    if (sampley.test(text) && !uiAsk.test(text)
+        && (clearVerb.test(text) || fillVerb.test(text))) {
+      const clearing = clearVerb.test(text);
+      setBusy(true);
+      try {
+        if (clearing) {
+          await client().removeSamples();
+          setFeed(f => [...f, { kind: "info", text: "Cleared the sample rows — only generated rows were removed; they're under each table's deleted rows if you need them back." }]);
+        } else {
+          const res = await client().fillSamples();
+          setFeed(f => [...f, {
+            kind: "info",
+            text: res.added > 0
+              ? `Filled your tables with ${res.added} sample rows so you can see the app working. Say “clear the sample data” (or use Data → Clear samples) to remove exactly these rows later.`
+              : "There are no tables to fill yet — describe the app first, then I can add sample data.",
+          }]);
+        }
+        await refreshPanels();
+      } catch (e) {
+        setFeed(f => [...f, { kind: "failure", reasons: [String(e)] }]);
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     setBusy(true);
     try {
       handleOutcome(await client().intent(text));
@@ -749,6 +783,7 @@ export function App(): React.JSX.Element {
           onWrite={table => liveBridge?.notifyWrite(table)}
           onClose={() => setShowData(false)}
           onError={msg => pushToast(msg, "danger")}
+          onInfo={msg => pushToast(msg, "info")}
         />
       ) : null}
       <ConversationRail

@@ -76,6 +76,8 @@ export class WorkerClient {
   keep(): Promise<{ version: number }> { return this.call("keep"); }
   discard(): Promise<null> { return this.call("discard"); }
   removeSamples(): Promise<null> { return this.call("removeSamples"); }
+  fillSamples(): Promise<{ added: number; tables: number }> { return this.call("fillSamples"); }
+  sampleCount(): Promise<number> { return this.call("sampleCount"); }
   reset(): Promise<null> { return this.call("reset"); }
   registryTables(): Promise<RegTable[]> { return this.call("registryTables"); }
   restoreRow(table: string, id: string): Promise<null> {

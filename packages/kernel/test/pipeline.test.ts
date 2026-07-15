@@ -203,6 +203,55 @@ describe("pipeline stages", () => {
     store.close();
   });
 
+  it("a model-mangled inverse is normalized, not failed (kernel-derived reversibility)", async () => {
+    const { store, table, panelId } = await seedShellStore(tracker());
+    const cols = tracker().registry[0]!.columns.map(c => c.name);
+    const plan = priorityPlan(table, panelId, cols);
+    // The recurring live failure mode: the model writes the inverse
+    // "undo-style" or plain wrong. The pipeline must substitute the
+    // canonical derivation instead of burning the repair round on I2.
+    (plan.migration as { inverse: unknown }).inverse = [
+      { op: "drop_table_if_created_by_this", table: "nonsense" },
+      { op: "drop_column_if_added_by_this", table, column: "wrong" },
+    ];
+    const planner = new ScriptedPlanner([plan]);
+    const result = await new MutationPipeline(store, planner).run(INTENT);
+    expect(result.status).toBe("preview");
+    expect(planner.repairCalls).toHaveLength(0);
+    if (result.status === "preview") {
+      const version = result.preview.keep();
+      // and the normalized inverse actually rolls back: scrub to v1
+      store.rollbackTo(version - 1);
+      expect(() => store.query({ from: table, select: ["priority"] }))
+        .toThrowError(ClayError);
+    }
+    store.close();
+  });
+
+  it("repair focuses on migration-level issues, not downstream panel noise", async () => {
+    const { store, table, panelId } = await seedShellStore(tracker());
+    const cols = tracker().registry[0]!.columns.map(c => c.name);
+    const good = priorityPlan(table, panelId, cols);
+    const bad = JSON.parse(JSON.stringify(good)) as {
+      migration: { operations: { table: string }[] };
+      panels: { declared_queries: { from: string }[] }[];
+    };
+    // Broken migration (op targets a table that doesn't exist) → the panel's
+    // query against that table is stale-registry noise; the single repair
+    // round should be spent on the migration issue alone.
+    bad.migration.operations[0]!.table = "ghost_table";
+    bad.migration.operations.length = 1;
+    bad.panels[0]!.declared_queries = [{ from: "ghost_table" }];
+    const planner = new ScriptedPlanner([bad as unknown as Record<string, unknown>, good]);
+    const result = await new MutationPipeline(store, planner).run(INTENT);
+    expect(result.status).toBe("preview");
+    expect(planner.repairCalls).toHaveLength(1);
+    const reasons = planner.repairCalls[0]!;
+    expect(reasons.join(" ")).toContain("V5");
+    expect(reasons.every(r => r.includes("V5") || !r.includes("["))).toBe(true);
+    store.close();
+  });
+
   it("a second failure is a visible failure, not another round", async () => {
     const { store, table, panelId } = await seedShellStore(tracker());
     const cols = tracker().registry[0]!.columns.map(c => c.name);

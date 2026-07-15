@@ -29,6 +29,7 @@ export function DataView(props: {
   onImport: (file: File) => void;
   onClose: () => void;
   onError: (msg: string) => void;
+  onInfo: (msg: string) => void;
 }): React.JSX.Element {
   const { worker, store } = props;
   const [tables, setTables] = useState<RegTable[]>([]);
@@ -39,6 +40,7 @@ export function DataView(props: {
   const [editing, setEditing] = useState<EditingCell | null>(null);
   const [draftRow, setDraftRow] = useState<Record<string, string>>({});
   const [search, setSearch] = useState("");
+  const [samples, setSamples] = useState(0);
 
   const table = tables.find(t => t.name === selected) ?? null;
   const columns = table?.columns.filter(c => !c.hidden) ?? [];
@@ -56,6 +58,7 @@ export function DataView(props: {
     void (async () => {
       const t = await worker.registryTables();
       setTables(t);
+      setSamples(await worker.sampleCount());
       if (t.length > 0) {
         const want = props.initialTable && t.some(x => x.name === props.initialTable)
           ? props.initialTable : t[0]!.name;
@@ -150,6 +153,32 @@ export function DataView(props: {
     );
   };
 
+  // Sample rows: generated in the trusted worker and tracked by id, so
+  // clearing removes exactly those rows (soft-deleted, restorable) — never
+  // anything the user typed or imported.
+  const fillSamples = async (): Promise<void> => {
+    try {
+      const res = await worker.fillSamples();
+      setSamples(await worker.sampleCount());
+      if (selected) await reload(selected);
+      for (const t of tables) props.onWrite(t.name);
+      props.onInfo(`Added ${res.added} sample row${res.added === 1 ? "" : "s"} across ${res.tables} table${res.tables === 1 ? "" : "s"}.`);
+    } catch (e) {
+      props.onError(e instanceof Error ? e.message : String(e));
+    }
+  };
+  const clearSamples = async (): Promise<void> => {
+    try {
+      await worker.removeSamples();
+      setSamples(0);
+      if (selected) await reload(selected);
+      for (const t of tables) props.onWrite(t.name);
+      props.onInfo("Sample rows cleared. Only generated rows were removed — your own data is untouched, and the cleared rows sit under “deleted rows” if you want them back.");
+    } catch (e) {
+      props.onError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   const q = search.trim().toLowerCase();
   const visible = q === "" ? rows : rows.filter(r =>
     columns.some(c => String(r[c.name] ?? "").toLowerCase().includes(q)));
@@ -162,6 +191,18 @@ export function DataView(props: {
           <span className="dataview-hint">click any cell to edit — every change is saved and reversible</span>
         </div>
         <div className="dataview-header-actions">
+          {tables.length > 0 ? (
+            <button className="dataview-sample" onClick={() => void fillSamples()}
+              title="Fill every table with realistic sample rows so you can see the app working. Clearing later removes only these generated rows.">
+              ✨ Sample data
+            </button>
+          ) : null}
+          {samples > 0 ? (
+            <button className="dataview-sample dataview-sample-clear" onClick={() => void clearSamples()}
+              title="Removes only the generated sample rows — never your own data. Cleared rows stay under “deleted rows”, restorable.">
+              Clear samples ({samples})
+            </button>
+          ) : null}
           <label className="dataview-import file-label" title="Add a CSV or JSON file as a new table">
             ⬆ Import file
             <input type="file" accept=".csv,.tsv,.txt,.json" style={{ display: "none" }}
