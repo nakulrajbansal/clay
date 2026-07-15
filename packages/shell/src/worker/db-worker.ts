@@ -261,6 +261,14 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       mustStore().revertPanel(String(p.panelId));
       return mustStore().livePanels();
     }
+    case "renamePanel": {
+      mustStore().renamePanel(String(p.panelId), String(p.title));
+      return mustStore().livePanels();
+    }
+    case "removePanel": {
+      mustStore().removePanel(String(p.panelId));
+      return mustStore().livePanels();
+    }
     case "keep": {
       if (!pending) throw new Error("no preview open");
       const version = pending.keep();

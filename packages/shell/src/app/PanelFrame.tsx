@@ -2,7 +2,7 @@
 // sandbox="allow-scripts" gives an opaque origin — no cookies, storage, or
 // parent DOM; the CSP leaves no network path (doc 06 §2). The only channel
 // is one transferred MessagePort speaking the Bridge protocol.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { portFromMessagePort, type Bridge, type LivePanel } from "@clay/kernel";
 // The fixed bootstrap, built to a single file and inlined (doc 06 §2).
@@ -248,11 +248,24 @@ export function PanelFrame(props: {
   onSetHeight?: (h: number) => void;
   onViewAs?: (view: string) => void;
   onEditData?: (table: string) => void;
+  onRename?: (title: string) => void;
+  onRemove?: () => void;
+  onAskAbout?: () => void;
   themeCss?: string;
 }): React.JSX.Element {
   const { panel, bridge, preview } = props;
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const headerRef = useRef<HTMLElement>(null);
   const [height, setHeight] = useState<number | null>(null);
+  const [headerH, setHeaderH] = useState(49);
+  const [editTitle, setEditTitle] = useState<string | null>(null);
+  // Masonry (ADR-022a): the section spans exact 1px grid rows for its
+  // measured height, so uneven panels pack without holes. Header height is
+  // measured because titles can wrap.
+  useLayoutEffect(() => {
+    const h = headerRef.current?.offsetHeight;
+    if (h && h !== headerH) setHeaderH(h);
+  });
   const [viewsOpen, setViewsOpen] = useState(false);
   const [dragW, setDragW] = useState<number | null>(null);   // live width preview (cols 1–4)
   const [dragH, setDragH] = useState<number | null>(null);   // live height preview (px)
@@ -348,11 +361,13 @@ export function PanelFrame(props: {
   }, []);
 
   // live size: dragW/dragH preview, then the stored placement, then defaults.
-  // Width (cols 1–4) only applies in the main region; default is half (2).
+  // Width (cols 1–4) applies in the top AND main grids (ADR-022a); default
+  // is a full strip (4) in top, half (2) in main.
   // The panel's primary table (first declared read) — the one "Edit data" jumps to.
   const editTable = panel.declared_queries[0]?.from ?? null;
-  const inMain = panel.placement.region === "main";
-  const span = inMain ? (dragW ?? panel.placement.w ?? 2) : null;
+  const inGrid = panel.placement.region !== "side";
+  const defaultW = panel.placement.region === "top" ? 4 : 2;
+  const span = inGrid ? (dragW ?? panel.placement.w ?? defaultW) : null;
   const effHeight = dragH ?? panel.placement.h ?? height;
   const resizing = dragW !== null || dragH !== null;
   const sectionStyle: React.CSSProperties = {};
@@ -360,13 +375,16 @@ export function PanelFrame(props: {
     // pinned to a start column (2D, ADR-019) or auto-flow
     const col = panel.placement.col;
     sectionStyle.gridColumn = col != null ? `${col + 1} / span ${span}` : `span ${span}`;
+    // masonry row span (ADR-022a): header + iframe + borders + 16px gap,
+    // in 1px implicit rows (see .region-top/.region-main in styles.css)
+    sectionStyle.gridRow = `span ${(effHeight ?? 180) + headerH + 2 + 16}`;
   }
   return (
     <section
       className={`panel-frame${preview ? " panel-preview" : ""}${props.draggingSrc ? " panel-drag-src" : ""}${resizing ? " panel-resizing" : ""}`}
       style={sectionStyle}
     >
-      <header className="panel-title">
+      <header className="panel-title" ref={headerRef}>
         {props.onDragStart ? (
           <span
             className="panel-grip"
@@ -382,9 +400,41 @@ export function PanelFrame(props: {
             onDragEnd={() => props.onDragEnd?.()}
           >⠿</span>
         ) : null}
-        {panel.title}
+        {editTitle !== null ? (
+          <input
+            className="panel-title-edit"
+            autoFocus
+            value={editTitle}
+            onChange={e => setEditTitle(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === "Enter") {
+                const t = editTitle.trim();
+                setEditTitle(null);
+                if (t && t !== panel.title) props.onRename?.(t);
+              } else if (e.key === "Escape") setEditTitle(null);
+            }}
+            onBlur={() => {
+              const t = (editTitle ?? "").trim();
+              setEditTitle(null);
+              if (t && t !== panel.title) props.onRename?.(t);
+            }}
+          />
+        ) : (
+          <span
+            className={props.onRename ? "panel-title-text panel-renamable" : "panel-title-text"}
+            title={props.onRename ? "Double-click to rename" : undefined}
+            onDoubleClick={props.onRename ? () => setEditTitle(panel.title) : undefined}
+          >{panel.title}</span>
+        )}
         {preview ? <span className="panel-proposed">proposed</span> : null}
         <span className="panel-tools">
+          {props.onAskAbout ? (
+            <button
+              className="panel-tool"
+              title="Reshape this panel — describe the change"
+              onClick={props.onAskAbout}
+            >✨</button>
+          ) : null}
           {props.onEditData && editTable ? (
             <button
               className="panel-tool"
@@ -425,6 +475,13 @@ export function PanelFrame(props: {
               title={props.wide ? "Make narrow" : "Make wide"}
               onClick={props.onResize}
             >{props.wide ? "◨" : "▭"}</button>
+          ) : null}
+          {props.onRemove ? (
+            <button
+              className="panel-tool panel-tool-remove"
+              title="Remove this panel — rewind the timeline to bring it back"
+              onClick={props.onRemove}
+            >✕</button>
           ) : null}
         </span>
       </header>

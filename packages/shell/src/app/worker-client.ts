@@ -57,8 +57,14 @@ export class WorkerClient {
     return this.call("importTable", payload);
   }
   panels(): Promise<LivePanel[]> { return this.call("panels"); }
-  commitLayout(placements: { panel_id: string; region: "top" | "main" | "side"; order: number; w?: number }[]): Promise<LivePanel[]> {
+  commitLayout(placements: { panel_id: string; region: "top" | "main" | "side"; order: number; w?: number; h?: number; col?: number | null }[]): Promise<LivePanel[]> {
     return this.call("commitLayout", { placements });
+  }
+  renamePanel(panelId: string, title: string): Promise<LivePanel[]> {
+    return this.call("renamePanel", { panelId, title });
+  }
+  removePanel(panelId: string): Promise<LivePanel[]> {
+    return this.call("removePanel", { panelId });
   }
   history(): Promise<HistoryEntry[]> { return this.call("history"); }
   setCheckpoint(version: number, label: string): Promise<HistoryEntry[]> {

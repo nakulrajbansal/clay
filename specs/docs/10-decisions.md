@@ -220,3 +220,36 @@ ADR-021 Pipeline appends missing V7 diff lines (same spirit as ADR-020).
   Consequence: fixture in pipeline.test.ts ("missing diff line is
   appended, not failed"). The preview card may show kernel-worded lines
   like "panel project_board (replaced)" when the model forgot its own.
+
+ADR-022 Reshaping-UI roadmap R1-R4: packed grid, universal resize, local
+  panel ops (rename/remove), scoped reshape seeds.
+  Context: field feedback - uneven panel sizes left grid holes; top-region
+  panels had no resize affordances at all; tiny edits (rename a title,
+  drop a panel) forced a model round-trip, making Clay feel like a
+  dashboard generator rather than a malleable app. 2025/26 malleability
+  research (Ink & Switch "malleable software" essay's gentle slope; CHI'25
+  generative+malleable task-driven UIs; CHI'26 conversational-
+  customization probe) converges on: direct manipulation must own small
+  changes, prompting owns structural ones, and both must share one
+  reversible history. See doc 14 (reshaping roadmap) for the full mapping.
+  DECISION:
+  (a) Layout: top and main regions are the SAME 4-column grid; panels
+      place masonry-style (1px implicit rows, row-span derived from the
+      panel's measured height, dense auto-flow) so uneven sizes cannot
+      leave holes. The placement schema is unchanged (region/order/w/h/col
+      per ADR-018/019); the default span in top is 4 (full strip), main
+      stays 2.
+  (b) Resize: every top/main panel gets width AND height handles; side
+      panels height only - the side rail is a fixed-width lane by design,
+      and the resize path for a side panel is dragging it into main.
+  (c) Local panel ops: ClayStore.renamePanel / removePanel commit through
+      the SAME CommitInput vocabulary model plans use (panel blob rewrite /
+      removePanels tombstone) - no model call, instant, reversible, one
+      timeline with language reshapes (the commitLayout pattern, B4/doc
+      13). No Bridge, Validator, or migration vocabulary was widened.
+  (d) Scoped reshape: a per-panel affordance seeds the composer with
+      'In the "<title>" panel: ' - pointing plus language in one gesture;
+      the pipeline itself is untouched.
+  Consequence: kernel tests cover rename/remove reversibility; packing and
+  resize are exercised by scripts/reshapeui.mjs (no-model harness) plus
+  the existing dragresize/verify2d harnesses.

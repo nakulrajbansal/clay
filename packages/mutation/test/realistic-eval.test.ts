@@ -153,9 +153,12 @@ describe("realistic evaluation — imperfect first output, one repair, commit", 
       api: 1, summary: "x", user_facing_diff: [],
       clarifying_question: null, assumptions: [], migration: null,
       panels: [{
-        panel_id: "gantt",   // too short (<3 chars after first) -> PanelId fails
+        panel_id: "gantt_view",
         title: "Gantt", placement: { region: "main", order: 0 },
-        code: "export default function(clay){}",
+        // V4: queries a table that is neither declared nor in the registry —
+        // a failure the pipeline can NOT heal (ADR-020/021 fix formalities,
+        // never capability violations), so two attempts -> honest failure.
+        code: "export default function(clay){ clay.db.query({from:\"ghost\"}); }",
         declared_queries: [], declared_writes: [],
       }],
       remove_panels: [], confidence: 0.9,

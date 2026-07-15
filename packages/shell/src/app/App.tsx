@@ -567,10 +567,12 @@ export function App(): React.JSX.Element {
   };
   // Resize (B4/ADR-017): toggle a panel between 1 and 2 columns — a
   // reversible commit, same timeline as everything else.
+  // default span: full strip in top, half in main (ADR-022a)
+  const defaultW = (p: LivePanel): number => (p.placement.region === "top" ? 4 : 2);
   const setSize = async (panelId: string, dim: { w?: number; h?: number }): Promise<void> => {
     const p = panels.find(x => x.panel_id === panelId);
     if (!p) return;
-    if (dim.w !== undefined && (p.placement.w ?? 2) === dim.w) return;   // default = half
+    if (dim.w !== undefined && (p.placement.w ?? defaultW(p)) === dim.w) return;
     if (dim.h !== undefined && p.placement.h === dim.h) return;
     const updated = await client().commitLayout(
       [{ panel_id: panelId, region: p.placement.region, order: p.placement.order, ...dim }]);
@@ -578,8 +580,30 @@ export function App(): React.JSX.Element {
     setHistory(await client().history());
   };
   const toggleWidth = (panelId: string): Promise<void> => {
-    const cur = panels.find(x => x.panel_id === panelId)?.placement.w ?? 2;
+    const p = panels.find(x => x.panel_id === panelId);
+    const cur = p ? (p.placement.w ?? defaultW(p)) : 2;
     return setSize(panelId, { w: cur >= 3 ? 2 : 4 });   // toggle half <-> full
+  };
+
+  // Small changes never call the model (ADR-022c): rename and remove are
+  // instant local commits on the same timeline as language reshapes.
+  const renamePanelLocal = async (panelId: string, title: string): Promise<void> => {
+    const updated = await client().renamePanel(panelId, title);
+    setPanels(updated);
+    setHistory(await client().history());
+  };
+  const removePanelLocal = async (panelId: string): Promise<void> => {
+    const title = panels.find(p => p.panel_id === panelId)?.title ?? panelId;
+    if (!window.confirm(
+      `Remove “${title}”? Your data is untouched — rewind the timeline to bring the panel back.`)) return;
+    const updated = await client().removePanel(panelId);
+    setPanels(updated);
+    setHistory(await client().history());
+    pushToast("Panel removed — rewind any time in the timeline", "success");
+  };
+  // Point, then speak (ADR-022d): seed the composer scoped to one panel.
+  const askAboutPanel = (panel: LivePanel): void => {
+    setIntentSeed(s => ({ text: `In the “${panel.title}” panel: `, n: s.n + 1 }));
   };
 
   // View switcher (moat pillar 4): re-lens one panel's data as a different
@@ -668,16 +692,21 @@ export function App(): React.JSX.Element {
             onDragStart={canDrag && !d.isPreview ? setDragId : undefined}
             onDragEnd={(): void => { setDragId(null); setDropTarget(null); }}
             draggingSrc={dragId === d.panel.panel_id}
-            wide={(d.panel.placement.w ?? 2) >= 3}
-            onResize={canDrag && !d.isPreview && d.panel.placement.region === "main"
+            wide={(d.panel.placement.w ?? (d.panel.placement.region === "top" ? 4 : 2)) >= 3}
+            onResize={canDrag && !d.isPreview && d.panel.placement.region !== "side"
               ? (): void => void toggleWidth(d.panel.panel_id) : undefined}
-            onSetWidth={canDrag && !d.isPreview && d.panel.placement.region === "main"
+            onSetWidth={canDrag && !d.isPreview && d.panel.placement.region !== "side"
               ? (w): void => void setSize(d.panel.panel_id, { w }) : undefined}
-            onSetHeight={canDrag && !d.isPreview && d.panel.placement.region !== "top"
+            onSetHeight={canDrag && !d.isPreview
               ? (h): void => void setSize(d.panel.panel_id, { h }) : undefined}
             onViewAs={canDrag && !d.isPreview && d.panel.declared_queries.length > 0
               ? (view): void => viewAs(d.panel, view) : undefined}
             onEditData={!d.isPreview ? (table): void => openData(table) : undefined}
+            onRename={canDrag && !d.isPreview
+              ? (title): void => void renamePanelLocal(d.panel.panel_id, title) : undefined}
+            onRemove={canDrag && !d.isPreview
+              ? (): void => void removePanelLocal(d.panel.panel_id) : undefined}
+            onAskAbout={!d.isPreview ? (): void => askAboutPanel(d.panel) : undefined}
           />
         );
       });

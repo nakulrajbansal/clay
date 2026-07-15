@@ -346,6 +346,42 @@ export class ClayStore {
     });
   }
 
+  /** Direct manipulation (ADR-022c): rename one panel's title as a
+   * reversible commit — no model. Small changes must never need a prompt
+   * round-trip. Same commit vocabulary as a plan's change_panel. */
+  renamePanel(panelId: string, title: string): number {
+    const p = this.livePanels().find(x => x.panel_id === panelId);
+    if (!p) throw new ClayError("E_VALIDATION", `no live panel '${panelId}'`);
+    const next = title.trim().slice(0, 80);
+    if (next.length === 0)
+      throw new ClayError("E_VALIDATION", "panel title cannot be empty");
+    if (next === p.title) return this.headVersion();
+    return this.commit({
+      intent: `rename the ${p.title} panel`,
+      summary: `Renamed “${p.title}” to “${next}”.`,
+      migration: null,
+      panels: [{
+        panel_id: p.panel_id, title: next, placement: p.placement,
+        code: p.code, declared_queries: p.declared_queries, declared_writes: p.declared_writes,
+      }],
+      diff: [{ kind: "change_panel", detail: `Renamed ${p.title} to ${next}` }],
+    });
+  }
+
+  /** Direct manipulation (ADR-022c): remove one panel as a reversible
+   * commit (tombstone). Data rows are untouched — rewind the timeline to
+   * bring the panel back. Same vocabulary as a plan's remove_panels. */
+  removePanel(panelId: string): number {
+    const p = this.livePanels().find(x => x.panel_id === panelId);
+    if (!p) throw new ClayError("E_VALIDATION", `no live panel '${panelId}'`);
+    return this.commit({
+      intent: `remove the ${p.title} panel`,
+      summary: `Removed the “${p.title}” panel.`,
+      migration: null, removePanels: [panelId],
+      diff: [{ kind: "remove_panel", detail: `Removed ${p.title}` }],
+    });
+  }
+
   /** Live panels at a version (default: current): latest blob per id, minus
    * panels whose latest tombstone is newer than their latest blob
    * (doc 04 §5). Passing an older version powers scrub-preview — panels AT

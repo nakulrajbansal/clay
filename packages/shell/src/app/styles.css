@@ -242,14 +242,21 @@ button.link.danger { color: var(--danger); }
   font-size: 12px; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 16px; }
 .onboarding-or::before, .onboarding-or::after { content: ""; flex: 1; height: 1px; background: var(--border-strong); }
 
-.region-top { grid-area: top; display: flex; gap: 16px; flex-wrap: wrap; }
-/* main is a 2-column dashboard grid; a wide panel spans both (ADR-017) */
-/* 4-column dashboard grid (ADR-018): panels span 1–4 cols; default is half (2) */
-.region-main { grid-area: main; display: grid; gap: 16px; align-content: start;
+/* Top and main are the SAME 4-col masonry grid (ADR-022a): 1px implicit
+   rows + dense flow; each panel spans exactly its measured height (inline
+   grid-row from PanelFrame), so uneven sizes pack without holes. The 16px
+   visual gap lives inside each panel's row span. */
+.region-top { grid-area: top; display: grid; column-gap: 16px; row-gap: 0;
+  grid-auto-rows: 1px; grid-auto-flow: row dense; align-content: start;
+  grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.region-top .panel-frame { grid-column: span 4; }    /* default full strip */
+.region-main { grid-area: main; display: grid; column-gap: 16px; row-gap: 0;
+  grid-auto-rows: 1px; grid-auto-flow: row dense; align-content: start;
   grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .region-main .panel-frame { grid-column: span 2; }   /* default half; inline style overrides */
 .region-side { grid-area: side; display: flex; flex-direction: column; gap: 16px; }
-@media (max-width: 1040px) { .region-main { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 1040px) {
+  .region-main, .region-top { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 /* panel frames (shell-drawn; nothing a panel renders escapes its frame) */
 .panel-frame {
@@ -261,8 +268,18 @@ button.link.danger { color: var(--danger); }
 @keyframes clay-panel-in { from { opacity: 0; transform: translateY(8px) scale(.996); } to { opacity: 1; transform: none; } }
 .panel-frame { animation: clay-panel-in .34s cubic-bezier(.2,.8,.2,1) both; }
 @media (prefers-reduced-motion: reduce) { .panel-frame { animation: none; } }
-.region-top .panel-frame, .region-side .panel-frame { flex: 1; }
+.region-side .panel-frame { flex: 1; }
 .panel-tools { margin-left: auto; display: flex; align-items: center; gap: 2px; }
+/* inline rename (ADR-022c): double-click the title, Enter commits */
+.panel-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.panel-renamable { cursor: text; }
+.panel-renamable:hover { text-decoration: underline dotted; text-underline-offset: 3px; }
+.panel-title-edit { font: inherit; font-weight: 600; color: var(--text);
+  border: 1px solid var(--accent); border-radius: 7px; padding: 2px 7px;
+  background: var(--panel); min-width: 60px; flex: 1;
+  box-shadow: 0 0 0 3px var(--accent-soft); outline: none; }
+.panel-tool-remove:hover { color: #c02626; background: #fdeaea; }
 .panel-tool {
   border: 0; background: none; cursor: pointer; color: var(--text-3);
   font-size: 13px; line-height: 1; padding: 3px 5px; border-radius: 7px;
@@ -300,7 +317,9 @@ button.link.danger { color: var(--danger); }
 .drop-slot { border: 2px dashed var(--accent); border-radius: var(--radius);
   background: var(--accent-soft); min-height: 100px; align-self: stretch;
   animation: clay-slot-in .14s ease; }
-.region-top .drop-slot, .region-side .drop-slot { flex: 1; min-width: 120px; }
+.region-side .drop-slot { flex: 1; min-width: 120px; }
+/* in the masonry grids the slot needs an explicit row span (1px rows) */
+.region-top .drop-slot, .region-main .drop-slot { grid-row: span 116; }
 @keyframes clay-slot-in { from { opacity: 0; transform: scale(.985); } to { opacity: 1; transform: none; } }
 /* edge/corner drag-resize handles (ADR-018) */
 .panel-edge-resize { position: absolute; display: flex; align-items: center; justify-content: center;
@@ -331,7 +350,6 @@ button.link.danger { color: var(--danger); }
 }
 .panel-frame iframe { display: block; width: 100%; height: 180px; border: 0;
   transition: height .12s ease; }
-.region-top .panel-frame iframe { height: 90px; }
 .panel-preview { border: 1.5px solid var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .panel-boundary {
   position: absolute; inset: 0; background: rgba(254, 243, 199, .97);
