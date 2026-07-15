@@ -617,6 +617,9 @@ export function App(): React.JSX.Element {
         onFork={() => void forkApp()}
         onRename={(id, name) => { renameApp(id, name); setApps(listApps()); }}
         onDelete={id => void deleteApp(id)}
+        themes={THEMES}
+        themeId={themeId}
+        onSelectTheme={selectTheme}
       />
       {!persistent ? (
         <div className="banner">

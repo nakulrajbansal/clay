@@ -106,6 +106,18 @@ button.link.danger { color: var(--danger); }
 .appbar-item.danger { color: var(--danger); }
 .appbar-check { color: var(--accent); }
 .appbar-sep { height: 1px; background: var(--border); margin: 6px 4px; }
+/* theme quick-switch (right of the app bar) */
+.appbar-theme { position: relative; margin-left: auto; }
+.appbar-theme-btn { display: flex; align-items: center; gap: 7px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--panel);
+  padding: 6px 12px; font: inherit; font-weight: 600; color: var(--text); cursor: pointer;
+  transition: border-color .12s; }
+.appbar-theme-btn:hover { border-color: #c9c7f0; }
+.appbar-theme-dot { width: 12px; height: 12px; border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.08); }
+.appbar-theme-menu { position: absolute; top: 44px; right: 0; z-index: 41; width: 300px;
+  background: var(--panel); border: 1px solid var(--border-strong); border-radius: 12px;
+  box-shadow: var(--shadow-lg); padding: 9px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
 .banner {
   flex: none; background: var(--warn-soft); color: var(--warn);
   padding: 9px 18px; font-size: 13px; font-weight: 500;

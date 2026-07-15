@@ -1,8 +1,10 @@
 // The multi-app switcher (G4): a header bar to switch between apps, create
 // a new one, or delete the current one. Switching is reload-based (App
-// handles the reload); this is just the chrome.
+// handles the reload); this is just the chrome. Also hosts a theme
+// quick-switch (palette popover) on the right.
 import { useState } from "react";
 import type { AppEntry } from "./apps";
+import type { Theme } from "./themes";
 
 export function AppSwitcher(props: {
   apps: AppEntry[];
@@ -12,11 +14,16 @@ export function AppSwitcher(props: {
   onFork: () => void;
   onRename: (id: string, name: string) => void;
   onDelete: (id: string) => void;
+  themes: Theme[];
+  themeId: string;
+  onSelectTheme: (id: string) => void;
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState("");
+  const [themeOpen, setThemeOpen] = useState(false);
   const current = props.apps.find(a => a.id === props.currentId) ?? null;
+  const currentTheme = props.themes.find(t => t.id === props.themeId) ?? props.themes[0]!;
   const startRename = (): void => { if (current) { setDraft(current.name); setRenaming(true); } };
   const saveRename = (): void => {
     if (current && draft.trim()) props.onRename(current.id, draft.trim());
@@ -83,6 +90,36 @@ export function AppSwitcher(props: {
                   Delete “{current.name}”
                 </button>
               ) : null}
+            </div>
+          </>
+        ) : null}
+      </div>
+
+      <div className="appbar-theme">
+        <button
+          className="appbar-theme-btn"
+          title="Color scheme"
+          onClick={() => setThemeOpen(o => !o)}
+        >
+          <span className="appbar-theme-dot" style={{ background: currentTheme.vars.accent }} />
+          Theme
+        </button>
+        {themeOpen ? (
+          <>
+            <div className="appbar-backdrop" onClick={() => setThemeOpen(false)} />
+            <div className="appbar-theme-menu">
+              {props.themes.map(t => (
+                <button
+                  key={t.id}
+                  className={`theme-swatch${t.id === props.themeId ? " selected" : ""}`}
+                  title={t.name}
+                  onClick={() => { props.onSelectTheme(t.id); setThemeOpen(false); }}
+                  style={{ background: t.vars.bg }}
+                >
+                  <span className="theme-dot" style={{ background: t.vars.accent }} />
+                  <span className="theme-name">{t.name}</span>
+                </button>
+              ))}
             </div>
           </>
         ) : null}
