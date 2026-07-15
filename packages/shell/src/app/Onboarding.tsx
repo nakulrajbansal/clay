@@ -7,7 +7,7 @@ import { STARTER_SHELLS, type StarterShellId } from "../shells/seed";
 const SHELL_ICONS: Record<string, string> = {
   tracker: "🎯", log: "📆", dashboard: "📊",
   small_business: "🏪", crm: "🤝", financials: "💰", staff: "🗓️", habits: "🔥", inventory: "📦",
-  approvals: "✅",
+  approvals: "✅", jobs: "💼", content: "📝",
 };
 
 export function Onboarding(props: {

@@ -350,3 +350,34 @@ ADR-025 Workflow guardrails: two-step advance + audit trail (revises
   renders. Verified live: counts 1/2/1/1 unchanged after the first click,
   0/3/1/1 after confirm, new "submitted -> in_review" row in Activity,
   toast shown.
+
+ADR-026 Template audit round: three cross-cutting fixes + per-template
+  gaps + two new templates (jobs, content).
+  Context: a full e2e audit of all templates (scripts/templatereview.mjs:
+  fresh profile per template, inventory, submit every form with plausible
+  values, confirm a Flow advance, verify writes propagate, screenshot).
+  It caught a P0: Bookkeeping's Record button was UNCLICKABLE.
+  DECISION (cross-cutting):
+  (a) Side-region panels use flex: 1 0 auto - a height-constrained side
+      column compressed sections below their iframe (overflow: hidden
+      clipped the form's submit button and parked the invisible bottom
+      resize strip over it, swallowing every click).
+  (b) The iframe runtime installs a ResizeObserver on body posting
+      clay_resize - content height settles after first render (fonts,
+      selects); a one-shot measure under-sized panels.
+  (c) A click is not a resize: edge-handle gestures with <= 4px of travel
+      are no-ops - previously a stray click on the strip committed a
+      phantom "Rearranged the layout by hand" version.
+  DECISION (per-template):
+  tracker + items_flow (todo/doing/done IS a process); dashboard +
+  add_record_form (a dashboard you cannot feed is read-only); habits +
+  streak_chart; inventory + inv_stock_chart (stock vs reorder point,
+  multi-series).
+  DECISION (new templates): jobs (Job Applications: saved -> applied ->
+  interview -> offer -> closed with app_activity audit trail) and content
+  (Content Calendar: idea -> draft -> review -> scheduled -> published
+  pipeline + a publish-date Timeline). Both follow the ADR-024/025
+  workflow pattern.
+  Consequence: 15 new seed-boot assertions; shells.test counts 13; the
+  audit harness is repeatable (all 12 templates green: forms write and
+  propagate, flows advance two-step, zero console errors).

@@ -47,7 +47,8 @@
         }
       ],
       "seed_panels": [
-        "items_table:main:0",
+        "items_flow:main:0",
+        "items_table:main:1",
         "status_counts:top:0",
         "add_item_form:side:0"
       ],
@@ -133,7 +134,8 @@
       "seed_panels": [
         "metrics_row:top:0",
         "records_table:main:0",
-        "by_category_chart:main:1"
+        "by_category_chart:main:1",
+        "add_record_form:side:0"
       ],
       "sample_rows": {
         "records": 5
@@ -819,6 +821,7 @@
         "habits_overview:top:0",
         "habits_board:main:0",
         "habits_table:main:1",
+        "streak_chart:main:2",
         "add_habit_form:side:0"
       ],
       "sample_rows": {
@@ -871,6 +874,7 @@
         "inv_overview:top:0",
         "inv_low:main:0",
         "inv_table:main:1",
+        "inv_stock_chart:main:2",
         "add_product:side:0"
       ],
       "sample_rows": {
@@ -961,6 +965,147 @@
       "sample_rows": {
         "requests": 5,
         "request_activity": 3
+      }
+    },
+    {
+      "shell_id": "jobs",
+      "name": "Job Applications",
+      "tagline": "Track applications from saved to offer, with every move logged",
+      "registry": [
+        {
+          "table": "applications",
+          "columns": [
+            {
+              "name": "company",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "role",
+              "type": "text"
+            },
+            {
+              "name": "stage",
+              "type": "enum",
+              "values": [
+                "saved",
+                "applied",
+                "interview",
+                "offer",
+                "closed"
+              ]
+            },
+            {
+              "name": "salary",
+              "type": "number"
+            },
+            {
+              "name": "location",
+              "type": "text"
+            },
+            {
+              "name": "applied_on",
+              "type": "date"
+            },
+            {
+              "name": "next_step",
+              "type": "text"
+            }
+          ]
+        },
+        {
+          "table": "app_activity",
+          "columns": [
+            {
+              "name": "application",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "from_stage",
+              "type": "text"
+            },
+            {
+              "name": "to_stage",
+              "type": "text"
+            },
+            {
+              "name": "moved_on",
+              "type": "date"
+            }
+          ]
+        }
+      ],
+      "seed_panels": [
+        "jobs_overview:top:0",
+        "jobs_flow:main:0",
+        "jobs_table:main:1",
+        "jobs_activity:main:2",
+        "add_application:side:0"
+      ],
+      "sample_rows": {
+        "applications": 6,
+        "app_activity": 3
+      }
+    },
+    {
+      "shell_id": "content",
+      "name": "Content Calendar",
+      "tagline": "Ideas to published: a pipeline plus a publish-date timeline",
+      "registry": [
+        {
+          "table": "posts",
+          "columns": [
+            {
+              "name": "title",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "channel",
+              "type": "enum",
+              "values": [
+                "blog",
+                "youtube",
+                "newsletter",
+                "social"
+              ]
+            },
+            {
+              "name": "stage",
+              "type": "enum",
+              "values": [
+                "idea",
+                "draft",
+                "review",
+                "scheduled",
+                "published"
+              ]
+            },
+            {
+              "name": "publish_on",
+              "type": "date"
+            },
+            {
+              "name": "owner",
+              "type": "text"
+            },
+            {
+              "name": "notes",
+              "type": "text"
+            }
+          ]
+        }
+      ],
+      "seed_panels": [
+        "content_overview:top:0",
+        "content_flow:main:0",
+        "content_timeline:main:1",
+        "content_table:main:2",
+        "add_post:side:0"
+      ],
+      "sample_rows": {
+        "posts": 6
       }
     }
   ],

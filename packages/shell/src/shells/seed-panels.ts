@@ -8,7 +8,7 @@ import type { PanelBlobInput } from "@clay/kernel";
 // ---------- tracker ----------
 const items_table: PanelBlobInput = {
   panel_id: "items_table", title: "Items",
-  placement: { region: "main", order: 0 },
+  placement: { region: "main", order: 1 },
   declared_queries: [{ from: "items" }],
   declared_writes: [],
   code: `export default function (clay) {
@@ -781,6 +781,305 @@ const add_product = panel(
     } }));
 }`);
 
+// ---------- audit additions (ADR-026): process/insight/entry gaps ----------
+// tracker: items have todo -> doing -> done, which is a PROCESS — show it
+const items_flow: PanelBlobInput = {
+  panel_id: "items_flow", title: "Progress",
+  placement: { region: "main", order: 0 },
+  declared_queries: [{ from: "items", orderBy: [{ field: "due", dir: "asc" }] }],
+  declared_writes: ["items"],
+  code: `export default function (clay) {
+  const stages = [
+    { key: "todo", label: "To do", tone: "gray" },
+    { key: "doing", label: "Doing", tone: "amber" },
+    { key: "done", label: "Done", tone: "green" }];
+  clay.db.watch({ from: "items", orderBy: [{ field: "due", dir: "asc" }] }, (rows) => {
+    const items = rows.map((r) => ({ id: r.id, title: r.name,
+      subtitle: r.owner || "", stage: r.status, badge: r.due || "", badgeTone: "gray" }));
+    clay.ui.render(h(Flow, { stages, items,
+      onAdvance: async (item, toKey) => {
+        try { await clay.db.update("items", item.id, { status: toKey }); }
+        catch (e) { clay.ui.toast("Could not move: " + e.message, "danger"); }
+      } }));
+  });
+}`,
+};
+
+// dashboard: a dashboard you cannot feed is read-only — add the entry form
+const add_record_form: PanelBlobInput = {
+  panel_id: "add_record_form", title: "Add record",
+  placement: { region: "side", order: 0 },
+  declared_queries: [],
+  declared_writes: ["records"],
+  code: `export default function (clay) {
+  clay.ui.render(h(Form, { submitLabel: "Add record", fields: [
+    { name: "name", label: "Name", kind: "text", required: true },
+    { name: "category", label: "Category", kind: "select", fromSchema: "records.category" },
+    { name: "value", label: "Value", kind: "number" },
+    { name: "on", label: "Date", kind: "date" }],
+    onSubmit: async (v) => {
+      try { await clay.db.insert("records", v); clay.ui.toast("Added", "success"); }
+      catch (e) { clay.ui.toast("Could not add: " + e.message, "danger"); }
+    } }));
+}`,
+};
+
+// habits: the insight is the streaks themselves — chart them
+const streak_chart: PanelBlobInput = {
+  panel_id: "streak_chart", title: "Streaks",
+  placement: { region: "main", order: 2 },
+  declared_queries: [{ from: "habits", orderBy: [{ field: "streak", dir: "desc" }] }],
+  declared_writes: [],
+  code: `export default function (clay) {
+  clay.db.watch({ from: "habits", orderBy: [{ field: "streak", dir: "desc" }] }, (rows) => {
+    clay.ui.render(rows.length === 0
+      ? h(EmptyState, { label: "Streaks appear once you add habits" })
+      : h(Chart, { kind: "bar", height: 190,
+          data: rows.map((r) => ({ x: r.name, y: r.streak || 0 })) }));
+  });
+}`,
+};
+
+// inventory: stock health at a glance — stock vs reorder point per product
+const inv_stock_chart: PanelBlobInput = {
+  panel_id: "inv_stock_chart", title: "Stock vs reorder point",
+  placement: { region: "main", order: 2 },
+  declared_queries: [{ from: "products", orderBy: [{ field: "stock", dir: "asc" }] }],
+  declared_writes: [],
+  code: `export default function (clay) {
+  clay.db.watch({ from: "products", orderBy: [{ field: "stock", dir: "asc" }] }, (rows) => {
+    clay.ui.render(rows.length === 0
+      ? h(EmptyState, { label: "Add products to see stock health" })
+      : h(Chart, { kind: "bar", height: 200, data: [
+          { label: "In stock", data: rows.map((r) => ({ x: r.name, y: r.stock || 0 })) },
+          { label: "Reorder at", data: rows.map((r) => ({ x: r.name, y: r.reorder_at || 0 })) }] }));
+  });
+}`,
+};
+
+// ---------- jobs (Job Applications — workflow-native, ADR-026) ----------
+const jobs_overview: PanelBlobInput = {
+  panel_id: "jobs_overview", title: "Search at a glance",
+  placement: { region: "top", order: 0 },
+  declared_queries: [{
+    from: "applications", groupBy: ["stage"],
+    aggregate: [{ fn: "count", field: "stage", as: "n" }],
+  }],
+  declared_writes: [],
+  code: `export default function (clay) {
+  const q = { from: "applications", groupBy: ["stage"], aggregate: [{ fn: "count", field: "stage", as: "n" }] };
+  clay.db.watch(q, (rows) => {
+    const n = (s) => { const r = rows.find((x) => x.stage === s); return r ? r.n : 0; };
+    const active = n("saved") + n("applied") + n("interview") + n("offer");
+    clay.ui.render(h(Grid, {},
+      h(MetricCard, { label: "Active applications", value: active }),
+      h(MetricCard, { label: "Interviewing", value: n("interview") }),
+      h(MetricCard, { label: "Offers", value: n("offer") }),
+      h(MetricCard, { label: "Closed", value: n("closed") })));
+  });
+}`,
+};
+
+const jobs_flow: PanelBlobInput = {
+  panel_id: "jobs_flow", title: "Application pipeline",
+  placement: { region: "main", order: 0 },
+  declared_queries: [{ from: "applications", orderBy: [{ field: "applied_on", dir: "asc" }] }],
+  declared_writes: ["applications", "app_activity"],
+  code: `export default function (clay) {
+  const stages = [
+    { key: "saved", label: "Saved", tone: "gray" },
+    { key: "applied", label: "Applied", tone: "accent" },
+    { key: "interview", label: "Interview", tone: "amber" },
+    { key: "offer", label: "Offer", tone: "green" },
+    { key: "closed", label: "Closed", tone: "gray" }];
+  const label = (k) => { const s = stages.find((x) => x.key === k); return s ? s.label : k; };
+  clay.db.watch({ from: "applications", orderBy: [{ field: "applied_on", dir: "asc" }] }, (rows) => {
+    const items = rows.map((r) => ({ id: r.id, title: r.company + " \\u00B7 " + (r.role || ""),
+      subtitle: r.next_step || "", stage: r.stage,
+      badge: r.salary ? clay.compute.formatCurrency(r.salary) : "", badgeTone: "gray" }));
+    clay.ui.render(h(Flow, { stages, items,
+      onAdvance: async (item, toKey) => {
+        try {
+          await clay.db.update("applications", item.id, { stage: toKey });
+          await clay.db.insert("app_activity", { application: item.title,
+            from_stage: item.stage, to_stage: toKey,
+            moved_on: clay.compute.now().slice(0, 10) });
+          clay.ui.toast(item.title + " \\u2192 " + label(toKey), "success");
+        } catch (e) { clay.ui.toast("Could not move: " + e.message, "danger"); }
+      } }));
+  });
+}`,
+};
+
+const jobs_table: PanelBlobInput = {
+  panel_id: "jobs_table", title: "All applications",
+  placement: { region: "main", order: 1 },
+  declared_queries: [{ from: "applications", orderBy: [{ field: "applied_on", dir: "desc" }] }],
+  declared_writes: [],
+  code: `export default function (clay) {
+  clay.db.watch({ from: "applications", orderBy: [{ field: "applied_on", dir: "desc" }] }, (rows) => {
+    clay.ui.render(rows.length === 0
+      ? h(EmptyState, { label: "No applications yet - add one on the right" })
+      : h(Table, { sortable: true, rows, columns: [
+          { field: "company", label: "Company" },
+          { field: "role", label: "Role" },
+          { field: "stage", label: "Stage",
+            badge: { field: "stage", map: { saved: "gray", applied: "accent", interview: "amber", offer: "green", closed: "gray" } } },
+          { field: "salary", label: "Salary", format: "currency" },
+          { field: "location", label: "Location" },
+          { field: "applied_on", label: "Applied", format: "date" }] }));
+  });
+}`,
+};
+
+const jobs_activity: PanelBlobInput = {
+  panel_id: "jobs_activity", title: "Activity",
+  placement: { region: "main", order: 2 },
+  declared_queries: [{
+    from: "app_activity", orderBy: [{ field: "created_at", dir: "desc" }], limit: 12,
+  }],
+  declared_writes: [],
+  code: `export default function (clay) {
+  const q = { from: "app_activity", orderBy: [{ field: "created_at", dir: "desc" }], limit: 12 };
+  clay.db.watch(q, (rows) => {
+    clay.ui.render(rows.length === 0
+      ? h(EmptyState, { label: "Moves land here as you advance applications" })
+      : h(Stack, {}, rows.map((r) =>
+          h(Box, { direction: "row", gap: "sm", align: "center" },
+            h(Text, { value: r.application, weight: "bold", size: "sm" }),
+            h(Badge, { label: r.from_stage + " \\u2192 " + r.to_stage, tone: "accent" }),
+            h(Text, { value: r.moved_on || "", size: "xs", muted: true })))));
+  });
+}`,
+};
+
+const add_application: PanelBlobInput = {
+  panel_id: "add_application", title: "Add application",
+  placement: { region: "side", order: 0 },
+  declared_queries: [],
+  declared_writes: ["applications"],
+  code: `export default function (clay) {
+  clay.ui.render(h(Form, { submitLabel: "Add application", fields: [
+    { name: "company", label: "Company", kind: "text", required: true },
+    { name: "role", label: "Role", kind: "text" },
+    { name: "salary", label: "Salary (USD)", kind: "number" },
+    { name: "location", label: "Location", kind: "text" },
+    { name: "next_step", label: "Next step", kind: "text" }],
+    onSubmit: async (v) => {
+      try {
+        await clay.db.insert("applications", { ...v, stage: "saved" });
+        clay.ui.toast("Saved - it enters the pipeline at Saved", "success");
+      } catch (e) { clay.ui.toast("Could not add: " + e.message, "danger"); }
+    } }));
+}`,
+};
+
+// ---------- content (Content Calendar — pipeline + timeline, ADR-026) ----------
+const content_overview: PanelBlobInput = {
+  panel_id: "content_overview", title: "Pipeline at a glance",
+  placement: { region: "top", order: 0 },
+  declared_queries: [{
+    from: "posts", groupBy: ["stage"],
+    aggregate: [{ fn: "count", field: "stage", as: "n" }],
+  }],
+  declared_writes: [],
+  code: `export default function (clay) {
+  const q = { from: "posts", groupBy: ["stage"], aggregate: [{ fn: "count", field: "stage", as: "n" }] };
+  clay.db.watch(q, (rows) => {
+    const n = (s) => { const r = rows.find((x) => x.stage === s); return r ? r.n : 0; };
+    clay.ui.render(h(Grid, {},
+      h(MetricCard, { label: "Ideas", value: n("idea") }),
+      h(MetricCard, { label: "In progress", value: n("draft") + n("review") }),
+      h(MetricCard, { label: "Scheduled", value: n("scheduled") }),
+      h(MetricCard, { label: "Published", value: n("published") })));
+  });
+}`,
+};
+
+const content_flow: PanelBlobInput = {
+  panel_id: "content_flow", title: "Content pipeline",
+  placement: { region: "main", order: 0 },
+  declared_queries: [{ from: "posts", orderBy: [{ field: "publish_on", dir: "asc" }] }],
+  declared_writes: ["posts"],
+  code: `export default function (clay) {
+  const stages = [
+    { key: "idea", label: "Idea", tone: "gray" },
+    { key: "draft", label: "Draft", tone: "accent" },
+    { key: "review", label: "Review", tone: "amber" },
+    { key: "scheduled", label: "Scheduled", tone: "green" },
+    { key: "published", label: "Published", tone: "accent" }];
+  clay.db.watch({ from: "posts", orderBy: [{ field: "publish_on", dir: "asc" }] }, (rows) => {
+    const items = rows.map((r) => ({ id: r.id, title: r.title,
+      subtitle: (r.owner || "") + (r.notes ? " \\u00B7 " + r.notes : ""),
+      stage: r.stage, badge: r.channel || "", badgeTone: "accent" }));
+    clay.ui.render(h(Flow, { stages, items,
+      onAdvance: async (item, toKey) => {
+        try { await clay.db.update("posts", item.id, { stage: toKey }); }
+        catch (e) { clay.ui.toast("Could not move: " + e.message, "danger"); }
+      } }));
+  });
+}`,
+};
+
+const content_timeline: PanelBlobInput = {
+  panel_id: "content_timeline", title: "Publish schedule",
+  placement: { region: "main", order: 1 },
+  declared_queries: [{ from: "posts", orderBy: [{ field: "publish_on", dir: "asc" }] }],
+  declared_writes: [],
+  code: `export default function (clay) {
+  const tones = { published: "green", scheduled: "accent", review: "amber", draft: "gray", idea: "gray" };
+  clay.db.watch({ from: "posts", orderBy: [{ field: "publish_on", dir: "asc" }] }, (rows) => {
+    const dated = rows.filter((r) => r.publish_on);
+    clay.ui.render(dated.length === 0
+      ? h(EmptyState, { label: "Give posts a publish date to see the schedule" })
+      : h(Timeline, { rows: dated.map((r) => ({
+          label: r.title, at: r.publish_on, tone: tones[r.stage] || "gray",
+          caption: r.channel || "" })) }));
+  });
+}`,
+};
+
+const content_table: PanelBlobInput = {
+  panel_id: "content_table", title: "All posts",
+  placement: { region: "main", order: 2 },
+  declared_queries: [{ from: "posts", orderBy: [{ field: "publish_on", dir: "asc" }] }],
+  declared_writes: [],
+  code: `export default function (clay) {
+  clay.db.watch({ from: "posts", orderBy: [{ field: "publish_on", dir: "asc" }] }, (rows) => {
+    clay.ui.render(rows.length === 0
+      ? h(EmptyState, { label: "No posts yet - capture an idea on the right" })
+      : h(Table, { sortable: true, rows, columns: [
+          { field: "title", label: "Title" },
+          { field: "channel", label: "Channel",
+            badge: { field: "channel", map: { blog: "accent", youtube: "red", newsletter: "amber", social: "green" } } },
+          { field: "stage", label: "Stage",
+            badge: { field: "stage", map: { idea: "gray", draft: "accent", review: "amber", scheduled: "green", published: "green" } } },
+          { field: "publish_on", label: "Publish", format: "date" },
+          { field: "owner", label: "Owner" }] }));
+  });
+}`,
+};
+
+const add_post: PanelBlobInput = {
+  panel_id: "add_post", title: "Capture an idea",
+  placement: { region: "side", order: 0 },
+  declared_queries: [],
+  declared_writes: ["posts"],
+  code: `export default function (clay) {
+  clay.ui.render(h(Form, { submitLabel: "Add to pipeline", fields: [
+    { name: "title", label: "Title", kind: "text", required: true },
+    { name: "channel", label: "Channel", kind: "select", fromSchema: "posts.channel" },
+    { name: "publish_on", label: "Target publish date", kind: "date" },
+    { name: "owner", label: "Owner", kind: "text" }],
+    onSubmit: async (v) => {
+      try {
+        await clay.db.insert("posts", { ...v, stage: "idea" });
+        clay.ui.toast("Captured - it starts as an Idea", "success");
+      } catch (e) { clay.ui.toast("Could not add: " + e.message, "danger"); }
+    } }));
+}`,
+};
+
 // ---------- approvals (workflow template, ADR-024) ----------
 const approvals_overview: PanelBlobInput = {
   panel_id: "approvals_overview", title: "At a glance",
@@ -915,9 +1214,9 @@ const new_request_form: PanelBlobInput = {
 
 export const SEED_PANELS: Record<string, PanelBlobInput[]> = {
   blank: [],
-  tracker: [items_table, status_counts, add_item_form],
+  tracker: [items_flow, items_table, status_counts, add_item_form],
   log: [entries_table, per_week_chart, quick_add_form],
-  dashboard: [metrics_row, records_table, by_category_chart],
+  dashboard: [metrics_row, records_table, by_category_chart, add_record_form],
   small_business: [
     sb_dashboard, sb_upcoming, sb_jobs_board, sb_jobs_table,
     sb_revenue, sb_invoices, sb_customers, sb_add_job,
@@ -925,7 +1224,9 @@ export const SEED_PANELS: Record<string, PanelBlobInput[]> = {
   crm,
   financials,
   staff,
-  habits: [habits_overview, habits_board, habits_table, add_habit_form],
-  inventory: [inv_overview, inv_low, inv_table, add_product],
+  habits: [habits_overview, habits_board, habits_table, streak_chart, add_habit_form],
+  inventory: [inv_overview, inv_low, inv_table, inv_stock_chart, add_product],
   approvals: [approvals_overview, request_flow, requests_table, activity_log, new_request_form],
+  jobs: [jobs_overview, jobs_flow, jobs_table, jobs_activity, add_application],
+  content: [content_overview, content_flow, content_timeline, content_table, add_post],
 };

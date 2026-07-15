@@ -116,6 +116,36 @@ describe("every seed panel boots and renders real data", () => {
       && c.textContent!.includes("approved → paid")],
     ["approvals", "new_request_form", c =>
       c.querySelectorAll("form.clay-form input, form.clay-form select").length === 4],
+    // Audit additions (ADR-026)
+    ["tracker", "items_flow", c =>
+      c.querySelectorAll(".clay-flow-step").length === 3
+      && c.querySelectorAll(".clay-flow-item").length >= 3],
+    ["dashboard", "add_record_form", c =>
+      c.querySelectorAll("form.clay-form input, form.clay-form select").length === 4],
+    ["habits", "streak_chart", c => c.querySelectorAll(".clay-chart-bar").length >= 3],
+    ["inventory", "inv_stock_chart", c =>
+      c.querySelectorAll(".clay-chart-mbar").length >= 6],   // 2 series × products
+    // Job Applications (workflow-native)
+    ["jobs", "jobs_flow", c =>
+      c.querySelectorAll(".clay-flow-step").length === 5
+      && c.textContent!.includes("Umbrella Labs")],
+    ["jobs", "jobs_overview", c =>
+      c.textContent!.includes("Interviewing") && c.querySelectorAll(".clay-metric").length === 4],
+    ["jobs", "jobs_table", c => c.querySelectorAll("tbody tr").length === 6],
+    ["jobs", "jobs_activity", c => c.textContent!.includes("interview → offer")],
+    ["jobs", "add_application", c =>
+      c.querySelectorAll("form.clay-form input, form.clay-form select").length === 5],
+    // Content Calendar (pipeline + publish timeline)
+    ["content", "content_flow", c =>
+      c.querySelectorAll(".clay-flow-step").length === 5
+      && c.textContent!.includes("Q3 product roadmap teaser")],
+    ["content", "content_timeline", c =>
+      c.querySelectorAll(".clay-timeline-row").length === 6],
+    ["content", "content_table", c => c.querySelectorAll("tbody tr").length === 6],
+    ["content", "content_overview", c =>
+      c.textContent!.includes("Scheduled") && c.querySelectorAll(".clay-metric").length === 4],
+    ["content", "add_post", c =>
+      c.querySelectorAll("form.clay-form input, form.clay-form select").length === 4],
   ];
 
   for (const [shellId, panelId, check] of expectations) {

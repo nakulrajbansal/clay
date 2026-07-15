@@ -272,7 +272,10 @@ button.link.danger { color: var(--danger); }
 @keyframes clay-panel-in { from { opacity: 0; transform: translateY(8px) scale(.996); } to { opacity: 1; transform: none; } }
 .panel-frame { animation: clay-panel-in .34s cubic-bezier(.2,.8,.2,1) both; }
 @media (prefers-reduced-motion: reduce) { .panel-frame { animation: none; } }
-.region-side .panel-frame { flex: 1; }
+/* grow to fill a short column but NEVER compress below content — a
+   compressed section clips its iframe and parks the bottom resize strip
+   over live controls (audit: Bookkeeping's Record button was unclickable) */
+.region-side .panel-frame { flex: 1 0 auto; }
 .panel-tools { margin-left: auto; display: flex; align-items: center; gap: 2px; }
 /* inline rename (ADR-022c): double-click the title, Enter commits */
 .panel-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis;

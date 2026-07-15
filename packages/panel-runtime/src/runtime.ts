@@ -140,6 +140,16 @@ export function bootPanelRuntime(opts: PanelRuntimeOptions): void {
       }
     } catch { /* sizing is best-effort */ }
   };
+  // Content height settles AFTER the first render (fonts, select options,
+  // wrapping) — a one-shot measure clips the bottom of the panel and leaves
+  // e.g. a form's submit button under the shell's edge-resize strip. Track
+  // it live. (jsdom has no ResizeObserver; render() still reports once.)
+  try {
+    if (typeof ResizeObserver !== "undefined" && typeof window !== "undefined"
+        && window.parent !== window && window.document.body) {
+      new ResizeObserver(() => reportHeight()).observe(window.document.body);
+    }
+  } catch { /* sizing is best-effort */ }
   const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
   const watchCbs = new Map<string, (rows: Record<string, unknown>[]) => void>();
   const eventCbs = new Map<string, Set<(payload: unknown) => void>>();

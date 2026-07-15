@@ -12,7 +12,8 @@ import { SEED_PANELS } from "./seed-panels";
 export type StarterShellId =
   | "blank"
   | "tracker" | "log" | "dashboard" | "small_business"
-  | "crm" | "financials" | "staff" | "habits" | "inventory" | "approvals";
+  | "crm" | "financials" | "staff" | "habits" | "inventory" | "approvals"
+  | "jobs" | "content";
 
 export type ShellColumn = {
   name: string;
@@ -423,6 +424,64 @@ export const STARTER_SHELLS: StarterShell[] = [
           { request: "Laptop replacement", from_stage: "in_review", to_stage: "approved", moved_on: soon(-10) },
           { request: "Laptop replacement", from_stage: "approved", to_stage: "paid", moved_on: soon(-7) },
           { request: "Team offsite venue deposit", from_stage: "in_review", to_stage: "approved", moved_on: soon(-2) },
+        ],
+      },
+    ],
+  },
+  {
+    id: "jobs", name: "Job Applications",
+    tagline: "Track applications from saved to offer, with every move logged",
+    tables: [
+      {
+        name: "applications",
+        columns: [
+          col("company", "text", true), col("role", "text"),
+          col("stage", "enum", false, ["saved", "applied", "interview", "offer", "closed"]),
+          col("salary", "number"), col("location", "text"),
+          col("applied_on", "date"), col("next_step", "text"),
+        ],
+        sampleRows: [
+          { company: "Northwind", role: "Product Engineer", stage: "saved", salary: 145000, location: "Remote", next_step: "Tailor resume to posting" },
+          { company: "BrightLab", role: "Frontend Engineer", stage: "applied", salary: 132000, location: "Austin", applied_on: soon(-6), next_step: "Follow up if quiet by Friday" },
+          { company: "Globex", role: "Full-stack Developer", stage: "applied", salary: 128000, location: "Remote", applied_on: soon(-3), next_step: "" },
+          { company: "Initech", role: "Senior SWE", stage: "interview", salary: 160000, location: "Toronto", applied_on: soon(-12), next_step: "Panel interview " + "on site" },
+          { company: "Umbrella Labs", role: "Platform Engineer", stage: "offer", salary: 155000, location: "Remote", applied_on: soon(-21), next_step: "Negotiate start date" },
+          { company: "Hooli", role: "Web Developer", stage: "closed", salary: 0, location: "Berlin", applied_on: soon(-30), next_step: "" },
+        ],
+      },
+      {
+        name: "app_activity",
+        columns: [
+          col("application", "text", true), col("from_stage", "text"),
+          col("to_stage", "text"), col("moved_on", "date"),
+        ],
+        sampleRows: [
+          { application: "Initech", from_stage: "applied", to_stage: "interview", moved_on: soon(-4) },
+          { application: "Umbrella Labs", from_stage: "interview", to_stage: "offer", moved_on: soon(-2) },
+          { application: "Hooli", from_stage: "applied", to_stage: "closed", moved_on: soon(-15) },
+        ],
+      },
+    ],
+  },
+  {
+    id: "content", name: "Content Calendar",
+    tagline: "Ideas to published: a pipeline plus a publish-date timeline",
+    tables: [
+      {
+        name: "posts",
+        columns: [
+          col("title", "text", true),
+          col("channel", "enum", false, ["blog", "youtube", "newsletter", "social"]),
+          col("stage", "enum", false, ["idea", "draft", "review", "scheduled", "published"]),
+          col("publish_on", "date"), col("owner", "text"), col("notes", "text"),
+        ],
+        sampleRows: [
+          { title: "How we cut onboarding time in half", channel: "blog", stage: "published", publish_on: soon(-5), owner: "Ava", notes: "" },
+          { title: "Q3 product roadmap teaser", channel: "newsletter", stage: "scheduled", publish_on: soon(3), owner: "Liam", notes: "Waiting on final screenshots" },
+          { title: "Customer story: Harbor Cafe", channel: "youtube", stage: "review", publish_on: soon(9), owner: "Maya", notes: "Legal sign-off pending" },
+          { title: "5 workflow patterns that stick", channel: "blog", stage: "draft", publish_on: soon(14), owner: "Ava", notes: "" },
+          { title: "Behind the scenes: support week", channel: "social", stage: "idea", publish_on: soon(21), owner: "Noah", notes: "" },
+          { title: "Pricing page refresh announcement", channel: "newsletter", stage: "idea", publish_on: soon(28), owner: "Liam", notes: "" },
         ],
       },
     ],

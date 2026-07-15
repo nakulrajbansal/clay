@@ -19,11 +19,11 @@ const { shells } = JSON.parse(readFileSync(shellsPath, "utf8")) as {
 };
 
 describe("starter shells validate against the constitution", () => {
-  it("the seed shells (blank + 3 generic + 4 business + habits + inventory + approvals)", () => {
-    expect(shells).toHaveLength(11);
+  it("the seed shells (blank + generic + business + personal + workflow)", () => {
+    expect(shells).toHaveLength(13);
     expect(shells.map(s => s.shell_id)).toEqual([
       "blank", "tracker", "log", "dashboard", "small_business", "crm", "financials",
-      "staff", "habits", "inventory", "approvals"]);
+      "staff", "habits", "inventory", "approvals", "jobs", "content"]);
   });
 
   for (const shell of shells) {

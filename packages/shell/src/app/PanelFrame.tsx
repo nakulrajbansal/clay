@@ -350,6 +350,11 @@ export function PanelFrame(props: {
     const region = section?.parentElement ?? null;
     const rect = section?.getBoundingClientRect();
     const startLeft = rect?.left ?? 0; const startTop = rect?.top ?? 0;
+    // A click is not a resize: without real pointer travel the gesture must
+    // be a no-op — otherwise a stray click on the (invisible) edge strip
+    // commits a phantom "Rearranged by hand" version and swallows the click.
+    const startX = e.clientX; const startY = e.clientY;
+    let moved = false;
     const spanFrom = (x: number): number => {
       const r = region?.getBoundingClientRect();
       if (!r) return 2;
@@ -357,6 +362,9 @@ export function PanelFrame(props: {
     };
     const hFrom = (y: number): number => Math.max(120, Math.min(1600, Math.round(y - startTop)));
     const apply = (ev: PointerEvent, commit: boolean): void => {
+      if (!moved && Math.abs(ev.clientX - startX) + Math.abs(ev.clientY - startY) > 4)
+        moved = true;
+      if (!moved) { if (commit) { setDragW(null); setDragH(null); } return; }
       const w = dims.width ? spanFrom(ev.clientX) : null;
       const h = dims.height ? hFrom(ev.clientY) : null;
       if (w !== null) setDragW(commit ? null : w);

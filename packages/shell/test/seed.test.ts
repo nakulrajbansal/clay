@@ -70,7 +70,7 @@ describe("seeding and samples", () => {
     const store = await ClayStore.openMemory();
     seedStarterShell(store, "tracker");
     expect(store.livePanels().map(p => p.panel_id).sort())
-      .toEqual(["add_item_form", "items_table", "status_counts"]);
+      .toEqual(["add_item_form", "items_flow", "items_table", "status_counts"]);
     expect(store.query({ from: "items" })).toHaveLength(3);
     store.close();
   });
