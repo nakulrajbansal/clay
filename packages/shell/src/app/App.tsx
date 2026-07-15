@@ -319,9 +319,10 @@ export function App(): React.JSX.Element {
               : "There are no tables to fill yet — describe the app first, then I can add sample data.",
           }]);
         }
-        // wake every live panel's watch — rows changed under them
+        // wake every live panel's watch — rows changed under them. No
+        // refreshPanels here: panels themselves didn't change, and the panel
+        // list churn is what used to sever mounted panels from the bridge.
         for (const t of await client().registryTables()) liveBridge?.notifyWrite(t.name);
-        await refreshPanels();
       } catch (e) {
         setFeed(f => [...f, { kind: "failure", reasons: [String(e)] }]);
       } finally {

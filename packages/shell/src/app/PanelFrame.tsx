@@ -339,7 +339,13 @@ export function PanelFrame(props: {
       window.removeEventListener("message", onMessage);
       bridge.detachPanel(panel.panel_id);
     };
-  }, [panel, bridge]);
+    // Attach exactly once per iframe: the render key encodes panel version,
+    // preview state, and theme, so any change that needs a re-boot remounts
+    // the whole frame. Re-running on prop identity churn (refreshPanels)
+    // would detachPanel and orphan the panel's watches — the iframe never
+    // fires "load" again, so attachPanel would never re-run.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // live size: dragW/dragH preview, then the stored placement, then defaults.
   // Width (cols 1–4) only applies in the main region; default is half (2).
