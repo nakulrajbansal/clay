@@ -300,15 +300,18 @@ function checkDeclarations(panel: PanelT, reg: Registry): ValidationIssue[] {
 }
 
 // ---------- V7: diff honesty (G24 mapping) ----------
-function checkDiffHonesty(plan: MutationPlanT, liveIds: Set<string>): ValidationIssue[] {
-  const issues: ValidationIssue[] = [];
+// The claim walk is shared: checkDiffHonesty turns unmet claims into V7
+// issues; missingDiffLines (pipeline normalization, ADR-021) turns the SAME
+// unmet claims into appendable lines so a model that forgot bookkeeping
+// doesn't burn its repair round on it.
+function walkDiffClaims(plan: MutationPlanT, liveIds: Set<string>,
+  onMissing: (kinds: DiffKind[], desc: string) => void): void {
   const lines = plan.user_facing_diff.map(d => d.kind);
   const used = lines.map(() => false);
   const claim = (kinds: DiffKind[], desc: string): void => {
     const i = lines.findIndex((k, idx) => !used[idx] && kinds.includes(k));
     if (i >= 0) used[i] = true;
-    else issues.push({ rule: "V7",
-      message: `${desc} has no user_facing_diff line of kind [${kinds.join("|")}]` });
+    else onMissing(kinds, desc);
   };
   for (const op of plan.migration?.operations ?? []) {
     switch (op.op) {
@@ -333,7 +336,22 @@ function checkDiffHonesty(plan: MutationPlanT, liveIds: Set<string>): Validation
     else claim(["add_panel", "add_chart"], `panel ${p.panel_id} (new)`);
   }
   for (const id of plan.remove_panels) claim(["remove_panel"], `remove_panels ${id}`);
+}
+
+function checkDiffHonesty(plan: MutationPlanT, liveIds: Set<string>): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  walkDiffClaims(plan, liveIds, (kinds, desc) => issues.push({ rule: "V7",
+    message: `${desc} has no user_facing_diff line of kind [${kinds.join("|")}]` }));
   return issues;
+}
+
+/** The diff lines a plan is missing for V7 — appendable as-is (ADR-021). */
+export function missingDiffLines(plan: MutationPlanT, liveIds: Set<string>):
+  { kind: DiffKind; detail: string }[] {
+  const out: { kind: DiffKind; detail: string }[] = [];
+  walkDiffClaims(plan, liveIds, (kinds, desc) =>
+    out.push({ kind: kinds[0]!, detail: desc.slice(0, 120) }));
+  return out;
 }
 
 /**

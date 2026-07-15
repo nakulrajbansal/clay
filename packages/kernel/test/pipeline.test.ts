@@ -228,6 +228,25 @@ describe("pipeline stages", () => {
     store.close();
   });
 
+  it("a missing V7 diff line is appended, not failed (ADR-021)", async () => {
+    const { store, table, panelId } = await seedShellStore(tracker());
+    const cols = tracker().registry[0]!.columns.map(c => c.name);
+    const plan = priorityPlan(table, panelId, cols);
+    // model forgot the bookkeeping: replaced panel, enum column — only a
+    // vague note in the diff
+    plan.user_facing_diff = [{ kind: "add_field", detail: "priority added" }];
+    const planner = new ScriptedPlanner([plan]);
+    const result = await new MutationPipeline(store, planner).run(INTENT);
+    expect(result.status).toBe("preview");
+    expect(planner.repairCalls).toHaveLength(0);
+    if (result.status === "preview") {
+      const kinds = result.preview.plan.user_facing_diff.map(d => d.kind);
+      expect(kinds).toContain("change_panel");   // synthesized for the replace
+      result.preview.discard();
+    }
+    store.close();
+  });
+
   it("repair focuses on migration-level issues, not downstream panel noise", async () => {
     const { store, table, panelId } = await seedShellStore(tracker());
     const cols = tracker().registry[0]!.columns.map(c => c.name);
@@ -256,11 +275,14 @@ describe("pipeline stages", () => {
     const { store, table, panelId } = await seedShellStore(tracker());
     const cols = tracker().registry[0]!.columns.map(c => c.name);
     const bad = priorityPlan(table, panelId, cols);
-    (bad.user_facing_diff as unknown[]).length = 0;   // V7 on every attempt
+    // V4 on every attempt (not kernel-normalizable, unlike V5/V7 bookkeeping)
+    (bad.panels as { code: string }[])[0]!.code = `export default function (clay) {
+  clay.db.query({ from: ${JSON.stringify(table)}, select: ["owner"] });
+}`;
     const planner = new ScriptedPlanner([bad, JSON.parse(JSON.stringify(bad)) as Record<string, unknown>]);
     const result = await new MutationPipeline(store, planner).run(INTENT);
     expect(result).toMatchObject({ status: "failed", stage: "validate" });
-    if (result.status === "failed") expect(result.reasons.join(" ")).toContain("V7");
+    if (result.status === "failed") expect(result.reasons.join(" ")).toContain("V4");
     expect(planner.repairCalls).toHaveLength(1);
     store.close();
   });

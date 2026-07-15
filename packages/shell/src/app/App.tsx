@@ -319,6 +319,8 @@ export function App(): React.JSX.Element {
               : "There are no tables to fill yet — describe the app first, then I can add sample data.",
           }]);
         }
+        // wake every live panel's watch — rows changed under them
+        for (const t of await client().registryTables()) liveBridge?.notifyWrite(t.name);
         await refreshPanels();
       } catch (e) {
         setFeed(f => [...f, { kind: "failure", reasons: [String(e)] }]);

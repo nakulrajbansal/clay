@@ -205,3 +205,18 @@ ADR-020 Kernel-derived inverses: the pipeline normalizes migration.inverse.
   commits, exemplars, tests) — only model plans are normalized. Fixtures:
   pipeline.test.ts "model-mangled inverse" + "repair focuses on
   migration-level issues".
+
+ADR-021 Pipeline appends missing V7 diff lines (same spirit as ADR-020).
+  Context: a live run failed an otherwise-good exec-dashboard upgrade at
+  V7 because the model's user_facing_diff lacked a [change_panel] line for
+  one replaced panel — bookkeeping the kernel can compute from the plan
+  itself. The repair round had already been spent on other issues.
+  DECISION: before S3, the pipeline appends the exact missing lines using
+  the SAME claim walk V7 checks (validate.ts missingDiffLines), so honesty
+  and check can't drift. Lines use the eligible kind and the claim
+  description as detail. The schema's 12-line cap is respected — if there
+  is no room, nothing is appended and V7 reports normally. V7 still guards
+  hand-written plans, and extra/unclaimed lines remain allowed.
+  Consequence: fixture in pipeline.test.ts ("missing diff line is
+  appended, not failed"). The preview card may show kernel-worded lines
+  like "panel project_board (replaced)" when the model forgot its own.

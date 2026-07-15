@@ -10,7 +10,7 @@ import type { z } from "zod";
 import { ClayError } from "./errors";
 import { deriveInverse } from "./migrate";
 import type { ClayStore, PanelBlobInput } from "./store";
-import { validateMutationPlan, type ValidationIssue } from "./validate";
+import { missingDiffLines, validateMutationPlan, type ValidationIssue } from "./validate";
 
 type MutationPlanT = z.infer<typeof MutationPlanSchema>;
 type QueryT = import("@clay/schema").Query;
@@ -196,6 +196,20 @@ export class MutationPipeline {
             p.migration.inverse =
               deriveInverse(p.migration.operations, this.store.registrySnapshot());
           } catch { /* invalid op sequence — V5 below states it */ }
+        }
+        // Same spirit for V7 (ADR-021): a plan that changes things but
+        // forgot a matching diff LINE is a bookkeeping miss, not a bad plan.
+        // Append the missing lines (schema caps the array at 12; if there's
+        // no room, leave it and let V7 say so).
+        const plan = result.plan as MutationPlanT | null;
+        if (plan && typeof plan === "object" && Array.isArray(plan.user_facing_diff)) {
+          try {
+            const missing = missingDiffLines(plan,
+              new Set(this.store.livePanels().map(lp => lp.panel_id)));
+            if (missing.length > 0
+                && plan.user_facing_diff.length + missing.length <= 12)
+              plan.user_facing_diff.push(...missing);
+          } catch { /* malformed plan — validator reports it */ }
         }
       }
 
