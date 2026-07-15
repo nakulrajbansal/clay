@@ -114,7 +114,7 @@ export function AppSwitcher(props: {
                   className={`theme-swatch${t.id === props.themeId ? " selected" : ""}`}
                   title={t.name}
                   onClick={() => { props.onSelectTheme(t.id); setThemeOpen(false); }}
-                  style={{ background: t.vars.bg }}
+                  style={{ background: t.vars.bg, color: t.vars.text, borderColor: t.vars.borderStrong }}
                 >
                   <span className="theme-dot" style={{ background: t.vars.accent }} />
                   <span className="theme-name">{t.name}</span>

@@ -216,30 +216,68 @@ function appFiles(appId?: string): { user: string; system: string } {
   return { user: `/app-${safe}-user.db`, system: `/app-${safe}-system.db` };
 }
 
+/** Does this environment actually have the OPFS SyncAccessHandle API? If not,
+ * retrying is pointless — the browser genuinely can't persist. (Typed via
+ * globalThis so the kernel package needn't pull in DOM lib.) */
+function opfsSupported(): boolean {
+  try {
+    const g = globalThis as unknown as {
+      navigator?: { storage?: { getDirectory?: unknown } };
+      FileSystemFileHandle?: { prototype?: { createSyncAccessHandle?: unknown } };
+    };
+    return !!g.navigator?.storage && typeof g.navigator.storage.getDirectory === "function"
+      && !!g.FileSystemFileHandle
+      && typeof g.FileSystemFileHandle.prototype?.createSyncAccessHandle === "function";
+  } catch { return false; }
+}
+
+const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms));
+
 export async function openBrowserDriver(
   appId?: string,
 ): Promise<{ driver: DbDriver; persistent: boolean }> {
   const s = await sqlite3();
-  try {
-    const withPool = s as unknown as {
-      installOpfsSAHPoolVfs(opts?: { name?: string; initialCapacity?: number }): Promise<PoolUtil>;
-    };
-    // Each app uses 2 files (user + system); the default pool has few slots.
-    // Reserve headroom so several apps (G4) fit without exhausting handles.
-    const pool = await withPool.installOpfsSAHPoolVfs({ initialCapacity: 24 });
-    activePool = pool;
-    if (typeof pool.getCapacity === "function" && typeof pool.addCapacity === "function"
-        && pool.getCapacity() < 24) {
-      try { await pool.addCapacity(24 - pool.getCapacity()); } catch { /* best effort */ }
-    }
-    const files = appFiles(appId);
-    const db = new pool.OpfsSAHPoolDb(files.user);
-    db.exec("PRAGMA foreign_keys = ON");
-    db.exec(`ATTACH 'file:${files.system}?vfs=opfs-sahpool' AS sys`);
-    return { driver: new SqliteWasmDriver(db), persistent: true };
-  } catch {
+  // Reuse an already-installed pool (a second openBrowserDriver in the same
+  // worker must not re-install the singleton VFS).
+  if (activePool) {
+    try {
+      const files = appFiles(appId);
+      const db = new activePool.OpfsSAHPoolDb(files.user);
+      db.exec("PRAGMA foreign_keys = ON");
+      db.exec(`ATTACH 'file:${files.system}?vfs=opfs-sahpool' AS sys`);
+      return { driver: new SqliteWasmDriver(db), persistent: true };
+    } catch { /* fall through to (re)install */ }
+  }
+  if (!opfsSupported()) {
     return { driver: await openMemoryDriver(), persistent: false };
   }
+  const withPool = s as unknown as {
+    installOpfsSAHPoolVfs(opts?: { name?: string; initialCapacity?: number }): Promise<PoolUtil>;
+  };
+  // The sahpool VFS holds an exclusive lock; on a reload-based app switch a new
+  // worker can briefly race the old one releasing it. Retry with backoff
+  // before giving up on persistence (the common cause of a spurious banner).
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const pool = await withPool.installOpfsSAHPoolVfs({ initialCapacity: 24 });
+      activePool = pool;
+      if (typeof pool.getCapacity === "function" && typeof pool.addCapacity === "function"
+          && pool.getCapacity() < 24) {
+        try { await pool.addCapacity(24 - pool.getCapacity()); } catch { /* best effort */ }
+      }
+      const files = appFiles(appId);
+      const db = new pool.OpfsSAHPoolDb(files.user);
+      db.exec("PRAGMA foreign_keys = ON");
+      db.exec(`ATTACH 'file:${files.system}?vfs=opfs-sahpool' AS sys`);
+      return { driver: new SqliteWasmDriver(db), persistent: true };
+    } catch (e) {
+      lastErr = e;
+      if (attempt < 4) await sleep(250 * (attempt + 1));   // 250,500,750,1000ms
+    }
+  }
+  console.warn("[clay] OPFS persistence unavailable after retries:", lastErr);
+  return { driver: await openMemoryDriver(), persistent: false };
 }
 
 /** Erase ALL OPFS databases (full "start over"; caller closes stores and

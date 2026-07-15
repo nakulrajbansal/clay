@@ -640,8 +640,14 @@ export function App(): React.JSX.Element {
       />
       {!persistent ? (
         <div className="banner">
-          This browser can’t persist data (no OPFS) — your work will vanish
-          when the tab closes. Export early, export often.
+          <span>
+            Your data isn’t saving on this device right now. If Clay is open in
+            another tab, close it and retry. Otherwise export a backup to be safe.
+          </span>
+          <span className="banner-actions">
+            <button className="link" onClick={reloadApp}>Retry</button>
+            <button className="link" onClick={() => void exportArchive()}>Export backup</button>
+          </span>
         </div>
       ) : null}
       <div className="app-body">
