@@ -36,6 +36,14 @@ const col = (name: string, type: ShellColumn["type"],
   required = false, values?: string[]): ShellColumn =>
   ({ name, type, required, ...(values ? { values } : {}) });
 
+// Sample dates relative to seed time, so "upcoming / next N days" panels are
+// populated on first run whenever the app is opened (not stale fixed dates).
+const soon = (offsetDays: number): string => {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  return d.toISOString().slice(0, 10);
+};
+
 export const STARTER_SHELLS: StarterShell[] = [
   {
     id: "blank", name: "Blank canvas",
@@ -53,9 +61,9 @@ export const STARTER_SHELLS: StarterShell[] = [
         col("due", "date"), col("notes", "text"),
       ],
       sampleRows: [
-        { name: "Ship the deck", owner: "You", status: "doing", due: "2026-07-10" },
-        { name: "Book dentist", owner: "You", status: "todo", due: "2026-07-20" },
-        { name: "Water plants", owner: "You", status: "done", due: "2026-07-01" },
+        { name: "Ship the deck", owner: "You", status: "doing", due: soon(3) },
+        { name: "Book dentist", owner: "You", status: "todo", due: soon(12) },
+        { name: "Water plants", owner: "You", status: "done", due: soon(-5) },
       ],
     }],
   },
@@ -69,9 +77,9 @@ export const STARTER_SHELLS: StarterShell[] = [
         col("amount", "number"), col("rating", "integer"), col("notes", "text"),
       ],
       sampleRows: [
-        { title: "Morning run", on: "2026-06-29", amount: 5, rating: 4 },
-        { title: "Read: The Overstory", on: "2026-06-30", amount: 40, rating: 5 },
-        { title: "Swim", on: "2026-07-01", amount: 1, rating: 3 },
+        { title: "Morning run", on: soon(-2), amount: 5, rating: 4 },
+        { title: "Read: The Overstory", on: soon(-4), amount: 40, rating: 5 },
+        { title: "Swim", on: soon(-8), amount: 1, rating: 3 },
       ],
     }],
   },
@@ -86,11 +94,11 @@ export const STARTER_SHELLS: StarterShell[] = [
         col("value", "number"), col("on", "date"),
       ],
       sampleRows: [
-        { name: "Website refresh", category: "a", value: 1200, on: "2026-06-05" },
-        { name: "Logo pack", category: "b", value: 450, on: "2026-06-12" },
-        { name: "Brand audit", category: "a", value: 900, on: "2026-06-18" },
-        { name: "Social kit", category: "c", value: 300, on: "2026-06-25" },
-        { name: "Retainer", category: "b", value: 2000, on: "2026-07-01" },
+        { name: "Website refresh", category: "a", value: 1200, on: soon(-40) },
+        { name: "Logo pack", category: "b", value: 450, on: soon(-33) },
+        { name: "Brand audit", category: "a", value: 900, on: soon(-20) },
+        { name: "Social kit", category: "c", value: 300, on: soon(-8) },
+        { name: "Retainer", category: "b", value: 2000, on: soon(-2) },
       ],
     }],
   },
@@ -118,11 +126,11 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("scheduled", "date"), col("price", "number"), col("notes", "text"),
         ],
         sampleRows: [
-          { title: "Kitchen faucet fix", customer: "Alice Nguyen", status: "scheduled", scheduled: "2026-07-06", price: 180 },
-          { title: "Espresso machine service", customer: "Bob's Cafe", status: "in_progress", scheduled: "2026-07-04", price: 420 },
-          { title: "Bathroom remodel quote", customer: "Carla Reyes", status: "lead", scheduled: "2026-07-09", price: 0 },
-          { title: "Water heater install", customer: "Alice Nguyen", status: "done", scheduled: "2026-06-28", price: 950 },
-          { title: "Drain cleaning", customer: "Bob's Cafe", status: "invoiced", scheduled: "2026-06-20", price: 140 },
+          { title: "Kitchen faucet fix", customer: "Alice Nguyen", status: "scheduled", scheduled: soon(2), price: 180 },
+          { title: "Espresso machine service", customer: "Bob's Cafe", status: "in_progress", scheduled: soon(5), price: 420 },
+          { title: "Bathroom remodel quote", customer: "Carla Reyes", status: "lead", scheduled: soon(9), price: 0 },
+          { title: "Water heater install", customer: "Alice Nguyen", status: "done", scheduled: soon(-6), price: 950 },
+          { title: "Drain cleaning", customer: "Bob's Cafe", status: "invoiced", scheduled: soon(-14), price: 140 },
         ],
       },
       {
@@ -133,9 +141,9 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("issued", "date"), col("due", "date"),
         ],
         sampleRows: [
-          { customer: "Bob's Cafe", job: "Drain cleaning", amount: 140, status: "paid", issued: "2026-06-21", due: "2026-07-05" },
-          { customer: "Alice Nguyen", job: "Water heater install", amount: 950, status: "sent", issued: "2026-06-29", due: "2026-07-13" },
-          { customer: "Bob's Cafe", job: "Espresso machine service", amount: 420, status: "draft", issued: "2026-07-04", due: "2026-07-18" },
+          { customer: "Bob's Cafe", job: "Drain cleaning", amount: 140, status: "paid", issued: soon(-14), due: soon(-4) },
+          { customer: "Alice Nguyen", job: "Water heater install", amount: 950, status: "sent", issued: soon(-6), due: soon(6) },
+          { customer: "Bob's Cafe", job: "Espresso machine service", amount: 420, status: "draft", issued: soon(-2), due: soon(12) },
         ],
       },
       {
@@ -158,8 +166,8 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("on", "date"),
         ],
         sampleRows: [
-          { description: "Van fuel", amount: 60, category: "fuel", on: "2026-07-01" },
-          { description: "Pipe stock", amount: 210, category: "supplies", on: "2026-06-30" },
+          { description: "Van fuel", amount: 60, category: "fuel", on: soon(-5) },
+          { description: "Pipe stock", amount: 210, category: "supplies", on: soon(-8) },
         ],
       },
     ],
@@ -201,11 +209,11 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("probability", "integer"), col("expected_close", "date"),
         ],
         sampleRows: [
-          { title: "Northwind annual plan", contact: "Dana Lee", company: "Northwind", stage: "proposal", value: 8000, owner: "You", source: "inbound", probability: 60, expected_close: "2026-07-20" },
-          { title: "BrightLab pilot", contact: "Sam Patel", company: "BrightLab", stage: "qualified", value: 3500, owner: "You", source: "outbound", probability: 40, expected_close: "2026-07-31" },
-          { title: "BrightLab expansion", contact: "Sam Patel", company: "BrightLab", stage: "negotiation", value: 12000, owner: "You", source: "referral", probability: 80, expected_close: "2026-07-15" },
-          { title: "Harbor Cafe setup", contact: "Rosa Diaz", company: "Harbor Cafe", stage: "won", value: 1200, owner: "You", source: "referral", probability: 100, expected_close: "2026-06-28" },
-          { title: "Referral lead", contact: "Sam Patel", company: "BrightLab", stage: "lead", value: 0, owner: "You", source: "referral", probability: 10, expected_close: "2026-08-10" },
+          { title: "Northwind annual plan", contact: "Dana Lee", company: "Northwind", stage: "proposal", value: 8000, owner: "You", source: "inbound", probability: 60, expected_close: soon(9) },
+          { title: "BrightLab pilot", contact: "Sam Patel", company: "BrightLab", stage: "qualified", value: 3500, owner: "You", source: "outbound", probability: 40, expected_close: soon(20) },
+          { title: "BrightLab expansion", contact: "Sam Patel", company: "BrightLab", stage: "negotiation", value: 12000, owner: "You", source: "referral", probability: 80, expected_close: soon(4) },
+          { title: "Harbor Cafe setup", contact: "Rosa Diaz", company: "Harbor Cafe", stage: "won", value: 1200, owner: "You", source: "referral", probability: 100, expected_close: soon(-16) },
+          { title: "Referral lead", contact: "Sam Patel", company: "BrightLab", stage: "lead", value: 0, owner: "You", source: "referral", probability: 10, expected_close: soon(30) },
         ],
       },
       {
@@ -216,9 +224,9 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("on", "date"),
         ],
         sampleRows: [
-          { subject: "Discovery call", contact: "Dana Lee", deal: "Northwind annual plan", type: "call", on: "2026-07-06" },
-          { subject: "Sent proposal", contact: "Dana Lee", deal: "Northwind annual plan", type: "email", on: "2026-07-07" },
-          { subject: "Kickoff", contact: "Rosa Diaz", deal: "Harbor Cafe setup", type: "meeting", on: "2026-07-02" },
+          { subject: "Discovery call", contact: "Dana Lee", deal: "Northwind annual plan", type: "call", on: soon(-8) },
+          { subject: "Sent proposal", contact: "Dana Lee", deal: "Northwind annual plan", type: "email", on: soon(-7) },
+          { subject: "Kickoff", contact: "Rosa Diaz", deal: "Harbor Cafe setup", type: "meeting", on: soon(-12) },
         ],
       },
       {
@@ -230,10 +238,10 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("status", "enum", false, ["open", "done"]),
         ],
         sampleRows: [
-          { title: "Follow up on proposal", deal: "Northwind annual plan", owner: "You", due: "2026-07-08", priority: "high", status: "open" },
-          { title: "Send pilot scope", deal: "BrightLab pilot", owner: "You", due: "2026-07-09", priority: "medium", status: "open" },
-          { title: "Contract review", deal: "BrightLab expansion", owner: "You", due: "2026-07-11", priority: "high", status: "open" },
-          { title: "Thank-you note", deal: "Harbor Cafe setup", owner: "You", due: "2026-06-29", priority: "low", status: "done" },
+          { title: "Follow up on proposal", deal: "Northwind annual plan", owner: "You", due: soon(1), priority: "high", status: "open" },
+          { title: "Send pilot scope", deal: "BrightLab pilot", owner: "You", due: soon(3), priority: "medium", status: "open" },
+          { title: "Contract review", deal: "BrightLab expansion", owner: "You", due: soon(6), priority: "high", status: "open" },
+          { title: "Thank-you note", deal: "Harbor Cafe setup", owner: "You", due: soon(-9), priority: "low", status: "done" },
         ],
       },
     ],
@@ -262,10 +270,10 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("category", "text"), col("on", "date"),
         ],
         sampleRows: [
-          { description: "Client payment — Northwind", account: "Business checking", amount: 1200, kind: "income", category: "Sales", on: "2026-06-28" },
-          { description: "Software subscription", account: "Business card", amount: 90, kind: "expense", category: "Software", on: "2026-07-01" },
-          { description: "Supplies", account: "Business card", amount: 210, kind: "expense", category: "Materials", on: "2026-06-30" },
-          { description: "Client payment — Harbor", account: "Business checking", amount: 1200, kind: "income", category: "Sales", on: "2026-07-03" },
+          { description: "Client payment — Northwind", account: "Business checking", amount: 1200, kind: "income", category: "Sales", on: soon(-9) },
+          { description: "Software subscription", account: "Business card", amount: 90, kind: "expense", category: "Software", on: soon(-6) },
+          { description: "Supplies", account: "Business card", amount: 210, kind: "expense", category: "Materials", on: soon(-7) },
+          { description: "Client payment — Harbor", account: "Business checking", amount: 1200, kind: "income", category: "Sales", on: soon(-3) },
         ],
       },
       {
@@ -276,9 +284,9 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("issued", "date"), col("due", "date"),
         ],
         sampleRows: [
-          { customer: "Northwind", amount: 8000, status: "sent", issued: "2026-06-29", due: "2026-07-13" },
-          { customer: "BrightLab", amount: 3500, status: "draft", issued: "2026-07-04", due: "2026-07-18" },
-          { customer: "Harbor Cafe", amount: 1200, status: "paid", issued: "2026-06-21", due: "2026-07-05" },
+          { customer: "Northwind", amount: 8000, status: "sent", issued: soon(-6), due: soon(8) },
+          { customer: "BrightLab", amount: 3500, status: "draft", issued: soon(-1), due: soon(14) },
+          { customer: "Harbor Cafe", amount: 1200, status: "paid", issued: soon(-14), due: soon(-2) },
         ],
       },
       {
@@ -288,8 +296,8 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("status", "enum", false, ["unpaid", "paid"]), col("due", "date"),
         ],
         sampleRows: [
-          { vendor: "Supply Co", amount: 210, status: "unpaid", due: "2026-07-15" },
-          { vendor: "Cloud Host", amount: 90, status: "paid", due: "2026-07-01" },
+          { vendor: "Supply Co", amount: 210, status: "unpaid", due: soon(4) },
+          { vendor: "Cloud Host", amount: 90, status: "paid", due: soon(-13) },
         ],
       },
     ],
@@ -319,9 +327,9 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("status", "enum", false, ["scheduled", "confirmed", "completed"]),
         ],
         sampleRows: [
-          { employee: "Maya Chen", date: "2026-07-06", start_time: "08:00", end_time: "14:00", role: "Barista", status: "confirmed" },
-          { employee: "Leo Park", date: "2026-07-06", start_time: "13:00", end_time: "21:00", role: "Shift lead", status: "scheduled" },
-          { employee: "Maya Chen", date: "2026-07-07", start_time: "08:00", end_time: "14:00", role: "Barista", status: "scheduled" },
+          { employee: "Maya Chen", date: soon(1), start_time: "08:00", end_time: "14:00", role: "Barista", status: "confirmed" },
+          { employee: "Leo Park", date: soon(2), start_time: "13:00", end_time: "21:00", role: "Shift lead", status: "scheduled" },
+          { employee: "Maya Chen", date: soon(4), start_time: "08:00", end_time: "14:00", role: "Barista", status: "scheduled" },
         ],
       },
       {
@@ -333,8 +341,8 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("status", "enum", false, ["pending", "approved", "denied"]),
         ],
         sampleRows: [
-          { employee: "Ivy Ross", kind: "vacation", start_date: "2026-07-05", end_date: "2026-07-12", status: "approved" },
-          { employee: "Leo Park", kind: "personal", start_date: "2026-07-09", end_date: "2026-07-09", status: "pending" },
+          { employee: "Ivy Ross", kind: "vacation", start_date: soon(3), end_date: soon(10), status: "approved" },
+          { employee: "Leo Park", kind: "personal", start_date: soon(6), end_date: soon(6), status: "pending" },
         ],
       },
     ],
