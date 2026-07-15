@@ -444,15 +444,81 @@ function buildFilterBar(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
 const SVG_NS = "http://www.w3.org/2000/svg";
 const CHART_W = 400;
 const MAX_POINTS = 200;
-// Series palette for multi-series (comparison) charts — planned vs actual,
-// this year vs last, etc. First colour is the accent so single-series stays
-// on-brand; the rest are legible against it.
-const SERIES_COLORS = ["#6a67e6", "#f0a54e", "#34c05f", "#e5688b", "#37b6c4", "#b07de8"];
+// Series palette for multi-series (comparison) charts. The values live in
+// CSS tokens (--series-1..6, defined by the shell per theme) so dark themes
+// get their own validated steps. The order is the CVD-safety mechanism —
+// both light and dark sets pass the palette validator (lightness band,
+// chroma floor, adjacent-pair CVD ΔE, normal-vision floor) on their
+// surfaces; do not reorder or extend without re-validating.
+const SERIES_N = 6;
+const seriesColor = (i: number): string => `var(--series-${(i % SERIES_N) + 1}, #6a67e6)`;
+
+// Nice axis scale: the smallest step from {1,2,5}×10^k that covers the max
+// in ≤5 ticks. Every gridline label lands on a clean multiple of the step —
+// no 62.5/187.5-style quarter fractions.
+function niceScale(raw: number): { top: number; step: number } {
+  if (raw <= 0) return { top: 1, step: 0.25 };
+  for (let k = Math.floor(Math.log10(raw)) - 1; ; k++) {
+    for (const m of [1, 2, 5]) {
+      const step = m * Math.pow(10, k);
+      if (raw / step <= 5) return { top: Math.ceil(raw / step) * step, step };
+    }
+  }
+}
+
+// One shared tooltip div per figure; marks opt in via tip(). Replaces the
+// sluggish native <title> with an instant, theme-aware label.
+function makeTip(ctx: Ctx, wrap: HTMLElement): (mark: Element, text: string) => void {
+  const tip = el(ctx, "div", "clay-chart-tip");
+  wrap.appendChild(tip);
+  return (mark, text) => {
+    mark.setAttribute("aria-label", text);
+    mark.addEventListener("pointerenter", () => {
+      const w = wrap.getBoundingClientRect();
+      const m = mark.getBoundingClientRect();
+      tip.textContent = text;
+      tip.style.left = `${m.left + m.width / 2 - w.left}px`;
+      tip.style.top = `${m.top - w.top}px`;
+      tip.classList.add("on");
+    });
+    mark.addEventListener("pointerleave", () => tip.classList.remove("on"));
+  };
+}
+
+// Recessive horizontal gridlines at nice steps with tiny y labels in the
+// left gutter — magnitude is readable without a value on every mark.
+function drawGrid(
+  ctx: Ctx, svg: SVGElement, x0: number, x1: number,
+  yFor: (y: number) => number, top: number, step: number,
+): void {
+  for (let v = step; v <= top + step / 1e6; v += step) {
+    const y = yFor(v);
+    const line = ctx.doc.createElementNS(SVG_NS, "line");
+    line.setAttribute("x1", String(x0)); line.setAttribute("x2", String(x1));
+    line.setAttribute("y1", String(y)); line.setAttribute("y2", String(y));
+    line.setAttribute("class", "clay-chart-grid");
+    svg.appendChild(line);
+    const lab = ctx.doc.createElementNS(SVG_NS, "text");
+    lab.setAttribute("x", String(x0 - 4)); lab.setAttribute("y", String(y + 2.5));
+    lab.setAttribute("text-anchor", "end"); lab.setAttribute("font-size", "7");
+    lab.setAttribute("class", "clay-chart-ylab");
+    lab.textContent = fmtNum(v);
+    svg.appendChild(lab);
+  }
+}
+
+// A bar rounded ONLY at its data end, anchored square to the baseline.
+function barPath(x: number, w: number, y: number, baseY: number): string {
+  const h = Math.max(baseY - y, 0);
+  const r = Math.min(3.5, w / 2, h);
+  return `M ${x} ${baseY} L ${x} ${y + r} Q ${x} ${y} ${x + r} ${y} `
+    + `L ${x + w - r} ${y} Q ${x + w} ${y} ${x + w} ${y + r} L ${x + w} ${baseY} Z`;
+}
 
 // A "point" is {x, y:number}; a "series" is {label?, data:point[]}. The model
 // reaches for the series shape whenever it wants to compare two things on one
 // chart, so we must render it — a flat single-series array is the other case.
-function shortX(x: string): string {
+function shortX(x: string, maxLen = 7): string {
   const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(x);
   if (d) return `${Number(d[2])}/${Number(d[3])}`;
   const w = /^\d{4}-W(\d{1,2})$/.exec(x);          // ISO week key -> "W01"
@@ -463,8 +529,12 @@ function shortX(x: string): string {
       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][Number(ym[2]) - 1];
     if (mo) return `${mo} '${ym[1]!.slice(2)}`;
   }
-  return x.length > 7 ? `${x.slice(0, 6)}…` : x;
+  return x.length > maxLen ? `${x.slice(0, Math.max(maxLen - 1, 3))}…` : x;
 }
+
+// How many label characters fit under one tick, given the space (in viewBox
+// units) each visible tick owns. Font 7.5 ≈ 4.3 units/char; keep sane bounds.
+const tickChars = (span: number): number => Math.max(4, Math.min(24, Math.floor(span / 4.3)));
 
 // Compact value label for bar tops: 1500 -> "1.5k", 12 -> "12", 3.25 -> "3.3".
 function fmtNum(n: number): string {
@@ -491,132 +561,159 @@ function buildChart(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
     .slice(0, MAX_POINTS);
 
   const wrap = el(ctx, "figure", "clay-chart");
+  if (data.length === 0) {
+    const empty = el(ctx, "div", "clay-empty");
+    empty.textContent = "No data yet";
+    wrap.appendChild(empty);
+    return wrap;
+  }
   const svg = ctx.doc.createElementNS(SVG_NS, "svg");
   svg.setAttribute("viewBox", `0 0 ${CHART_W} ${height}`);
   svg.setAttribute("role", "img");
   wrap.appendChild(svg);
-  if (data.length === 0) return wrap;
-
-  const rawMax = Math.max(...data.map(d => d.y), 0) || 1;
-  // Headroom above the tallest bar so value labels have room to breathe.
-  const maxY = kind === "pie" ? rawMax : rawMax * 1.16;
-  const pad = 4;
-  // Reserve a strip for x-axis labels on bar/line/area (pie doesn't use yFor).
-  const showTicks = kind !== "pie" && data.length <= 12;
-  const axisH = showTicks ? 14 : pad;
-  const plotH = height - pad - axisH;
-  const yFor = (y: number): number => pad + plotH - (Math.max(y, 0) / maxY) * plotH;
-  const xTick = (cx: number, label: string): void => {
-    const t = ctx.doc.createElementNS(SVG_NS, "text");
-    t.setAttribute("x", String(cx)); t.setAttribute("y", String(height - 3));
-    t.setAttribute("text-anchor", "middle"); t.setAttribute("font-size", "7");
-    t.setAttribute("fill", "#a6a4b1"); t.setAttribute("class", "clay-chart-xtick");
-    t.textContent = shortX(String(label));
-    svg.appendChild(t);
-  };
+  const tip = makeTip(ctx, wrap);
 
   if (kind === "pie") {
-    const total = data.reduce((s, d) => s + Math.max(d.y, 0), 0) || 1;
+    // Donut, not flat pie: identity reads from the ring + legend; the hole
+    // carries the headline total. Beyond 5 slices identity is unreadable —
+    // fold the tail into "Other" (fixed-order palette, never cycled).
+    const sorted = [...data].sort((a, b) => Math.max(b.y, 0) - Math.max(a.y, 0));
+    const head = sorted.slice(0, 5);
+    const tailSum = sorted.slice(5).reduce((s, d) => s + Math.max(d.y, 0), 0);
+    const slices = tailSum > 0 ? [...head, { x: "Other", y: tailSum }] : head;
+    const total = slices.reduce((s, d) => s + Math.max(d.y, 0), 0) || 1;
     const cx = CHART_W / 2; const cy = height / 2;
-    const r = Math.min(cx, cy) - pad;
+    const r = Math.min(cx, cy) - 6;
+    const r2 = r * 0.62;
     let angle = -Math.PI / 2;
-    data.forEach((d, i) => {
-      const color = SERIES_COLORS[i % SERIES_COLORS.length]!;
-      const sweep = (Math.max(d.y, 0) / total) * Math.PI * 2;
-      const x1 = cx + r * Math.cos(angle); const y1 = cy + r * Math.sin(angle);
-      angle += sweep;
-      const x2 = cx + r * Math.cos(angle); const y2 = cy + r * Math.sin(angle);
+    slices.forEach((d, i) => {
+      const frac = Math.max(d.y, 0) / total;
+      const sweep = frac * Math.PI * 2;
+      const a0 = angle; angle += sweep; const a1 = angle;
       const path = ctx.doc.createElementNS(SVG_NS, "path");
-      // A full circle (single slice) needs two arcs — one path to (x2,y2)
-      // when they coincide degenerates to nothing.
-      path.setAttribute("d", data.length === 1
-        ? `M ${cx} ${cy - r} A ${r} ${r} 0 1 1 ${cx - 0.01} ${cy - r} Z`
-        : `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${sweep > Math.PI ? 1 : 0} 1 ${x2} ${y2} Z`);
+      const p = (rr: number, a: number): string =>
+        `${cx + rr * Math.cos(a)} ${cy + rr * Math.sin(a)}`;
+      // annular sector; a lone full-circle slice needs two arcs per ring
+      path.setAttribute("d", slices.length === 1
+        ? `M ${p(r, -Math.PI / 2)} A ${r} ${r} 0 1 1 ${cx - 0.01} ${cy - r}`
+          + ` M ${p(r2, -Math.PI / 2)} A ${r2} ${r2} 0 1 0 ${cx + 0.01} ${cy - r2}`
+        : `M ${p(r, a0)} A ${r} ${r} 0 ${sweep > Math.PI ? 1 : 0} 1 ${p(r, a1)}`
+          + ` L ${p(r2, a1)} A ${r2} ${r2} 0 ${sweep > Math.PI ? 1 : 0} 0 ${p(r2, a0)} Z`);
       path.setAttribute("class", "clay-chart-slice");
-      path.setAttribute("fill", color);          // distinct colour per category
-      const title = ctx.doc.createElementNS(SVG_NS, "title");
-      const share = Math.round((Math.max(d.y, 0) / total) * 100);
-      title.textContent = `${String(d.x)}: ${d.y} (${share}%)`;
-      path.appendChild(title);
+      path.setAttribute("fill", seriesColor(i));
+      path.setAttribute("fill-rule", "evenodd");
+      tip(path, `${String(d.x)}: ${fmtNum(d.y)} (${Math.round(frac * 100)}%)`);
       svg.appendChild(path);
     });
-    // Legend — a pie without one is unreadable.
+    // headline total in the hole
+    const tot = ctx.doc.createElementNS(SVG_NS, "text");
+    tot.setAttribute("x", String(cx)); tot.setAttribute("y", String(cy + 1));
+    tot.setAttribute("text-anchor", "middle"); tot.setAttribute("font-size", "16");
+    tot.setAttribute("font-weight", "650"); tot.setAttribute("class", "clay-chart-total");
+    tot.textContent = fmtNum(total);
+    svg.appendChild(tot);
+    const cap = ctx.doc.createElementNS(SVG_NS, "text");
+    cap.setAttribute("x", String(cx)); cap.setAttribute("y", String(cy + 13));
+    cap.setAttribute("text-anchor", "middle"); cap.setAttribute("font-size", "7");
+    cap.setAttribute("class", "clay-chart-xtick");
+    cap.textContent = "total";
+    svg.appendChild(cap);
+    // Legend with share — identity is never color-alone.
     const legend = el(ctx, "figcaption", "clay-chart-legend");
-    data.forEach((d, i) => {
+    slices.forEach((d, i) => {
       const item = el(ctx, "span", "lg");
       const sw = el(ctx, "span", "sw");
-      sw.style.background = SERIES_COLORS[i % SERIES_COLORS.length]!;
+      sw.style.background = seriesColor(i);
       item.appendChild(sw);
-      item.appendChild(ctx.doc.createTextNode(String(d.x)));
+      item.appendChild(ctx.doc.createTextNode(
+        `${String(d.x)} · ${Math.round((Math.max(d.y, 0) / total) * 100)}%`));
       legend.appendChild(item);
     });
     wrap.appendChild(legend);
     return wrap;
   }
 
-  // baseline (bar/line/area share it)
+  // bar/line/area share the scale, grid, and axis strip
+  const { top, step: gridStep } = niceScale(Math.max(...data.map(d => d.y), 0));
+  const padT = 6; const padL = 26; const padR = 6;
+  const showTicks = data.length <= 16;
+  const axisH = showTicks ? 14 : 4;
+  const plotH = height - padT - axisH;
+  const yFor = (y: number): number => padT + plotH - (Math.max(y, 0) / top) * plotH;
+  const baseY = yFor(0);
+  const tickStride = Math.ceil(data.length / 8);
+  const tickSpan = ((CHART_W - padL - padR) / data.length) * tickStride;
+  const xTick = (cxx: number, label: string, i: number): void => {
+    if (!showTicks || i % tickStride !== 0) return;
+    const t = ctx.doc.createElementNS(SVG_NS, "text");
+    t.setAttribute("x", String(cxx)); t.setAttribute("y", String(height - 3));
+    t.setAttribute("text-anchor", "middle"); t.setAttribute("font-size", "7.5");
+    t.setAttribute("class", "clay-chart-xtick");
+    t.textContent = shortX(String(label), tickChars(tickSpan));
+    svg.appendChild(t);
+  };
+
+  drawGrid(ctx, svg, padL, CHART_W - padR, yFor, top, gridStep);
   const baseline = ctx.doc.createElementNS(SVG_NS, "line");
-  baseline.setAttribute("x1", String(pad)); baseline.setAttribute("x2", String(CHART_W - pad));
-  baseline.setAttribute("y1", String(yFor(0))); baseline.setAttribute("y2", String(yFor(0)));
+  baseline.setAttribute("x1", String(padL)); baseline.setAttribute("x2", String(CHART_W - padR));
+  baseline.setAttribute("y1", String(baseY)); baseline.setAttribute("y2", String(baseY));
   baseline.setAttribute("class", "clay-chart-axis");
   svg.appendChild(baseline);
 
   if (kind === "line" || kind === "area") {
-    const step = data.length > 1 ? (CHART_W - pad * 2) / (data.length - 1) : 0;
-    const xs = data.map((_, i) => pad + i * step);
+    const step = data.length > 1 ? (CHART_W - padL - padR) / (data.length - 1) : 0;
+    const xs = data.map((_, i) => padL + i * step);
     const poly = data.map((d, i) => `${xs[i]},${yFor(d.y)}`).join(" ");
-    // soft filled area beneath the line
     const fill = ctx.doc.createElementNS(SVG_NS, "polygon");
-    fill.setAttribute("points", `${pad},${yFor(0)} ${poly} ${xs[data.length - 1]},${yFor(0)}`);
+    fill.setAttribute("points", `${padL},${baseY} ${poly} ${xs[data.length - 1]},${baseY}`);
     fill.setAttribute("class", "clay-chart-areafill");
     svg.appendChild(fill);
-    // crisp line on top
     const line = ctx.doc.createElementNS(SVG_NS, "polyline");
     line.setAttribute("points", poly);
     line.setAttribute("class", "clay-chart-line");
     svg.appendChild(line);
-    // point dots
+    // dots on sparse lines only; every point keeps a large invisible hover
+    // target (the hit area must be bigger than the mark)
+    const showDots = data.length <= 40;
     data.forEach((d, i) => {
-      const dot = ctx.doc.createElementNS(SVG_NS, "circle");
-      dot.setAttribute("cx", String(xs[i])); dot.setAttribute("cy", String(yFor(d.y)));
-      dot.setAttribute("r", "2.6"); dot.setAttribute("class", "clay-chart-dot");
-      const title = ctx.doc.createElementNS(SVG_NS, "title");
-      title.textContent = `${String(d.x)}: ${d.y}`;
-      dot.appendChild(title);
-      svg.appendChild(dot);
+      if (showDots) {
+        const dot = ctx.doc.createElementNS(SVG_NS, "circle");
+        dot.setAttribute("cx", String(xs[i])); dot.setAttribute("cy", String(yFor(d.y)));
+        dot.setAttribute("r", "2.6"); dot.setAttribute("class", "clay-chart-dot");
+        svg.appendChild(dot);
+      }
+      const hit = ctx.doc.createElementNS(SVG_NS, "circle");
+      hit.setAttribute("cx", String(xs[i])); hit.setAttribute("cy", String(yFor(d.y)));
+      hit.setAttribute("r", "9"); hit.setAttribute("fill", "transparent");
+      tip(hit, `${String(d.x)}: ${fmtNum(d.y)}`);
+      svg.appendChild(hit);
+      xTick(xs[i]!, String(d.x), i);
     });
-    if (showTicks) data.forEach((d, i) => xTick(xs[i]!, String(d.x)));
     return wrap;
   }
 
-  // bar (default)
-  const slot = (CHART_W - pad * 2) / data.length;
+  // bar (default): thin marks, rounded ONLY at the data end, ≥2px slot gap
+  const slot = (CHART_W - padL - padR) / data.length;
   const showVals = data.length <= 10;
   data.forEach((d, i) => {
-    const bx = pad + i * slot + slot * 0.12;
-    const bw = slot * 0.76;
+    const bw = Math.max(Math.min(slot * 0.68, 28), 2);
+    const bx = padL + i * slot + (slot - bw) / 2;
     const by = yFor(d.y);
-    const rect = ctx.doc.createElementNS(SVG_NS, "rect");
-    rect.setAttribute("x", String(bx));
-    rect.setAttribute("width", String(bw));
-    rect.setAttribute("y", String(by));
-    rect.setAttribute("height", String(Math.max(yFor(0) - by, 0)));
-    rect.setAttribute("rx", "4");
-    rect.setAttribute("class", "clay-chart-bar");
-    const title = ctx.doc.createElementNS(SVG_NS, "title");
-    title.textContent = `${String(d.x)}: ${d.y}`;
-    rect.appendChild(title);
-    svg.appendChild(rect);
+    const bar = ctx.doc.createElementNS(SVG_NS, "path");
+    bar.setAttribute("d", barPath(bx, bw, by, baseY));
+    bar.setAttribute("class", "clay-chart-bar");
+    tip(bar, `${String(d.x)}: ${fmtNum(d.y)}`);
+    svg.appendChild(bar);
     if (showVals && d.y > 0) {
       const val = ctx.doc.createElementNS(SVG_NS, "text");
       val.setAttribute("x", String(bx + bw / 2)); val.setAttribute("y", String(by - 3));
       val.setAttribute("text-anchor", "middle"); val.setAttribute("font-size", "8");
-      val.setAttribute("font-weight", "600"); val.setAttribute("fill", "#6d6b78");
+      val.setAttribute("font-weight", "600");
       val.setAttribute("class", "clay-chart-val");
       val.textContent = fmtNum(d.y);
       svg.appendChild(val);
     }
-    if (showTicks) xTick(bx + bw / 2, String(d.x));
+    xTick(bx + bw / 2, String(d.x), i);
   });
   return wrap;
 }
@@ -640,7 +737,12 @@ function buildMultiSeriesChart(
     .filter(s => s.points.length > 0);
 
   const wrap = el(ctx, "figure", "clay-chart");
-  if (series.length === 0) return wrap;
+  if (series.length === 0) {
+    const empty = el(ctx, "div", "clay-empty");
+    empty.textContent = "No data yet";
+    wrap.appendChild(empty);
+    return wrap;
+  }
 
   // Ordered union of x categories across all series.
   const cats: string[] = [];
@@ -655,82 +757,102 @@ function buildMultiSeriesChart(
     return m;
   });
 
-  const showTicks = cats.length > 0 && cats.length <= 12;
+  const showTicks = cats.length > 0 && cats.length <= 16;
   const axisH = showTicks ? 14 : 4;
-  const pad = 4;
-  const plotH = height - axisH - pad;
-  const maxY = Math.max(1, ...series.flatMap(s => s.points.map(p => Math.max(p.y, 0))));
-  const yFor = (y: number): number => pad + plotH - (Math.max(y, 0) / maxY) * plotH;
+  const padT = 6; const padL = 26; const padR = 6;
+  const plotH = height - axisH - padT;
+  const { top, step: gridStep } =
+    niceScale(Math.max(...series.flatMap(s => s.points.map(p => Math.max(p.y, 0))), 0));
+  const yFor = (y: number): number => padT + plotH - (Math.max(y, 0) / top) * plotH;
   const baseY = yFor(0);
 
   const svg = ctx.doc.createElementNS(SVG_NS, "svg");
   svg.setAttribute("viewBox", `0 0 ${CHART_W} ${height}`);
   svg.setAttribute("role", "img");
   wrap.appendChild(svg);
+  const tip = makeTip(ctx, wrap);
 
+  drawGrid(ctx, svg, padL, CHART_W - padR, yFor, top, gridStep);
   const baseline = ctx.doc.createElementNS(SVG_NS, "line");
-  baseline.setAttribute("x1", String(pad)); baseline.setAttribute("x2", String(CHART_W - pad));
+  baseline.setAttribute("x1", String(padL)); baseline.setAttribute("x2", String(CHART_W - padR));
   baseline.setAttribute("y1", String(baseY)); baseline.setAttribute("y2", String(baseY));
   baseline.setAttribute("class", "clay-chart-axis");
   svg.appendChild(baseline);
 
-  const lineStep = cats.length > 1 ? (CHART_W - pad * 2) / (cats.length - 1) : 0;
-  const groupSlot = (CHART_W - pad * 2) / Math.max(cats.length, 1);
+  const lineStep = cats.length > 1 ? (CHART_W - padL - padR) / (cats.length - 1) : 0;
+  const groupSlot = (CHART_W - padL - padR) / Math.max(cats.length, 1);
 
   if (kind === "line" || kind === "area") {
     series.forEach((s, si) => {
-      const color = SERIES_COLORS[si % SERIES_COLORS.length]!;
+      const color = seriesColor(si);
       const map = valueOf[si]!;
-      const pts: string[] = [];
+      const pts: { x: number; y: number; c: string; v: number }[] = [];
       cats.forEach((c, i) => {
         const y = map.get(c);
-        if (y != null) pts.push(`${pad + i * lineStep},${yFor(y)}`);
+        if (y != null) pts.push({ x: padL + i * lineStep, y: yFor(y), c, v: y });
       });
       if (pts.length === 0) return;
       const poly = ctx.doc.createElementNS(SVG_NS, "polyline");
-      poly.setAttribute("points", pts.join(" "));
+      poly.setAttribute("points", pts.map(p => `${p.x},${p.y}`).join(" "));
       poly.setAttribute("fill", "none");
       poly.setAttribute("stroke", color);
       poly.setAttribute("stroke-width", "2");
       poly.setAttribute("stroke-linejoin", "round");
+      poly.setAttribute("stroke-linecap", "round");
       svg.appendChild(poly);
+      // end dot marks the series terminus (identity beyond color alone);
+      // every point gets an oversized invisible hover target
+      const last = pts[pts.length - 1]!;
+      const end = ctx.doc.createElementNS(SVG_NS, "circle");
+      end.setAttribute("cx", String(last.x)); end.setAttribute("cy", String(last.y));
+      end.setAttribute("r", "3"); end.setAttribute("fill", color);
+      end.setAttribute("class", "clay-chart-enddot");
+      svg.appendChild(end);
+      for (const p of pts) {
+        const hit = ctx.doc.createElementNS(SVG_NS, "circle");
+        hit.setAttribute("cx", String(p.x)); hit.setAttribute("cy", String(p.y));
+        hit.setAttribute("r", "8"); hit.setAttribute("fill", "transparent");
+        tip(hit, `${s.label} · ${p.c}: ${fmtNum(p.v)}`);
+        svg.appendChild(hit);
+      }
     });
   } else {
-    const barW = (groupSlot * 0.8) / series.length;
+    // grouped bars: 2-unit surface gap between neighbours, tops rounded
+    // only, and THIN marks — cap the bar width and recenter the group
+    const gap = 2;
+    const rawW = (groupSlot * 0.78 - gap * (series.length - 1)) / series.length;
+    const barW = Math.max(Math.min(rawW, 20), 1);
+    const inner = barW * series.length + gap * (series.length - 1);
     cats.forEach((c, i) => {
       series.forEach((s, si) => {
         const y = valueOf[si]!.get(c);
         if (y == null) return;
-        const color = SERIES_COLORS[si % SERIES_COLORS.length]!;
-        const rect = ctx.doc.createElementNS(SVG_NS, "rect");
-        rect.setAttribute("x", String(pad + i * groupSlot + groupSlot * 0.1 + si * barW));
-        rect.setAttribute("width", String(Math.max(barW, 0.5)));
-        rect.setAttribute("y", String(yFor(y)));
-        rect.setAttribute("height", String(Math.max(baseY - yFor(y), 0)));
-        rect.setAttribute("rx", "2");
-        rect.setAttribute("class", "clay-chart-mbar");
-        rect.setAttribute("fill", color);
-        const title = ctx.doc.createElementNS(SVG_NS, "title");
-        title.textContent = `${s.label} · ${c}: ${y}`;
-        rect.appendChild(title);
-        svg.appendChild(rect);
+        const bx = padL + i * groupSlot + (groupSlot - inner) / 2 + si * (barW + gap);
+        const bar = ctx.doc.createElementNS(SVG_NS, "path");
+        bar.setAttribute("d", barPath(bx, barW, yFor(y), baseY));
+        bar.setAttribute("class", "clay-chart-mbar");
+        bar.setAttribute("fill", seriesColor(si));
+        tip(bar, `${s.label} · ${c}: ${fmtNum(y)}`);
+        svg.appendChild(bar);
       });
     });
   }
 
   if (showTicks) {
+    const stride = Math.ceil(cats.length / 8);
+    const span = ((CHART_W - padL - padR) / Math.max(cats.length, 1)) * stride;
     cats.forEach((c, i) => {
+      if (i % stride !== 0) return;
       const cx = kind === "line" || kind === "area"
-        ? pad + i * lineStep
-        : pad + i * groupSlot + groupSlot / 2;
+        ? padL + i * lineStep
+        : padL + i * groupSlot + groupSlot / 2;
       const t = ctx.doc.createElementNS(SVG_NS, "text");
       t.setAttribute("x", String(cx));
       t.setAttribute("y", String(height - 3));
       t.setAttribute("text-anchor", "middle");
-      t.setAttribute("font-size", "7");
-      t.setAttribute("fill", "#a6a4b1");
+      t.setAttribute("font-size", "7.5");
       t.setAttribute("class", "clay-chart-xtick");
-      t.textContent = shortX(c);
+      t.textContent = shortX(c, tickChars(span));
       svg.appendChild(t);
     });
   }
@@ -740,7 +862,7 @@ function buildMultiSeriesChart(
   series.forEach((s, si) => {
     const item = el(ctx, "span", "lg");
     const sw = el(ctx, "span", "sw");
-    sw.style.background = SERIES_COLORS[si % SERIES_COLORS.length]!;
+    sw.style.background = seriesColor(si);
     item.appendChild(sw);
     item.appendChild(ctx.doc.createTextNode(s.label));
     legend.appendChild(item);

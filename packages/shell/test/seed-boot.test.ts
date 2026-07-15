@@ -62,19 +62,19 @@ describe("every seed panel boots and renders real data", () => {
     ["tracker", "add_item_form", c =>
       c.querySelectorAll("form.clay-form input, form.clay-form select").length === 4],
     ["log", "entries_table", c => c.textContent!.includes("Morning run")],
-    ["log", "per_week_chart", c => c.querySelectorAll("svg rect").length >= 1],
+    ["log", "per_week_chart", c => c.querySelectorAll(".clay-chart-bar").length >= 1],
     ["log", "quick_add_form", c => c.querySelector("form.clay-form") !== null],
     ["dashboard", "metrics_row", c =>
       c.textContent!.includes("Records") && c.textContent!.includes("5")],
     ["dashboard", "records_table", c => c.textContent!.includes("Website refresh")],
-    ["dashboard", "by_category_chart", c => c.querySelectorAll("svg rect").length === 3],
+    ["dashboard", "by_category_chart", c => c.querySelectorAll(".clay-chart-bar").length === 3],
     // small business — one dataset seen many ways
     ["small_business", "sb_dashboard", c =>
       c.textContent!.includes("Open jobs") && c.querySelectorAll(".clay-metric").length === 3],
     ["small_business", "sb_jobs_board", c =>
       c.querySelectorAll(".clay-board-col").length === 5 && c.textContent!.includes("Kitchen faucet fix")],
     ["small_business", "sb_jobs_table", c => c.textContent!.includes("Water heater install")],
-    ["small_business", "sb_revenue", c => c.querySelectorAll("svg rect").length >= 1],
+    ["small_business", "sb_revenue", c => c.querySelectorAll(".clay-chart-bar").length >= 1],
     ["small_business", "sb_invoices", c => c.querySelectorAll("tbody tr").length === 3],
     ["small_business", "sb_customers", c =>
       c.querySelectorAll(".clay-card").length === 3 && c.textContent!.includes("Alice Nguyen")],
@@ -87,7 +87,7 @@ describe("every seed panel boots and renders real data", () => {
     ["crm", "crm_metrics", c =>
       c.textContent!.includes("Weighted pipeline") && c.querySelectorAll(".clay-metric").length === 4],
     ["crm", "crm_today", c => c.textContent!.includes("Follow up on proposal")],
-    ["crm", "crm_forecast", c => c.querySelectorAll("svg rect").length >= 1],
+    ["crm", "crm_forecast", c => c.querySelectorAll(".clay-chart-bar").length >= 1],
     ["crm", "crm_contacts", c => c.querySelectorAll(".clay-card").length === 3],
     ["crm", "crm_add_task", c =>
       c.querySelectorAll("form.clay-form input, form.clay-form select").length === 4],
@@ -95,7 +95,7 @@ describe("every seed panel boots and renders real data", () => {
     ["financials", "fin_summary", c =>
       c.textContent!.includes("Net") && c.querySelectorAll(".clay-metric").length === 3],
     ["financials", "fin_transactions", c => c.querySelectorAll("tbody tr").length === 4],
-    ["financials", "fin_spending", c => c.querySelectorAll("svg rect").length >= 1],
+    ["financials", "fin_spending", c => c.querySelectorAll(".clay-chart-bar").length >= 1],
     // Staff
     ["staff", "staff_board", c =>
       c.querySelectorAll(".clay-board-col").length === 3 && c.textContent!.includes("Maya Chen")],

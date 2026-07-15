@@ -94,9 +94,19 @@ export function applyThemeToRoot(theme: Theme): void {
   root.dataset.theme = theme.id;
 }
 
+// Categorical chart series (ADR-023). Two steppings of the same hues, each
+// set validated (lightness band, chroma floor, adjacent CVD ΔE, normal-vision
+// floor) against its surfaces via the dataviz palette validator. The ORDER is
+// the colorblind-safety mechanism — never reorder, extend, or cycle without
+// re-validating.
+const SERIES_LIGHT = ["#6a67e6", "#008300", "#e87ba4", "#eda100", "#1baf7a", "#eb6834"];
+const SERIES_DARK = ["#7d7aec", "#00a300", "#d55181", "#c98500", "#199e70", "#d95926"];
+
 /** A :root override block to inject into a panel iframe's srcdoc. */
 export function panelThemeCss(theme: Theme): string {
   const decls = Object.entries(CSS)
     .map(([k, cssVar]) => `${cssVar}:${theme.vars[k as keyof ThemeVars]}`).join(";");
-  return `:root{color-scheme:${theme.dark ? "dark" : "light"};${decls}}`;
+  const series = (theme.dark ? SERIES_DARK : SERIES_LIGHT)
+    .map((c, i) => `--series-${i + 1}:${c}`).join(";");
+  return `:root{color-scheme:${theme.dark ? "dark" : "light"};${decls};${series}}`;
 }

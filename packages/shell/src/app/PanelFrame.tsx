@@ -15,7 +15,11 @@ const PANEL_CSS = `
     --panel: #ffffff; --text: #2b2a33; --text-2: #6d6b78; --text-3: #a6a4b1;
     --border: #efeef3; --border-2: #e7e5ee; --bg-soft: #f8f7fb;
     --accent: #6a67e6; --accent-soft: #f1f0fc; --accent-text: #4b47c4;
-    --chart-area: rgba(106,103,230,.12); }
+    --chart-area: rgba(106,103,230,.12);
+    /* categorical series palette (light steps) — validated order, never cycle
+       or reorder without re-running the palette validator (dataviz ADR-023) */
+    --series-1: #6a67e6; --series-2: #008300; --series-3: #e87ba4;
+    --series-4: #eda100; --series-5: #1baf7a; --series-6: #eb6834; }
   body { margin: 0; font: 13px/1.55 var(--font); background: var(--panel);
     color: var(--text); padding: 12px; -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility; }
@@ -77,8 +81,21 @@ const PANEL_CSS = `
   .clay-button:hover { filter: brightness(1.06); box-shadow: 0 4px 15px color-mix(in srgb, var(--accent) 45%, transparent); }
   .clay-button:active { transform: translateY(1px); box-shadow: 0 1px 4px rgba(91,87,235,.35); }
   .clay-filterbar { display: flex; gap: 8px; }
+  .clay-chart { position: relative; }
   .clay-chart svg { width: 100%; height: auto; display: block; overflow: visible;
     animation: clay-chart-in .42s ease both; }
+  .clay-chart-grid { stroke: var(--border); stroke-width: .75; }
+  .clay-chart-ylab { fill: var(--text-3); }
+  .clay-chart-total { fill: var(--text); font-family: var(--font-display);
+    letter-spacing: -.02em; }
+  .clay-chart-bar:hover, .clay-chart-mbar:hover { filter: brightness(1.12); }
+  .clay-chart-slice:hover { filter: brightness(1.07); }
+  .clay-chart-tip { position: absolute; z-index: 5; pointer-events: none;
+    background: var(--text); color: var(--panel); font-size: 11px; font-weight: 600;
+    line-height: 1.35; padding: 4px 9px; border-radius: 7px; white-space: nowrap;
+    opacity: 0; transform: translate(-50%, -100%) translateY(-6px);
+    transition: opacity .1s; box-shadow: 0 3px 12px rgba(0,0,0,.18); }
+  .clay-chart-tip.on { opacity: .97; }
   @keyframes clay-chart-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
   @keyframes clay-bar-grow { from { transform: scaleY(0); } to { transform: scaleY(1); } }
   @media (prefers-reduced-motion: reduce) {
@@ -86,8 +103,9 @@ const PANEL_CSS = `
   .clay-chart-bar, .clay-chart-mbar { transform-box: fill-box; transform-origin: bottom;
     animation: clay-bar-grow .52s cubic-bezier(.2,.85,.3,1) both; }
   .clay-chart-bar { fill: var(--accent); }
-  /* slice colour is set inline (per category); CSS only draws separators */
-  .clay-chart-slice { stroke: #fff; stroke-width: 1.5; }
+  /* slice colour is set inline (per category); the 2px surface-colored
+     stroke is the mandated gap between adjacent fills */
+  .clay-chart-slice { stroke: var(--panel); stroke-width: 2; }
   .clay-chart-axis { stroke: var(--border-2); stroke-width: 1; }
   .clay-chart-line { fill: none; stroke: var(--accent); stroke-width: 2.25;
     stroke-linejoin: round; stroke-linecap: round; }

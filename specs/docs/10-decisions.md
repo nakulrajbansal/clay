@@ -253,3 +253,39 @@ ADR-022 Reshaping-UI roadmap R1-R4: packed grid, universal resize, local
   Consequence: kernel tests cover rename/remove reversibility; packing and
   resize are exercised by scripts/reshapeui.mjs (no-model harness) plus
   the existing dragresize/verify2d harnesses.
+
+ADR-023 Chart redesign: validated categorical palette as theme tokens +
+  grid/scale/donut/tooltip upgrades to the sandbox SVG renderer.
+  Context: field feedback "charts don't look good". Audit against current
+  dataviz practice found: no y-scale or gridlines anywhere (magnitude
+  unreadable), bars rounded on all four corners (float off the baseline),
+  grouped bars touching, flat pie with unlimited slices, colliding 7px
+  ticks, native <title> tooltips, and a hardcoded series palette whose
+  green/orange adjacent pair measured CVD dE 2.0 under protanopia
+  (indistinguishable for red-green colorblind users) with one hue outside
+  the lightness band.
+  DECISION:
+  (a) Series colors move to CSS tokens --series-1..6 with two validated
+      steppings: light (#6a67e6 #008300 #e87ba4 #eda100 #1baf7a #eb6834 on
+      #ffffff) and dark (#7d7aec #00a300 #d55181 #c98500 #199e70 #d95926 on
+      #1b1b24/#172230). Both pass the palette validator's hard gates
+      (lightness band, chroma floor, adjacent-pair CVD dE >= 8, normal-
+      vision floor >= 15). The ORDER is the colorblind-safety mechanism:
+      never reorder, extend, or cycle. Light mode's contrast WARN on three
+      hues is covered by the relief rule - legends name every series and
+      bars carry direct value labels. The shell injects the stepping per
+      theme (themes.ts); slot 1 stays Clay indigo so single-series charts
+      remain on-brand.
+  (b) Renderer (panel-runtime vnode.ts): nice axis maximum (1/2/2.5/5 x
+      10^k) with 4 recessive gridlines + y labels in a 26-unit left
+      gutter; bars become paths rounded ONLY at the data end, anchored
+      square to the baseline; grouped bars get a 2-unit surface gap;
+      pie becomes a donut (2px surface-stroke slice gaps, headline total
+      in the hole, shares in the legend) folding beyond 5 categories into
+      "Other"; crowded x-axes thin ticks to <= 8; every mark gets an
+      instant theme-aware hover tooltip (shared div per figure, aria-label
+      mirror) replacing native <title>; empty data renders "No data yet".
+  Consequence: 6 new renderer tests (grid count, nice labels, baseline
+  anchoring, donut fold + total, tooltip presence, tick thinning); the
+  palette re-validation command is recorded here:
+  validate_palette.js "<hexes>" --mode light|dark --surface <panel hex>.

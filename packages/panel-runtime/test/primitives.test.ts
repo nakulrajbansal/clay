@@ -261,14 +261,14 @@ describe("Chart multi-series (from live diagnostic: planned vs actual)", () => {
 
   it("renders grouped bars (one per series per category) with a legend", () => {
     const c = mount(h(Chart, { kind: "bar", data: series, height: 260 }));
-    // 2 series × 2 categories = 4 bars, not zero.
-    expect(c.querySelectorAll("rect")).toHaveLength(4);
+    // 2 series × 2 categories = 4 bars (baseline-anchored paths), not zero.
+    expect(c.querySelectorAll(".clay-chart-mbar")).toHaveLength(4);
     // Legend names both series.
     expect(c.textContent).toContain("Planned");
     expect(c.textContent).toContain("Actual");
     expect(c.querySelectorAll(".clay-chart-legend .sw")).toHaveLength(2);
-    // Distinct colours per series.
-    const fills = new Set([...c.querySelectorAll("rect")].map(r => r.getAttribute("fill")));
+    // Distinct colours per series (fixed-order tokens, never cycled).
+    const fills = new Set([...c.querySelectorAll(".clay-chart-mbar")].map(r => r.getAttribute("fill")));
     expect(fills.size).toBe(2);
     // Shortened date ticks.
     expect(c.textContent).toContain("1/6");
@@ -312,8 +312,71 @@ describe("Chart multi-series (from live diagnostic: planned vs actual)", () => {
     expect(new Set(slices.map(s => s.getAttribute("fill"))).size).toBe(3); // not monochrome
     expect(c.querySelectorAll(".clay-chart-legend .lg")).toHaveLength(3);
     expect(c.textContent).toContain("rent");
-    // tooltip carries the share
-    expect(slices[0]!.querySelector("title")?.textContent).toContain("%");
+    // hover label (aria-label mirrors the custom tooltip) carries the share
+    expect(slices[0]!.getAttribute("aria-label")).toContain("%");
+    // legend text itself carries the share too — identity never color-alone
+    expect(c.querySelector(".clay-chart-legend")!.textContent).toContain("%");
+  });
+});
+
+describe("Chart redesign (ADR-023: grid, nice scale, donut, tooltips)", () => {
+  it("bar/line charts draw recessive gridlines with y labels on nice steps", () => {
+    const c = mount(h(Chart, { kind: "bar", data: [{ x: "a", y: 7 }] }));
+    expect(c.querySelectorAll(".clay-chart-grid")).toHaveLength(4);
+    const ylabs = [...c.querySelectorAll(".clay-chart-ylab")].map(t => t.textContent);
+    expect(ylabs).toEqual(["2", "4", "6", "8"]);   // step 2, top 8 — no fractions
+  });
+
+  it("gridline labels stay clean multiples for awkward maxima (230 -> 50s)", () => {
+    const c = mount(h(Chart, { kind: "bar", data: [{ x: "a", y: 230 }] }));
+    const ylabs = [...c.querySelectorAll(".clay-chart-ylab")].map(t => t.textContent);
+    expect(ylabs).toEqual(["50", "100", "150", "200", "250"]);
+  });
+
+  it("wide slots keep long category labels; narrow slots truncate", () => {
+    const wide = mount(h(Chart, { kind: "bar", data: [
+      { x: "Materials and supplies", y: 3 }, { x: "Software", y: 7 }] }));
+    expect(wide.textContent).toContain("Materials and supplies");
+    const narrow = mount(h(Chart, { kind: "bar",
+      data: Array.from({ length: 14 }, (_, i) => ({ x: `Category number ${i}`, y: i + 1 })) }));
+    expect(narrow.textContent).toContain("…");
+  });
+
+  it("bars are paths anchored square to the baseline (rounded data-end only)", () => {
+    const c = mount(h(Chart, { kind: "bar", data: [{ x: "a", y: 5 }] }));
+    const bar = c.querySelector(".clay-chart-bar")!;
+    expect(bar.tagName.toLowerCase()).toBe("path");
+    // starts and ends at the baseline (closed path, flat bottom)
+    expect(bar.getAttribute("d")).toMatch(/^M [\d.]+ [\d.]+ L/);
+    expect(bar.getAttribute("d")).toMatch(/Z$/);
+  });
+
+  it("donut folds beyond 5 categories into Other and shows the total", () => {
+    const data = "abcdefgh".split("").map((x, i) => ({ x, y: 8 - i }));
+    const c = mount(h(Chart, { kind: "pie", data }));
+    expect(c.querySelectorAll(".clay-chart-slice")).toHaveLength(6); // 5 + Other
+    expect(c.textContent).toContain("Other");
+    expect(c.querySelector(".clay-chart-total")?.textContent).toBe("36"); // Σ1..8
+  });
+
+  it("every chart carries one shared tooltip element; marks are labeled", () => {
+    const c = mount(h(Chart, { kind: "bar", data: [{ x: "a", y: 3 }] }));
+    expect(c.querySelectorAll(".clay-chart-tip")).toHaveLength(1);
+    expect(c.querySelector(".clay-chart-bar")?.getAttribute("aria-label")).toBe("a: 3");
+  });
+
+  it("no data renders an explicit empty state, not a blank svg", () => {
+    const c = mount(h(Chart, { kind: "bar", data: [] }));
+    expect(c.querySelector("svg")).toBeNull();
+    expect(c.textContent).toContain("No data yet");
+  });
+
+  it("crowded x axes thin their ticks instead of colliding", () => {
+    const data = Array.from({ length: 16 }, (_, i) => ({ x: `cat${i}`, y: i + 1 }));
+    const c = mount(h(Chart, { kind: "bar", data }));
+    const ticks = c.querySelectorAll(".clay-chart-xtick").length;
+    expect(ticks).toBeGreaterThan(0);
+    expect(ticks).toBeLessThanOrEqual(8);
   });
 });
 
