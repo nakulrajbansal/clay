@@ -226,12 +226,16 @@ button.link.danger { color: var(--danger); }
 .empty-canvas-busy { color: var(--accent-text); font-weight: 600; margin-top: 20px; }
 
 /* onboarding hero (start from scratch) */
+/* theme-aware surfaces only — a hardcoded white card made the title
+   unreadable (white-on-white) under dark themes */
 .onboarding-hero { display: flex; align-items: center; gap: 16px; width: 100%;
   text-align: left; padding: 20px 22px; border: 1px solid var(--border-strong);
-  border-radius: 18px; background: linear-gradient(180deg, #ffffff, #fbfbff);
+  border-radius: 18px; background: linear-gradient(180deg, var(--panel), var(--bg-soft));
+  color: var(--text);
   box-shadow: var(--shadow); cursor: pointer; margin-bottom: 26px;
   transition: transform .12s, box-shadow .12s, border-color .12s; }
-.onboarding-hero:hover:not(:disabled) { transform: translateY(-2px); box-shadow: var(--shadow-md); border-color: #cdc9f2; }
+.onboarding-hero:hover:not(:disabled) { transform: translateY(-2px);
+  box-shadow: var(--shadow-md); border-color: var(--accent); }
 .onboarding-hero-spark { font-size: 22px; color: var(--accent); background: var(--accent-soft);
   width: 52px; height: 52px; border-radius: 15px; display: grid; place-items: center; flex: none; }
 .onboarding-hero-text { display: flex; flex-direction: column; gap: 3px; flex: 1; }

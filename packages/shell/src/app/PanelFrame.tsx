@@ -195,6 +195,54 @@ const PANEL_CSS = `
   .clay-card.clay-clickable:hover { border-color: #cfd0f5; box-shadow: 0 2px 8px rgba(16,24,40,.08); }
   .clay-badge-clickable:hover { filter: brightness(0.94); }
 
+  /* Flow: staged process with one-click advance (ADR-024) */
+  .clay-flow { display: flex; flex-direction: column; gap: 8px; }
+  .clay-flow-rail { display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    padding-bottom: 2px; }
+  .clay-flow-step { display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 10px; border-radius: 999px; background: var(--bg-soft);
+    border: 1px solid var(--border-2); font-size: 11px; font-weight: 650;
+    color: var(--text-2); letter-spacing: .01em; }
+  .clay-flow-step-count { background: var(--border-2); color: var(--text-2);
+    border-radius: 999px; padding: 0 7px; font-size: 10.5px; font-weight: 700; }
+  .clay-flow-step-green, .clay-flow-step-success { border-color: #34c05f55; color: #15803d; }
+  .clay-flow-step-amber, .clay-flow-step-warning { border-color: #f5a62355; color: #b45309; }
+  .clay-flow-step-red, .clay-flow-step-danger { border-color: #ef535055; color: #c02626; }
+  .clay-flow-step-accent { border-color: var(--accent); color: var(--accent-text); }
+  .clay-flow-arrow { color: var(--text-3); font-size: 11px; }
+  .clay-flow-progress { display: flex; align-items: center; gap: 10px; }
+  .clay-flow-progress-track { flex: 1; height: 6px; border-radius: 999px;
+    background: var(--bg-soft); overflow: hidden; }
+  .clay-flow-progress-fill { height: 100%; border-radius: 999px;
+    background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 60%, #fff));
+    transition: width .3s ease; }
+  .clay-flow-progress-caption { font-size: 11px; color: var(--text-3);
+    white-space: nowrap; font-weight: 600; }
+  .clay-flow-group-head { font-size: 10.5px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .06em; color: var(--text-3); margin-top: 6px; }
+  .clay-flow-item { display: flex; align-items: center; gap: 10px;
+    padding: 9px 11px; border: 1px solid var(--border); border-radius: 11px;
+    background: var(--panel); box-shadow: 0 1px 2px rgba(16,24,40,.04);
+    transition: border-color .1s, box-shadow .1s; }
+  .clay-flow-item:hover { border-color: var(--border-2); box-shadow: 0 2px 8px rgba(16,24,40,.07); }
+  .clay-flow-item-main { flex: 1; min-width: 0; }
+  .clay-flow-item-title { font-weight: 600; font-size: 13px; line-height: 1.3;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .clay-flow-item-sub { font-size: 11.5px; color: var(--text-2); margin-top: 1px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .clay-flow-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+  .clay-flow-advance { border: 0; border-radius: 8px; padding: 5px 11px;
+    font: inherit; font-size: 11.5px; font-weight: 650; cursor: pointer;
+    background: var(--accent-soft); color: var(--accent-text);
+    transition: filter .1s, transform .08s; white-space: nowrap; }
+  .clay-flow-advance:hover { filter: brightness(1.05); }
+  .clay-flow-advance:active { transform: translateY(1px); }
+  .clay-flow-back { border: 1px solid var(--border-2); border-radius: 8px;
+    background: none; color: var(--text-3); font: inherit; font-size: 12px;
+    width: 24px; height: 24px; line-height: 1; cursor: pointer; padding: 0; }
+  .clay-flow-back:hover { color: var(--text); border-color: var(--text-3); }
+  .clay-flow-done { color: #15803d; font-weight: 800; font-size: 13px; }
+
   /* timeline / gantt */
   .clay-timeline { display: flex; flex-direction: column; gap: 6px; }
   .clay-timeline-axis { display: flex; justify-content: space-between;

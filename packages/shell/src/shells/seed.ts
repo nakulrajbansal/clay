@@ -12,7 +12,7 @@ import { SEED_PANELS } from "./seed-panels";
 export type StarterShellId =
   | "blank"
   | "tracker" | "log" | "dashboard" | "small_business"
-  | "crm" | "financials" | "staff" | "habits" | "inventory";
+  | "crm" | "financials" | "staff" | "habits" | "inventory" | "approvals";
 
 export type ShellColumn = {
   name: string;
@@ -388,6 +388,29 @@ export const STARTER_SHELLS: StarterShell[] = [
           { name: "Paper cups (sleeve)", sku: "CUP-050", category: "supplies", price: 6, stock: 40, reorder_at: 15 },
           { name: "Tote bag", sku: "BAG-003", category: "retail", price: 22, stock: 9, reorder_at: 4 },
           { name: "Cleaning spray", sku: "CLN-007", category: "supplies", price: 5, stock: 1, reorder_at: 3 },
+        ],
+      },
+    ],
+  },
+  {
+    id: "approvals", name: "Approvals",
+    tagline: "Requests that flow through review, approval, and payment",
+    tables: [
+      {
+        name: "requests",
+        columns: [
+          col("title", "text", true), col("requester", "text"),
+          col("category", "enum", false, ["equipment", "travel", "software", "other"]),
+          col("amount", "number"),
+          col("stage", "enum", false, ["submitted", "in_review", "approved", "paid"]),
+          col("decision_note", "text"), col("submitted_on", "date"),
+        ],
+        sampleRows: [
+          { title: "Standing desk", requester: "Ava Patel", category: "equipment", amount: 640, stage: "submitted", decision_note: "", submitted_on: soon(-1) },
+          { title: "Conference travel — DevConf", requester: "Liam Chen", category: "travel", amount: 1850, stage: "in_review", decision_note: "Waiting on flight quote", submitted_on: soon(-4) },
+          { title: "Design tool licences (5)", requester: "Maya Rodriguez", category: "software", amount: 900, stage: "in_review", decision_note: "", submitted_on: soon(-3) },
+          { title: "Team offsite venue deposit", requester: "Noah Kim", category: "other", amount: 1200, stage: "approved", decision_note: "Approved for Q3 budget", submitted_on: soon(-9) },
+          { title: "Laptop replacement", requester: "Zoe Ahmed", category: "equipment", amount: 1400, stage: "paid", decision_note: "Paid 07/02", submitted_on: soon(-14) },
         ],
       },
     ],

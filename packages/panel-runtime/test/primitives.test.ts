@@ -407,3 +407,67 @@ describe("Table sorting (interactivity)", () => {
     expect(c.querySelector("tbody tr:first-child td")?.textContent).toBe("b");
   });
 });
+
+describe("Flow (ADR-024: workflows, not just dashboards)", () => {
+  const STAGES = [
+    { key: "submitted", label: "Submitted", tone: "gray" },
+    { key: "in_review", label: "In review", tone: "amber" },
+    { key: "approved", label: "Approved", tone: "green" },
+  ];
+  const ITEMS = [
+    { id: "1", title: "New laptop", subtitle: "Ava - $1,400", stage: "submitted" },
+    { id: "2", title: "Conference travel", stage: "in_review" },
+    { id: "3", title: "Software licence", stage: "approved" },
+  ];
+  // Flow marker is a global injected into panel scope; tests reference it
+  // the same way panel code does.
+  const FlowTag = "Flow";
+
+  it("renders the stage rail in order with per-stage counts", () => {
+    const c = mount(h(FlowTag, { stages: STAGES, items: ITEMS }));
+    const labels = [...c.querySelectorAll(".clay-flow-step-label")].map(e => e.textContent);
+    expect(labels).toEqual(["Submitted", "In review", "Approved"]);
+    const counts = [...c.querySelectorAll(".clay-flow-step-count")].map(e => e.textContent);
+    expect(counts).toEqual(["1", "1", "1"]);
+    expect(c.querySelectorAll(".clay-flow-arrow")).toHaveLength(2);
+  });
+
+  it("shows progress toward the final stage", () => {
+    const c = mount(h(FlowTag, { stages: STAGES, items: ITEMS }));
+    expect(c.querySelector(".clay-flow-progress-caption")?.textContent)
+      .toBe("1 of 3 approved");
+    expect((c.querySelector(".clay-flow-progress-fill") as HTMLElement).style.width)
+      .toBe("33%");
+  });
+
+  it("advance fires onAdvance with the NEXT stage key; back with the previous", () => {
+    const moves: [string, string][] = [];
+    const c = mount(h(FlowTag, {
+      stages: STAGES, items: ITEMS,
+      onAdvance: (it: { id: string }, to: string) => moves.push([it.id, to]),
+    }));
+    (c.querySelector(".clay-flow-advance") as HTMLButtonElement).click();     // item 1 -> in_review
+    (c.querySelector(".clay-flow-back") as HTMLButtonElement).click();        // item 2 -> submitted
+    expect(moves).toEqual([["1", "in_review"], ["2", "submitted"]]);
+  });
+
+  it("final-stage items show a done mark and no advance button", () => {
+    const c = mount(h(FlowTag, {
+      stages: STAGES, items: [{ id: "3", title: "Done thing", stage: "approved" }],
+      onAdvance: () => {},
+    }));
+    expect(c.querySelector(".clay-flow-done")).not.toBeNull();
+    expect(c.querySelector(".clay-flow-advance")).toBeNull();
+  });
+
+  it("without onAdvance the flow is read-only (no action buttons)", () => {
+    const c = mount(h(FlowTag, { stages: STAGES, items: ITEMS }));
+    expect(c.querySelector(".clay-flow-advance")).toBeNull();
+    expect(c.querySelector(".clay-flow-back")).toBeNull();
+  });
+
+  it("no items renders an explicit empty state", () => {
+    const c = mount(h(FlowTag, { stages: STAGES, items: [] }));
+    expect(c.textContent).toContain("Nothing in this flow yet");
+  });
+});

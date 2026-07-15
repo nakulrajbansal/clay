@@ -52,8 +52,19 @@ props are enumerated tokens or numbers — never CSS, never raw HTML.
   the standard tokens. Use for gantt bars, network diagrams, heatmaps,
   any bespoke visual.
 
-Three ready-made VIEW components cover the most common business layouts —
+Four ready-made VIEW components cover the most common business layouts —
 ALWAYS prefer them over composing from primitives or Scene:
+- Flow{stages:[{key,label,tone}], items:[{id,title,subtitle,badge,badgeTone,
+       stage}], onAdvance, onItemClick} — a staged PROCESS (workflow). stages
+       are ORDERED (the process order); each item sits at one stage. Renders
+       a stage rail with counts, a progress bar toward the final stage, and
+       per-item "advance to next / send back" buttons. Wire
+       onAdvance(item, toStageKey) to clay.db.update the record's stage enum.
+       THIS is the answer to any "workflow / process / pipeline steps /
+       approval chain / intake queue / move things through stages" request:
+       Board shows STATE you drag between; Flow shows a PROCESS with
+       one-click advancing and progress. Apps that track work through steps
+       deserve a Flow panel, not only tables and charts.
 - Board{groups:[{key,label,tone,cards:[{title,subtitle,badge,badgeTone}]}],
         onCardMove, onCardClick} — a kanban board. Shape rows into groups
         yourself (e.g. group by a status enum), one group per column.

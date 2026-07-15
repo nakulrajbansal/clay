@@ -781,6 +781,109 @@ const add_product = panel(
     } }));
 }`);
 
+// ---------- approvals (workflow template, ADR-024) ----------
+const approvals_overview: PanelBlobInput = {
+  panel_id: "approvals_overview", title: "At a glance",
+  placement: { region: "top", order: 0 },
+  declared_queries: [
+    { from: "requests", groupBy: ["stage"],
+      aggregate: [{ fn: "count", field: "stage", as: "n" }] },
+    { from: "requests",
+      aggregate: [{ fn: "sum", field: "amount", as: "total" }] },
+  ],
+  declared_writes: [],
+  code: `export default function (clay) {
+  const byStage = { from: "requests", groupBy: ["stage"], aggregate: [{ fn: "count", field: "stage", as: "n" }] };
+  const totals = { from: "requests", aggregate: [{ fn: "sum", field: "amount", as: "total" }] };
+  let stages = [], total = 0;
+  const draw = () => {
+    const n = (s) => { const r = stages.find((x) => x.stage === s); return r ? r.n : 0; };
+    clay.ui.render(h(Grid, {},
+      h(MetricCard, { label: "Awaiting review", value: n("submitted") + n("in_review") }),
+      h(MetricCard, { label: "Approved", value: n("approved") }),
+      h(MetricCard, { label: "Paid", value: n("paid") }),
+      h(MetricCard, { label: "Total requested", value: total, format: "currency" })));
+  };
+  clay.db.watch(byStage, (rows) => { stages = rows; draw(); });
+  clay.db.watch(totals, (rows) => { total = (rows[0] && rows[0].total) || 0; draw(); });
+}`,
+};
+
+const request_flow: PanelBlobInput = {
+  panel_id: "request_flow", title: "Request workflow",
+  placement: { region: "main", order: 0 },
+  declared_queries: [
+    { from: "requests", orderBy: [{ field: "submitted_on", dir: "asc" }] },
+  ],
+  declared_writes: ["requests"],
+  code: `export default function (clay) {
+  const stages = [
+    { key: "submitted", label: "Submitted", tone: "gray" },
+    { key: "in_review", label: "In review", tone: "amber" },
+    { key: "approved", label: "Approved", tone: "green" },
+    { key: "paid", label: "Paid", tone: "accent" }];
+  const q = { from: "requests", orderBy: [{ field: "submitted_on", dir: "asc" }] };
+  clay.db.watch(q, (rows) => {
+    const items = rows.map((r) => ({ id: r.id, title: r.title,
+      subtitle: r.requester, stage: r.stage,
+      badge: clay.compute.formatCurrency(r.amount || 0), badgeTone: "gray" }));
+    clay.ui.render(h(Flow, { stages, items,
+      onAdvance: async (item, toKey) => {
+        try { await clay.db.update("requests", item.id, { stage: toKey }); }
+        catch (e) { clay.ui.toast("Could not move the request", "danger"); }
+      } }));
+  });
+}`,
+};
+
+const requests_table: PanelBlobInput = {
+  panel_id: "requests_table", title: "All requests",
+  placement: { region: "main", order: 1 },
+  declared_queries: [
+    { from: "requests", orderBy: [{ field: "submitted_on", dir: "desc" }] },
+  ],
+  declared_writes: [],
+  code: `export default function (clay) {
+  const q = { from: "requests", orderBy: [{ field: "submitted_on", dir: "desc" }] };
+  clay.db.watch(q, (rows) => {
+    clay.ui.render(rows.length === 0
+      ? h(EmptyState, { label: "No requests yet - submit one on the right" })
+      : h(Table, { sortable: true, rows, columns: [
+          { field: "title", label: "Request" },
+          { field: "requester", label: "Requester" },
+          { field: "category", label: "Category",
+            badge: { field: "category", map: { equipment: "accent", travel: "amber", software: "green", other: "gray" } } },
+          { field: "amount", label: "Amount", format: "currency" },
+          { field: "stage", label: "Stage",
+            badge: { field: "stage", map: { submitted: "gray", in_review: "amber", approved: "green", paid: "accent" } } },
+          { field: "submitted_on", label: "Submitted", format: "date" }] }));
+  });
+}`,
+};
+
+const new_request_form: PanelBlobInput = {
+  panel_id: "new_request_form", title: "New request",
+  placement: { region: "side", order: 0 },
+  declared_queries: [],
+  declared_writes: ["requests"],
+  code: `export default function (clay) {
+  clay.ui.render(h(Form, {
+    submitLabel: "Submit request",
+    fields: [
+      { name: "title", label: "What do you need?", kind: "text", required: true },
+      { name: "requester", label: "Requested by", kind: "text" },
+      { name: "category", label: "Category", kind: "select", fromSchema: "requests.category" },
+      { name: "amount", label: "Amount (USD)", kind: "number" }],
+    onSubmit: async (v) => {
+      try {
+        await clay.db.insert("requests", { ...v, stage: "submitted",
+          submitted_on: clay.compute.now().slice(0, 10) });
+        clay.ui.toast("Request submitted - it enters the workflow at Submitted", "success");
+      } catch (e) { clay.ui.toast("Could not submit: " + e.message, "danger"); }
+    } }));
+}`,
+};
+
 export const SEED_PANELS: Record<string, PanelBlobInput[]> = {
   blank: [],
   tracker: [items_table, status_counts, add_item_form],
@@ -795,4 +898,5 @@ export const SEED_PANELS: Record<string, PanelBlobInput[]> = {
   staff,
   habits: [habits_overview, habits_board, habits_table, add_habit_form],
   inventory: [inv_overview, inv_low, inv_table, add_product],
+  approvals: [approvals_overview, request_flow, requests_table, new_request_form],
 };

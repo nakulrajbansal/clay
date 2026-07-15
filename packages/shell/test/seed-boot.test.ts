@@ -101,6 +101,18 @@ describe("every seed panel boots and renders real data", () => {
       c.querySelectorAll(".clay-board-col").length === 3 && c.textContent!.includes("Maya Chen")],
     ["staff", "staff_roster", c => c.querySelectorAll(".clay-card").length === 3],
     ["staff", "staff_timeoff", c => c.querySelectorAll("tbody tr").length === 2],
+    // Approvals — the workflow template (ADR-024): a Flow with 4 ordered
+    // stages, advance buttons, and progress toward "paid"
+    ["approvals", "request_flow", c =>
+      c.querySelectorAll(".clay-flow-step").length === 4
+      && c.querySelectorAll(".clay-flow-item").length === 5
+      && c.querySelectorAll(".clay-flow-advance").length >= 1
+      && c.textContent!.includes("Standing desk")],
+    ["approvals", "approvals_overview", c =>
+      c.textContent!.includes("Awaiting review") && c.querySelectorAll(".clay-metric").length === 4],
+    ["approvals", "requests_table", c => c.querySelectorAll("tbody tr").length === 5],
+    ["approvals", "new_request_form", c =>
+      c.querySelectorAll("form.clay-form input, form.clay-form select").length === 4],
   ];
 
   for (const [shellId, panelId, check] of expectations) {

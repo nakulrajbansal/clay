@@ -289,3 +289,35 @@ ADR-023 Chart redesign: validated categorical palette as theme tokens +
   anchoring, donut fold + total, tooltip presence, tick thinning); the
   palette re-validation command is recorded here:
   validate_palette.js "<hexes>" --mode light|dark --surface <panel hex>.
+
+ADR-024 Workflows: the Flow view component, taught + templated.
+  Context: field feedback - "apps should have workflows too instead of
+  just dashboards". Clay rendered STATE well (tables, boards, charts,
+  metrics) but had no first-class way to express PROCESS: work moving
+  through ordered stages with explicit advancing and visible progress.
+  Board is adjacent but shows unordered columns you drag between; nothing
+  said "this is a sequence, here is where each item sits, click to move
+  it forward".
+  DECISION:
+  (a) New panel-runtime view component Flow{stages(ordered), items,
+      onAdvance(item, toStageKey), onItemClick}: a stage rail with
+      per-stage counts, a progress bar toward the final stage, items
+      grouped in process order, and per-item advance/back buttons. The
+      write path is EXACTLY Board's: the panel wires onAdvance to
+      clay.db.update of the stage enum through declared_writes - no new
+      Bridge, Validator, or migration vocabulary (the component is
+      sandbox UI vocabulary, precedent ADR-016/#13/#18).
+  (b) Taught: prompt.ts view-component list (Flow FIRST for any
+      workflow/process/approval/pipeline-steps intent; Board=state,
+      Flow=process) + exemplar 14-flow.md (stage enum reuse, $var-free
+      declared queries, declared_writes) regenerated into assets.
+  (c) Templated: new "approvals" starter shell (requests: submitted ->
+      in_review -> approved -> paid) seeding an At-a-glance metric strip,
+      the Request workflow Flow panel, a requests table, and a new-request
+      form - the binding spec entry lives in starter-shells.json with the
+      drift/validator/boot tests extending automatically.
+  Also fixed in the same change: .onboarding-hero hardcoded a white
+  gradient, rendering the "Start from scratch / Build" hero unreadable
+  under dark themes; it now uses var(--panel)/var(--bg-soft)/var(--text).
+  Consequence: 6 Flow unit tests (rail order+counts, progress, advance/
+  back keys, done state, read-only, empty) + 4 approvals seed-boot tests.

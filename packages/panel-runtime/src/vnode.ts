@@ -40,11 +40,12 @@ export const Scene = "Scene";
 export const Board = "Board";
 export const Cards = "Cards";
 export const Timeline = "Timeline";
+export const Flow = "Flow";
 
 export const PANEL_GLOBALS: Record<string, unknown> = {
   Table, Chart, MetricCard, Badge, Form, Field, Button, Input, Select,
   DatePicker, Checkbox, Toggle, EmptyState, Stack, Grid, FilterBar,
-  Box, Text, Bar, Scene, Board, Cards, Timeline,
+  Box, Text, Bar, Scene, Board, Cards, Timeline, Flow,
 };
 
 const LAYOUT_TAGS = new Set(["div", "span", "section", "h1", "h2", "h3", "p", "ul", "li", "hr"]);
@@ -266,6 +267,7 @@ function buildComponent(ctx: Ctx, node: VNode): HTMLElement {
     case Bar: return buildBar(ctx, props);
     case Scene: return buildScene(ctx, props);
     case Board: return buildBoard(ctx, props);
+    case Flow: return buildFlow(ctx, props);
     case Cards: return buildCards(ctx, props);
     case Timeline: return buildTimeline(ctx, props);
     case Field: {
@@ -1132,6 +1134,139 @@ function buildBoard(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
     board.appendChild(col);
   }
   return board;
+}
+
+// ---------- Flow: a staged process (workflow), not just a view ----------
+// Where Board shows STATE (columns you drag between), Flow shows PROCESS:
+// stages in order with counts and progress, and each item carries explicit
+// one-click "advance to next stage" / "send back" actions. The panel wires
+// onAdvance(item, toStageKey) to clay.db.update of the stage enum — the
+// same reversible declared-write path Board's drag uses (ADR-024).
+function buildFlow(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
+  type Stage = { key?: unknown; label?: unknown; tone?: unknown };
+  type Item = { id?: unknown; title?: unknown; subtitle?: unknown;
+    badge?: unknown; badgeTone?: unknown; stage?: unknown };
+  const stages = (Array.isArray(props.stages) ? props.stages : []) as Stage[];
+  const items = (Array.isArray(props.items) ? props.items : []) as Item[];
+  const onAdvance = props.onAdvance;
+  const onItemClick = props.onItemClick;
+  const canAct = typeof onAdvance === "function";
+  const keyOf = (s: Stage): string => String(s.key ?? s.label ?? "");
+  const labelOf = (s: Stage): string => String(s.label ?? s.key ?? "");
+  const stageIndex = new Map(stages.map((s, i) => [keyOf(s), i]));
+  const byStage = stages.map(() => [] as Item[]);
+  for (const it of items) {
+    const i = stageIndex.get(String(it.stage ?? ""));
+    if (i !== undefined) byStage[i]!.push(it);
+  }
+  const doneCount = byStage[stages.length - 1]?.length ?? 0;
+
+  const root = el(ctx, "div", "clay-flow");
+
+  // Stage rail: the process at a glance — ordered chips with counts.
+  const rail = el(ctx, "div", "clay-flow-rail");
+  stages.forEach((s, i) => {
+    if (i > 0) {
+      const sep = el(ctx, "span", "clay-flow-arrow");
+      sep.textContent = "→";
+      rail.appendChild(sep);
+    }
+    const chip = el(ctx, "span", "clay-flow-step");
+    const tone = clampTone(s.tone);
+    if (tone) chip.classList.add(`clay-flow-step-${tone}`);
+    const lab = el(ctx, "span", "clay-flow-step-label");
+    lab.textContent = labelOf(s);
+    const n = el(ctx, "span", "clay-flow-step-count");
+    n.textContent = String(byStage[i]!.length);
+    chip.append(lab, n);
+    rail.appendChild(chip);
+  });
+  root.appendChild(rail);
+
+  // Progress: how much of the work has reached the final stage.
+  if (items.length > 0 && stages.length > 1) {
+    const prog = el(ctx, "div", "clay-flow-progress");
+    const track = el(ctx, "div", "clay-flow-progress-track");
+    const fill = el(ctx, "div", "clay-flow-progress-fill");
+    fill.style.width = `${Math.round((doneCount / items.length) * 100)}%`;
+    track.appendChild(fill);
+    const cap = el(ctx, "span", "clay-flow-progress-caption");
+    cap.textContent = `${doneCount} of ${items.length} ${labelOf(stages[stages.length - 1]!).toLowerCase()}`;
+    prog.append(track, cap);
+    root.appendChild(prog);
+  }
+
+  if (items.length === 0) {
+    const empty = el(ctx, "div", "clay-empty");
+    empty.textContent = "Nothing in this flow yet";
+    root.appendChild(empty);
+    return root;
+  }
+
+  // Items, grouped in process order. Each row carries its actions.
+  stages.forEach((s, i) => {
+    const group = byStage[i]!;
+    if (group.length === 0) return;
+    const head = el(ctx, "div", "clay-flow-group-head");
+    head.textContent = labelOf(s);
+    const tone = clampTone(s.tone);
+    if (tone) head.classList.add(`clay-tone-fg-${tone}`);
+    root.appendChild(head);
+    for (const it of group) {
+      const row = el(ctx, "div", "clay-flow-item");
+      if (typeof onItemClick === "function") {
+        row.classList.add("clay-clickable");
+        row.addEventListener("click", () => (onItemClick as (x: Item) => void)(it));
+      }
+      const main = el(ctx, "div", "clay-flow-item-main");
+      const title = el(ctx, "div", "clay-flow-item-title");
+      title.textContent = String(it.title ?? "");
+      main.appendChild(title);
+      if (it.subtitle !== undefined && it.subtitle !== null && it.subtitle !== "") {
+        const sub = el(ctx, "div", "clay-flow-item-sub");
+        sub.textContent = String(it.subtitle);
+        main.appendChild(sub);
+      }
+      row.appendChild(main);
+      if (it.badge !== undefined && it.badge !== null && it.badge !== "") {
+        const b = el(ctx, "span", "clay-badge");
+        const bt = clampTone(it.badgeTone);
+        if (bt) b.classList.add(`clay-tone-${bt}`);
+        b.textContent = String(it.badge);
+        row.appendChild(b);
+      }
+      const actions = el(ctx, "div", "clay-flow-actions");
+      if (canAct && i > 0) {
+        const back = el(ctx, "button", "clay-flow-back") as HTMLButtonElement;
+        back.type = "button";
+        back.textContent = "‹";
+        back.title = `Back to ${labelOf(stages[i - 1]!)}`;
+        back.addEventListener("click", (e) => {
+          e.stopPropagation();
+          (onAdvance as (x: Item, k: string) => void)(it, keyOf(stages[i - 1]!));
+        });
+        actions.appendChild(back);
+      }
+      if (canAct && i < stages.length - 1) {
+        const adv = el(ctx, "button", "clay-flow-advance") as HTMLButtonElement;
+        adv.type = "button";
+        adv.textContent = `${labelOf(stages[i + 1]!)} →`;
+        adv.addEventListener("click", (e) => {
+          e.stopPropagation();
+          (onAdvance as (x: Item, k: string) => void)(it, keyOf(stages[i + 1]!));
+        });
+        actions.appendChild(adv);
+      }
+      if (i === stages.length - 1) {
+        const done = el(ctx, "span", "clay-flow-done");
+        done.textContent = "✓";
+        actions.appendChild(done);
+      }
+      row.appendChild(actions);
+      root.appendChild(row);
+    }
+  });
+  return root;
 }
 
 function buildCards(ctx: Ctx, props: Record<string, unknown>): HTMLElement {

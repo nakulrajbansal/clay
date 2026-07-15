@@ -4,7 +4,7 @@
     {
       "shell_id": "blank",
       "name": "Blank canvas",
-      "tagline": "Start from nothing \u2014 describe the app you want and watch it build itself.",
+      "tagline": "Start from nothing — describe the app you want and watch it build itself.",
       "registry": [],
       "seed_panels": [],
       "sample_rows": {}
@@ -142,7 +142,7 @@
     {
       "shell_id": "small_business",
       "name": "Small Business",
-      "tagline": "Customers, jobs, invoices, money \u2014 your whole business in one app",
+      "tagline": "Customers, jobs, invoices, money — your whole business in one app",
       "registry": [
         {
           "table": "customers",
@@ -876,7 +876,69 @@
       "sample_rows": {
         "products": 6
       }
+    },
+    {
+      "shell_id": "approvals",
+      "name": "Approvals",
+      "tagline": "Requests that flow through review, approval, and payment",
+      "registry": [
+        {
+          "table": "requests",
+          "columns": [
+            {
+              "name": "title",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "requester",
+              "type": "text"
+            },
+            {
+              "name": "category",
+              "type": "enum",
+              "values": [
+                "equipment",
+                "travel",
+                "software",
+                "other"
+              ]
+            },
+            {
+              "name": "amount",
+              "type": "number"
+            },
+            {
+              "name": "stage",
+              "type": "enum",
+              "values": [
+                "submitted",
+                "in_review",
+                "approved",
+                "paid"
+              ]
+            },
+            {
+              "name": "decision_note",
+              "type": "text"
+            },
+            {
+              "name": "submitted_on",
+              "type": "date"
+            }
+          ]
+        }
+      ],
+      "seed_panels": [
+        "approvals_overview:top:0",
+        "request_flow:main:0",
+        "requests_table:main:1",
+        "new_request_form:side:0"
+      ],
+      "sample_rows": {
+        "requests": 5
+      }
     }
   ],
-  "note": "Seed panel code lives in the shell package; the registries, ids, and placements here are binding. Multi-table templates map to real small-business software (CRM, bookkeeping, staff scheduling) and show one dataset through many views \u2014 a board AND a table AND dashboard counts."
+  "note": "Seed panel code lives in the shell package; the registries, ids, and placements here are binding. Multi-table templates map to real small-business software (CRM, bookkeeping, staff scheduling) and show one dataset through many views — a board AND a table AND dashboard counts."
 }
