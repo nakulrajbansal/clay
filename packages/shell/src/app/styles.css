@@ -206,6 +206,13 @@ button.link.danger { color: var(--danger); }
 .empty-canvas h2 { font-family: var(--font-display); font-size: 30px; font-weight: 620;
   letter-spacing: -.03em; margin: 0 0 10px; }
 .empty-canvas p { color: var(--text-2); font-size: 15px; max-width: 480px; margin: 0 0 28px; }
+.empty-upload { display: inline-flex; align-items: center; gap: 9px; cursor: pointer;
+  padding: 13px 22px; border: 1.5px dashed var(--accent); border-radius: 14px;
+  background: var(--accent-soft); color: var(--accent-text); font-weight: 650; margin-bottom: 20px;
+  transition: transform .12s, box-shadow .12s; }
+.empty-upload:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); }
+.empty-canvas-or { color: var(--text-3); font-size: 11px; text-transform: uppercase;
+  letter-spacing: .08em; margin-bottom: 14px; }
 .empty-canvas-chips { display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 560px; }
 .empty-chip { text-align: left; padding: 14px 16px; border: 1px solid var(--border);
   border-radius: 14px; background: var(--panel); color: var(--text); font: inherit;

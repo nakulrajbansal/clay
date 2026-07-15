@@ -4,9 +4,9 @@
 // serveStore RPC ports for the Bridge's AsyncStore (live and shadow).
 // Records never leave this worker except over those ports to the Bridge.
 import {
-  ClayStore, MutationPipeline, deleteAppStorage, openBrowserDriver,
+  ClayStore, MutationPipeline, deleteAppStorage, deriveInverse, openBrowserDriver,
   portFromMessagePort, serveStore, wipeBrowserStorage,
-  type DbDriver, type DebugEvent, type LivePanel, type PreviewHandle,
+  type DbDriver, type DebugEvent, type LivePanel, type MigrationPlanT, type PreviewHandle,
 } from "@clay/kernel";
 import { MutationClient } from "@clay/mutation";
 import { removeSampleRows, seedStarterShell, type StarterShellId } from "../shells/seed";
@@ -26,6 +26,25 @@ export type IntentOutcome =
   | { status: "failed"; stage: string; reasons: string[] };
 
 type Request = { id: number; op: string; payload?: Record<string, unknown> };
+
+type ImportColumn = { name: string; type: string; values?: string[] };
+
+/** A basic, always-valid table panel so imported data is visible immediately
+ * (before any model reshape). Columns are formatted by inferred type. */
+function importTablePanelCode(table: string, columns: ImportColumn[]): string {
+  const cols = columns.map(c => {
+    const fmt = c.type === "number" ? ', format: "number"'
+      : c.type === "date" ? ', format: "date"' : "";
+    return `{ field: ${JSON.stringify(c.name)}, label: ${JSON.stringify(c.name)}${fmt} }`;
+  }).join(", ");
+  return `export default function (clay) {
+  clay.db.watch({ from: ${JSON.stringify(table)}, limit: 500 }, (rows) => {
+    clay.ui.render(rows.length === 0
+      ? h(EmptyState, { label: "No rows yet" })
+      : h(Table, { sortable: true, rows, columns: [${cols}] }));
+  });
+}`;
+}
 
 let store: ClayStore | null = null;
 let persistent = false;
@@ -161,6 +180,39 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "seed":
       seedStarterShell(mustStore(), p.shellId as StarterShellId);
       return null;
+    case "importTable": {
+      // Bring-your-own-data: create the table + a starter view and insert the
+      // parsed rows as ONE reversible commit (data outlives interface). The
+      // model builds the richer dashboard afterwards.
+      const s = mustStore();
+      const columns = p.columns as ImportColumn[];
+      const rows = p.rows as Record<string, unknown>[];
+      const reg = s.registrySnapshot();
+      let table = String(p.table);
+      let n = 2;
+      while (reg.has(table)) table = `${String(p.table)}_${n++}`;   // avoid collision
+      const ops: MigrationPlanT["operations"] = [{
+        op: "create_table", table,
+        columns: columns.map(c => ({
+          name: c.name, type: c.type as "text", required: false,
+          ...(c.values ? { values: c.values } : {}),
+        })),
+      }];
+      const panelId = `${table}_view`.slice(0, 40).replace(/^[^a-z]/, "t");
+      s.commit({
+        intent: `Import data (${table})`,
+        summary: `Imported ${rows.length} row${rows.length === 1 ? "" : "s"} into ${table}.`,
+        migration: { operations: ops, inverse: deriveInverse(ops, reg) },
+        panels: [{
+          panel_id: panelId, title: table, placement: { region: "main", order: 0, w: 4 },
+          code: importTablePanelCode(table, columns),
+          declared_queries: [{ from: table, limit: 500 }], declared_writes: [],
+        }],
+      });
+      let imported = 0;
+      for (const row of rows) { try { s.insert(table, row); imported++; } catch { /* skip bad row */ } }
+      return { table, imported, columns: columns.length };
+    }
     case "panels":
       return mustStore().livePanels();
     case "commitLayout":

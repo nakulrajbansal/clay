@@ -28,6 +28,7 @@ import {
   getApiKey, getBackendUrl, hasModelAccess, setApiKey, setBackendUrl,
 } from "./settings";
 import { reorder, type Region } from "./layout";
+import { parseImportFile } from "./importData";
 
 type Phase = "loading" | "onboarding" | "main" | "error";
 
@@ -86,6 +87,7 @@ export function App(): React.JSX.Element {
   const [faults, setFaults] = useState<Record<string, PanelFault>>({});
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [showData, setShowData] = useState(false);
+  const [dataTable, setDataTable] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const dataStoreRef = useRef<StoreRpcClient | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -137,6 +139,33 @@ export function App(): React.JSX.Element {
     const appId = currentId ?? currentAppId() ?? "default";
     saveThemeId(appId, id);
     setThemeId(id);
+  };
+
+  // Bring-your-own-data: parse the file in the trusted shell, create the table
+  // + rows (one reversible commit), then let the model build the dashboard.
+  const importFile = async (file: File): Promise<void> => {
+    setBusy(true);
+    try {
+      const parsed = parseImportFile(await file.text(), file.name);
+      if (parsed.columns.length === 0 || parsed.rows.length === 0)
+        throw new Error("No rows found — check the file has a header row and data.");
+      const res = await client().importTable(
+        { table: parsed.table, columns: parsed.columns, rows: parsed.rows });
+      await refreshPanels();
+      setFeed(f => [...f, { kind: "info", text: `Imported ${res.imported} row${res.imported === 1 ? "" : "s"} into “${res.table}”.` }]);
+      setBusy(false);
+      void refreshSuggestions();
+      if (hasKey) {
+        void runIntent(`Build the most insightful dashboard for my “${res.table}” data `
+          + `(${res.columns} columns): a few key metric cards, one or two charts, and — if there's a `
+          + `status/category column — a board grouped by it. Keep the existing table too.`);
+      } else {
+        setFeed(f => [...f, { kind: "info", text: "Add a model key in settings, then ask me to build a dashboard." }]);
+      }
+    } catch (e) {
+      setBusy(false);
+      pushToast("Import failed: " + (e as Error).message, "danger");
+    }
   };
 
   // boot
@@ -355,9 +384,10 @@ export function App(): React.JSX.Element {
     }
   };
 
-  const openData = (): void => {
+  const openData = (table?: string): void => {
     dataStoreRef.current ??= new StoreRpcClient(
       portFromMessagePort(client().openStorePort("live")));
+    setDataTable(table ?? null);
     setShowData(true);
   };
 
@@ -609,6 +639,7 @@ export function App(): React.JSX.Element {
               ? (h): void => void setSize(d.panel.panel_id, { h }) : undefined}
             onViewAs={canDrag && !d.isPreview && d.panel.declared_queries.length > 0
               ? (view): void => viewAs(d.panel, view) : undefined}
+            onEditData={!d.isPreview ? (table): void => openData(table) : undefined}
           />
         );
       });
@@ -665,8 +696,15 @@ export function App(): React.JSX.Element {
           <div className="empty-canvas">
             <div className="empty-canvas-spark">✦</div>
             <h2>What do you want to build?</h2>
-            <p>Describe it in plain words — a tracker, a CRM, a planner, anything.
-              Clay builds it, and every change is reversible.</p>
+            <p>Describe it in plain words, or <strong>upload a spreadsheet</strong> and
+              Clay builds a dashboard around your data. Every change is reversible.</p>
+            <label className="empty-upload file-label">
+              ⬆ Upload a spreadsheet (CSV or JSON)
+              <input type="file" accept=".csv,.tsv,.txt,.json" style={{ display: "none" }}
+                disabled={busy}
+                onChange={e => { const f = e.target.files?.[0]; if (f) void importFile(f); e.target.value = ""; }} />
+            </label>
+            <div className="empty-canvas-or">or describe it</div>
             <div className="empty-canvas-chips">
               {[
                 "Build a habit tracker with a daily check-off and a streak count",
@@ -704,6 +742,7 @@ export function App(): React.JSX.Element {
         <DataView
           worker={workerRef.current}
           store={dataStoreRef.current}
+          initialTable={dataTable}
           onWrite={table => liveBridge?.notifyWrite(table)}
           onClose={() => setShowData(false)}
           onError={msg => pushToast(msg, "danger")}
@@ -714,6 +753,7 @@ export function App(): React.JSX.Element {
         preview={preview}
         busy={busy || scrub !== null}
         onOpenData={openData}
+        onImportData={file => void importFile(file)}
         hasKey={hasKey}
         suggestions={suggestions}
         onAcceptSuggestion={acceptSuggestion}

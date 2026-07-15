@@ -17,6 +17,7 @@ function coerceDraft(type: string, draft: string): unknown {
 export function DataView(props: {
   worker: WorkerClient;
   store: AsyncStore;
+  initialTable?: string | null;
   onWrite: (table: string) => void;
   onClose: () => void;
   onError: (msg: string) => void;
@@ -47,11 +48,13 @@ export function DataView(props: {
       const t = await worker.registryTables();
       setTables(t);
       if (t.length > 0) {
-        setSelected(t[0]!.name);
-        await reload(t[0]!.name);
+        const want = props.initialTable && t.some(x => x.name === props.initialTable)
+          ? props.initialTable : t[0]!.name;
+        setSelected(want);
+        await reload(want);
       }
     })();
-  }, [worker, reload]);
+  }, [worker, reload, props.initialTable]);
 
   const pick = async (name: string): Promise<void> => {
     setSelected(name);

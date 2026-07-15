@@ -247,6 +247,7 @@ export function PanelFrame(props: {
   onSetWidth?: (w: number) => void;
   onSetHeight?: (h: number) => void;
   onViewAs?: (view: string) => void;
+  onEditData?: (table: string) => void;
   themeCss?: string;
 }): React.JSX.Element {
   const { panel, bridge, preview } = props;
@@ -342,6 +343,8 @@ export function PanelFrame(props: {
 
   // live size: dragW/dragH preview, then the stored placement, then defaults.
   // Width (cols 1–4) only applies in the main region; default is half (2).
+  // The panel's primary table (first declared read) — the one "Edit data" jumps to.
+  const editTable = panel.declared_queries[0]?.from ?? null;
   const inMain = panel.placement.region === "main";
   const span = inMain ? (dragW ?? panel.placement.w ?? 2) : null;
   const effHeight = dragH ?? panel.placement.h ?? height;
@@ -376,6 +379,13 @@ export function PanelFrame(props: {
         {panel.title}
         {preview ? <span className="panel-proposed">proposed</span> : null}
         <span className="panel-tools">
+          {props.onEditData && editTable ? (
+            <button
+              className="panel-tool"
+              title={`Edit the ${editTable} data`}
+              onClick={() => props.onEditData!(editTable)}
+            >✎</button>
+          ) : null}
           {props.onViewAs ? (
             <span className="panel-views">
               <button
