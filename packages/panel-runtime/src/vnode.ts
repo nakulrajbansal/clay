@@ -405,16 +405,24 @@ function buildForm(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
   return form;
 }
 
+// Panels re-render their whole tree on every change, rebuilding the bar
+// from scratch. Many panels (including ones committed before `initial`
+// existed) don't thread their state back — so the bar REMEMBERS its own
+// last state per field-signature. Module scope = per-iframe = per-panel.
+const FILTER_MEMORY = new Map<string, Record<string, unknown>>();
+
 function buildFilterBar(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
   type FilterSpec = { field: string; kind: "select" | "search" | "daterange";
     options?: FieldOption[] };
   const filters = (Array.isArray(props.filters) ? props.filters : []) as FilterSpec[];
   const onChange = props.onChange;
   const bar = el(ctx, "div", "clay-filterbar");
-  // Panels typically re-render the whole tree on change; `initial` restores
-  // the bar's state and control values across those rebuilds.
+  // `initial` (explicit panel state) wins; otherwise the bar's own memory
+  // keeps controls truthful across rebuilds.
+  const memoryKey = filters.map(f => `${f.kind}:${f.field}`).join("|");
   const initial = (props.initial && typeof props.initial === "object"
-    ? props.initial : {}) as Record<string, unknown>;
+    ? props.initial
+    : FILTER_MEMORY.get(memoryKey) ?? {}) as Record<string, unknown>;
   const state: Record<string, unknown> = { ...initial };
   const resets: (() => void)[] = [];
   // A filter you can't escape is a trap: a Clear control appears the moment
@@ -431,6 +439,7 @@ function buildFilterBar(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
     return v !== "" && v != null;
   });
   const emit = (): void => {
+    FILTER_MEMORY.set(memoryKey, { ...state });
     clear.style.display = active() ? "" : "none";
     if (typeof onChange === "function")
       (onChange as (s: Record<string, unknown>) => void)({ ...state });

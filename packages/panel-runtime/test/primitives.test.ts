@@ -580,3 +580,25 @@ describe("FilterBar initial state (survives panel re-renders)", () => {
     expect(states[states.length - 1]).toEqual({});
   });
 });
+
+describe("FilterBar memory (old panels that never pass initial)", () => {
+  it("a rebuilt bar with NO initial remembers its last state; clear resets it", () => {
+    const FILTERS = [{ field: "shade", kind: "select",
+      options: [{ value: "dark", label: "dark" }, { value: "light", label: "light" }] }];
+    // first mount: user picks a value (panel re-renders after this)
+    const first = mount(h(FilterBar, { filters: FILTERS, onChange: () => {} }));
+    const sel1 = first.querySelector("select") as HTMLSelectElement;
+    sel1.value = "dark";
+    sel1.dispatchEvent(new window.Event("change", { bubbles: true }));
+    // second mount simulates the re-rendered panel: no initial passed
+    const second = mount(h(FilterBar, { filters: FILTERS, onChange: () => {} }));
+    const sel2 = second.querySelector("select") as HTMLSelectElement;
+    expect(sel2.value).toBe("dark");                              // truthfully shown
+    const clear2 = second.querySelector(".clay-filter-clear") as HTMLButtonElement;
+    expect(clear2.style.display).toBe("");                        // escape available
+    clear2.click();
+    // third mount after clearing starts clean
+    const third = mount(h(FilterBar, { filters: FILTERS, onChange: () => {} }));
+    expect((third.querySelector("select") as HTMLSelectElement).value).toBe("");
+  });
+});
