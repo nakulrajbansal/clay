@@ -31,6 +31,13 @@ const PANEL_CSS = `
   .clay-th-sort { cursor: pointer; user-select: none; }
   .clay-th-sort:hover { color: var(--accent-text); }
   .clay-table td { padding: 8px 9px; border-bottom: 1px solid var(--border); }
+  /* narrow panels (1-col span, side rail): tighten the table so five
+     columns read instead of clipping a badge mid-glyph */
+  @media (max-width: 460px) {
+    .clay-table th { padding: 5px 6px; font-size: 9.5px; }
+    .clay-table td { padding: 6px 6px; font-size: 12px; }
+    .clay-badge { padding: 1px 6px; font-size: 10px; }
+  }
   .clay-table tbody tr:last-child td { border-bottom: 0; }
   .clay-table tbody tr { transition: background .1s; }
   .clay-table tbody tr:hover td { background: var(--bg-soft); }

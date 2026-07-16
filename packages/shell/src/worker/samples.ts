@@ -41,6 +41,24 @@ const GENERIC_TITLES = [
   "Fix billing edge case", "Draft launch email", "Tidy the backlog",
   "Book team offsite", "Update pricing sheet", "Review new applicants",
 ];
+// Domain-aware title pools: matched against the TABLE name so a book
+// library gets book titles, not "Fix billing edge case".
+const DOMAIN_TITLES: [RegExp, string[]][] = [
+  [/book|read|library/, [
+    "The Silent Harbor", "A Field Guide to Rivers", "Midnight at the Archive",
+    "The Cartographer's Daughter", "On Slow Thinking", "Salt and Starlight",
+    "The Last Lighthouse", "Notes from a Small Kitchen"]],
+  [/session|talk|event|meeting/, [
+    "Opening keynote", "Scaling with small teams", "Design systems that last",
+    "The future of local-first", "Panel: shipping weekly", "Lightning talks",
+    "Hands-on workshop", "Closing fireside chat"]],
+  [/recipe|meal|dish/, [
+    "Lemon herb roast chicken", "Weeknight miso ramen", "Skillet cornbread",
+    "Slow-cooked ragù", "Summer peach salad", "Overnight oats three ways"]],
+  [/song|track|album|playlist/, [
+    "Golden Hour", "Static Bloom", "Northbound", "Paper Lanterns",
+    "Second Sunrise", "The Quiet Machine"]],
+];
 
 const pick = <T>(arr: T[], i: number): T => arr[i % arr.length]!;
 
@@ -50,7 +68,7 @@ function isoOffset(days: number): string {
 }
 
 /** A plausible value for one column, keyed off its name and type. */
-function valueFor(col: RegColumn, i: number, rng: () => number): unknown {
+function valueFor(col: RegColumn, i: number, rng: () => number, tableName = ""): unknown {
   const n = col.name.toLowerCase();
   switch (col.type) {
     case "enum": {
@@ -91,6 +109,8 @@ function valueFor(col: RegColumn, i: number, rng: () => number): unknown {
       if (/note|description|summary|detail|comment/.test(n)) return pick(NOTES, i);
       if (/project|initiative|epic|campaign/.test(n)) return pick(PROJECT_NAMES, i);
       if (/name|title|subject|task|item|label/.test(n)) {
+        for (const [re, pool] of DOMAIN_TITLES)
+          if (re.test(tableName)) return pick(pool, i);
         return pick(n.includes("name") && !/project/.test(n) && rng() > 0.5 ? PROJECT_NAMES : GENERIC_TITLES, i);
       }
       if (/city|location|office/.test(n)) return pick(["Austin", "Berlin", "Toronto", "Singapore", "London"], i);
@@ -114,6 +134,12 @@ export function fillSampleRows(store: ClayStore): { added: number; tables: numbe
   const marker = store.getSetting<Record<string, string[]>>("sample_rows") ?? {};
   let added = 0; let tableCount = 0;
   for (const table of store.registrySnapshot().values()) {
+    // History must reflect real moves, never invented ones: skip audit
+    // tables (activity/log/history names, or a from_stage/to_stage pair) —
+    // they fill themselves as the user advances items.
+    const names = new Set(table.columns.map(c => c.name));
+    if (/(activity|_log|_history)$/.test(table.name)
+        || (names.has("from_stage") && names.has("to_stage"))) continue;
     const writable = table.columns.filter(c =>
       c.type !== "computed" && c.type !== "json" && !c.hidden);
     if (writable.length === 0) continue;
@@ -121,7 +147,7 @@ export function fillSampleRows(store: ClayStore): { added: number; tables: numbe
     for (let i = 0; i < ROWS_PER_TABLE; i++) {
       const row: Record<string, unknown> = {};
       for (const c of writable) {
-        const v = valueFor(c, i + Math.floor(rng() * 3), rng);
+        const v = valueFor(c, i + Math.floor(rng() * 3), rng, table.name);
         if (v !== undefined && v !== null) row[c.name] = v;
       }
       try {

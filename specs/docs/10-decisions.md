@@ -470,3 +470,29 @@ ADR-029 Blueprints: declarative specs for standard panels, expanded
   integration, and repair-visible errors. Live verify: a 6-panel build
   committed first-try with zero repairs, mixing directives and custom
   code.
+
+ADR-030 Build-3 iteration round: three live builds -> fixes + two new
+  blueprint capabilities.
+  Context: three brand-new apps built live end-to-end (OKR tracker, 2-day
+  conference planner, book library) — all six model calls (3 builds + 3
+  follow-up edits) committed FIRST TRY with zero repairs, zero console
+  errors, zero panel boundaries; Observer v3 nudges and the workflow/
+  calendar/timeline/FilterBar surfaces all fired live. The screenshots
+  still exposed four real gaps.
+  DECISION:
+  (a) Sample fill never invents history: tables named *activity/*_log/
+      *_history, or carrying a from_stage/to_stage pair, are skipped —
+      audit trails fill themselves as the user advances items.
+  (b) Domain-aware sample titles: title-ish columns draw from pools keyed
+      by TABLE name (books/sessions/recipes/tracks), so a library shows
+      "The Silent Harbor", not "Fix billing edge case".
+  (c) Narrow panels tighten table type/padding via an in-iframe media
+      query instead of clipping a badge mid-glyph.
+  (d) Blueprint kind "progress" (label + value toward a column-or-constant
+      max, tone by fraction — the OKR/goals/budget pattern) and table
+      option "search"/"filters" (FilterBar + client-side filtering
+      generated in ONE panel, no cross-panel events) — both taught and
+      Validator-clean by test.
+  Consequence: harness scripts/build3.mjs is repeatable; a closing live
+  build ("reading goals") verified both new capabilities: 8 progress
+  bars, search + season filter, filter narrowing 8 -> 5 rows live.

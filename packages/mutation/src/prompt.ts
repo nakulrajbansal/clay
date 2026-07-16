@@ -115,7 +115,9 @@ stays short:
 Kinds (all fields except the ones shown are optional; columns/fields
 default sensibly from the schema; enum columns get badges/tones
 automatically):
-- {"kind":"table","table",T, "columns":[{"field","label","format","badge":{value:tone}}], "sort":{"field","dir"},"where":[Condition],"limit"}
+- {"kind":"table","table":T, "columns":[{"field","label","format","badge":{value:tone}}], "sort":{"field","dir"},"where":[Condition],"limit",
+   "search":textCol?, "filters":[enumCols]?} — search/filters generate a
+   FilterBar with client-side filtering in the same panel
 - {"kind":"form","table":T, "fields":[{"name","label","kind","required"}], "submitLabel","defaults":{col:value}}
 - {"kind":"metrics","table":T, "metrics":[{"label","agg":"count|sum|avg|min|max","field","where":[Condition],"format":"currency"}]} (1–6)
 - {"kind":"chart","table":T, "chart":"bar|line|area|pie","x":col,"y":col,"agg","where","height"}
@@ -125,6 +127,7 @@ automatically):
 - {"kind":"timeline","table":T, "label":col, "at":dateCol | "start"+"end", "sort"}
 - {"kind":"calendar","table":T, "date":dateCol, "label":col}
 - {"kind":"feed","table":T, "title":col, "meta":[cols], "limit"}
+- {"kind":"progress","table":T, "label":col, "value":numCol, "max":numCol|number, "sort"} — one bar per row toward its target (OKRs, goals, budgets)
 Blueprints + a migration in ONE plan is the fastest correct build: create
 the tables, then one directive per panel. Write custom module code ONLY
 when no blueprint fits (unusual interactions, cross-table joins in-panel,

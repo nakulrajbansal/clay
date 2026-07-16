@@ -46,6 +46,7 @@ const SPECS: Record<string, object> = {
   timeline: { kind: "timeline", table: "requests", label: "title", at: "due" },
   calendar: { kind: "calendar", table: "requests", date: "due", label: "title" },
   feed: { kind: "feed", table: "request_log", title: "request", meta: ["to_stage"] },
+  progress: { kind: "progress", table: "requests", label: "title", value: "amount", max: 5000 },
 };
 
 describe("blueprint expansion (ADR-029)", () => {
@@ -137,6 +138,47 @@ describe("pipeline blueprint integration (ADR-029)", () => {
     expect(result.status).toBe("preview");
     expect(repairs[0]!.join(" ")).toContain("unknown table 'ghost'");
     if (result.status === "preview") result.preview.discard();
+    store.close();
+  });
+});
+
+describe("blueprint round-2 kinds (from the build-3 iteration)", () => {
+  it("progress expands to per-row bars with column or constant max", async () => {
+    const store = await richStore();
+    const ex = expandBlueprint({ kind: "progress", table: "requests",
+      label: "title", value: "amount", max: 5000 }, store.registrySnapshot());
+    expect(ex.code).toContain("h(Bar");
+    expect(ex.code).toContain("5000");
+    const issues = validateMutationPlan({
+      api: 1, summary: "P.", user_facing_diff: [{ kind: "add_panel", detail: "p" }],
+      clarifying_question: null, assumptions: [], migration: null,
+      panels: [{ panel_id: "progress_panel", title: "P",
+        placement: { region: "main", order: 0 }, code: ex.code,
+        declared_queries: ex.declared_queries, declared_writes: ex.declared_writes }],
+      remove_panels: [], confidence: 0.9,
+    }, { registry: store.registrySnapshot(), livePanelIds: [] });
+    expect(issues).toEqual([]);
+    expect(() => expandBlueprint({ kind: "progress", table: "requests",
+      label: "title", value: "amount" }, store.registrySnapshot()))
+      .toThrow(/needs max/);
+    store.close();
+  });
+
+  it("table with search + filters expands to a FilterBar panel, Validator-clean", async () => {
+    const store = await richStore();
+    const ex = expandBlueprint({ kind: "table", table: "requests",
+      search: "title", filters: ["stage"] }, store.registrySnapshot());
+    expect(ex.code).toContain("FilterBar");
+    expect(ex.code).toContain("onChange");
+    const issues = validateMutationPlan({
+      api: 1, summary: "T.", user_facing_diff: [{ kind: "add_panel", detail: "t" }],
+      clarifying_question: null, assumptions: [], migration: null,
+      panels: [{ panel_id: "filtered_table", title: "T",
+        placement: { region: "main", order: 0 }, code: ex.code,
+        declared_queries: ex.declared_queries, declared_writes: ex.declared_writes }],
+      remove_panels: [], confidence: 0.9,
+    }, { registry: store.registrySnapshot(), livePanelIds: [] });
+    expect(issues).toEqual([]);
     store.close();
   });
 });

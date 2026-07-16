@@ -3,7 +3,7 @@
 // never rows the user added themselves — that asymmetry is the whole point.
 import { describe, expect, it } from "vitest";
 import { ClayStore, deriveInverse, type MigrationPlanT } from "@clay/kernel";
-import { removeSampleRows } from "../src/shells/seed";
+import { removeSampleRows, seedStarterShell } from "../src/shells/seed";
 import { fillSampleRows, sampleRowCount } from "../src/worker/samples";
 
 async function storeWithProjects(): Promise<ClayStore> {
@@ -71,6 +71,33 @@ describe("sample data fill/clear", () => {
     expect(sampleRowCount(store)).toBe(a.added + b.added);
     removeSampleRows(store);
     expect(store.query({ from: "projects" })).toHaveLength(0);
+    store.close();
+  });
+});
+
+describe("sample fill round-2 (build-3 iteration)", () => {
+  it("never invents history: activity/log tables are skipped", async () => {
+    const store = await ClayStore.openMemory();
+    seedStarterShell(store, "approvals");            // has request_activity
+    removeSampleRows(store);                          // clear template rows
+    fillSampleRows(store);
+    const marker = store.getSetting<Record<string, string[]>>("sample_rows") ?? {};
+    expect(Object.keys(marker)).toContain("requests");
+    expect(Object.keys(marker)).not.toContain("request_activity");
+    store.close();
+  });
+
+  it("domain-aware titles: a books table gets book titles, not task titles", async () => {
+    const store = await ClayStore.openMemory();
+    const ops = [{ op: "create_table" as const, table: "books", columns: [
+      { name: "title", type: "text" as const, required: true }] }];
+    store.commit({ intent: "seed", summary: "v1",
+      migration: { operations: ops, inverse: deriveInverse(ops, store.registrySnapshot()) },
+      panels: [] });
+    fillSampleRows(store);
+    const titles = store.query({ from: "books" }).map(r => String(r.title));
+    expect(titles).toContain("The Silent Harbor");
+    expect(titles).not.toContain("Fix billing edge case");
     store.close();
   });
 });

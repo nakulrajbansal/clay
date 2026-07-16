@@ -98,6 +98,47 @@ function bpTable(reg: Registry, spec: Spec): BlueprintResult {
       return entry;
     });
   const q = baseQuery(t, spec);
+
+  // Optional interactive filters: "filters" lists enum columns (dropdowns)
+  // and/or {"search": col} for a text search — generated as a FilterBar
+  // with client-side filtering in the SAME panel (no cross-panel events).
+  const filterCols = (Array.isArray(spec.filters) ? spec.filters : [])
+    .map(f => col(t, f, "filter"))
+    .filter(f => t.columns.find(c => c.name === f)?.type === "enum");
+  const searchCol = spec.search ? col(t, spec.search, "search") : null;
+  if (filterCols.length > 0 || searchCol) {
+    const filterSpecs = [
+      ...(searchCol ? [{ field: searchCol, kind: "search" }] : []),
+      ...filterCols.map(f => ({ field: f, kind: "select",
+        options: (t.columns.find(c => c.name === f)?.values ?? [])
+          .map(v => ({ value: v, label: v })) })),
+    ];
+    const body =
+      `    all = rows; draw();`;
+    const code =
+      `export default function (clay) {\n`
+      + `  let all = [];\n`
+      + `  let state = {};\n`
+      + `  const draw = () => {\n`
+      + `    const shown = all.filter((r) => {\n`
+      + (searchCol
+        ? `      const s = String(state[${J(searchCol)}] || "").toLowerCase();\n`
+          + `      if (s && !String(r[${J(searchCol)}] || "").toLowerCase().includes(s)) return false;\n`
+        : "")
+      + filterCols.map(f =>
+          `      if (state[${J(f)}] && r[${J(f)}] !== state[${J(f)}]) return false;\n`).join("")
+      + `      return true;\n    });\n`
+      + `    clay.ui.render(h(Stack, {},\n`
+      + `      h(FilterBar, { filters: ${J(filterSpecs)},\n`
+      + `        onChange: (next) => { state = next; draw(); } }),\n`
+      + `      shown.length === 0\n`
+      + `        ? h(EmptyState, { label: "Nothing matches" })\n`
+      + `        : h(Table, { sortable: true, rows: shown, columns: ${J(cols)} })));\n`
+      + `  };\n`
+      + `  clay.db.watch(${J(q)}, (rows) => {\n${body}\n  });\n}`;
+    return { code, declared_queries: [q], declared_writes: [] };
+  }
+
   const body =
     `    clay.ui.render(rows.length === 0\n`
     + `      ? h(EmptyState, { label: ${J(`No ${t.name} yet`)} })\n`
@@ -340,10 +381,33 @@ function bpFeed(reg: Registry, spec: Spec): BlueprintResult {
   return { code: watchRender(q, body), declared_queries: [q], declared_writes: [] };
 }
 
+// progress: label + value toward a target per row (OKR / goals / budgets) —
+// target is a column name or a constant number.
+function bpProgress(reg: Registry, spec: Spec): BlueprintResult {
+  const t = table(reg, spec.table);
+  const label = col(t, spec.label ?? t.columns.find(c => !c.hidden)?.name, "label");
+  const value = col(t, spec.value, "value");
+  const maxCol = typeof spec.max === "string" ? col(t, spec.max, "max") : null;
+  const maxNum = typeof spec.max === "number" ? spec.max : null;
+  if (!maxCol && maxNum === null) fail("blueprint: progress needs max (column or number)");
+  const q = baseQuery(t, spec);
+  const maxExpr = maxCol ? `(r[${J(maxCol)}] || 1)` : String(maxNum);
+  const body =
+    `    clay.ui.render(rows.length === 0\n`
+    + `      ? h(EmptyState, { label: ${J(`No ${t.name} yet`)} })\n`
+    + `      : h(Stack, {}, rows.map((r) => {\n`
+    + `          const frac = Math.max(0, Math.min(1, (r[${J(value)}] || 0) / ${maxExpr}));\n`
+    + `          return h(Bar, { label: r[${J(label)}], value: frac,\n`
+    + `            caption: String(r[${J(value)}] || 0) + " / " + String(${maxCol ? `r[${J(maxCol)}] || 0` : String(maxNum)}),\n`
+    + `            tone: frac >= 1 ? "green" : frac < 0.5 ? "amber" : "accent" });\n`
+    + `        })));`;
+  return { code: watchRender(q, body), declared_queries: [q], declared_writes: [] };
+}
+
 const KINDS: Record<string, (reg: Registry, spec: Spec) => BlueprintResult> = {
   table: bpTable, form: bpForm, metrics: bpMetrics, chart: bpChart,
   board: bpBoard, flow: bpFlow, cards: bpCards, timeline: bpTimeline,
-  calendar: bpCalendar, feed: bpFeed,
+  calendar: bpCalendar, feed: bpFeed, progress: bpProgress,
 };
 
 export const BLUEPRINT_KINDS = Object.keys(KINDS);
