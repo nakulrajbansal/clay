@@ -87,7 +87,11 @@ const PANEL_CSS = `
     transition: transform .08s ease, box-shadow .12s ease, filter .12s ease; }
   .clay-button:hover { filter: brightness(1.06); box-shadow: 0 4px 15px color-mix(in srgb, var(--accent) 45%, transparent); }
   .clay-button:active { transform: translateY(1px); box-shadow: 0 1px 4px rgba(91,87,235,.35); }
-  .clay-filterbar { display: flex; gap: 8px; }
+  .clay-filterbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .clay-filter-clear { border: 0; background: none; color: var(--accent-text);
+    font: inherit; font-size: 12px; font-weight: 650; cursor: pointer;
+    padding: 3px 7px; border-radius: 7px; white-space: nowrap; }
+  .clay-filter-clear:hover { background: var(--accent-soft); }
   .clay-chart { position: relative; }
   .clay-chart svg { width: 100%; height: auto; display: block; overflow: visible;
     animation: clay-chart-in .42s ease both; }

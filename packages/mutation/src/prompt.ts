@@ -193,6 +193,10 @@ Your plan is validated against a strict schema. Follow these exactly:
 - confidence < 0.5 => set clarifying_question and leave the plan empty;
   otherwise decide and record the choice in assumptions.
 
+FilterBar accepts initial (the current filter state) — when your panel
+re-renders on filter change, pass it back so controls keep their values
+and the built-in ✕ clear affordance works.
+
 Interactivity: Badge, Box, Button, and Table rows all accept an onClick
 (Table also onRowClick) — use them directly for clickable status chips,
 selectable rows, etc. Clickable elements automatically show a pointer

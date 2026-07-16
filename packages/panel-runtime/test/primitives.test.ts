@@ -3,7 +3,7 @@
 // compose into layouts the named components can't express (a Gantt).
 import { describe, expect, it } from "vitest";
 import {
-  h, render, Box, Text, Bar, Scene, Stack, Board, Cards, Timeline, Badge, Button, Chart, Table,
+  h, render, Box, Text, Bar, Scene, Stack, Board, Cards, Timeline, Badge, Button, Chart, Table, FilterBar,
 } from "../src/index";
 
 function mount(vnode: Parameters<typeof render>[0]): HTMLElement {
@@ -532,5 +532,51 @@ describe("Calendar (ADR-027)", () => {
     const c = mount(h("Calendar", { month: "2026-07", items }));
     expect(c.querySelectorAll(".clay-cal-chip")).toHaveLength(3);
     expect(c.textContent).toContain("+2 more");
+  });
+});
+
+describe("FilterBar clearing (field feedback: filters had no way out)", () => {
+  const FILTERS = [
+    { field: "genre", kind: "select",
+      options: [{ value: "fiction", label: "fiction" }, { value: "sci_fi", label: "sci_fi" }] },
+    { field: "title", kind: "search" },
+  ];
+
+  it("selects always carry an All escape option, prepended when missing", () => {
+    const c = mount(h(FilterBar, { filters: FILTERS, onChange: () => {} }));
+    const opts = [...c.querySelectorAll("select option")].map(o => (o as HTMLOptionElement).value);
+    expect(opts[0]).toBe("");
+    expect(c.querySelector("select option")!.textContent).toBe("All genre");
+  });
+
+  it("a clear control appears once anything is set; clicking resets state AND controls", () => {
+    const states: Record<string, unknown>[] = [];
+    const c = mount(h(FilterBar, { filters: FILTERS, onChange: (s: Record<string, unknown>) => states.push(s) }));
+    const clear = c.querySelector(".clay-filter-clear") as HTMLButtonElement;
+    expect(clear.style.display).toBe("none");                 // idle: hidden
+    const select = c.querySelector("select") as HTMLSelectElement;
+    select.value = "sci_fi";
+    select.dispatchEvent(new window.Event("change", { bubbles: true }));
+    expect(clear.style.display).toBe("");                     // active: visible
+    clear.click();
+    expect(select.value).toBe("");                            // control reset
+    expect(states[states.length - 1]).toEqual({});            // state emptied
+    expect(clear.style.display).toBe("none");                 // hidden again
+  });
+});
+
+describe("FilterBar initial state (survives panel re-renders)", () => {
+  it("restores control values, state, and clear visibility from initial", () => {
+    const states: Record<string, unknown>[] = [];
+    const c = mount(h(FilterBar, {
+      filters: [{ field: "genre", kind: "select",
+        options: [{ value: "fiction", label: "fiction" }] }],
+      initial: { genre: "fiction" },
+      onChange: (s: Record<string, unknown>) => states.push(s),
+    }));
+    expect((c.querySelector("select") as HTMLSelectElement).value).toBe("fiction");
+    expect((c.querySelector(".clay-filter-clear") as HTMLElement).style.display).toBe("");
+    (c.querySelector(".clay-filter-clear") as HTMLButtonElement).click();
+    expect(states[states.length - 1]).toEqual({});
   });
 });

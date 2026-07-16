@@ -129,7 +129,7 @@ function bpTable(reg: Registry, spec: Spec): BlueprintResult {
           `      if (state[${J(f)}] && r[${J(f)}] !== state[${J(f)}]) return false;\n`).join("")
       + `      return true;\n    });\n`
       + `    clay.ui.render(h(Stack, {},\n`
-      + `      h(FilterBar, { filters: ${J(filterSpecs)},\n`
+      + `      h(FilterBar, { filters: ${J(filterSpecs)}, initial: state,\n`
       + `        onChange: (next) => { state = next; draw(); } }),\n`
       + `      shown.length === 0\n`
       + `        ? h(EmptyState, { label: "Nothing matches" })\n`

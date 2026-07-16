@@ -411,21 +411,52 @@ function buildFilterBar(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
   const filters = (Array.isArray(props.filters) ? props.filters : []) as FilterSpec[];
   const onChange = props.onChange;
   const bar = el(ctx, "div", "clay-filterbar");
-  const state: Record<string, unknown> = {};
+  // Panels typically re-render the whole tree on change; `initial` restores
+  // the bar's state and control values across those rebuilds.
+  const initial = (props.initial && typeof props.initial === "object"
+    ? props.initial : {}) as Record<string, unknown>;
+  const state: Record<string, unknown> = { ...initial };
+  const resets: (() => void)[] = [];
+  // A filter you can't escape is a trap: a Clear control appears the moment
+  // anything is set, and every select carries an "All …" first option even
+  // when the panel forgot one.
+  const clear = el(ctx, "button", "clay-filter-clear") as HTMLButtonElement;
+  clear.type = "button";
+  clear.textContent = "✕ clear";
+  clear.title = "Clear all filters";
+  clear.style.display = "none";
+  const active = (): boolean => Object.values(state).some(v => {
+    if (v && typeof v === "object")
+      return Object.values(v as Record<string, unknown>).some(x => x !== "" && x != null);
+    return v !== "" && v != null;
+  });
   const emit = (): void => {
+    clear.style.display = active() ? "" : "none";
     if (typeof onChange === "function")
       (onChange as (s: Record<string, unknown>) => void)({ ...state });
   };
+  clear.addEventListener("click", () => {
+    for (const k of Object.keys(state)) delete state[k];
+    for (const r of resets) r();
+    emit();
+  });
   for (const f of filters) {
     if (f.kind === "select") {
-      const select = buildSelect(ctx, f.options ?? [], undefined);
+      const given = f.options ?? [];
+      const options = given.some(o => String(o.value ?? "") === "")
+        ? given
+        : [{ value: "", label: `All ${String(f.field).replace(/_/g, " ")}` }, ...given];
+      const select = buildSelect(ctx, options, initial[f.field]);
       select.setAttribute("name", f.field);
       select.addEventListener("change", () => { state[f.field] = select.value; emit(); });
+      resets.push(() => { select.value = ""; });
       bar.appendChild(select);
     } else if (f.kind === "search") {
       const input = buildControl(ctx, "search", { placeholder: f.field });
+      if (typeof initial[f.field] === "string") input.value = String(initial[f.field]);
       input.setAttribute("name", f.field);
       input.addEventListener("input", () => { state[f.field] = input.value; emit(); });
+      resets.push(() => { input.value = ""; });
       bar.appendChild(input);
     } else {
       const from = buildControl(ctx, "date", {});
@@ -435,9 +466,12 @@ function buildFilterBar(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
       };
       from.addEventListener("change", update);
       to.addEventListener("change", update);
+      resets.push(() => { from.value = ""; to.value = ""; });
       bar.append(from, to);
     }
   }
+  bar.appendChild(clear);
+  clear.style.display = active() ? "" : "none";   // restored state shows it
   return bar;
 }
 
