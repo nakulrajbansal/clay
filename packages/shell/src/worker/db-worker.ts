@@ -11,6 +11,7 @@ import {
 import { MutationClient } from "@clay/mutation";
 import { removeSampleRows, seedStarterShell, type StarterShellId } from "../shells/seed";
 import { fillSampleRows, sampleRowCount } from "./samples";
+import { addColumnCommit, renameColumnCommit } from "./schema-ops";
 
 export type PreviewInfo = {
   summary: string;
@@ -264,6 +265,16 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "renamePanel": {
       mustStore().renamePanel(String(p.panelId), String(p.title));
       return mustStore().livePanels();
+    }
+    case "rowHistory":
+      return mustStore().rowHistory(String(p.table), String(p.id));
+    case "addColumn": {
+      addColumnCommit(mustStore(), String(p.table), p.column as never);
+      return [...mustStore().registrySnapshot().values()];
+    }
+    case "renameColumn": {
+      renameColumnCommit(mustStore(), String(p.table), String(p.from), String(p.to));
+      return [...mustStore().registrySnapshot().values()];
     }
     case "removePanel": {
       mustStore().removePanel(String(p.panelId));

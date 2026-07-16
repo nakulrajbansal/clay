@@ -764,8 +764,9 @@
       "seed_panels": [
         "staff_today:top:0",
         "staff_board:main:0",
-        "staff_shifts:main:1",
-        "staff_timeoff:main:2",
+        "shift_calendar:main:1",
+        "staff_shifts:main:2",
+        "staff_timeoff:main:3",
         "staff_roster:side:0",
         "staff_add_shift:side:1"
       ],

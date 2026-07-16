@@ -17,7 +17,7 @@ export type UsageEvent = {
 export type Suggestion = {
   id: string;
   kind: "promote_to_status" | "pin_filtered_panel" | "add_view"
-    | "flag_overdue" | "regroup_board";
+    | "flag_overdue" | "regroup_board" | "make_workflow" | "chart_metric";
   subject: string;
   /** the intent text prefilled into the rail if accepted */
   intent: string;
@@ -61,11 +61,16 @@ export class Observer {
     reg: Registry,
     viewedTables: Set<string> = new Set(),
     boardedTables: Set<string> = new Set(),
+    flowedTables: Set<string> = new Set(),
+    chartedTables: Set<string> = new Set(),
   ): Suggestion[] {
     const out: Suggestion[] = [];
     out.push(...this.unviewedTable(reg, viewedTables));
     out.push(...this.overdueItems(reg));
-    out.push(...this.statusNotBoarded(reg, viewedTables, boardedTables));
+    out.push(...this.processNotFlowed(reg, viewedTables, flowedTables));
+    out.push(...this.statusNotBoarded(reg, viewedTables,
+      new Set([...boardedTables, ...flowedTables])));
+    out.push(...this.metricNotCharted(reg, viewedTables, chartedTables));
     out.push(...this.tokenPromotion(reg));
     out.push(...this.repeatedFilter());
     // suppress any the user already dismissed/accepted
@@ -103,6 +108,76 @@ export class Observer {
         intent: `add a view of ${table.name} that are overdue — past their `
           + `${dateCol.name} and not yet done — highlighted so they stand out`,
         reason: `${n} ${table.name} are overdue and still open — surface the overdue ones?`,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Process-not-flowed (ADR-027): an enum whose VALUES read like an ordered
+   * pipeline (starts at an intake word and/or ends at a terminal word) on a
+   * table with no workflow view. Board shows state; these want a Flow with
+   * one-click advancing, progress, and history.
+   */
+  private processNotFlowed(
+    reg: Registry, viewed: Set<string>, flowed: Set<string>,
+  ): Suggestion[] {
+    const INTAKE = new Set(["todo", "new", "idea", "saved", "submitted",
+      "draft", "backlog", "pending", "lead", "requested", "scheduled", "open"]);
+    const out: Suggestion[] = [];
+    for (const table of reg.values()) {
+      if (!viewed.has(table.name) || flowed.has(table.name)) continue;
+      const col = table.columns.find(c => {
+        if (c.type !== "enum" || c.hidden || (c.values?.length ?? 0) < 3) return false;
+        const vals = (c.values ?? []).map(v => v.toLowerCase());
+        return INTAKE.has(vals[0]!) || TERMINAL_STATUS.has(vals[vals.length - 1]!);
+      });
+      if (!col) continue;
+      let n = 0;
+      try {
+        n = Number(this.driver.select(
+          `SELECT COUNT(*) AS n FROM "${table.name}" WHERE "deleted_at" IS NULL`)[0]?.n ?? 0);
+      } catch { continue; }
+      if (n < 3) continue;
+      out.push({
+        id: uuidv7(), kind: "make_workflow", subject: `${table.name}.${col.name}`,
+        intent: `show my ${table.name} as a workflow: ${(col.values ?? []).join(" → ")}, `
+          + `with one-click advancing and an activity log`,
+        reason: `${col.name} looks like a process (${(col.values ?? []).join(" → ")}) — `
+          + `show ${table.name} as a workflow?`,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Metric-not-charted (ADR-027): a table with a real numeric column and a
+   * date or category to slice by, enough rows to mean something, and no
+   * chart anywhere — magnitude the user can't see the shape of.
+   */
+  private metricNotCharted(
+    reg: Registry, viewed: Set<string>, charted: Set<string>,
+  ): Suggestion[] {
+    const out: Suggestion[] = [];
+    for (const table of reg.values()) {
+      if (!viewed.has(table.name) || charted.has(table.name)) continue;
+      const num = table.columns.find(c =>
+        (c.type === "number" || c.type === "integer") && !c.hidden);
+      const slicer = table.columns.find(c =>
+        (c.type === "date" || c.type === "enum") && !c.hidden);
+      if (!num || !slicer) continue;
+      let n = 0;
+      try {
+        n = Number(this.driver.select(
+          `SELECT COUNT(*) AS n FROM "${table.name}"
+           WHERE "deleted_at" IS NULL AND "${num.name}" IS NOT NULL`)[0]?.n ?? 0);
+      } catch { continue; }
+      if (n < 6) continue;
+      const by = slicer.type === "date" ? `over time by ${slicer.name}` : `by ${slicer.name}`;
+      out.push({
+        id: uuidv7(), kind: "chart_metric", subject: `${table.name}.${num.name}`,
+        intent: `add a chart of ${num.name} ${by} for my ${table.name}`,
+        reason: `you have ${n} ${table.name} with a ${num.name} — chart it ${by}?`,
       });
     }
     return out;

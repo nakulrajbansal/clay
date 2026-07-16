@@ -593,7 +593,19 @@ const staff = [
     clay.ui.render(h(Board, { groups, onCardMove: move }));
   });
 }`, 4),
-  panel("staff_shifts", "All shifts", "main", 1,
+  panel("shift_calendar", "Calendar", "main", 1,
+    [{ from: "shifts", orderBy: [{ field: "date", dir: "asc" }] }], [],
+    `export default function (clay) {
+  const tones = { scheduled: "gray", confirmed: "accent", completed: "green" };
+  clay.db.watch({ from: "shifts", orderBy: [{ field: "date", dir: "asc" }] }, (rows) => {
+    clay.ui.render(rows.length === 0
+      ? h(EmptyState, { label: "No shifts yet - add one on the right" })
+      : h(Calendar, { items: rows.map((r) => ({ date: r.date,
+          label: (r.employee || "") + (r.start_time ? " " + r.start_time : ""),
+          tone: tones[r.status] || "gray" })) }));
+  });
+}`),
+  panel("staff_shifts", "All shifts", "main", 2,
     [{ from: "shifts", orderBy: [{ field: "date", dir: "asc" }] }], [],
     `export default function (clay) {
   clay.db.watch({ from: "shifts", orderBy: [{ field: "date", dir: "asc" }] }, (rows) => {
@@ -604,7 +616,7 @@ const staff = [
         { field: "status", label: "Status", badge: { field: "status", map: { scheduled: "gray", confirmed: "accent", completed: "green" } } }] }));
   });
 }`),
-  panel("staff_timeoff", "Time off", "main", 2,
+  panel("staff_timeoff", "Time off", "main", 3,
     [{ from: "time_off", orderBy: [{ field: "start_date", dir: "asc" }] }], [],
     `export default function (clay) {
   clay.db.watch({ from: "time_off", orderBy: [{ field: "start_date", dir: "asc" }] }, (rows) => {
@@ -795,7 +807,7 @@ const items_flow: PanelBlobInput = {
     { key: "done", label: "Done", tone: "green" }];
   clay.db.watch({ from: "items", orderBy: [{ field: "due", dir: "asc" }] }, (rows) => {
     const items = rows.map((r) => ({ id: r.id, title: r.name,
-      subtitle: r.owner || "", stage: r.status, badge: r.due || "", badgeTone: "gray" }));
+      subtitle: r.owner || "", stage: r.status, since: r.updated_at, badge: r.due || "", badgeTone: "gray" }));
     clay.ui.render(h(Flow, { stages, items,
       onAdvance: async (item, toKey) => {
         try { await clay.db.update("items", item.id, { status: toKey }); }
@@ -895,7 +907,7 @@ const jobs_flow: PanelBlobInput = {
   const label = (k) => { const s = stages.find((x) => x.key === k); return s ? s.label : k; };
   clay.db.watch({ from: "applications", orderBy: [{ field: "applied_on", dir: "asc" }] }, (rows) => {
     const items = rows.map((r) => ({ id: r.id, title: r.company + " \\u00B7 " + (r.role || ""),
-      subtitle: r.next_step || "", stage: r.stage,
+      subtitle: r.next_step || "", stage: r.stage, since: r.updated_at,
       badge: r.salary ? clay.compute.formatCurrency(r.salary) : "", badgeTone: "gray" }));
     clay.ui.render(h(Flow, { stages, items,
       onAdvance: async (item, toKey) => {
@@ -1011,7 +1023,7 @@ const content_flow: PanelBlobInput = {
   clay.db.watch({ from: "posts", orderBy: [{ field: "publish_on", dir: "asc" }] }, (rows) => {
     const items = rows.map((r) => ({ id: r.id, title: r.title,
       subtitle: (r.owner || "") + (r.notes ? " \\u00B7 " + r.notes : ""),
-      stage: r.stage, badge: r.channel || "", badgeTone: "accent" }));
+      stage: r.stage, since: r.updated_at, badge: r.channel || "", badgeTone: "accent" }));
     clay.ui.render(h(Flow, { stages, items,
       onAdvance: async (item, toKey) => {
         try { await clay.db.update("posts", item.id, { stage: toKey }); }
@@ -1125,7 +1137,7 @@ const request_flow: PanelBlobInput = {
   const q = { from: "requests", orderBy: [{ field: "submitted_on", dir: "asc" }] };
   clay.db.watch(q, (rows) => {
     const items = rows.map((r) => ({ id: r.id, title: r.title,
-      subtitle: r.requester, stage: r.stage,
+      subtitle: r.requester, stage: r.stage, since: r.updated_at,
       badge: clay.compute.formatCurrency(r.amount || 0), badgeTone: "gray" }));
     clay.ui.render(h(Flow, { stages, items,
       onAdvance: async (item, toKey) => {

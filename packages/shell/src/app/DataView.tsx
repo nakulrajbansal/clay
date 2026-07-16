@@ -30,6 +30,7 @@ export function DataView(props: {
   onClose: () => void;
   onError: (msg: string) => void;
   onInfo: (msg: string) => void;
+  onSchemaChange?: () => void;
 }): React.JSX.Element {
   const { worker, store } = props;
   const [tables, setTables] = useState<RegTable[]>([]);
@@ -41,6 +42,41 @@ export function DataView(props: {
   const [draftRow, setDraftRow] = useState<Record<string, string>>({});
   const [search, setSearch] = useState("");
   const [samples, setSamples] = useState(0);
+  // ADR-027: per-record history + local schema edits (no model call)
+  const [histFor, setHistFor] = useState<{ id: string;
+    entries: { at: string; values: Record<string, unknown> }[] } | null>(null);
+  const [addingCol, setAddingCol] = useState<{ name: string; type: string } | null>(null);
+  const [renamingCol, setRenamingCol] = useState<{ from: string; value: string } | null>(null);
+
+  const toggleHistory = async (id: string): Promise<void> => {
+    if (histFor?.id === id) { setHistFor(null); return; }
+    setHistFor({ id, entries: await worker.rowHistory(selected!, id) });
+  };
+  const commitAddColumn = async (): Promise<void> => {
+    if (!addingCol || !selected || addingCol.name.trim() === "") return;
+    try {
+      setTables(await worker.addColumn(selected,
+        { name: addingCol.name, type: addingCol.type }));
+      setAddingCol(null);
+      await reload(selected);
+      props.onWrite(selected);
+      props.onSchemaChange?.();
+      props.onInfo(`Added “${addingCol.name}” — rewind the timeline to undo.`);
+    } catch (e) { props.onError("Could not add column: " + (e as Error).message); }
+  };
+  const commitRenameColumn = async (): Promise<void> => {
+    if (!renamingCol || !selected) return;
+    const { from, value } = renamingCol;
+    setRenamingCol(null);
+    if (value.trim() === "" || value === from) return;
+    try {
+      setTables(await worker.renameColumn(selected, from, value));
+      await reload(selected);
+      props.onWrite(selected);
+      props.onSchemaChange?.();
+      props.onInfo(`Renamed “${from}” to “${value}” — panels updated too.`);
+    } catch (e) { props.onError("Could not rename: " + (e as Error).message); }
+  };
 
   const table = tables.find(t => t.name === selected) ?? null;
   const columns = table?.columns.filter(c => !c.hidden) ?? [];
@@ -208,6 +244,26 @@ export function DataView(props: {
             <input type="file" accept=".csv,.tsv,.txt,.json" style={{ display: "none" }}
               onChange={e => { const f = e.target.files?.[0]; if (f) props.onImport(f); e.target.value = ""; }} />
           </label>
+          {table ? (
+            <button
+              className="dataview-import"
+              title={`Download “${table.name}” as a spreadsheet — your data is always yours`}
+              onClick={() => {
+                const esc = (v: unknown): string => {
+                  const s = String(v ?? "");
+                  return /[",\n]/.test(s) ? `"${s.replace(/"/g, "\"\"")}"` : s;
+                };
+                const csv = [columns.map(c => esc(c.name)).join(",")]
+                  .concat(rows.map(r => columns.map(c => esc(r[c.name])).join(",")))
+                  .join("\n");
+                const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+                const a = document.createElement("a");
+                a.href = url; a.download = `${table.name}.csv`; a.click();
+                URL.revokeObjectURL(url);
+                props.onInfo?.(`Downloaded ${rows.length} rows as ${table.name}.csv`);
+              }}
+            >⬇ CSV</button>
+          ) : null}
           <button className="dataview-close" title="Close (Esc)" onClick={props.onClose}>✕</button>
         </div>
       </header>
@@ -242,12 +298,63 @@ export function DataView(props: {
             <thead>
               <tr>
                 {columns.map(c => (
-                  <th key={c.name} title={c.type}>
-                    {c.name}
-                    {TYPE_HINT[c.type] ? <span className="dataview-type">{TYPE_HINT[c.type]}</span> : null}
+                  <th key={c.name} title={`${c.type} — double-click to rename`}
+                    onDoubleClick={() => {
+                      if (c.type !== "computed") setRenamingCol({ from: c.name, value: c.name });
+                    }}>
+                    {renamingCol?.from === c.name ? (
+                      <input
+                        className="dataview-col-edit"
+                        autoFocus
+                        value={renamingCol.value}
+                        onChange={e => setRenamingCol({ from: c.name, value: e.target.value })}
+                        onKeyDown={e => {
+                          if (e.key === "Enter") void commitRenameColumn();
+                          else if (e.key === "Escape") setRenamingCol(null);
+                        }}
+                        onBlur={() => void commitRenameColumn()}
+                      />
+                    ) : (
+                      <>
+                        {c.name}
+                        {TYPE_HINT[c.type] ? <span className="dataview-type">{TYPE_HINT[c.type]}</span> : null}
+                      </>
+                    )}
                   </th>
                 ))}
-                <th />
+                <th className="dataview-addcol-th">
+                  {addingCol ? (
+                    <span className="dataview-addcol">
+                      <input
+                        className="dataview-col-edit"
+                        autoFocus
+                        placeholder="column name"
+                        value={addingCol.name}
+                        onChange={e => setAddingCol({ ...addingCol, name: e.target.value })}
+                        onKeyDown={e => {
+                          if (e.key === "Enter") void commitAddColumn();
+                          else if (e.key === "Escape") setAddingCol(null);
+                        }}
+                      />
+                      <select
+                        value={addingCol.type}
+                        onChange={e => setAddingCol({ ...addingCol, type: e.target.value })}
+                      >
+                        <option value="text">text</option>
+                        <option value="number">number</option>
+                        <option value="date">date</option>
+                        <option value="boolean">yes/no</option>
+                      </select>
+                      <button className="link" onClick={() => void commitAddColumn()}>✓</button>
+                    </span>
+                  ) : (
+                    <button
+                      className="link dataview-addcol-btn"
+                      title="Add a column — instant, reversible on the timeline"
+                      onClick={() => setAddingCol({ name: "", type: "text" })}
+                    >＋ column</button>
+                  )}
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -277,8 +384,9 @@ export function DataView(props: {
                   <td className="cell-actions">
                     {restorable.has(String(r.id)) ? (
                       <button className="link"
-                        onClick={() => void act(async () => worker.restoreRow(selected!, String(r.id)))}>
-                        undo
+                        title="This record has history — see and restore it"
+                        onClick={() => void toggleHistory(String(r.id))}>
+                        ⏱
                       </button>
                     ) : null}
                     <button className="link danger"
@@ -287,7 +395,37 @@ export function DataView(props: {
                     </button>
                   </td>
                 </tr>
-              ))}
+              )).flatMap((tr, i) => {
+                const r = visible[i]!;
+                if (histFor?.id !== String(r.id)) return [tr];
+                return [tr, (
+                  <tr key={`${String(r.id)}-hist`} className="dataview-hist">
+                    <td colSpan={columns.length + 2}>
+                      <div className="dataview-hist-head">
+                        This record’s history — newest first
+                        <button className="link"
+                          onClick={() => void act(async () => {
+                            await worker.restoreRow(selected!, String(r.id));
+                            setHistFor(null);
+                          })}>
+                          ↩ restore previous values
+                        </button>
+                      </div>
+                      {histFor.entries.length === 0
+                        ? <div className="dataview-hist-row">No snapshots in the last 30 days.</div>
+                        : histFor.entries.map((e, j) => (
+                          <div key={j} className="dataview-hist-row">
+                            <span className="dataview-hist-at">{e.at.slice(0, 16).replace("T", " ")}</span>
+                            <span>{columns.filter(c => e.values[c.name] !== undefined)
+                              .slice(0, 4)
+                              .map(c => `${c.name}: ${String(e.values[c.name] ?? "—")}`)
+                              .join(" · ")}</span>
+                          </div>
+                        ))}
+                    </td>
+                  </tr>
+                )];
+              })}
               {visible.length === 0 && q !== "" ? (
                 <tr><td className="dataview-nomatch" colSpan={columns.length + 1}>
                   No rows match “{search}”.

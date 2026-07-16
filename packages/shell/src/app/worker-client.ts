@@ -63,6 +63,17 @@ export class WorkerClient {
   renamePanel(panelId: string, title: string): Promise<LivePanel[]> {
     return this.call("renamePanel", { panelId, title });
   }
+  rowHistory(table: string, id: string):
+    Promise<{ at: string; values: Record<string, unknown> }[]> {
+    return this.call("rowHistory", { table, id });
+  }
+  addColumn(table: string, column: { name: string; type: string; values?: string[] }):
+    Promise<RegTable[]> {
+    return this.call("addColumn", { table, column });
+  }
+  renameColumn(table: string, from: string, to: string): Promise<RegTable[]> {
+    return this.call("renameColumn", { table, from, to });
+  }
   removePanel(panelId: string): Promise<LivePanel[]> {
     return this.call("removePanel", { panelId });
   }

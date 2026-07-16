@@ -52,10 +52,16 @@ props are enumerated tokens or numbers — never CSS, never raw HTML.
   the standard tokens. Use for gantt bars, network diagrams, heatmaps,
   any bespoke visual.
 
-Four ready-made VIEW components cover the most common business layouts —
+Five ready-made VIEW components cover the most common business layouts —
 ALWAYS prefer them over composing from primitives or Scene:
+- Calendar{items:[{date,label,tone}], month?, onItemClick} — a month grid;
+  each dated item lands on its day as a colored chip, with built-in ‹ ›
+  month navigation. THIS is the answer to "calendar / month view /
+  schedule by day" — never hand-compose a month from Boxes. Dates are ISO
+  strings; items outside the shown month simply don't render.
 - Flow{stages:[{key,label,tone}], items:[{id,title,subtitle,badge,badgeTone,
-       stage}], onAdvance, onItemClick} — a staged PROCESS (workflow). stages
+       stage,since}], onAdvance, onItemClick, warnDays?} — a staged PROCESS
+       (workflow). stages
        are ORDERED (the process order); each item sits at one stage. Renders
        a stage rail with counts, a progress bar toward the final stage, and
        per-item "advance to next / send back" buttons. Wire
@@ -71,7 +77,14 @@ ALWAYS prefer them over composing from primitives or Scene:
        have onAdvance insert a transition row after the stage update and
        toast the move, and add a compact Activity panel listing recent
        transitions (newest first). Both written tables go in
-       declared_writes.
+       declared_writes. More workflow conventions:
+       · pass since: r.updated_at on each item — stuck work then shows an
+         age badge automatically (warnDays tunes the threshold);
+       · when a stage implies a date (paid_on, published_on, closed_on),
+         SET it inside onAdvance when the item enters that stage;
+       · for team-ish apps give records an owner field and, when asked for
+         "my queue" / "waiting on me", add a Flow filtered to one owner,
+         oldest first.
 - Board{groups:[{key,label,tone,cards:[{title,subtitle,badge,badgeTone}]}],
         onCardMove, onCardClick} — a kanban board. Shape rows into groups
         yourself (e.g. group by a status enum), one group per column.

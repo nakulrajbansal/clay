@@ -381,3 +381,39 @@ ADR-026 Template audit round: three cross-cutting fixes + per-template
   Consequence: 15 new seed-boot assertions; shells.test counts 13; the
   audit harness is repeatable (all 12 templates green: forms write and
   propagate, flows advance two-step, zero console errors).
+
+ADR-027 Feature round: record history, Calendar view, Observer v3, local
+  schema edits, felt reversibility, data egress, workflow conventions.
+  Context: post-audit feature push. Each item deepens an existing
+  principle rather than widening a surface.
+  DECISION:
+  (a) rowHistory(table, id) read API on ClayStore (G6 snapshots projected
+      onto live columns, newest first) surfaced ONLY in the trusted Data
+      editor: per-row clock toggle showing each record's history with the
+      existing restoreRow as "restore previous values". row_history stays
+      reserved from panel queries.
+  (b) Calendar view component (month grid, tone chips per dated item,
+      local month navigation) + prompt vocabulary + exemplar 15 + staff
+      shift_calendar showcase. Never hand-compose month grids from Boxes.
+  (c) Observer v3: process-not-flowed (an enum whose values read like an
+      ordered pipeline on a table with no Flow view suggests a workflow;
+      workflow-viewed tables also suppress the board nudge) and
+      metric-not-charted (numeric column + date/enum slicer, >= 6 rows, no
+      chart). Local heuristics only, P4 intact.
+  (d) Local schema edits from the Data editor: add/rename column commit
+      through the EXISTING migration vocabulary with kernel-derived
+      inverses (worker schema-ops helper; commitLayout/ADR-022c
+      precedent). Labels normalize to idents ("Due date" -> due_date);
+      renames ride G16 query rewriting so panels follow.
+  (e) Felt reversibility + data egress: Keep's toast carries a one-click
+      Rewind (makeLatest to the prior version); per-table CSV download in
+      the Data editor; a weekly backup nudge with one-click .clay export
+      (last-backup timestamp in localStorage).
+  (f) Workflow conventions taught to the planner: pass since:updated_at
+      so Flow's stage-age badges light up (warnDays threshold, component-
+      side); stamp stage-implied dates (paid_on) inside onAdvance; owner
+      fields + "my queue" Flow variants on request. Template flows all
+      pass since.
+  Consequence: kernel rowHistory + Observer tests; shell schema-ops +
+  seed-boot calendar tests; panel-runtime Calendar + aging tests; all
+  taught surfaces regenerated into assets.

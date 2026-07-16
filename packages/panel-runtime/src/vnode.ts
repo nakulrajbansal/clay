@@ -41,11 +41,12 @@ export const Board = "Board";
 export const Cards = "Cards";
 export const Timeline = "Timeline";
 export const Flow = "Flow";
+export const Calendar = "Calendar";
 
 export const PANEL_GLOBALS: Record<string, unknown> = {
   Table, Chart, MetricCard, Badge, Form, Field, Button, Input, Select,
   DatePicker, Checkbox, Toggle, EmptyState, Stack, Grid, FilterBar,
-  Box, Text, Bar, Scene, Board, Cards, Timeline, Flow,
+  Box, Text, Bar, Scene, Board, Cards, Timeline, Flow, Calendar,
 };
 
 const LAYOUT_TAGS = new Set(["div", "span", "section", "h1", "h2", "h3", "p", "ul", "li", "hr"]);
@@ -268,6 +269,7 @@ function buildComponent(ctx: Ctx, node: VNode): HTMLElement {
     case Scene: return buildScene(ctx, props);
     case Board: return buildBoard(ctx, props);
     case Flow: return buildFlow(ctx, props);
+    case Calendar: return buildCalendar(ctx, props);
     case Cards: return buildCards(ctx, props);
     case Timeline: return buildTimeline(ctx, props);
     case Field: {
@@ -1145,11 +1147,14 @@ function buildBoard(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
 function buildFlow(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
   type Stage = { key?: unknown; label?: unknown; tone?: unknown };
   type Item = { id?: unknown; title?: unknown; subtitle?: unknown;
-    badge?: unknown; badgeTone?: unknown; stage?: unknown };
+    badge?: unknown; badgeTone?: unknown; stage?: unknown; since?: unknown };
   const stages = (Array.isArray(props.stages) ? props.stages : []) as Stage[];
   const items = (Array.isArray(props.items) ? props.items : []) as Item[];
   const onAdvance = props.onAdvance;
   const onItemClick = props.onItemClick;
+  // Stage aging: items carry since (usually the row's updated_at); older
+  // than warnDays (default 7) reads as a stuck-work warning.
+  const warnDays = typeof props.warnDays === "number" ? props.warnDays : 7;
   const canAct = typeof onAdvance === "function";
   const keyOf = (s: Stage): string => String(s.key ?? s.label ?? "");
   const labelOf = (s: Stage): string => String(s.label ?? s.key ?? "");
@@ -1235,6 +1240,17 @@ function buildFlow(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
         b.textContent = String(it.badge);
         row.appendChild(b);
       }
+      if (it.since !== undefined && it.since !== null && it.since !== ""
+          && i < stages.length - 1) {
+        const days = Math.floor((Date.now() - Date.parse(String(it.since))) / 86400000);
+        if (Number.isFinite(days) && days >= 1) {
+          const age = el(ctx, "span", "clay-flow-age");
+          if (days > warnDays) age.classList.add("clay-flow-age-warn");
+          age.textContent = `${days}d`;
+          age.title = `In ${labelOf(s)} for ${days} day${days === 1 ? "" : "s"}`;
+          row.appendChild(age);
+        }
+      }
       const actions = el(ctx, "div", "clay-flow-actions");
       if (canAct && i > 0) {
         const back = el(ctx, "button", "clay-flow-back") as HTMLButtonElement;
@@ -1287,6 +1303,90 @@ function buildFlow(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
       root.appendChild(row);
     }
   });
+  return root;
+}
+
+// ---------- Calendar: a month grid of dated items (ADR-027) ----------
+// The month view Timeline can't express: each item lands on its calendar
+// day as a tone-colored chip. Month navigation is local component state
+// (same precedent as Board's drag state); items outside the shown month
+// simply don't render. Dates are ISO strings; keys are computed in LOCAL
+// time so a chip lands on the user's wall-clock day.
+function buildCalendar(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
+  type CItem = { date?: unknown; label?: unknown; tone?: unknown };
+  const items = (Array.isArray(props.items) ? props.items : []) as CItem[];
+  const onItemClick = props.onItemClick;
+  const byDay = new Map<string, CItem[]>();
+  const key = (d: Date): string =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  for (const it of items) {
+    const k = String(it.date ?? "").slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(k)) continue;
+    if (!byDay.has(k)) byDay.set(k, []);
+    byDay.get(k)!.push(it);
+  }
+  const MONTHS = ["January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"];
+  const anchor = /^(\d{4})-(\d{2})/.exec(String(props.month ?? ""));
+  let cur = anchor
+    ? new Date(Number(anchor[1]), Number(anchor[2]) - 1, 1)
+    : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+  const root = el(ctx, "div", "clay-cal");
+
+  const draw = (): void => {
+    root.textContent = "";
+    const head = el(ctx, "div", "clay-cal-head");
+    const prev = el(ctx, "button", "clay-cal-nav") as HTMLButtonElement;
+    prev.type = "button"; prev.textContent = "‹"; prev.title = "Previous month";
+    const title = el(ctx, "span", "clay-cal-title");
+    title.textContent = `${MONTHS[cur.getMonth()]} ${cur.getFullYear()}`;
+    const next = el(ctx, "button", "clay-cal-nav") as HTMLButtonElement;
+    next.type = "button"; next.textContent = "›"; next.title = "Next month";
+    prev.addEventListener("click", () => { cur = new Date(cur.getFullYear(), cur.getMonth() - 1, 1); draw(); });
+    next.addEventListener("click", () => { cur = new Date(cur.getFullYear(), cur.getMonth() + 1, 1); draw(); });
+    head.append(prev, title, next);
+    root.appendChild(head);
+
+    const grid = el(ctx, "div", "clay-cal-grid");
+    for (const wd of ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]) {
+      const w = el(ctx, "div", "clay-cal-wd");
+      w.textContent = wd;
+      grid.appendChild(w);
+    }
+    const lead = (new Date(cur.getFullYear(), cur.getMonth(), 1).getDay() + 6) % 7;
+    const todayK = key(new Date());
+    for (let i = 0; i < 42; i++) {
+      const d = new Date(cur.getFullYear(), cur.getMonth(), 1 - lead + i);
+      const k = key(d);
+      const cell = el(ctx, "div", "clay-cal-cell");
+      if (d.getMonth() !== cur.getMonth()) cell.classList.add("clay-cal-out");
+      if (k === todayK) cell.classList.add("clay-cal-today");
+      const num = el(ctx, "div", "clay-cal-daynum");
+      num.textContent = String(d.getDate());
+      cell.appendChild(num);
+      const day = byDay.get(k) ?? [];
+      for (const it of day.slice(0, 3)) {
+        const chip = el(ctx, "div", "clay-cal-chip");
+        const tone = clampTone(it.tone);
+        if (tone) chip.classList.add(`clay-cal-chip-${tone}`);
+        chip.textContent = String(it.label ?? "");
+        chip.title = `${k} · ${String(it.label ?? "")}`;
+        if (typeof onItemClick === "function") {
+          chip.classList.add("clay-clickable");
+          chip.addEventListener("click", () => (onItemClick as (x: CItem) => void)(it));
+        }
+        cell.appendChild(chip);
+      }
+      if (day.length > 3) {
+        const more = el(ctx, "div", "clay-cal-more");
+        more.textContent = `+${day.length - 3} more`;
+        cell.appendChild(more);
+      }
+      grid.appendChild(cell);
+    }
+    root.appendChild(grid);
+  };
+  draw();
   return root;
 }
 

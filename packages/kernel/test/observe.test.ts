@@ -219,3 +219,47 @@ describe("usage ring", () => {
     store.close();
   });
 });
+
+describe("Observer v3 (ADR-027): workflow + chart nudges", () => {
+  it("an ordered-looking enum with no Flow view suggests a workflow", async () => {
+    const store = await ClayStore.openMemory();
+    const ops = [{ op: "create_table" as const, table: "tickets", columns: [
+      { name: "title", type: "text" as const, required: true },
+      { name: "stage", type: "enum" as const, required: false,
+        values: ["submitted", "triage", "resolved"] },
+    ] }];
+    store.commit({ intent: "seed", summary: "v1",
+      migration: { operations: ops, inverse: deriveInverse(ops, store.registrySnapshot()) },
+      panels: [{ panel_id: "tickets_table", title: "T",
+        placement: { region: "main", order: 0 },
+        code: "export default function(clay){ clay.db.watch({from:\"tickets\"},(r)=>clay.ui.render(h(Table,{rows:r,columns:[{field:\"title\",label:\"T\"}]}))); }",
+        declared_queries: [{ from: "tickets" }], declared_writes: [] }] });
+    for (let i = 0; i < 4; i++) store.insert("tickets", { title: `t${i}`, stage: "submitted" });
+    const s = store.suggestions().find(x => x.kind === "make_workflow");
+    expect(s).toBeDefined();
+    expect(s!.intent).toContain("workflow");
+    expect(s!.intent).toContain("submitted → triage → resolved");
+    store.close();
+  });
+
+  it("a numeric column with a slicer and no chart suggests charting it", async () => {
+    const store = await ClayStore.openMemory();
+    const ops = [{ op: "create_table" as const, table: "sales", columns: [
+      { name: "item", type: "text" as const, required: true },
+      { name: "amount", type: "number" as const, required: false },
+      { name: "on", type: "date" as const, required: false },
+    ] }];
+    store.commit({ intent: "seed", summary: "v1",
+      migration: { operations: ops, inverse: deriveInverse(ops, store.registrySnapshot()) },
+      panels: [{ panel_id: "sales_table", title: "S",
+        placement: { region: "main", order: 0 },
+        code: "export default function(clay){ clay.db.watch({from:\"sales\"},(r)=>clay.ui.render(h(Table,{rows:r,columns:[{field:\"item\",label:\"I\"}]}))); }",
+        declared_queries: [{ from: "sales" }], declared_writes: [] }] });
+    for (let i = 0; i < 7; i++)
+      store.insert("sales", { item: `i${i}`, amount: 10 * i, on: "2026-07-01" });
+    const s = store.suggestions().find(x => x.kind === "chart_metric");
+    expect(s).toBeDefined();
+    expect(s!.intent).toContain("chart of amount over time");
+    store.close();
+  });
+});

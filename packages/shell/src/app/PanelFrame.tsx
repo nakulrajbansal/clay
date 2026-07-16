@@ -244,6 +244,40 @@ const PANEL_CSS = `
     width: 24px; height: 24px; line-height: 1; cursor: pointer; padding: 0; }
   .clay-flow-back:hover { color: var(--text); border-color: var(--text-3); }
   .clay-flow-done { color: #15803d; font-weight: 800; font-size: 13px; }
+  .clay-flow-age { font-size: 10.5px; font-weight: 700; color: var(--text-3);
+    flex: none; }
+  .clay-flow-age-warn { color: #b45309; background: #fdf0d5;
+    padding: 1px 7px; border-radius: 999px; }
+
+  /* Calendar: month grid of dated items (ADR-027) */
+  .clay-cal { display: flex; flex-direction: column; gap: 7px; }
+  .clay-cal-head { display: flex; align-items: center; justify-content: center; gap: 12px; }
+  .clay-cal-title { font-weight: 700; font-size: 13px; letter-spacing: -.01em;
+    min-width: 130px; text-align: center; }
+  .clay-cal-nav { border: 1px solid var(--border-2); border-radius: 8px;
+    background: none; color: var(--text-2); font: inherit; font-size: 14px;
+    width: 26px; height: 24px; line-height: 1; cursor: pointer; padding: 0; }
+  .clay-cal-nav:hover { color: var(--text); border-color: var(--text-3); }
+  .clay-cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 3px; }
+  .clay-cal-wd { font-size: 9.5px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .05em; color: var(--text-3); text-align: center; padding: 2px 0; }
+  .clay-cal-cell { min-height: 54px; border: 1px solid var(--border);
+    border-radius: 8px; padding: 3px 4px; background: var(--panel);
+    display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .clay-cal-out { opacity: .38; }
+  .clay-cal-today { border-color: var(--accent); box-shadow: 0 0 0 1.5px var(--accent-soft); }
+  .clay-cal-daynum { font-size: 10px; font-weight: 650; color: var(--text-3); }
+  .clay-cal-today .clay-cal-daynum { color: var(--accent-text); }
+  .clay-cal-chip { font-size: 10px; font-weight: 600; line-height: 1.3;
+    padding: 1px 5px; border-radius: 5px; background: var(--accent-soft);
+    color: var(--accent-text); overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  .clay-cal-chip-green, .clay-cal-chip-success { background: #e7f6ec; color: #15803d; }
+  .clay-cal-chip-amber, .clay-cal-chip-warning { background: #fdf0d5; color: #b45309; }
+  .clay-cal-chip-red, .clay-cal-chip-danger { background: #fdeaea; color: #c02626; }
+  .clay-cal-chip-gray, .clay-cal-chip-default { background: var(--bg-soft); color: var(--text-2); }
+  .clay-cal-more { font-size: 9.5px; color: var(--text-3); font-weight: 600; }
 
   /* timeline / gantt */
   .clay-timeline { display: flex; flex-direction: column; gap: 6px; }

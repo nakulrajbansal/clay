@@ -101,6 +101,9 @@ describe("every seed panel boots and renders real data", () => {
       c.querySelectorAll(".clay-board-col").length === 3 && c.textContent!.includes("Maya Chen")],
     ["staff", "staff_roster", c => c.querySelectorAll(".clay-card").length === 3],
     ["staff", "staff_timeoff", c => c.querySelectorAll("tbody tr").length === 2],
+    ["staff", "shift_calendar", c =>
+      c.querySelectorAll(".clay-cal-cell").length === 42
+      && c.querySelector(".clay-cal-title") !== null],
     // Approvals — the workflow template (ADR-024): a Flow with 4 ordered
     // stages, advance buttons, and progress toward "paid"
     ["approvals", "request_flow", c =>

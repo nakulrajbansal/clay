@@ -41,7 +41,8 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
       setTimeout(() => reject(new Error(`${what} timed out after ${ms / 1000}s`)), ms)),
   ]);
 }
-type Toast = { id: number; msg: string; kind: string };
+type Toast = { id: number; msg: string; kind: string;
+  action?: { label: string; run: () => void } };
 
 type PanelFault = { code: string; message: string };
 
@@ -93,10 +94,12 @@ export function App(): React.JSX.Element {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastId = useRef(0);
 
-  const pushToast = useCallback((msg: string, kind: string): void => {
+  const pushToast = useCallback((msg: string, kind: string,
+    action?: { label: string; run: () => void }): void => {
     const id = ++toastId.current;
-    setToasts(t => [...t, { id, msg, kind }]);
-    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 3500);
+    setToasts(t => [...t, { id, msg, kind, action }]);
+    // actionable toasts linger long enough to actually click
+    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), action ? 7000 : 3500);
   }, []);
 
   const client = (): WorkerClient => {
@@ -389,8 +392,28 @@ export function App(): React.JSX.Element {
     a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
+    try { localStorage.setItem("clay_last_backup", String(Date.now())); } catch { /* private mode */ }
     pushToast("Exported your whole app to one file", "success");
   };
+
+  // Local-first means the user carries the backup burden — carry it FOR
+  // them as far as a browser allows: a gentle weekly nudge with a
+  // one-click export. Never more than once per session.
+  const backupNudged = useRef(false);
+  useEffect(() => {
+    if (phase !== "main" || backupNudged.current) return;
+    backupNudged.current = true;
+    let last = 0;
+    try { last = Number(localStorage.getItem("clay_last_backup") ?? 0); } catch { /* private mode */ }
+    const days = (Date.now() - last) / 86400000;
+    if (history.length > 2 && days > 7) {
+      pushToast(
+        last === 0 ? "Your data lives only in this browser — keep a backup file"
+          : `Last backup ${Math.floor(days)} days ago`,
+        "default", { label: "Export now", run: () => void exportArchive() });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, history.length]);
 
   const importArchive = async (file: File): Promise<void> => {
     if (!window.confirm(
@@ -441,6 +464,17 @@ export function App(): React.JSX.Element {
     closePreview();
     await refreshPanels();   // hot swap: keyed remount against the new blobs
     await refreshSuggestions();
+    // Reversibility you can FEEL: one click undoes the keep (same
+    // makeLatest path as the timeline — data rows are kept either way).
+    pushToast(`Kept — your app is now v${version}`, "success", {
+      label: "Rewind",
+      run: () => void (async () => {
+        const fresh = await client().makeLatest(version - 1);
+        setPanels(fresh);
+        setHistory(await client().history());
+        setFeed(f => [...f, { kind: "info", text: `Rewound — v${version - 1} is the latest again.` }]);
+      })(),
+    });
   };
 
   const discard = async (): Promise<void> => {
@@ -816,6 +850,7 @@ export function App(): React.JSX.Element {
           onClose={() => setShowData(false)}
           onError={msg => pushToast(msg, "danger")}
           onInfo={msg => pushToast(msg, "info")}
+          onSchemaChange={() => void refreshPanels()}
         />
       ) : null}
       <ConversationRail
@@ -845,7 +880,15 @@ export function App(): React.JSX.Element {
       </div>
       <div className="toasts">
         {toasts.map(t => (
-          <div key={t.id} className={`toast toast-${t.kind}`}>{t.msg}</div>
+          <div key={t.id} className={`toast toast-${t.kind}`}>
+            {t.msg}
+            {t.action ? (
+              <button
+                className="toast-action"
+                onClick={() => { t.action!.run(); setToasts(x => x.filter(y => y.id !== t.id)); }}
+              >{t.action.label}</button>
+            ) : null}
+          </div>
         ))}
       </div>
     </div>

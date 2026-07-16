@@ -547,14 +547,21 @@ export class ClayStore {
     // no view" can be offered (ambient reshaping, B3).
     const viewed = new Set<string>();
     const boarded = new Set<string>();          // tables already shown as a board
+    const flowed = new Set<string>();           // ... or as a workflow (ADR-027)
+    const charted = new Set<string>();          // ... or summarised in a chart
     for (const p of this.livePanels()) {
-      const isBoard = /\bBoard\b/.test(p.code ?? "");
+      const code = p.code ?? "";
+      const isBoard = /\bBoard\b/.test(code);
+      const isFlow = /\bFlow\b/.test(code);
+      const isChart = /\bChart\b/.test(code);
       for (const q of p.declared_queries) {
         viewed.add(q.from);
         if (isBoard) boarded.add(q.from);
+        if (isFlow) flowed.add(q.from);
+        if (isChart) charted.add(q.from);
       }
     }
-    return this.observer.suggestions(this.reg, viewed, boarded);
+    return this.observer.suggestions(this.reg, viewed, boarded, flowed, charted);
   }
   markSuggestionShown(subject: string, kind: string): void {
     this.observer.markShown(subject, kind);
@@ -607,6 +614,26 @@ export class ClayStore {
     return this.driver.select(
       `SELECT DISTINCT "row_id" FROM "row_history" WHERE "table" = ? AND "at" >= ?`,
       [table, cutoff]).map(r => String(r.row_id));
+  }
+
+  /** A row's snapshots, newest first (ADR-027: the Data view shows each
+   * record's own history). Read-only; values are the row AS IT WAS before
+   * each change, projected onto columns that still exist. Trusted-shell
+   * surface only — never exposed to panel queries (row_history stays a
+   * reserved table name). */
+  rowHistory(table: string, id: string, limit = 20):
+    { at: string; values: Record<string, unknown> }[] {
+    const t = getTable(this.reg, table);
+    const live = new Set(t.columns.map(c => c.name));
+    return this.driver.select(
+      `SELECT "at", "before_json" FROM "row_history"
+       WHERE "table" = ? AND "row_id" = ? ORDER BY "at" DESC LIMIT ?`,
+      [table, id, limit]).map(r => {
+      const raw = JSON.parse(String(r.before_json)) as Record<string, unknown>;
+      const values: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(raw)) if (live.has(k)) values[k] = v;
+      return { at: String(r.at), values };
+    });
   }
 
   /** Restore the most recent snapshot of a row (also undeletes, since the

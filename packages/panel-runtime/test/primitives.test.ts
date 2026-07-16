@@ -486,3 +486,51 @@ describe("Flow (ADR-024: workflows, not just dashboards)", () => {
     expect(c.textContent).toContain("Nothing in this flow yet");
   });
 });
+
+describe("Flow stage aging (ADR-027)", () => {
+  it("old items get an age badge that warns past warnDays; final stage never does", () => {
+    const old = new Date(Date.now() - 12 * 86400000).toISOString();
+    const fresh = new Date().toISOString();
+    const c = mount(h("Flow", { stages: [
+      { key: "a", label: "A" }, { key: "b", label: "B" }, { key: "z", label: "Z" }],
+    warnDays: 7, items: [
+      { id: "1", title: "Stuck", stage: "a", since: old },
+      { id: "2", title: "Fresh", stage: "b", since: fresh },
+      { id: "3", title: "Done", stage: "z", since: old },
+    ] }));
+    const ages = [...c.querySelectorAll(".clay-flow-age")];
+    expect(ages).toHaveLength(1);                       // fresh + final stage: none
+    expect(ages[0]!.textContent).toBe("12d");
+    expect(ages[0]!.className).toContain("clay-flow-age-warn");
+  });
+});
+
+describe("Calendar (ADR-027)", () => {
+  it("renders a month grid with items landing on their days", () => {
+    const c = mount(h("Calendar", { month: "2026-07", items: [
+      { date: "2026-07-04", label: "Shift A", tone: "green" },
+      { date: "2026-07-04", label: "Shift B" },
+      { date: "2026-09-01", label: "Far future" },
+    ] }));
+    expect(c.querySelector(".clay-cal-title")?.textContent).toBe("July 2026");
+    expect(c.querySelectorAll(".clay-cal-cell")).toHaveLength(42);
+    expect(c.querySelectorAll(".clay-cal-chip")).toHaveLength(2);   // Sept item outside the grid
+    expect(c.textContent).toContain("Shift A");
+    expect(c.querySelector(".clay-cal-chip")!.className).toContain("clay-cal-chip-green");
+  });
+
+  it("navigates months with local ‹ › state", () => {
+    const c = mount(h("Calendar", { month: "2026-07", items: [
+      { date: "2026-08-01", label: "August thing" }] }));
+    (c.querySelectorAll(".clay-cal-nav")[1] as HTMLButtonElement).click();
+    expect(c.querySelector(".clay-cal-title")?.textContent).toBe("August 2026");
+    expect(c.textContent).toContain("August thing");
+  });
+
+  it("caps a day at 3 chips and folds the rest into +n more", () => {
+    const items = Array.from({ length: 5 }, (_, i) => ({ date: "2026-07-10", label: "e" + i }));
+    const c = mount(h("Calendar", { month: "2026-07", items }));
+    expect(c.querySelectorAll(".clay-cal-chip")).toHaveLength(3);
+    expect(c.textContent).toContain("+2 more");
+  });
+});
