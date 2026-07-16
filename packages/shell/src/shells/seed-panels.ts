@@ -1224,6 +1224,61 @@ const new_request_form: PanelBlobInput = {
 }`,
 };
 
+
+// ---------- okrs / events / library (ADR-030): blueprint-directive seeds ----
+// One line per panel — expanded at seed time by the SAME kernel path model
+// plans use (seedStarterShell), so templates and generated apps can't drift.
+const bp = (panel_id: string, title: string, region: "top" | "main" | "side",
+  order: number, spec: object): PanelBlobInput => ({
+  panel_id, title, placement: { region, order },
+  declared_queries: [], declared_writes: [],
+  code: `//#blueprint ${JSON.stringify(spec)}`,
+});
+
+const okrs = [
+  bp("okr_overview", "This quarter", "top", 0, { kind: "metrics", table: "objectives", metrics: [
+    { label: "Objectives", agg: "count", field: "title" },
+    { label: "Active", agg: "count", field: "title", where: [{ field: "status", op: "eq", value: "active" }] },
+    { label: "Done", agg: "count", field: "title", where: [{ field: "status", op: "eq", value: "done" }] }] }),
+  bp("kr_progress", "Key results", "main", 0, { kind: "progress", table: "key_results",
+    label: "metric", value: "current", max: "target" }),
+  bp("objectives_table", "Objectives", "main", 1, { kind: "table", table: "objectives" }),
+  bp("add_objective", "Add objective", "side", 0, { kind: "form", table: "objectives",
+    submitLabel: "Add objective", defaults: { status: "draft" } }),
+  bp("add_key_result", "Add key result", "side", 1, { kind: "form", table: "key_results",
+    submitLabel: "Add key result" }),
+];
+
+const events = [
+  bp("event_overview", "At a glance", "top", 0, { kind: "metrics", table: "sessions", metrics: [
+    { label: "Sessions", agg: "count", field: "title" },
+    { label: "Confirmed", agg: "count", field: "title", where: [{ field: "status", op: "eq", value: "confirmed" }] },
+    { label: "Proposed", agg: "count", field: "title", where: [{ field: "status", op: "eq", value: "proposed" }] }] }),
+  bp("session_calendar", "Calendar", "main", 0, { kind: "calendar", table: "sessions",
+    date: "day", label: "title" }),
+  bp("session_board", "By status", "main", 1, { kind: "board", table: "sessions",
+    groupBy: "status", item: { title: "title", subtitle: "speaker" } }),
+  bp("sessions_table", "All sessions", "main", 2, { kind: "table", table: "sessions",
+    sort: { field: "day", dir: "asc" } }),
+  bp("add_session", "Add session", "side", 0, { kind: "form", table: "sessions",
+    submitLabel: "Add session", defaults: { status: "proposed" } }),
+];
+
+const library = [
+  bp("library_overview", "My shelf", "top", 0, { kind: "metrics", table: "books", metrics: [
+    { label: "Books", agg: "count", field: "title" },
+    { label: "Reading now", agg: "count", field: "title", where: [{ field: "status", op: "eq", value: "reading" }] },
+    { label: "Finished", agg: "count", field: "title", where: [{ field: "status", op: "eq", value: "finished" }] }] }),
+  bp("books_table", "Browse", "main", 0, { kind: "table", table: "books",
+    search: "title", filters: ["genre", "status"] }),
+  bp("reading_flow", "Reading workflow", "main", 1, { kind: "flow", table: "books",
+    stage: "status", item: { title: "title", subtitle: "author" } }),
+  bp("ratings_chart", "Avg rating by genre", "main", 2, { kind: "chart", table: "books",
+    chart: "bar", x: "genre", y: "rating", agg: "avg" }),
+  bp("add_book", "Add a book", "side", 0, { kind: "form", table: "books",
+    submitLabel: "Add book", defaults: { status: "to_read" } }),
+];
+
 export const SEED_PANELS: Record<string, PanelBlobInput[]> = {
   blank: [],
   tracker: [items_flow, items_table, status_counts, add_item_form],
@@ -1241,4 +1296,7 @@ export const SEED_PANELS: Record<string, PanelBlobInput[]> = {
   approvals: [approvals_overview, request_flow, requests_table, activity_log, new_request_form],
   jobs: [jobs_overview, jobs_flow, jobs_table, jobs_activity, add_application],
   content: [content_overview, content_flow, content_timeline, content_table, add_post],
+  okrs,
+  events,
+  library,
 };

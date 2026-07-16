@@ -5,7 +5,9 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { ClayStore, validateMutationPlan } from "@clay/kernel";
+import {
+  ClayStore, expandBlueprint, parseBlueprintDirective, validateMutationPlan,
+} from "@clay/kernel";
 import {
   SEED_PANELS, STARTER_SHELLS, removeSampleRows, seedStarterShell,
 } from "../src/index";
@@ -51,7 +53,16 @@ describe("every seed panel passes the Validator (G9: validator-passing)", () => 
     it(shell.id, async () => {
       const store = await ClayStore.openMemory();
       seedStarterShell(store, shell.id);
-      for (const panel of SEED_PANELS[shell.id]!) {
+      for (const raw of SEED_PANELS[shell.id]!) {
+        // blueprint-directive seeds (ADR-030) are validated in their
+        // EXPANDED form - exactly what seedStarterShell commits
+        const spec = parseBlueprintDirective(raw.code);
+        const panel = spec === null ? raw : (() => {
+          const ex = expandBlueprint(spec, store.registrySnapshot());
+          return { ...raw, code: ex.code,
+            declared_queries: ex.declared_queries as typeof raw.declared_queries,
+            declared_writes: ex.declared_writes };
+        })();
         const issues = validateMutationPlan({
           api: 1, summary: "Seed panel.",
           user_facing_diff: [{ kind: "add_panel", detail: panel.panel_id }],

@@ -20,10 +20,10 @@ const { shells } = JSON.parse(readFileSync(shellsPath, "utf8")) as {
 
 describe("starter shells validate against the constitution", () => {
   it("the seed shells (blank + generic + business + personal + workflow)", () => {
-    expect(shells).toHaveLength(13);
+    expect(shells).toHaveLength(16);
     expect(shells.map(s => s.shell_id)).toEqual([
       "blank", "tracker", "log", "dashboard", "small_business", "crm", "financials",
-      "staff", "habits", "inventory", "approvals", "jobs", "content"]);
+      "staff", "habits", "inventory", "approvals", "jobs", "content", "okrs", "events", "library"]);
   });
 
   for (const shell of shells) {

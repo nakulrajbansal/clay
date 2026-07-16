@@ -1108,6 +1108,189 @@
       "sample_rows": {
         "posts": 6
       }
+    },
+    {
+      "shell_id": "okrs",
+      "name": "Goals & OKRs",
+      "tagline": "Objectives with measurable key results and visual progress",
+      "registry": [
+        {
+          "table": "objectives",
+          "columns": [
+            {
+              "name": "title",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "owner",
+              "type": "text"
+            },
+            {
+              "name": "quarter",
+              "type": "enum",
+              "values": [
+                "Q1",
+                "Q2",
+                "Q3",
+                "Q4"
+              ]
+            },
+            {
+              "name": "status",
+              "type": "enum",
+              "values": [
+                "draft",
+                "active",
+                "done"
+              ]
+            }
+          ]
+        },
+        {
+          "table": "key_results",
+          "columns": [
+            {
+              "name": "objective",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "metric",
+              "type": "text"
+            },
+            {
+              "name": "target",
+              "type": "number"
+            },
+            {
+              "name": "current",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "seed_panels": [
+        "okr_overview:top:0",
+        "kr_progress:main:0",
+        "objectives_table:main:1",
+        "add_objective:side:0",
+        "add_key_result:side:1"
+      ],
+      "sample_rows": {
+        "objectives": 4,
+        "key_results": 6
+      }
+    },
+    {
+      "shell_id": "events",
+      "name": "Event Planner",
+      "tagline": "Sessions on a calendar, by status, and in one table",
+      "registry": [
+        {
+          "table": "sessions",
+          "columns": [
+            {
+              "name": "title",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "speaker",
+              "type": "text"
+            },
+            {
+              "name": "room",
+              "type": "text"
+            },
+            {
+              "name": "day",
+              "type": "date"
+            },
+            {
+              "name": "start_time",
+              "type": "text"
+            },
+            {
+              "name": "status",
+              "type": "enum",
+              "values": [
+                "proposed",
+                "confirmed",
+                "cancelled"
+              ]
+            }
+          ]
+        }
+      ],
+      "seed_panels": [
+        "event_overview:top:0",
+        "session_calendar:main:0",
+        "session_board:main:1",
+        "sessions_table:main:2",
+        "add_session:side:0"
+      ],
+      "sample_rows": {
+        "sessions": 8
+      }
+    },
+    {
+      "shell_id": "library",
+      "name": "Book Library",
+      "tagline": "A searchable shelf with a reading workflow and ratings",
+      "registry": [
+        {
+          "table": "books",
+          "columns": [
+            {
+              "name": "title",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "author",
+              "type": "text"
+            },
+            {
+              "name": "genre",
+              "type": "enum",
+              "values": [
+                "fiction",
+                "non_fiction",
+                "sci_fi",
+                "biography"
+              ]
+            },
+            {
+              "name": "status",
+              "type": "enum",
+              "values": [
+                "to_read",
+                "reading",
+                "finished"
+              ]
+            },
+            {
+              "name": "rating",
+              "type": "integer"
+            },
+            {
+              "name": "finished_on",
+              "type": "date"
+            }
+          ]
+        }
+      ],
+      "seed_panels": [
+        "library_overview:top:0",
+        "books_table:main:0",
+        "reading_flow:main:1",
+        "ratings_chart:main:2",
+        "add_book:side:0"
+      ],
+      "sample_rows": {
+        "books": 8
+      }
     }
   ],
   "note": "Seed panel code lives in the shell package; the registries, ids, and placements here are binding. Multi-table templates map to real small-business software (CRM, bookkeeping, staff scheduling) and show one dataset through many views — a board AND a table AND dashboard counts."

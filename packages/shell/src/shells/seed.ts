@@ -6,14 +6,17 @@
 // tables in different ways (a jobs board AND a jobs table AND a dashboard
 // count). Tables are created in commits of <=3 (invariant I5); panels then
 // land in one commit; then sample rows.
-import { ClayStore, deriveInverse, type MigrationPlanT } from "@clay/kernel";
+import {
+  ClayStore, deriveInverse, expandBlueprint, parseBlueprintDirective,
+  type MigrationPlanT,
+} from "@clay/kernel";
 import { SEED_PANELS } from "./seed-panels";
 
 export type StarterShellId =
   | "blank"
   | "tracker" | "log" | "dashboard" | "small_business"
   | "crm" | "financials" | "staff" | "habits" | "inventory" | "approvals"
-  | "jobs" | "content";
+  | "jobs" | "content" | "okrs" | "events" | "library";
 
 export type ShellColumn = {
   name: string;
@@ -486,6 +489,90 @@ export const STARTER_SHELLS: StarterShell[] = [
       },
     ],
   },
+  {
+    id: "okrs", name: "Goals & OKRs",
+    tagline: "Objectives with measurable key results and visual progress",
+    tables: [
+      {
+        name: "objectives",
+        columns: [
+          col("title", "text", true), col("owner", "text"),
+          col("quarter", "enum", false, ["Q1", "Q2", "Q3", "Q4"]),
+          col("status", "enum", false, ["draft", "active", "done"]),
+        ],
+        sampleRows: [
+          { title: "Make onboarding effortless", owner: "Ava Patel", quarter: "Q3", status: "active" },
+          { title: "Grow qualified pipeline", owner: "Liam Chen", quarter: "Q3", status: "active" },
+          { title: "Harden the platform", owner: "Maya Rodriguez", quarter: "Q3", status: "draft" },
+          { title: "Ship the mobile beta", owner: "Noah Kim", quarter: "Q2", status: "done" },
+        ],
+      },
+      {
+        name: "key_results",
+        columns: [
+          col("objective", "text", true), col("metric", "text"),
+          col("target", "number"), col("current", "number"),
+        ],
+        sampleRows: [
+          { objective: "Make onboarding effortless", metric: "Time to first value (min)", target: 10, current: 22 },
+          { objective: "Make onboarding effortless", metric: "Setup completion %", target: 90, current: 61 },
+          { objective: "Grow qualified pipeline", metric: "Qualified leads / mo", target: 120, current: 84 },
+          { objective: "Grow qualified pipeline", metric: "Demo-to-close %", target: 25, current: 19 },
+          { objective: "Harden the platform", metric: "p95 latency (ms)", target: 200, current: 340 },
+          { objective: "Ship the mobile beta", metric: "Beta installs", target: 500, current: 512 },
+        ],
+      },
+    ],
+  },
+  {
+    id: "events", name: "Event Planner",
+    tagline: "Sessions on a calendar, by status, and in one table",
+    tables: [
+      {
+        name: "sessions",
+        columns: [
+          col("title", "text", true), col("speaker", "text"), col("room", "text"),
+          col("day", "date"), col("start_time", "text"),
+          col("status", "enum", false, ["proposed", "confirmed", "cancelled"]),
+        ],
+        sampleRows: [
+          { title: "Opening keynote", speaker: "Ava Patel", room: "Main Hall", day: soon(6), start_time: "09:00", status: "confirmed" },
+          { title: "Scaling with small teams", speaker: "Liam Chen", room: "Room A", day: soon(6), start_time: "11:00", status: "confirmed" },
+          { title: "Design systems that last", speaker: "Maya Rodriguez", room: "Room B", day: soon(6), start_time: "14:00", status: "proposed" },
+          { title: "The future of local-first", speaker: "Noah Kim", room: "Room A", day: soon(7), start_time: "10:00", status: "confirmed" },
+          { title: "Panel: shipping weekly", speaker: "Zoe Ahmed", room: "Main Hall", day: soon(7), start_time: "13:00", status: "proposed" },
+          { title: "Lightning talks", speaker: "Ethan Brooks", room: "Room B", day: soon(7), start_time: "15:00", status: "proposed" },
+          { title: "Hands-on workshop", speaker: "Ines Fournier", room: "Lab", day: soon(6), start_time: "16:00", status: "cancelled" },
+          { title: "Closing fireside chat", speaker: "Ravi Shah", room: "Main Hall", day: soon(7), start_time: "17:00", status: "confirmed" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "library", name: "Book Library",
+    tagline: "A searchable shelf with a reading workflow and ratings",
+    tables: [
+      {
+        name: "books",
+        columns: [
+          col("title", "text", true), col("author", "text"),
+          col("genre", "enum", false, ["fiction", "non_fiction", "sci_fi", "biography"]),
+          col("status", "enum", false, ["to_read", "reading", "finished"]),
+          col("rating", "integer"), col("finished_on", "date"),
+        ],
+        sampleRows: [
+          { title: "The Silent Harbor", author: "M. Okafor", genre: "fiction", status: "finished", rating: 5, finished_on: soon(-20) },
+          { title: "On Slow Thinking", author: "R. Feld", genre: "non_fiction", status: "reading", rating: 4 },
+          { title: "Salt and Starlight", author: "J. Amara", genre: "sci_fi", status: "reading", rating: 4 },
+          { title: "The Cartographer's Daughter", author: "L. Voss", genre: "fiction", status: "to_read", rating: 0 },
+          { title: "A Field Guide to Rivers", author: "T. Brooks", genre: "non_fiction", status: "to_read", rating: 0 },
+          { title: "Midnight at the Archive", author: "S. Kwon", genre: "sci_fi", status: "finished", rating: 3, finished_on: soon(-45) },
+          { title: "The Last Lighthouse", author: "H. Mercer", genre: "biography", status: "to_read", rating: 0 },
+          { title: "Notes from a Small Kitchen", author: "P. Andal", genre: "non_fiction", status: "finished", rating: 5, finished_on: soon(-8) },
+        ],
+      },
+    ],
+  },
 ];
 
 function chunk<T>(arr: T[], size: number): T[][] {
@@ -516,11 +603,22 @@ export function seedStarterShell(store: ClayStore, id: StarterShellId): void {
 
   // All panels in one commit (a blank canvas commits an empty first version
   // so the app is "started" but carries nothing to reshape from).
+  // Panels may be blueprint DIRECTIVES (ADR-029/030): expand them here
+  // against the just-created registry — templates ride the same expansion
+  // path model plans do, so the two can never drift.
   const isBlank = shell.tables.length === 0;
+  const panels = (SEED_PANELS[shell.id] ?? []).map(p => {
+    const spec = parseBlueprintDirective(p.code);
+    if (spec === null) return p;
+    const ex = expandBlueprint(spec, store.registrySnapshot());
+    return { ...p, code: ex.code,
+      declared_queries: ex.declared_queries as typeof p.declared_queries,
+      declared_writes: ex.declared_writes };
+  });
   store.commit({
     intent: "first run",
     summary: isBlank ? "Starts a blank canvas." : `Creates your ${shell.name} views.`,
-    migration: null, panels: SEED_PANELS[shell.id] ?? [],
+    migration: null, panels,
     diff: isBlank ? [] : [{ kind: "add_panel", detail: `${shell.name} starter panels` }],
   });
 

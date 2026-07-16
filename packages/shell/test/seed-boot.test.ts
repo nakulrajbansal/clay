@@ -4,7 +4,7 @@
 // write back through declared_writes.
 import { describe, expect, it } from "vitest";
 import {
-  Bridge, ClayStore, InProcessAsyncStore,
+  Bridge, ClayStore, InProcessAsyncStore, expandBlueprint, parseBlueprintDirective,
   type MessagePortLike,
 } from "@clay/kernel";
 import { bootPanelRuntime } from "@clay/panel-runtime";
@@ -41,7 +41,14 @@ async function bootShellPanel(shellId: StarterShellId, panelId: string): Promise
   const bridge = new Bridge(new InProcessAsyncStore(store), {
     onToast: (_p, msg, kind) => toasts.push(`${kind}:${msg}`),
   });
-  const panel = SEED_PANELS[shellId]!.find(p => p.panel_id === panelId)!;
+  const raw = SEED_PANELS[shellId]!.find(p => p.panel_id === panelId)!;
+  const spec = parseBlueprintDirective(raw.code);
+  const panel = spec === null ? raw : (() => {
+    const ex = expandBlueprint(spec, store.registrySnapshot());
+    return { ...raw, code: ex.code,
+      declared_queries: ex.declared_queries as typeof raw.declared_queries,
+      declared_writes: ex.declared_writes };
+  })();
   const [bridgeSide, panelSide] = portPair();
   const container = document.createElement("div");
   document.body.appendChild(container);
@@ -149,6 +156,31 @@ describe("every seed panel boots and renders real data", () => {
       c.textContent!.includes("Scheduled") && c.querySelectorAll(".clay-metric").length === 4],
     ["content", "add_post", c =>
       c.querySelectorAll("form.clay-form input, form.clay-form select").length === 4],
+    // Blueprint-directive templates (ADR-030): seeded via the SAME kernel
+    // expansion path model plans use.
+    ["okrs", "kr_progress", c =>
+      c.querySelectorAll(".clay-bar-track").length === 6
+      && c.textContent!.includes("Qualified leads / mo")],
+    ["okrs", "okr_overview", c =>
+      c.textContent!.includes("Active") && c.querySelectorAll(".clay-metric").length === 3],
+    ["okrs", "objectives_table", c => c.querySelectorAll("tbody tr").length === 4],
+    ["okrs", "add_objective", c => c.querySelector("form.clay-form") !== null],
+    ["events", "session_calendar", c =>
+      c.querySelectorAll(".clay-cal-cell").length === 42
+      && c.querySelectorAll(".clay-cal-chip").length >= 1],
+    ["events", "session_board", c =>
+      c.querySelectorAll(".clay-board-col").length === 3
+      && c.textContent!.includes("Opening keynote")],
+    ["events", "sessions_table", c => c.querySelectorAll("tbody tr").length === 8],
+    ["library", "books_table", c =>
+      c.querySelectorAll(".clay-filterbar select").length === 2
+      && c.querySelectorAll(".clay-filterbar input").length === 1
+      && c.textContent!.includes("The Silent Harbor")],
+    ["library", "reading_flow", c =>
+      c.querySelectorAll(".clay-flow-step").length === 3
+      && c.querySelectorAll(".clay-flow-item").length === 8],
+    ["library", "ratings_chart", c => c.querySelectorAll(".clay-chart-bar").length >= 3],
+    ["library", "add_book", c => c.querySelector("form.clay-form") !== null],
   ];
 
   for (const [shellId, panelId, check] of expectations) {
