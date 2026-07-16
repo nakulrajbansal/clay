@@ -8,7 +8,8 @@
 import { MutationPlan as MutationPlanSchema } from "@clay/schema";
 import type { z } from "zod";
 import { ClayError } from "./errors";
-import { deriveInverse } from "./migrate";
+import { deriveInverse, validateMigrationPlan } from "./migrate";
+import { expandBlueprint, parseBlueprintDirective } from "./blueprints";
 import type { ClayStore, PanelBlobInput } from "./store";
 import { missingDiffLines, validateMutationPlan, type ValidationIssue } from "./validate";
 
@@ -213,11 +214,49 @@ export class MutationPipeline {
         }
       }
 
+      // Blueprints (ADR-029): expand `//#blueprint {...}` directives into
+      // canonical code with DERIVED declared_queries/writes, against the
+      // POST-migration registry (a blueprint may target a table this same
+      // plan creates). Expansion failures become precise validation issues
+      // for the single repair round; the output goes through the same
+      // Validator as hand-written code — nothing is widened.
+      const blueprintIssues: ValidationIssue[] = [];
+      {
+        const plan = result.plan as MutationPlanT | null;
+        if (plan && typeof plan === "object" && Array.isArray(plan.panels)) {
+          let reg = this.store.registrySnapshot();
+          if (plan.migration) {
+            try { reg = validateMigrationPlan(plan.migration, reg); }
+            catch { /* bad migration — V5 reports; expand pre-migration */ }
+          }
+          for (const p of plan.panels) {
+            if (!p || typeof p.code !== "string") continue;
+            let spec: unknown;
+            try { spec = parseBlueprintDirective(p.code); }
+            catch {
+              blueprintIssues.push({ rule: "V1", panel: p.panel_id,
+                message: "blueprint: the directive is not valid JSON" });
+              continue;
+            }
+            if (spec === null) continue;
+            try {
+              const ex = expandBlueprint(spec, reg);
+              p.code = ex.code;
+              p.declared_queries = ex.declared_queries as typeof p.declared_queries;
+              p.declared_writes = ex.declared_writes;
+            } catch (e) {
+              blueprintIssues.push({ rule: "V1", panel: p.panel_id,
+                message: e instanceof Error ? e.message : String(e) });
+            }
+          }
+        }
+      }
+
       // S3: the Validator (V1–V7)
-      const issues = validateMutationPlan(result.plan, {
+      const issues = [...blueprintIssues, ...validateMutationPlan(result.plan, {
         registry: this.store.registrySnapshot(),
         livePanelIds: this.store.livePanels().map(p => p.panel_id),
-      });
+      })];
       if (issues.length > 0) {
         debug({ stage: "validate", issues: issueStrings(issues) });
         if (repairUsed) return fail("validate", issueStrings(issues), "E_VALIDATION");

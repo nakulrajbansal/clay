@@ -49,7 +49,7 @@ export function buildAssets() {
     "01-add-field.md", "02-enum-status.md", "03-computed-and-strip.md",
     "04-chart.md", "05-form.md", "06-filter-event-pair.md", "07-clarify.md",
     "08-rename.md", "09-remove.md", "10-out-of-scope.md",
-    "11-board.md", "12-cards.md", "13-timeline.md", "14-flow.md", "15-calendar.md",
+    "11-board.md", "12-cards.md", "13-timeline.md", "14-flow.md", "15-calendar.md", "16-blueprints.md",
   ];
   const exemplars = files.map((f, i) => {
     const e = parseExemplar(read(join("exemplars", f)));

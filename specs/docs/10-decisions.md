@@ -437,3 +437,36 @@ ADR-028 Backend Phase 1.2: magic-link auth + quotas + /me, dev-mode first.
   Consequence: 6 backend tests (link->session->/me, rate limit,
   single-use tokens, 401 gating, quota exhaustion + free repairs, open
   local mode preserved). Deploy blockers recorded in OPEN-QUESTIONS.
+
+ADR-029 Blueprints: declarative specs for standard panels, expanded
+  pipeline-side into canonical code.
+  Context: every reshape made the model hand-write full panel modules
+  (~0.5-1.5k output tokens each) even for bog-standard tables and forms —
+  the dominant cost in both latency and tokens — and hand-written
+  declared_queries drifting from code was the #1 validation failure (V4).
+  DECISION: a panel's code may be a single directive,
+  `//#blueprint {"kind":...}`, for ten standard kinds (table, form,
+  metrics, chart, board, flow, cards, timeline, calendar, feed). The
+  pipeline expands directives BEFORE S3 validation (kernel
+  blueprints.ts), generating the same canonical code the seed panels use
+  and DERIVING declared_queries/declared_writes from the same spec — V4
+  mismatches become structurally impossible for blueprint panels.
+  Expansion runs against the POST-migration registry
+  (validateMigrationPlan's projection), so a blueprint may target a table
+  its own plan creates. Expansion failures become precise validation
+  issues ("blueprint: unknown table 'ghost'") for the single repair
+  round. Registry-aware defaults: table columns / form fields derive from
+  the schema when omitted; enum columns get badge tone maps and Flow
+  stages automatically; flows accept an activity table (ADR-025
+  convention) and emit the audit insert.
+  This widens NOTHING: the MutationPlan schema and API grammar are
+  byte-identical (a directive is just a code string); expanded output
+  goes through the same Validator and sandbox and can express nothing
+  custom code couldn't. Custom module code remains fully supported and
+  is still the path for non-standard panels.
+  Consequence: prompt teaches blueprints as the PREFERRED form + exemplar
+  16 (a whole app: migration + one line per panel); kernel tests assert
+  every kind expands Validator-clean against a real registry, pipeline
+  integration, and repair-visible errors. Live verify: a 6-panel build
+  committed first-try with zero repairs, mixing directives and custom
+  code.

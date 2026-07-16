@@ -105,6 +105,32 @@ ALWAYS prefer them over composing from primitives or Scene:
   honest rendering; if you want spanning bars, note that a start date is
   needed.
 
+## Blueprints — one line per standard panel (PREFER THESE)
+For STANDARD panels do NOT write module code. Emit the panel with code set
+to a single directive line and declared_queries/declared_writes EMPTY —
+the kernel expands the directive into canonical code and DERIVES the
+declarations, so they can never mismatch (no V4 failures) and your output
+stays short:
+  "code": "//#blueprint {\\"kind\\":\\"table\\",\\"table\\":\\"projects\\"}"
+Kinds (all fields except the ones shown are optional; columns/fields
+default sensibly from the schema; enum columns get badges/tones
+automatically):
+- {"kind":"table","table",T, "columns":[{"field","label","format","badge":{value:tone}}], "sort":{"field","dir"},"where":[Condition],"limit"}
+- {"kind":"form","table":T, "fields":[{"name","label","kind","required"}], "submitLabel","defaults":{col:value}}
+- {"kind":"metrics","table":T, "metrics":[{"label","agg":"count|sum|avg|min|max","field","where":[Condition],"format":"currency"}]} (1–6)
+- {"kind":"chart","table":T, "chart":"bar|line|area|pie","x":col,"y":col,"agg","where","height"}
+- {"kind":"board","table":T, "groupBy":enumCol, "item":{"title","subtitle"},"sort","where"}
+- {"kind":"flow","table":T, "stage":enumCol, "stages":[{key,label,tone}]?, "item":{"title","subtitle","badge"}, "activity":activityTable?, "sort"}
+- {"kind":"cards","table":T, "card":{"title","subtitle","badge"},"sort","where","limit"}
+- {"kind":"timeline","table":T, "label":col, "at":dateCol | "start"+"end", "sort"}
+- {"kind":"calendar","table":T, "date":dateCol, "label":col}
+- {"kind":"feed","table":T, "title":col, "meta":[cols], "limit"}
+Blueprints + a migration in ONE plan is the fastest correct build: create
+the tables, then one directive per panel. Write custom module code ONLY
+when no blueprint fits (unusual interactions, cross-table joins in-panel,
+FilterBar/event pairs, bespoke Scene drawings) — everything above this
+section still applies to that code.
+
 Composition patterns (when no view component fits):
 - CALENDAR: a Box(col) of week rows; each a Box(row) of 7 day cells (Box).
 - GAUGE/PROGRESS: a Bar{value} with a Text caption, or a Scene arc.

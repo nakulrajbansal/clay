@@ -1,5 +1,7 @@
 // @clay/kernel public API. Shell code may import ONLY from here (doc 02 §7).
 export type { Query } from "@clay/schema";
+export { BLUEPRINT_KINDS, expandBlueprint, parseBlueprintDirective,
+  type BlueprintResult } from "./blueprints";
 export { ClayError, type ClayErrorCode } from "./errors";
 export {
   compileExpr, evalExpr, parseExpr, typecheckExpr, exprFields,
