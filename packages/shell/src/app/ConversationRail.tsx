@@ -35,6 +35,8 @@ export function ConversationRail(props: {
   loadStatus: () => Promise<StatusInfo>;
   onCopyDiagnostics: () => void;
   seed?: { text: string; n: number };
+  /** hosted-mode usage meter from /me (Phase 1.2); null quota = unlimited */
+  meter?: { used: number; quota: number | null } | null;
   themes: Theme[];
   themeId: string;
   onSelectTheme: (id: string) => void;
@@ -117,6 +119,15 @@ export function ConversationRail(props: {
                 {status.stats.kept} kept · {status.stats.discarded} discarded ·{" "}
                 {status.stats.clarify} clarified
               </div>
+            </div>
+          ) : null}
+          {props.meter && props.meter.quota !== null ? (
+            <div className={`rail-meter${props.meter.used / props.meter.quota >= 0.5 ? " rail-meter-warm" : ""}`}>
+              <span>Reshapes this period: {props.meter.used} of {props.meter.quota}</span>
+              <span className="rail-meter-track">
+                <span className="rail-meter-fill" style={{
+                  width: `${Math.min(100, Math.round((props.meter.used / props.meter.quota) * 100))}%` }} />
+              </span>
             </div>
           ) : null}
           <label className="rail-label">

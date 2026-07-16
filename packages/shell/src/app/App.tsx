@@ -498,6 +498,23 @@ export function App(): React.JSX.Element {
     pushToast(url ? "Hosted backend set for all apps" : "Hosted backend cleared", "success");
   };
 
+  // Hosted-mode usage meter (Phase 1.2): /me feeds the rail. Silent when
+  // the backend is open/local or the user isn't signed in.
+  const [meter, setMeter] = useState<{ used: number; quota: number | null } | null>(null);
+  useEffect(() => {
+    if (phase !== "main") return;
+    const url = getBackendUrl();
+    if (!url) { setMeter(null); return; }
+    void (async () => {
+      try {
+        const res = await fetch(url.replace(/\/$/, "") + "/me", { credentials: "include" });
+        if (!res.ok) { setMeter(null); return; }
+        const b = await res.json() as { mutations_used: number; quota: number | null };
+        setMeter({ used: b.mutations_used, quota: b.quota });
+      } catch { setMeter(null); }
+    })();
+  }, [phase, hasKey]);
+
   const head = history.length > 0 ? history[history.length - 1]!.version : 0;
 
   const scrubTo = async (version: number): Promise<void> => {
@@ -863,6 +880,7 @@ export function App(): React.JSX.Element {
         onDismissSuggestion={dismissSuggestion}
         loadStatus={() => client().status()}
         seed={intentSeed}
+        meter={meter}
         themes={THEMES}
         themeId={themeId}
         onSelectTheme={selectTheme}

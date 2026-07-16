@@ -417,3 +417,23 @@ ADR-027 Feature round: record history, Calendar view, Observer v3, local
   Consequence: kernel rowHistory + Observer tests; shell schema-ops +
   seed-boot calendar tests; panel-runtime Calendar + aging tests; all
   taught surfaces regenerated into assets.
+
+ADR-028 Backend Phase 1.2: magic-link auth + quotas + /me, dev-mode first.
+  Context: doc 07 §1-3 requires auth, a 20/30d free quota, and a usage
+  meter before deploy. Deploy itself (Phase 1.3) is blocked on hosting +
+  email-provider credentials, so 1.2 ships fully testable without them.
+  DECISION: an injectable AuthStore interface (MemoryAuthStore now; the
+  Postgres adapter implements the same contract at deploy — atomic
+  incrementUsage is the documented seam) + Sessions (15-min single-use
+  magic tokens, 30d rolling sessions, 3 links/hour/email). Auth is OPT-IN
+  on createApp: no auth option = Phase 1.1 open local proxy, keeping BYO
+  and local dev first-class (doc 07 §6). AUTH=dev on the server turns on
+  dev mode where the magic link returns in the response (no email hop).
+  Sessions ride an httpOnly cookie AND an Authorization bearer echo (the
+  callback returns the session id) so cross-origin dev works before the
+  same-origin deploy. Plan calls meter; repairs are free per spec; 429
+  carries the meter so the client can render "resets on <date>". /me
+  feeds a usage meter in the rail (warm styling at >= 50%).
+  Consequence: 6 backend tests (link->session->/me, rate limit,
+  single-use tokens, 401 gating, quota exhaustion + free repairs, open
+  local mode preserved). Deploy blockers recorded in OPEN-QUESTIONS.

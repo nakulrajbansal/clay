@@ -139,3 +139,10 @@ back-filled into doc 10. Original findings kept below for the record.
 - Shell registries, panel ids, regions, and column types all validate
   against ColumnSpec/PanelId; exemplar panel ids and queries (except the
   intentional exemplar-10 case) match their declared_queries per V4.
+
+Q(2026-07-16) Phase 1.3 deploy prerequisites: hosting choice (Fly.io vs
+Cloudflare Workers + Neon), a transactional email provider for magic
+links, and a domain — all need account credentials the repo cannot hold.
+Phase 1.2 (auth+quotas+/me) is implemented behind AUTH=dev with in-memory
+storage; the Postgres AuthStore adapter and real sendEmail are the two
+deploy-time seams (see packages/backend/src/auth.ts interface).
