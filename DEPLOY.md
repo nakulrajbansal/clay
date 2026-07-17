@@ -1,22 +1,45 @@
 # Deploying Clay (Phase 1.3)
 
-One container serves both the API and the built shell (same origin →
-session cookies work with no CORS gymnastics).
+Two supported targets. Both serve the API and the built shell from ONE
+origin (same origin → session cookies work with no CORS gymnastics).
+
+- **Vercel + Supabase** (primary): static shell on the CDN, the backend as
+  a serverless function (`api/index.ts` + `vercel.json` rewrites). All
+  auth state — sessions, magic-link tokens, rate limits — lives in
+  Postgres (`PgSessions`), because serverless instances share no memory.
+- **Fly.io** (alternative): one long-running container (`Dockerfile` +
+  `fly.toml`), backend serves `STATIC_DIR`. Works with either Postgres
+  or the in-memory session store.
 
 ## Accounts you need (once)
 1. **Anthropic** — server API key (`ANTHROPIC_API_KEY`).
-2. **Hosting** — Fly.io (this repo ships `Dockerfile` + `fly.toml`).
-   Cloudflare Workers is possible later but needs a Workers-compatible
-   entry (the Node server here targets Fly/containers).
-3. **Postgres** — Neon (free tier is fine): `DATABASE_URL`.
-   Setting it enables real accounts; the schema auto-creates on boot.
+2. **Hosting** — Vercel (primary) or Fly.io.
+3. **Postgres** — Supabase or Neon: `DATABASE_URL`. Required on Vercel.
+   Schema auto-creates on first request (users, usage, login_tokens,
+   sessions — counters and session ids only, never app data).
+   Supabase: use the **transaction pooler** string (port 6543) — direct
+   connections (5432) exhaust fast under serverless. Free-tier Supabase
+   pauses after ~1 week of inactivity; open the dashboard to wake it.
 4. **Email** — Resend: `RESEND_API_KEY` + a verified `FROM_EMAIL` domain.
    Without it, magic links are returned in the API response (dev mode) —
    fine for staging, not for production.
-5. **Domain** — point DNS at Fly; set `APP_ORIGIN=https://yourdomain.com`
-   so emailed links resolve.
+5. **Domain** — set `APP_ORIGIN=https://yourdomain.com` so emailed links
+   resolve (on Vercel this is your `*.vercel.app` URL until you attach a
+   domain).
 
-## Steps
+## Vercel + Supabase steps
+1. Supabase → New project → copy the **Transaction pooler** connection
+   string from Connect (postgres://...pooler.supabase.com:6543/postgres).
+2. Vercel → Add New Project → import the GitHub repo. Framework preset:
+   **Other**. Build command and output dir come from `vercel.json`
+   (`pnpm --filter @clay/shell build` → `packages/shell/dist`).
+3. Project → Settings → Environment Variables:
+   `ANTHROPIC_API_KEY`, `DATABASE_URL` (pooler string), `RESEND_API_KEY`,
+   `FROM_EMAIL`, `APP_ORIGIN` (the deployment URL).
+   Omit `RESEND_API_KEY` on a staging deploy to get dev links.
+4. Deploy. In the app: Settings → backend URL = the deployment origin.
+
+## Fly.io steps (alternative)
 ```sh
 fly launch --no-deploy            # accept the existing fly.toml
 fly secrets set ANTHROPIC_API_KEY=... DATABASE_URL=... \
@@ -34,8 +57,9 @@ fly deploy
 - Real-Safari (macOS) persistence check — the one gate that needs a Mac.
 
 ## Notes
-- Sessions are in-memory by design v1: a redeploy signs users out but
-  loses nothing (app data lives in the user's browser; accounts re-link
-  by email). Durable sessions move to Postgres with sharing (task #67).
-- The privacy commitment holds server-side: users + usage counters only,
-  no intent text, no schema payloads (doc 07 §2).
+- With `DATABASE_URL` set, sessions/tokens/rate-limits are durable
+  (Postgres, `PgSessions`) — redeploys keep users signed in. The
+  in-memory store remains for local dev (`AUTH=dev`) and container
+  deploys without a database.
+- The privacy commitment holds server-side: users + usage counters +
+  opaque session ids only, no intent text, no schema payloads (doc 07 §2).

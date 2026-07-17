@@ -7,6 +7,13 @@ settings:
 importers:
 
   .:
+    dependencies:
+      hono:
+        specifier: ^4.12.27
+        version: 4.12.27
+      pg:
+        specifier: ^8.22.0
+        version: 8.22.0
     devDependencies:
       '@axe-core/playwright':
         specifier: ^4.12.1

@@ -9,7 +9,7 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { createApp, makeDevAuth, type BackendOptions } from "./app";
 import { MemoryAuthStore, Sessions } from "./auth";
-import { PostgresAuthStore } from "./pg-store";
+import { PgSessions, PostgresAuthStore } from "./pg-store";
 
 const port = Number(process.env.PORT ?? "8787");
 const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -24,7 +24,7 @@ async function main(): Promise<void> {
     const store = PostgresAuthStore.connect(dbUrl);
     await store.ensureSchema();
     auth = {
-      store, sessions: new Sessions(),
+      store, sessions: new PgSessions(store.db),
       devLinks: !resendKey,
       sendEmail: resendKey
         ? async (email, link) => {

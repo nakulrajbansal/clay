@@ -496,3 +496,28 @@ ADR-030 Build-3 iteration round: three live builds -> fixes + two new
   Consequence: harness scripts/build3.mjs is repeatable; a closing live
   build ("reading goals") verified both new capabilities: 8 progress
   bars, search + season filter, filter narrowing 8 -> 5 rows live.
+
+ADR-031 (2026-07-17) Serverless deploy target: durable sessions in Postgres
+  CONTEXT: Phase 1.3 shipped a Fly.io container path where magic-link
+  tokens, sessions, and per-email rate limits lived in one process's
+  memory (acceptable: restart = re-login, no data loss). The chosen
+  launch platform is Vercel + Supabase, and serverless breaks that
+  premise — every request may hit a fresh instance, so in-memory auth
+  state evaporates between the magic-link request and its redemption.
+  DECISION: Extract a SessionStore interface (issueLink/redeem/userIdFor,
+  all async). The in-memory Sessions class remains for local dev and
+  container deploys; PgSessions (packages/backend/src/pg-store.ts) is
+  the deploy implementation, adding login_tokens (single-use via a
+  conditional mark-used UPDATE — not DELETE, so redeemed links still
+  count toward the 3/hour rate limit) and sessions (30d rolling expiry
+  via UPDATE ... RETURNING) tables to the auto-created schema. The
+  Vercel entry is api/index.ts (hono/vercel-style fetch handler) with
+  vercel.json rewriting /auth/*, /me, /mutations/*, /healthz to it and
+  serving packages/shell/dist statically — same origin, cookies intact.
+  Privacy posture unchanged: the new tables hold opaque ids and expiries
+  only. Root package.json gains hono+pg (already backend deps) solely so
+  Vercel's function bundler can trace them; the kernel dependency rule
+  is untouched. Fly remains a supported alternative (Dockerfile kept).
+  CONSEQUENCE: redeploys no longer sign users out on any platform with
+  DATABASE_URL set; test/serverless.test.ts simulates fresh instances
+  per request over a shared fake pool and pins the SQL semantics.

@@ -3,7 +3,7 @@
 // live here — never intent text, never schema payloads (design commitment,
 // doc 06 §1: a curious operator can't read what isn't retained).
 import pg from "pg";
-import type { AuthStore, Usage, User } from "./auth";
+import type { AuthStore, SessionStore, Usage, User } from "./auth";
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS users (
@@ -16,6 +16,19 @@ CREATE TABLE IF NOT EXISTS usage (
   user_id TEXT PRIMARY KEY REFERENCES users(id),
   period_start TIMESTAMPTZ NOT NULL DEFAULT now(),
   mutations_used INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS login_tokens (
+  token TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  email TEXT NOT NULL,
+  expires TIMESTAMPTZ NOT NULL,
+  used BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  expires TIMESTAMPTZ NOT NULL
 );`;
 
 const PERIOD_MS = 30 * 86_400_000;
@@ -30,6 +43,9 @@ export type Queryable = {
 
 export class PostgresAuthStore implements AuthStore {
   constructor(private readonly pool: Queryable) {}
+
+  /** shared pool for PgSessions (one connection budget, doc 07 thinness) */
+  get db(): Queryable { return this.pool; }
 
   static connect(databaseUrl: string): PostgresAuthStore {
     return new PostgresAuthStore(new pg.Pool({ connectionString: databaseUrl }));
@@ -82,3 +98,47 @@ export class PostgresAuthStore implements AuthStore {
   }
 }
 void PERIOD_MS;
+
+/** Durable sessions for serverless (Vercel): every request may hit a
+ * fresh instance, so tokens/sessions/rate-limits live in Postgres. */
+export class PgSessions implements SessionStore {
+  constructor(private readonly pool: Queryable) {}
+
+  async issueLink(user: User): Promise<string | null> {
+    const recent = await this.pool.query(
+      `SELECT COUNT(*) AS n FROM login_tokens
+       WHERE email = $1 AND created_at > now() - interval '1 hour'`, [user.email]);
+    if (Number(recent.rows[0]!.n) >= 3) return null;
+    const token = rand();
+    await this.pool.query(
+      `INSERT INTO login_tokens(token, user_id, email, expires)
+       VALUES ($1, $2, $3, now() + interval '15 minutes')`,
+      [token, user.id, user.email]);
+    return token;
+  }
+
+  async redeem(token: string): Promise<string | null> {
+    // mark-used (not delete) so a redeemed link still counts toward the
+    // 3/hour rate limit, matching the in-memory Sessions semantics; the
+    // conditional UPDATE wins single-use races atomically
+    const r = await this.pool.query(
+      `UPDATE login_tokens SET used = true
+       WHERE token = $1 AND used = false RETURNING user_id,
+        (expires > now()) AS live`, [token]);
+    const row = r.rows[0];
+    if (!row || !row.live) return null;
+    const sid = rand();
+    await this.pool.query(
+      `INSERT INTO sessions(id, user_id, expires)
+       VALUES ($1, $2, now() + interval '30 days')`, [sid, String(row.user_id)]);
+    return sid;
+  }
+
+  async userIdFor(sid: string | undefined | null): Promise<string | null> {
+    if (!sid) return null;
+    const r = await this.pool.query(
+      `UPDATE sessions SET expires = now() + interval '30 days'
+       WHERE id = $1 AND expires > now() RETURNING user_id`, [sid]);
+    return r.rows[0] ? String(r.rows[0].user_id) : null;
+  }
+}

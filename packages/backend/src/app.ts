@@ -12,7 +12,9 @@ import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { getCookie, setCookie } from "hono/cookie";
 import { MutationClient, type S1Context } from "@clay/mutation";
-import { FREE_QUOTA, MemoryAuthStore, Sessions, type AuthStore } from "./auth";
+import {
+  FREE_QUOTA, MemoryAuthStore, Sessions, type AuthStore, type SessionStore,
+} from "./auth";
 
 const BODY_CAP = 64 * 1024;   // doc 07: body <= 64KB
 
@@ -22,7 +24,7 @@ export type BackendOptions = {
   makeClient?: (apiKey: string) => Pick<MutationClient, "rawPlan" | "rawRepair">;
   /** Phase 1.2: providing an auth store turns on auth + quotas. Omitted =
    * Phase 1.1 open local proxy (first-class dev mode, doc 07 §6 spirit). */
-  auth?: { store: AuthStore; sessions: Sessions;
+  auth?: { store: AuthStore; sessions: SessionStore;
     /** dev mode: return the magic link in the response instead of email —
      * an email provider is a deploy-time concern (OPEN-QUESTIONS) */
     devLinks?: boolean;
@@ -50,7 +52,7 @@ export function createApp(opts: BackendOptions): Hono {
 
   // ---------- Phase 1.2: magic-link auth + quotas (doc 07 §1–3) ----------
   const auth = opts.auth;
-  const sessionUser = (c: Context): string | null => {
+  const sessionUser = async (c: Context): Promise<string | null> => {
     if (!auth) return null;
     const bearer = c.req.header("authorization")?.replace(/^Bearer\s+/i, "");
     return auth.sessions.userIdFor(bearer ?? getCookie(c, "clay_session"));
@@ -62,7 +64,7 @@ export function createApp(opts: BackendOptions): Hono {
       const email = body?.email?.trim().toLowerCase();
       if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
         return c.json({ error: "a real email address is required" }, 400);
-      const token = auth.sessions.issueLink(await auth.store.upsertUser(email));
+      const token = await auth.sessions.issueLink(await auth.store.upsertUser(email));
       if (!token) return c.json({ error: "too many links — try again in an hour" }, 429);
       const link = `/auth/callback?token=${token}`;
       if (auth.devLinks) return c.json({ link });         // dev/tests: no email hop
@@ -70,8 +72,8 @@ export function createApp(opts: BackendOptions): Hono {
       return c.body(null, 204);
     });
 
-    app.get("/auth/callback", (c) => {
-      const sid = auth.sessions.redeem(c.req.query("token") ?? "");
+    app.get("/auth/callback", async (c) => {
+      const sid = await auth.sessions.redeem(c.req.query("token") ?? "");
       if (!sid) return c.json({ error: "link expired — request a fresh one" }, 401);
       setCookie(c, "clay_session", sid,
         { httpOnly: true, sameSite: "Lax", path: "/", maxAge: 30 * 86400 });
@@ -80,7 +82,7 @@ export function createApp(opts: BackendOptions): Hono {
     });
 
     app.get("/me", async (c) => {
-      const userId = sessionUser(c);
+      const userId = await sessionUser(c);
       const user = userId ? await auth.store.getUser(userId) : null;
       if (!user) return c.json({ error: "sign in first" }, 401);
       const usage = await auth.store.usage(user.id);
@@ -97,7 +99,7 @@ export function createApp(opts: BackendOptions): Hono {
    * the user's). Returns a Response to short-circuit, or null to proceed. */
   const guard = async (c: Context, metered: boolean): Promise<Response | null> => {
     if (!auth) return null;                              // Phase 1.1 open mode
-    const userId = sessionUser(c);
+    const userId = await sessionUser(c);
     const user = userId ? await auth.store.getUser(userId) : null;
     if (!user) return c.json({ error: "sign in first" }, 401);
     if (metered && user.plan !== "pro") {

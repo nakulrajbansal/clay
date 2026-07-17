@@ -56,16 +56,28 @@ export class MemoryAuthStore implements AuthStore {
   }
 }
 
+/** Session state interface. The memory impl below suits long-running
+ * containers (Fly); serverless platforms (Vercel) MUST use the Postgres
+ * impl (pg-store.ts) — every request may hit a fresh instance, so
+ * in-memory tokens/sessions would evaporate between calls. */
+export interface SessionStore {
+  /** issue a magic token, or null when the address is over 3/hour */
+  issueLink(user: User): Promise<string | null>;
+  /** redeem a single-use token into a session id (null = invalid/expired) */
+  redeem(token: string): Promise<string | null>;
+  /** resolve a session id to a user id, rolling the expiry */
+  userIdFor(sid: string | undefined | null): Promise<string | null>;
+}
+
 /** Magic-link tokens (15 min, single-use) and sessions (30d, rolling),
- * both in memory by design: a restart logs users out, it never loses data
- * (accounts re-link by email; app data lives client-side). */
-export class Sessions {
+ * in memory: fine for containers; NOT for serverless (see SessionStore). */
+export class Sessions implements SessionStore {
   private readonly links = new Map<string, { userId: string; expires: number }>();
   private readonly sessions = new Map<string, { userId: string; expires: number }>();
   private readonly linkRate = new Map<string, number[]>();
 
   /** Returns the token, or null when the address is over the 3/hour rate. */
-  issueLink(user: User): string | null {
+  async issueLink(user: User): Promise<string | null> {
     const now = Date.now();
     const recent = (this.linkRate.get(user.email) ?? []).filter(t => now - t < 3_600_000);
     if (recent.length >= 3) return null;
@@ -76,7 +88,7 @@ export class Sessions {
     return token;
   }
 
-  redeem(token: string): string | null {
+  async redeem(token: string): Promise<string | null> {
     const link = this.links.get(token);
     this.links.delete(token);                     // single-use
     if (!link || link.expires < Date.now()) return null;
@@ -85,7 +97,7 @@ export class Sessions {
     return sid;
   }
 
-  userIdFor(sid: string | undefined | null): string | null {
+  async userIdFor(sid: string | undefined | null): Promise<string | null> {
     if (!sid) return null;
     const s = this.sessions.get(sid);
     if (!s || s.expires < Date.now()) return null;

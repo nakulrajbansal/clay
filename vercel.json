@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "pnpm --filter @clay/shell build",
+  "outputDirectory": "packages/shell/dist",
+  "rewrites": [
+    { "source": "/auth/:path*", "destination": "/api" },
+    { "source": "/me", "destination": "/api" },
+    { "source": "/mutations/:path*", "destination": "/api" },
+    { "source": "/healthz", "destination": "/api" }
+  ]
+}
