@@ -583,3 +583,12 @@ button.link.danger { color: var(--danger); }
   --danger: #f19a94; --warn: #e6bd74; --ok: #7fd3a8;
   --danger-soft: #421d1d; --warn-soft: #3b2c10; --ok-soft: #173a24;
 }
+
+/* hosted-mode account block (Phase 1.2 sign-in) */
+.rail-account { display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; font-size: 12.5px; color: var(--text-2); padding: 9px 12px;
+  margin-bottom: 12px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--bg-soft); }
+.rail-account-who b { color: var(--text); font-weight: 650; }
+.rail-account-signin { display: block; }
+.rail-account-signin .rail-actions { margin-top: 8px; }

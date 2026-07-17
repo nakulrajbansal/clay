@@ -25,7 +25,8 @@ import {
   THEMES, applyThemeToRoot, getThemeId, panelThemeCss, setThemeId as saveThemeId, themeById,
 } from "./themes";
 import {
-  getApiKey, getBackendUrl, hasModelAccess, setApiKey, setBackendUrl,
+  getApiKey, getBackendUrl, getSessionToken, hasModelAccess, setApiKey,
+  setBackendUrl, setSessionToken,
 } from "./settings";
 import { reorder, type Region } from "./layout";
 import { parseImportFile } from "./importData";
@@ -208,7 +209,7 @@ export function App(): React.JSX.Element {
           const legacyB = await wc.getSetting<string>("backend_url");
           if (legacyB) setBackendUrl(legacyB);
         }
-        await wc.setModelAccess(getApiKey(), getBackendUrl());
+        await wc.setModelAccess(getApiKey(), getBackendUrl(), getSessionToken());
         setHasKey(hasModelAccess());
 
         // Existing single-app user with data but no registry: adopt it (G4).
@@ -353,6 +354,8 @@ export function App(): React.JSX.Element {
       setFeed(f => [...f, { kind: "failure", reasons: [String(e)] }]);
     } finally {
       setBusy(false);
+      // hosted mode: every plan call moves the quota — keep the meter honest
+      if (getBackendUrl()) setAccountN(n => n + 1);
     }
   };
 
@@ -509,34 +512,83 @@ export function App(): React.JSX.Element {
 
   const saveKey = async (key: string): Promise<void> => {
     setApiKey(key || null);                                   // device-global
-    await client().setModelAccess(getApiKey(), getBackendUrl());
+    await client().setModelAccess(getApiKey(), getBackendUrl(), getSessionToken());
     setHasKey(hasModelAccess());
     pushToast("API key saved on this device — used by all your apps", "success");
   };
 
   const saveBackend = async (url: string): Promise<void> => {
     setBackendUrl(url || null);                               // device-global
-    await client().setModelAccess(getApiKey(), getBackendUrl());
+    await client().setModelAccess(getApiKey(), getBackendUrl(), getSessionToken());
     setHasKey(hasModelAccess());
     pushToast(url ? "Hosted backend set for all apps" : "Hosted backend cleared", "success");
   };
 
-  // Hosted-mode usage meter (Phase 1.2): /me feeds the rail. Silent when
-  // the backend is open/local or the user isn't signed in.
+  // Hosted-mode account (Phase 1.2): /me feeds the rail meter and the
+  // signed-in identity. Sessions ride a bearer token (cross-origin dev)
+  // or the cookie (same-origin deploys). Silent in open/local mode.
   const [meter, setMeter] = useState<{ used: number; quota: number | null } | null>(null);
+  const [account, setAccount] = useState<{ email: string } | null>(null);
+  const [accountN, setAccountN] = useState(0);   // bump to refetch
   useEffect(() => {
     if (phase !== "main") return;
     const url = getBackendUrl();
-    if (!url) { setMeter(null); return; }
+    if (!url) { setMeter(null); setAccount(null); return; }
     void (async () => {
       try {
-        const res = await fetch(url.replace(/\/$/, "") + "/me", { credentials: "include" });
-        if (!res.ok) { setMeter(null); return; }
-        const b = await res.json() as { mutations_used: number; quota: number | null };
+        const token = getSessionToken();
+        const res = await fetch(url.replace(/\/$/, "") + "/me", {
+          credentials: "include",
+          headers: token ? { authorization: `Bearer ${token}` } : {},
+        });
+        if (!res.ok) { setMeter(null); setAccount(null); return; }
+        const b = await res.json() as {
+          email: string; mutations_used: number; quota: number | null };
         setMeter({ used: b.mutations_used, quota: b.quota });
-      } catch { setMeter(null); }
+        setAccount({ email: b.email });
+      } catch { setMeter(null); setAccount(null); }
     })();
-  }, [phase, hasKey]);
+  }, [phase, hasKey, accountN]);
+
+  // Magic-link sign-in. Dev backends return the link directly (no email
+  // hop); production sends an email and we wait for the user to click.
+  const signIn = async (email: string): Promise<void> => {
+    const url = getBackendUrl()?.replace(/\/$/, "");
+    if (!url) { pushToast("Set the backend URL first", "danger"); return; }
+    try {
+      const res = await fetch(url + "/auth/magic-link", {
+        method: "POST", credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      if (res.status === 204) {
+        pushToast("Check your email for the sign-in link, then come back here",
+          "success", { label: "I clicked it", run: () => setAccountN(n => n + 1) });
+        return;
+      }
+      const body = await res.json() as { link?: string; error?: string };
+      if (!res.ok || !body.link) {
+        pushToast(body.error ?? "Could not send the link", "danger");
+        return;
+      }
+      const cb = await fetch(url + body.link, { credentials: "include" });
+      const got = await cb.json() as { session?: string };
+      if (got.session) {
+        setSessionToken(got.session);
+        await client().setModelAccess(getApiKey(), getBackendUrl(), got.session);
+        setAccountN(n => n + 1);
+        pushToast("Signed in — your reshapes now count against your plan", "success");
+      }
+    } catch (e) {
+      pushToast("Sign-in failed: " + (e as Error).message, "danger");
+    }
+  };
+  const signOut = async (): Promise<void> => {
+    setSessionToken(null);
+    await client().setModelAccess(getApiKey(), getBackendUrl(), null);
+    setAccount(null); setMeter(null);
+    pushToast("Signed out on this device", "default");
+  };
 
   const head = history.length > 0 ? history[history.length - 1]!.version : 0;
 
@@ -904,6 +956,9 @@ export function App(): React.JSX.Element {
         loadStatus={() => client().status()}
         seed={intentSeed}
         meter={meter}
+        account={account}
+        onSignIn={email => void signIn(email)}
+        onSignOut={() => void signOut()}
         themes={THEMES}
         themeId={themeId}
         onSelectTheme={selectTheme}

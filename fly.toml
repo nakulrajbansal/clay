@@ -1,0 +1,20 @@
+# fly launch --no-deploy  (then: fly secrets set ... ; fly deploy)
+app = "clay-app"            # change to your app name
+primary_region = "iad"      # change to your region
+
+[build]
+
+[env]
+  PORT = "8080"
+  STATIC_DIR = "packages/shell/dist"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

@@ -62,7 +62,7 @@ export function createApp(opts: BackendOptions): Hono {
       const email = body?.email?.trim().toLowerCase();
       if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
         return c.json({ error: "a real email address is required" }, 400);
-      const token = auth.sessions.issueLink(auth.store.upsertUser(email));
+      const token = auth.sessions.issueLink(await auth.store.upsertUser(email));
       if (!token) return c.json({ error: "too many links — try again in an hour" }, 429);
       const link = `/auth/callback?token=${token}`;
       if (auth.devLinks) return c.json({ link });         // dev/tests: no email hop
@@ -79,13 +79,13 @@ export function createApp(opts: BackendOptions): Hono {
       return c.json({ ok: true, session: sid });
     });
 
-    app.get("/me", (c) => {
+    app.get("/me", async (c) => {
       const userId = sessionUser(c);
-      const user = userId ? auth.store.getUser(userId) : null;
+      const user = userId ? await auth.store.getUser(userId) : null;
       if (!user) return c.json({ error: "sign in first" }, 401);
-      const usage = auth.store.usage(user.id);
+      const usage = await auth.store.usage(user.id);
       return c.json({
-        user_id: user.id, plan: user.plan,
+        user_id: user.id, email: user.email, plan: user.plan,
         mutations_used: usage.used,
         quota: user.plan === "pro" ? null : FREE_QUOTA,
         period_end: new Date(usage.periodStart + 30 * 86_400_000).toISOString(),
@@ -95,20 +95,20 @@ export function createApp(opts: BackendOptions): Hono {
 
   /** Plan calls are metered; repairs are free (they're Clay's failure, not
    * the user's). Returns a Response to short-circuit, or null to proceed. */
-  const guard = (c: Context, metered: boolean): Response | null => {
+  const guard = async (c: Context, metered: boolean): Promise<Response | null> => {
     if (!auth) return null;                              // Phase 1.1 open mode
     const userId = sessionUser(c);
-    const user = userId ? auth.store.getUser(userId) : null;
+    const user = userId ? await auth.store.getUser(userId) : null;
     if (!user) return c.json({ error: "sign in first" }, 401);
     if (metered && user.plan !== "pro") {
-      const usage = auth.store.usage(user.id);
+      const usage = await auth.store.usage(user.id);
       if (usage.used >= FREE_QUOTA)
         return c.json({
           error: `free plan is ${FREE_QUOTA} reshapes per 30 days — resets `
             + new Date(usage.periodStart + 30 * 86_400_000).toISOString().slice(0, 10),
           mutations_used: usage.used, quota: FREE_QUOTA,
         }, 429);
-      auth.store.incrementUsage(user.id);
+      await auth.store.incrementUsage(user.id);
     }
     return null;
   };
@@ -120,7 +120,7 @@ export function createApp(opts: BackendOptions): Hono {
   };
 
   app.post("/mutations/plan", async (c) => {
-    const denied = guard(c, true);
+    const denied = await guard(c, true);
     if (denied) return denied;
     let body: { context?: S1Context };
     try { body = (await readBody(c)) as typeof body; }
@@ -135,7 +135,7 @@ export function createApp(opts: BackendOptions): Hono {
   });
 
   app.post("/mutations/repair", async (c) => {
-    const denied = guard(c, false);   // repairs never double-charge (doc 07 §3)
+    const denied = await guard(c, false);   // repairs never double-charge (doc 07 §3)
     if (denied) return denied;
     let body: { context?: S1Context; prior_plan?: string; failures?: string[] };
     try { body = (await readBody(c)) as typeof body; }

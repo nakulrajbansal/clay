@@ -55,7 +55,7 @@ let pending: PreviewHandle | null = null;
 let currentAppId: string | undefined;   // which app's OPFS files are open (G4)
 // Device-global model access (B1): set by the main thread from localStorage,
 // shared across every app, never persisted in an app DB.
-let modelAccess: { apiKey?: string; backendUrl?: string } = {};
+let modelAccess: { apiKey?: string; backendUrl?: string; session?: string } = {};
 
 // A ring of recent pipeline traces the user can review/copy (the user
 // asked for logs of inputs -> processing -> outputs). Also mirrored to the
@@ -86,7 +86,8 @@ async function runPipelineText(text: string): Promise<IntentOutcome> {
   // Hosted first (ADR-011): if a backend is configured, use it and no
   // browser key is needed. Otherwise fall back to BYO.
   const client = backendUrl
-    ? new MutationClient({ mode: "hosted", endpoint: backendUrl.replace(/\/$/, "") })
+    ? new MutationClient({ mode: "hosted", endpoint: backendUrl.replace(/\/$/, ""),
+        session: modelAccess.session })
     : apiKey
       ? new MutationClient({ mode: "byo", apiKey })
       : null;
@@ -151,6 +152,7 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       modelAccess = {
         apiKey: p.apiKey ? String(p.apiKey) : undefined,
         backendUrl: p.backendUrl ? String(p.backendUrl) : undefined,
+        session: p.session ? String(p.session) : undefined,
       };
       return null;
     }

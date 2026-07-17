@@ -47,6 +47,9 @@ export function ConversationRail(props: {
   seed?: { text: string; n: number };
   /** hosted-mode usage meter from /me (Phase 1.2); null quota = unlimited */
   meter?: { used: number; quota: number | null } | null;
+  account?: { email: string } | null;
+  onSignIn?: (email: string) => void;
+  onSignOut?: () => void;
   themes: Theme[];
   themeId: string;
   onSelectTheme: (id: string) => void;
@@ -60,6 +63,7 @@ export function ConversationRail(props: {
 
   // Empty-canvas example chips seed the input (and focus it) so the user can
   // send or edit — the moat, one click away.
+  const [emailDraft, setEmailDraft] = useState("");
   const [stageIx, setStageIx] = useState(0);
   useEffect(() => {
     if (!props.busy) { setStageIx(0); return; }
@@ -146,6 +150,36 @@ export function ConversationRail(props: {
                 <span className="rail-meter-fill" style={{
                   width: `${Math.min(100, Math.round((props.meter.used / props.meter.quota) * 100))}%` }} />
               </span>
+            </div>
+          ) : null}
+          {props.account ? (
+            <div className="rail-account">
+              <span className="rail-account-who">Signed in as <b>{props.account.email}</b></span>
+              <button className="link" onClick={props.onSignOut}>sign out</button>
+            </div>
+          ) : props.onSignIn ? (
+            <div className="rail-account rail-account-signin">
+              <label className="rail-label">
+                Sign in (hosted mode) — we email you a link, no password
+                <input
+                  type="email"
+                  value={emailDraft}
+                  placeholder="you@example.com"
+                  onChange={e => setEmailDraft(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === "Enter" && emailDraft.trim() !== "") {
+                      props.onSignIn!(emailDraft.trim()); setEmailDraft("");
+                    }
+                  }}
+                />
+              </label>
+              <div className="rail-actions">
+                <button
+                  className="primary"
+                  disabled={emailDraft.trim() === ""}
+                  onClick={() => { props.onSignIn!(emailDraft.trim()); setEmailDraft(""); }}
+                >Email me a sign-in link</button>
+              </div>
             </div>
           ) : null}
           <label className="rail-label">

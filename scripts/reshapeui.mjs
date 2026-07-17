@@ -82,9 +82,9 @@ check(Number(versionsAfter) === Number(versionsBefore) + 1,
   `rename is a timeline commit (v${versionsBefore} -> v${versionsAfter})`);
 
 // R3b: ✕ removes the panel after confirm; panel count drops by one
-page.on("dialog", (d) => void d.accept());
 const beforeCount = await page.locator(".region-main .panel-frame, .region-top .panel-frame, .region-side .panel-frame").count();
 await page.locator(".panel-frame", { hasText: "Renamed By Hand" }).locator(".panel-tool-remove").click();
+await page.locator(".confirm-actions button.primary").click();   // styled dialog (finish pass)
 await page.waitForTimeout(900);
 const afterCount = await page.locator(".region-main .panel-frame, .region-top .panel-frame, .region-side .panel-frame").count();
 check(afterCount === beforeCount - 1, `remove dropped panel count ${beforeCount} -> ${afterCount}`);

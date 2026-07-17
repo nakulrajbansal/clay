@@ -5,6 +5,7 @@
 // and switching apps never re-prompts.
 const KEY = "clay_api_key";
 const BACKEND = "clay_backend_url";
+const SESSION = "clay_session";
 
 function read(k: string): string | null {
   try { return localStorage.getItem(k); } catch { return null; }
@@ -18,4 +19,6 @@ export function getApiKey(): string | null { return read(KEY); }
 export function setApiKey(v: string | null): void { write(KEY, v && v.trim() ? v.trim() : null); }
 export function getBackendUrl(): string | null { return read(BACKEND); }
 export function setBackendUrl(v: string | null): void { write(BACKEND, v && v.trim() ? v.trim() : null); }
+export function getSessionToken(): string | null { return read(SESSION); }
+export function setSessionToken(v: string | null): void { write(SESSION, v && v.trim() ? v.trim() : null); }
 export function hasModelAccess(): boolean { return Boolean(getApiKey() || getBackendUrl()); }

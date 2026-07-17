@@ -100,7 +100,7 @@ type MutationPlanT = import("@clay/schema").MutationPlan;
 
 export type Transport =
   | { mode: "byo"; apiKey: string }
-  | { mode: "hosted"; endpoint: string };
+  | { mode: "hosted"; endpoint: string; session?: string };
 
 export type PlanResult =
   | { ok: true; plan: MutationPlanT; raw: string;
@@ -274,9 +274,11 @@ export class MutationClient {
     // Doc 07 §1: the backend assembles the prompt; the wire carries schema
     // shapes + intent only (B2). Repairs count against the same attempt.
     const path = repair ? "/mutations/repair" : "/mutations/plan";
+    const session = this.transport.mode === "hosted" ? this.transport.session : undefined;
     const res = await this.fetchFn(`${endpoint}${path}`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json",
+        ...(session ? { authorization: `Bearer ${session}` } : {}) },
       body: JSON.stringify(repair
         ? { context: ctx, prior_plan: repair.priorPlanRaw, failures: repair.failures }
         : { context: ctx }),

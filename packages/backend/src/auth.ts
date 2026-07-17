@@ -10,13 +10,13 @@ export type User = { id: string; email: string; plan: "free" | "pro" };
 export type Usage = { used: number; periodStart: number };
 
 export interface AuthStore {
-  upsertUser(email: string): User;
-  getUser(id: string): User | null;
+  upsertUser(email: string): Promise<User>;
+  getUser(id: string): Promise<User | null>;
   /** current rolling-30d usage row, creating/rolling as needed */
-  usage(userId: string): Usage;
+  usage(userId: string): Promise<Usage>;
   /** atomically increment and return the new count (Postgres: single
    * UPDATE ... RETURNING; memory impl is trivially atomic) */
-  incrementUsage(userId: string): number;
+  incrementUsage(userId: string): Promise<number>;
 }
 
 const PERIOD_MS = 30 * 86_400_000;
@@ -31,7 +31,7 @@ export class MemoryAuthStore implements AuthStore {
   private readonly byEmail = new Map<string, string>();
   private readonly usageRows = new Map<string, Usage>();
 
-  upsertUser(email: string): User {
+  async upsertUser(email: string): Promise<User> {
     const key = email.trim().toLowerCase();
     const existing = this.byEmail.get(key);
     if (existing) return this.users.get(existing)!;
@@ -40,8 +40,8 @@ export class MemoryAuthStore implements AuthStore {
     this.byEmail.set(key, user.id);
     return user;
   }
-  getUser(id: string): User | null { return this.users.get(id) ?? null; }
-  usage(userId: string): Usage {
+  async getUser(id: string): Promise<User | null> { return this.users.get(id) ?? null; }
+  async usage(userId: string): Promise<Usage> {
     let u = this.usageRows.get(userId);
     if (!u || Date.now() - u.periodStart > PERIOD_MS) {
       u = { used: 0, periodStart: Date.now() };
@@ -49,8 +49,8 @@ export class MemoryAuthStore implements AuthStore {
     }
     return u;
   }
-  incrementUsage(userId: string): number {
-    const u = this.usage(userId);
+  async incrementUsage(userId: string): Promise<number> {
+    const u = await this.usage(userId);
     u.used += 1;
     return u.used;
   }
