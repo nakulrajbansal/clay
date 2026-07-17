@@ -166,7 +166,7 @@ export function DataView(props: {
     commit?: () => void): React.JSX.Element => {
     if (c.type === "enum") {
       return (
-        <select value={value} autoFocus={commit !== undefined}
+        <select value={value} autoFocus={commit !== undefined} aria-label={c.name}
           onChange={e => { onChange(e.target.value); }} onBlur={commit}>
           <option value="">—</option>
           {(c.values ?? []).map(v => <option key={v} value={v}>{v}</option>)}
@@ -179,6 +179,7 @@ export function DataView(props: {
           : c.type === "number" || c.type === "integer" ? "number" : "text"}
         value={value}
         autoFocus={commit !== undefined}
+        aria-label={c.name}
         onChange={e => onChange(e.target.value)}
         onBlur={commit}
         onKeyDown={e => {
@@ -328,6 +329,7 @@ export function DataView(props: {
                       <input
                         className="dataview-col-edit"
                         autoFocus
+                        aria-label="new column name"
                         placeholder="column name"
                         value={addingCol.name}
                         onChange={e => setAddingCol({ ...addingCol, name: e.target.value })}
@@ -337,6 +339,7 @@ export function DataView(props: {
                         }}
                       />
                       <select
+                        aria-label="new column type"
                         value={addingCol.type}
                         onChange={e => setAddingCol({ ...addingCol, type: e.target.value })}
                       >

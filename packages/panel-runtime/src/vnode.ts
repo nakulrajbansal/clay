@@ -158,6 +158,10 @@ function buildTable(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
   const sortable = props.sortable === true;
   const onRowClick = props.onRowClick;
   const wrap = el(ctx, "div", "clay-table-wrap");
+  // a horizontally scrollable region must be keyboard-reachable (WCAG 2.1.1)
+  wrap.setAttribute("tabindex", "0");
+  wrap.setAttribute("role", "region");
+  wrap.setAttribute("aria-label", "data table");
   const table = el(ctx, "table", "clay-table");
   // Give each column a floor so a narrow (half-width) panel scrolls
   // horizontally with every column readable, instead of cramming/clipping
@@ -457,6 +461,7 @@ function buildFilterBar(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
         : [{ value: "", label: `All ${String(f.field).replace(/_/g, " ")}` }, ...given];
       const select = buildSelect(ctx, options, initial[f.field]);
       select.setAttribute("name", f.field);
+      select.setAttribute("aria-label", `Filter by ${f.field}`);
       select.addEventListener("change", () => { state[f.field] = select.value; emit(); });
       resets.push(() => { select.value = ""; });
       bar.appendChild(select);
@@ -464,6 +469,7 @@ function buildFilterBar(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
       const input = buildControl(ctx, "search", { placeholder: f.field });
       if (typeof initial[f.field] === "string") input.value = String(initial[f.field]);
       input.setAttribute("name", f.field);
+      input.setAttribute("aria-label", `Search ${f.field}`);
       input.addEventListener("input", () => { state[f.field] = input.value; emit(); });
       resets.push(() => { input.value = ""; });
       bar.appendChild(input);

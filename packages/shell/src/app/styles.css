@@ -12,7 +12,7 @@
   --border-strong: #e6e4ee;
   --text: #2b2a33;
   --text-2: #6d6b78;
-  --text-3: #a6a4b1;
+  --text-3: #75737e;
   --accent: #6a67e6;
   --accent-hover: #5b58dc;
   --accent-soft: #f1f0fc;
@@ -149,7 +149,7 @@ button.link.danger { color: var(--danger); }
 .timeslider-summary { color: var(--text-2); max-width: 340px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
 .timeslider-actions { display: flex; gap: 8px; }
-.timeslider-history { border: 0; background: none; color: var(--accent);
+.timeslider-history { border: 0; background: none; color: var(--accent-text);
   font-weight: 600; font-size: 13px; padding: 4px 6px; border-radius: 8px; white-space: nowrap; }
 .timeslider-history:hover { background: var(--accent-soft); }
 
@@ -480,7 +480,7 @@ button.link.danger { color: var(--danger); }
   background: var(--panel); color: var(--text); }
 .dataview-search:focus { outline: none; border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft); }
-.dataview-count { font-size: 12px; color: var(--text-3); white-space: nowrap;
+.dataview-count { font-size: 12px; color: var(--text-2); white-space: nowrap;
   font-variant-numeric: tabular-nums; }
 .dataview-body { overflow: auto; padding: 0 18px 14px; }
 .dataview-grid { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
@@ -489,7 +489,7 @@ button.link.danger { color: var(--danger); }
   letter-spacing: .04em; color: var(--text-3); padding: 11px 8px 7px;
   border-bottom: 1px solid var(--border-strong); }
 .dataview-type { margin-left: 6px; font-size: 9.5px; text-transform: none;
-  letter-spacing: 0; color: var(--text-3); opacity: .75;
+  letter-spacing: 0; color: var(--text-2);
   border: 1px solid var(--border); border-radius: 5px; padding: 0 4px; }
 .dataview-grid td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
 .dataview-grid tbody tr:hover td { background: var(--bg); }
@@ -577,3 +577,9 @@ button.link.danger { color: var(--danger); }
   max-width: 420px; margin: 16px; }
 .confirm-msg { margin: 0 0 16px; color: var(--text); line-height: 1.55; }
 .confirm-actions { display: flex; gap: 10px; justify-content: flex-end; }
+
+/* dark themes lighten the semantic status inks (AA on dark surfaces) */
+:root[data-theme="midnight"], :root[data-theme="ocean"], :root[data-theme="plum"] {
+  --danger: #f19a94; --warn: #e6bd74; --ok: #7fd3a8;
+  --danger-soft: #421d1d; --warn-soft: #3b2c10; --ok-soft: #173a24;
+}

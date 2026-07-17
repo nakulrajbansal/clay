@@ -11,6 +11,7 @@
     "regression": "pnpm --filter @clay/mutation regression"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.12.1",
     "playwright": "^1.61.1"
   }
 }

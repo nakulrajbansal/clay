@@ -14,7 +14,7 @@ export type Theme = { id: string; name: string; dark?: boolean; vars: ThemeVars 
 
 const LIGHT = {
   panel: "#ffffff", border: "#efeef3", borderStrong: "#e6e4ee", border2: "#e7e5ee",
-  bgSoft: "#f8f7fb", text: "#2b2a33", text2: "#6d6b78", text3: "#a6a4b1",
+  bgSoft: "#f8f7fb", text: "#2b2a33", text2: "#6d6b78", text3: "#75737e",
 };
 function light(
   id: string, name: string, bg: string,
@@ -30,7 +30,7 @@ function dark(
     id, name, dark: true,
     vars: {
       border: "#2a2a37", borderStrong: "#35354c", border2: "#2a2a37", bgSoft: "#22222e",
-      text: "#e8e7ef", text2: "#a8a6b8", text3: "#6e6c80", accentHover: v.accent,
+      text: "#e8e7ef", text2: "#a8a6b8", text3: "#8f8da4", accentHover: v.accent,
       ...v,
     } as ThemeVars,
   };
@@ -50,13 +50,13 @@ export const THEMES: Theme[] = [
   }),
   dark("ocean", "Ocean", {
     bg: "#0f1720", panel: "#172230", border: "#25313f", borderStrong: "#2f3e50", border2: "#25313f",
-    bgSoft: "#1a2735", text: "#e6edf3", text2: "#9fb0c0", text3: "#657888",
+    bgSoft: "#1a2735", text: "#e6edf3", text2: "#9fb0c0", text3: "#8299ad",
     accent: "#38bdf8", accentHover: "#56c9fa", accentSoft: "#0f3348", accentText: "#7dd3fc",
     chartArea: "rgba(56,189,248,.16)",
   }),
   dark("plum", "Plum", {
     bg: "#160f1c", panel: "#1f1628", border: "#33263f", borderStrong: "#3f2f4d", border2: "#33263f",
-    bgSoft: "#261a30", text: "#efe7f3", text2: "#b6a6bf", text3: "#7c6a86",
+    bgSoft: "#261a30", text: "#efe7f3", text2: "#b6a6bf", text3: "#98859f",
     accent: "#c084fc", accentHover: "#cf9bfd", accentSoft: "#3a2647", accentText: "#e0c3fe",
     chartArea: "rgba(192,132,252,.16)",
   }),
@@ -108,5 +108,14 @@ export function panelThemeCss(theme: Theme): string {
     .map(([k, cssVar]) => `${cssVar}:${theme.vars[k as keyof ThemeVars]}`).join(";");
   const series = (theme.dark ? SERIES_DARK : SERIES_LIGHT)
     .map((c, i) => `--series-${i + 1}:${c}`).join(";");
-  return `:root{color-scheme:${theme.dark ? "dark" : "light"};${decls};${series}}`;
+  // semantic tone steps: same hue meanings, re-stepped per mode so badge
+  // and chip text meets WCAG AA on dark surfaces too (axe launch gate)
+  const tones = theme.dark
+    ? "--tone-green-bg:#173a24;--tone-green-fg:#8ce3ad;--tone-amber-bg:#3b2c10;"
+      + "--tone-amber-fg:#f4c26f;--tone-red-bg:#421d1d;--tone-red-fg:#f6a5a5;"
+      + "--tone-gray-bg:#2c2c39;--tone-gray-fg:#c7c5d2"
+    : "--tone-green-bg:#e7f6ec;--tone-green-fg:#116632;--tone-amber-bg:#fdf0d5;"
+      + "--tone-amber-fg:#92400e;--tone-red-bg:#fdeaea;--tone-red-fg:#a61e1e;"
+      + "--tone-gray-bg:#f0f0f3;--tone-gray-fg:#4d4b57";
+  return `:root{color-scheme:${theme.dark ? "dark" : "light"};${decls};${series};${tones}}`;
 }

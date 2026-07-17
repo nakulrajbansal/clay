@@ -215,7 +215,7 @@ export function ConversationRail(props: {
         </div>
       ) : null}
 
-      <div className="rail-feed">
+      <div className="rail-feed" tabIndex={0} role="log" aria-label="Reshape history">
         {props.feed.map((item, i) => {
           switch (item.kind) {
             case "intent":
