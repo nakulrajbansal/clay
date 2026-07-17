@@ -101,3 +101,19 @@ export function shellName(shellId: string | null): string {
   };
   return (shellId && map[shellId]) || "My app";
 }
+
+/** Name a blank app from its first kept summary: "Creates a Portfolio
+ * Dashboard with projects and a status board." -> "Portfolio Dashboard".
+ * Returns null when nothing name-worthy survives the trimming. */
+export function deriveAppName(summary: string): string | null {
+  let s = summary.trim()
+    .replace(/^(creates?|builds?|adds?|sets up|starts?|makes?)\s+/i, "")
+    .replace(/^(your?|a|an|the)\s+/i, "");
+  // cut at the first connective — the head noun phrase IS the name
+  s = s.split(/[,:;.]|\s+(?:with|for|that|showing|tracking|to|and)\s+/i)[0] ?? "";
+  const words = s.trim().split(/\s+/).filter(Boolean).slice(0, 4);
+  if (words.length === 0) return null;
+  const name = words.join(" ").replace(/\W+$/, "");
+  if (name.length < 3) return null;
+  return (name[0]!.toUpperCase() + name.slice(1)).slice(0, 30);
+}

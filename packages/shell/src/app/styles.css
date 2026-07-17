@@ -567,3 +567,13 @@ button.link.danger { color: var(--danger); }
   background: var(--accent); transition: width .3s ease; }
 .rail-meter-warm { color: #b45309; border-color: #f5a62366; }
 .rail-meter-warm .rail-meter-fill { background: #f5a623; }
+
+/* styled confirmation dialog (replaces native window.confirm) */
+.confirm-backdrop { position: fixed; inset: 0; z-index: 60;
+  background: rgba(10, 10, 18, .44); display: grid; place-items: center;
+  animation: clay-slot-in .12s ease; }
+.confirm-card { background: var(--panel); border: 1px solid var(--border-strong);
+  border-radius: 16px; box-shadow: var(--shadow-lg); padding: 20px 22px;
+  max-width: 420px; margin: 16px; }
+.confirm-msg { margin: 0 0 16px; color: var(--text); line-height: 1.55; }
+.confirm-actions { display: flex; gap: 10px; justify-content: flex-end; }

@@ -146,3 +146,14 @@ links, and a domain — all need account credentials the repo cannot hold.
 Phase 1.2 (auth+quotas+/me) is implemented behind AUTH=dev with in-memory
 storage; the Postgres AuthStore adapter and real sendEmail are the two
 deploy-time seams (see packages/backend/src/auth.ts interface).
+
+Q(2026-07-16b) Accounts + sharing (user direction, post-finish): tie
+apps/data to login and share specific apps with other users, initially
+admin vs view roles. Sketch: sync = server-stored .clay archives keyed by
+user (Phase 1.2 auth is live); push-on-keep, pull-on-open, single-writer
+lock v1 (no CRDTs); sharing = per-app grants (email -> role), server
+enforces the role on sync writes, view role boots the shell read-only
+(new boot flag suppressing reshape/composer/data edits). BLOCKER: doc 01
+§3 pre-decides multi-user as a no — an ADR must reopen it with this
+narrow single-writer scope before any code. Local-first + BYO stay
+first-class regardless.

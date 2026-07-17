@@ -18,8 +18,8 @@ import { PanelFrame } from "./PanelFrame";
 import { TimeSlider } from "./TimeSlider";
 import { AppSwitcher } from "./AppSwitcher";
 import {
-  addForkEntry, createApp, currentApp, currentAppId, ensureLegacyAdopted, listApps, removeApp,
-  renameApp, setCurrentApp, shellName, type AppEntry,
+  addForkEntry, createApp, currentApp, currentAppId, deriveAppName, ensureLegacyAdopted,
+  listApps, removeApp, renameApp, setCurrentApp, shellName, type AppEntry,
 } from "./apps";
 import {
   THEMES, applyThemeToRoot, getThemeId, panelThemeCss, setThemeId as saveThemeId, themeById,
@@ -48,12 +48,13 @@ type PanelFault = { code: string; message: string };
 
 function makeBridge(client: WorkerClient, target: "live" | "shadow",
   onToast: (msg: string, kind: string) => void,
-  onFault: (panelId: string, fault: PanelFault) => void): Bridge {
+  onFault: (panelId: string, fault: PanelFault) => void,
+  onConfirm: (msg: string) => Promise<boolean>): Bridge {
   const port = client.openStorePort(target);
   const store = new StoreRpcClient(portFromMessagePort(port));
   return new Bridge(store, {
     onToast: (_panel, msg, kind) => onToast(msg, kind),
-    onConfirm: async (_panel, msg) => window.confirm(msg),
+    onConfirm: async (_panel, msg) => onConfirm(msg),
     onPanelError: (panelId, code, message) => onFault(panelId, { code, message }),
     onBoundary: (panelId, reason) =>
       onFault(panelId, { code: "E_STRIKES", message: reason }),
@@ -105,6 +106,18 @@ export function App(): React.JSX.Element {
   const client = (): WorkerClient => {
     if (!workerRef.current) throw new Error("worker not ready");
     return workerRef.current;
+  };
+
+  // Styled in-app confirmation (native dialogs read as unfinished and
+  // can't be themed). One dialog serves the shell AND sandboxed panels
+  // (via the Bridge onConfirm hook).
+  const [confirmBox, setConfirmBox] =
+    useState<{ msg: string; resolve: (ok: boolean) => void } | null>(null);
+  const askConfirm = useCallback((msg: string): Promise<boolean> =>
+    new Promise(res => setConfirmBox({ msg, resolve: res })), []);
+  const settleConfirm = (ok: boolean): void => {
+    confirmBox?.resolve(ok);
+    setConfirmBox(null);
   };
 
   const recordFault = useCallback((panelId: string, fault: PanelFault): void => {
@@ -212,7 +225,7 @@ export function App(): React.JSX.Element {
         }
         setApps(listApps());
         setCurrentId(currentApp()?.id ?? null);
-        setLiveBridge(makeBridge(wc, "live", pushToast, recordFault));
+        setLiveBridge(makeBridge(wc, "live", pushToast, recordFault, askConfirm));
         setPanels(await wc.panels());
         setHistory(await wc.history());
         setSuggestions(await wc.suggestions());
@@ -239,7 +252,7 @@ export function App(): React.JSX.Element {
       await client().seed(id);
       setApps(listApps());
       setCurrentId(currentApp()?.id ?? null);
-      setLiveBridge(makeBridge(client(), "live", pushToast, recordFault));
+      setLiveBridge(makeBridge(client(), "live", pushToast, recordFault, askConfirm));
       await refreshPanels();
       setFeed([{ kind: "info", text: "Your app is ready. Describe any change to reshape it." }]);
       setBusy(false);
@@ -275,9 +288,9 @@ export function App(): React.JSX.Element {
   };
   const deleteApp = async (id: string): Promise<void> => {
     const entry = apps.find(a => a.id === id);
-    if (!window.confirm(
+    if (!(await askConfirm(
       `Delete “${entry?.name ?? "this app"}” and all of its data? `
-      + "This cannot be undone. (Export a .clay backup first if unsure.)")) return;
+      + "This cannot be undone. (Export a .clay backup first if unsure.)"))) return;
     removeApp(id);
     try { await client().deleteApp(id); } catch { /* files may already be gone */ }
     reloadApp();
@@ -290,7 +303,7 @@ export function App(): React.JSX.Element {
       setFeed(f => [...f, { kind: "failure", reasons: outcome.reasons }]);
     } else {
       setPreview(outcome.preview);
-      setShadowBridge(makeBridge(client(), "shadow", pushToast, recordFault));
+      setShadowBridge(makeBridge(client(), "shadow", pushToast, recordFault, askConfirm));
     }
   };
 
@@ -416,9 +429,9 @@ export function App(): React.JSX.Element {
   }, [phase, history.length]);
 
   const importArchive = async (file: File): Promise<void> => {
-    if (!window.confirm(
+    if (!(await askConfirm(
       `Replace this app with the contents of "${file.name}"? `
-      + `Your current data will be overwritten — export a backup first if unsure.`)) return;
+      + `Your current data will be overwritten — export a backup first if unsure.`))) return;
     try {
       const result = await client().importArchive(await file.arrayBuffer());
       if (result.invalidPanels.length > 0) {
@@ -464,6 +477,16 @@ export function App(): React.JSX.Element {
     closePreview();
     await refreshPanels();   // hot swap: keyed remount against the new blobs
     await refreshSuggestions();
+    // A blank canvas earns its name from its first build — "My app"
+    // reads unfinished; "Portfolio Dashboard" reads alive.
+    const current = currentApp();
+    if (current && current.name === "My app") {
+      const derived = deriveAppName(preview.summary);
+      if (derived) {
+        renameApp(current.id, derived);
+        setApps(listApps());
+      }
+    }
     // Reversibility you can FEEL: one click undoes the keep (same
     // makeLatest path as the timeline — data rows are kept either way).
     pushToast(`Kept — your app is now v${version}`, "success", {
@@ -526,9 +549,9 @@ export function App(): React.JSX.Element {
   const restoreTo = async (version: number): Promise<void> => {
     if (version >= head) return;
     const dropped = history.filter(h => h.version > version).length;
-    if (!window.confirm(
+    if (!(await askConfirm(
       `Rewind your app to v${version}? The ${dropped} newer change${dropped === 1 ? "" : "s"} `
-      + `will be removed from history. Data rows are always kept.`)) return;
+      + `will be removed from history. Data rows are always kept.`))) return;
     const fresh = await client().makeLatest(version);
     setScrub(null);
     setPanels(fresh);
@@ -540,9 +563,9 @@ export function App(): React.JSX.Element {
   };
 
   const resetApp = async (): Promise<void> => {
-    if (!window.confirm(
+    if (!(await askConfirm(
       "Erase EVERYTHING and start over? All apps and their data are deleted. "
-      + "This is the one action Clay cannot undo.")) return;
+      + "This is the one action Clay cannot undo."))) return;
     await client().reset();
     try { localStorage.removeItem("clay_apps"); localStorage.removeItem("clay_current_app"); }
     catch { /* ignore */ }
@@ -645,8 +668,8 @@ export function App(): React.JSX.Element {
   };
   const removePanelLocal = async (panelId: string): Promise<void> => {
     const title = panels.find(p => p.panel_id === panelId)?.title ?? panelId;
-    if (!window.confirm(
-      `Remove “${title}”? Your data is untouched — rewind the timeline to bring the panel back.`)) return;
+    if (!(await askConfirm(
+      `Remove “${title}”? Your data is untouched — rewind the timeline to bring the panel back.`))) return;
     const updated = await client().removePanel(panelId);
     setPanels(updated);
     setHistory(await client().history());
@@ -896,6 +919,18 @@ export function App(): React.JSX.Element {
         onCopyDiagnostics={() => void copyDiagnostics()}
       />
       </div>
+      {confirmBox ? (
+        <div className="confirm-backdrop" onClick={() => settleConfirm(false)}>
+          <div className="confirm-card" role="alertdialog" aria-modal="true"
+            onClick={e => e.stopPropagation()}>
+            <p className="confirm-msg">{confirmBox.msg}</p>
+            <div className="rail-actions confirm-actions">
+              <button autoFocus className="primary" onClick={() => settleConfirm(true)}>Confirm</button>
+              <button onClick={() => settleConfirm(false)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <div className="toasts">
         {toasts.map(t => (
           <div key={t.id} className={`toast toast-${t.kind}`}>

@@ -78,3 +78,16 @@ describe("app registry", () => {
     expect(shellName(null)).toBe("My app");
   });
 });
+
+describe("deriveAppName (blank apps earn their name from the first build)", () => {
+  it("extracts the head noun phrase from a plan summary", async () => {
+    const { deriveAppName } = await import("../src/app/apps");
+    expect(deriveAppName("Creates a Portfolio Dashboard with a projects table and a status board."))
+      .toBe("Portfolio Dashboard");
+    expect(deriveAppName("Builds a customer feedback tracker with a summary strip."))
+      .toBe("Customer feedback tracker");
+    expect(deriveAppName("Adds an expense approvals app for your team."))
+      .toBe("Expense approvals app");
+    expect(deriveAppName("")).toBeNull();
+  });
+});

@@ -15,6 +15,16 @@ export type FeedItem =
   | { kind: "discarded"; summary: string }
   | { kind: "info"; text: string };
 
+// Reshapes take 10–40s; a wait that TALKS reads as working, a spinner
+// reads as stuck. Purely cosmetic pacing — real stages live in the worker.
+const RESHAPE_STAGES = [
+  "Reading your app's shape…",
+  "Planning the change…",
+  "Writing the panels…",
+  "Checking it's safe and reversible…",
+  "Almost done…",
+];
+
 export function ConversationRail(props: {
   feed: FeedItem[];
   preview: PreviewInfo | null;
@@ -50,6 +60,14 @@ export function ConversationRail(props: {
 
   // Empty-canvas example chips seed the input (and focus it) so the user can
   // send or edit — the moat, one click away.
+  const [stageIx, setStageIx] = useState(0);
+  useEffect(() => {
+    if (!props.busy) { setStageIx(0); return; }
+    const id = setInterval(() =>
+      setStageIx(i => Math.min(i + 1, RESHAPE_STAGES.length - 1)), 8000);
+    return () => clearInterval(id);
+  }, [props.busy]);
+
   const seedN = props.seed?.n ?? 0;
   useEffect(() => {
     if (props.seed && props.seed.text) {
@@ -225,7 +243,8 @@ export function ConversationRail(props: {
         })}
         {props.busy ? (
           <div className="feed-item feed-info reshaping">
-            <span className="reshaping-dots"><i /><i /><i /></span>Reshaping…
+            <span className="reshaping-dots"><i /><i /><i /></span>
+            {RESHAPE_STAGES[stageIx]}
           </div>
         ) : null}
       </div>
