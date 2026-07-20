@@ -37,6 +37,10 @@ export {
 } from "./pipeline";
 export { Observer, type Suggestion, type UsageEvent } from "./observe";
 export {
+  MetricsCollector, classifyDiffKind,
+  type AttemptRecord, type MetricsSummary, type DiffKind, type Outcome,
+} from "./metrics";
+export {
   InProcessAsyncStore, StoreRpcClient, portFromMessagePort, serveStore,
   type AsyncStore, type MessagePortLike, type StoreRequest, type StoreResponse,
 } from "./asyncstore";
