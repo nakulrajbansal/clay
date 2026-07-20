@@ -1,0 +1,22 @@
+# Normalize line endings to LF in the repository, regardless of the
+# checkout platform. This repo lives on a Windows/OneDrive path where
+# editors and sync can silently rewrite files to CRLF, producing large
+# phantom diffs (every line "changed") with zero content change. Pinning
+# text=lf keeps the tree stable across Windows, WSL, and CI.
+* text=auto eol=lf
+
+# Explicit source/text types (belt-and-suspenders for the paths that churned).
+*.ts   text eol=lf
+*.tsx  text eol=lf
+*.js   text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+*.css  text eol=lf
+*.html text eol=lf
+*.cmd  text eol=crlf
+
+# Binary assets must never be normalized.
+*.png  binary
+*.jpg  binary
+*.ico  binary
+*.wasm binary
