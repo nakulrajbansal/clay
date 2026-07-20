@@ -17,7 +17,19 @@ function write(k: string, v: string | null): void {
 
 export function getApiKey(): string | null { return read(KEY); }
 export function setApiKey(v: string | null): void { write(KEY, v && v.trim() ? v.trim() : null); }
-export function getBackendUrl(): string | null { return read(BACKEND); }
+export function getBackendUrl(): string | null {
+  const stored = read(BACKEND);
+  if (stored) return stored;
+  // Hosted deploys serve the shell and API from ONE origin: default to
+  // the page's own origin so a fresh visitor can sign in with zero setup.
+  // An explicit BYO key keeps direct mode; localhost/http keeps dev flows.
+  try {
+    if (!read(KEY) && typeof location !== "undefined"
+      && location.protocol === "https:"
+      && !/^(localhost|127\.)/.test(location.hostname)) return location.origin;
+  } catch { /* non-browser context */ }
+  return null;
+}
 export function setBackendUrl(v: string | null): void { write(BACKEND, v && v.trim() ? v.trim() : null); }
 export function getSessionToken(): string | null { return read(SESSION); }
 export function setSessionToken(v: string | null): void { write(SESSION, v && v.trim() ? v.trim() : null); }

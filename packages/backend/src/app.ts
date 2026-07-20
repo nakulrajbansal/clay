@@ -73,10 +73,17 @@ export function createApp(opts: BackendOptions): Hono {
     });
 
     app.get("/auth/callback", async (c) => {
+      // an email click is a browser navigation (Accept: text/html): land
+      // in the app itself, cookie set — never a raw JSON page. Fetch
+      // callers (dev auto-redeem, tests) keep the JSON + bearer echo.
+      const wantsHtml = c.req.header("accept")?.includes("text/html") ?? false;
       const sid = await auth.sessions.redeem(c.req.query("token") ?? "");
-      if (!sid) return c.json({ error: "link expired — request a fresh one" }, 401);
+      if (!sid) return wantsHtml
+        ? c.redirect("/?auth=expired", 302)
+        : c.json({ error: "link expired — request a fresh one" }, 401);
       setCookie(c, "clay_session", sid,
         { httpOnly: true, sameSite: "Lax", path: "/", maxAge: 30 * 86400 });
+      if (wantsHtml) return c.redirect("/?auth=ok", 302);
       // bearer echo: lets a cross-origin client store the session itself
       return c.json({ ok: true, session: sid });
     });

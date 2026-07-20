@@ -104,6 +104,22 @@ export function App(): React.JSX.Element {
     setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), action ? 7000 : 3500);
   }, []);
 
+  // Landing after a magic-link email click (backend redirects the browser
+  // to /?auth=ok|expired with the session cookie set): confirm or nudge,
+  // then clean the URL so a reload doesn't re-toast.
+  useEffect(() => {
+    try {
+      const u = new URL(window.location.href);
+      const flag = u.searchParams.get("auth");
+      if (!flag) return;
+      if (flag === "ok") pushToast("Signed in — welcome back", "success");
+      if (flag === "expired")
+        pushToast("That sign-in link expired — request a fresh one", "danger");
+      u.searchParams.delete("auth");
+      window.history.replaceState(null, "", u.toString());
+    } catch { /* non-browser context */ }
+  }, [pushToast]);
+
   const client = (): WorkerClient => {
     if (!workerRef.current) throw new Error("worker not ready");
     return workerRef.current;

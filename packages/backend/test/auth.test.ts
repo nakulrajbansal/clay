@@ -47,6 +47,22 @@ describe("magic-link auth (Phase 1.2)", () => {
     expect(fourth.status).toBe(429);
   });
 
+  it("a browser email click redirects into the app with the cookie set", async () => {
+    const { app } = appWithAuth();
+    const linkRes = await app.request("/auth/magic-link", { method: "POST",
+      body: JSON.stringify({ email: "click@example.com" }),
+      headers: { "content-type": "application/json" } });
+    const { link } = await linkRes.json() as { link: string };
+    const nav = await app.request(link, { headers: { accept: "text/html,application/xhtml+xml" } });
+    expect(nav.status).toBe(302);
+    expect(nav.headers.get("location")).toBe("/?auth=ok");
+    expect(nav.headers.get("set-cookie")).toContain("clay_session=");
+    const expired = await app.request("/auth/callback?token=bogus",
+      { headers: { accept: "text/html" } });
+    expect(expired.status).toBe(302);
+    expect(expired.headers.get("location")).toBe("/?auth=expired");
+  });
+
   it("magic-link tokens are single-use", async () => {
     const { app } = appWithAuth();
     const linkRes = await app.request("/auth/magic-link", { method: "POST",

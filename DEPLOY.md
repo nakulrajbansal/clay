@@ -37,7 +37,10 @@ origin (same origin → session cookies work with no CORS gymnastics).
    `ANTHROPIC_API_KEY`, `DATABASE_URL` (pooler string), `RESEND_API_KEY`,
    `FROM_EMAIL`, `APP_ORIGIN` (the deployment URL).
    Omit `RESEND_API_KEY` on a staging deploy to get dev links.
-4. Deploy. In the app: Settings → backend URL = the deployment origin.
+4. Deploy. Nothing to configure in the app: on an https deploy the shell
+   defaults its backend to the page's own origin (Settings can still
+   override for cross-origin setups), and clicking a magic-link email
+   lands directly in the app, signed in.
 
 ## Fly.io steps (alternative)
 ```sh
