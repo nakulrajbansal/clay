@@ -15,7 +15,7 @@
   "dependencies": {
     "@clay/mutation": "workspace:*",
     "@clay/schema": "workspace:*",
-    "hono": "^4.6.0",
+    "hono": "^4.12.34",
     "pg": "^8.22.0"
   },
   "devDependencies": {

@@ -6,6 +6,7 @@ Deliberately thin. If this document grows, the architecture is drifting.
 
 POST /auth/magic-link {email} -> 204 (sends link; rate: 3/hour/email)
 GET  /auth/callback?token=    -> session cookie (httpOnly, 30d, rolling)
+POST /auth/logout             -> revokes session + expires cookie
 GET  /me                      -> {user_id, plan, mutations_used, quota, period_end}
 POST /mutations/plan          -> proxies to Anthropic
      body: {context: S1Context, intent: string}   // Zod-validated
@@ -16,6 +17,11 @@ POST /mutations/plan          -> proxies to Anthropic
 POST /mutations/repair        -> same shape + error payload; counts against
                                  the SAME attempt (no double quota charge)
 GET  /healthz
+
+Production is fail-closed. Vercel requires `ANTHROPIC_API_KEY`,
+`DATABASE_URL`, `RESEND_API_KEY`, and an HTTPS `APP_ORIGIN`; missing any one
+returns 503 and never exposes the open local proxy or a dev magic link.
+Dev links require the explicit local-only `AUTH=dev` switch.
 
 ## 2. Data (Postgres)
 
@@ -32,6 +38,9 @@ free: 20 mutations / rolling 30 days. pro ($8/mo, Stripe, v1.1 — launch may
 be free+BYO only): unlimited mutations, priority model tier, future sync.
 Repair rounds free (they're Clay's failure, not the user's). Meter surfaced
 via /me and shown in the conversation rail at >= 50% consumption.
+Quota admission is one conditional Postgres update, so concurrent serverless
+requests cannot race above the free limit. Request bodies are stream-counted
+against the 64KB cap even when Content-Length is absent.
 
 ## 4. Model proxy behavior
 

@@ -31,6 +31,13 @@ Validates against registry: required fields present, types coerced
 (ISO dates, numbers), enum values legal, unknown keys rejected (E_VALIDATION).
 Fills id (uuidv7), created_at, updated_at. Returns the stored row.
 
+All three write calls require both manifest membership in `declared_writes`
+and a recent user action signalled by the fixed vnode runtime. One rendered
+action grants at most 8 writes for 5 seconds so an async form or workflow can
+complete atomically; module-boot and background writes are rejected.
+Preview bridges are read-only. Data-entry controls unlock after Keep, so a
+shadow interaction can never create a row that silently disappears on commit.
+
 ### update(table, id, patch): Promise<Row>
 Same validation on patch. Computed columns are rejected as targets (E_TYPE).
 Missing id -> E_VALIDATION.
@@ -105,7 +112,9 @@ emphasis ("solid"|"soft"). The kernel maps tokens to the design system —
 generated UI cannot be ugly in new ways, only in known ways.
 
 Event handlers allowed: onClick, onSubmit, onChange, onRowClick. Handlers
-run inside the sandbox; they may call clay.* freely.
+run inside the sandbox; they may call clay.* freely. The fixed renderer never
+passes native DOM events or nodes into panel code. Handlers receive only their
+documented plain-JSON payload, or no argument for a simple click.
 
 ### toast(msg, kind?), confirm(msg): Promise<boolean>
 Rendered by the SHELL (outside the iframe) so panels cannot spoof system UI.

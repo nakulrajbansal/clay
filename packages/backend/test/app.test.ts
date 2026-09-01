@@ -62,6 +62,16 @@ describe("/mutations/plan", () => {
     expect(res.status).toBe(400);
   });
 
+  it("enforces the 64KB body cap even without a Content-Length header", async () => {
+    const request = new Request("http://local/mutations/plan", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ context: ctx, padding: "x".repeat(70 * 1024) }),
+    });
+    const res = await app().fetch(request);
+    expect(res.status).toBe(413);
+  });
+
   it("maps a model failure to 502", async () => {
     const res = await app({ throws: "anthropic 529 overloaded" }).request("/mutations/plan", {
       method: "POST", headers: { "content-type": "application/json" },

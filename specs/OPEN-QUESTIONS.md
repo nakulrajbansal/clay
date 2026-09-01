@@ -46,13 +46,10 @@
   the client validates (hydrate + Zod + Validator) before executing
   anything. If the pipeline ever moves server-side, revisit. Candidate
   doc 07 correction.
-- Q23 L3 property gate: `PB_RUNS=10000 pnpm --filter @clay/kernel test:pb`
-  passes all 8 properties (PB1-PB4) but the ~160s single-file run trips a
-  vitest worker reporter-RPC timeout at the final flush (threads AND forks
-  pools; "8 passed / 1 error", non-zero exit). Substance is met — the pass
-  count is authoritative. If a clean CI exit is needed for L3, split the
-  four PBs across separate invocations or shard by numRuns. Default
-  `pnpm test` (small counts) is clean and fast.
+- Q23 resolved: the L3 property gate keeps all 10,000 cases per property but
+  splits the run into deterministic 1,000-case Vitest processes. This avoids the
+  independent 60-second worker-RPC timeout in Vitest 3.2.x without reducing
+  coverage. Override `PB_SEED` to reproduce an alternate deterministic run.
 - Q22 Panel iframes are sandbox=allow-scripts only, so native form
   submission is blocked by the browser (no allow-forms — deliberate).
   Form components submit via plain button click + Enter handling instead;

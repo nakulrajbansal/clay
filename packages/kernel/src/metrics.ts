@@ -68,7 +68,7 @@ export function classifyDiffKind(intent: string): DiffKind {
 
 const ruleOf = (issue: string): string | null => {
   const m = /^(V[1-7])\b/.exec(issue);
-  return m ? m[1] : null;
+  return m?.[1] ?? null;
 };
 
 /**
@@ -131,7 +131,8 @@ export class MetricsCollector {
   /** Mark the most recent preview attempt as committed (call from keep()). */
   markCommitted(): void {
     for (let i = this.records.length - 1; i >= 0; i--) {
-      if (this.records[i].outcome === "preview") { this.records[i].outcome = "committed"; return; }
+      const record = this.records[i];
+      if (record?.outcome === "preview") { record.outcome = "committed"; return; }
     }
   }
 

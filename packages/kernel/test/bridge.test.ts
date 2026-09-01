@@ -125,8 +125,12 @@ describe("declared query enforcement (V4 runtime)", () => {
 });
 
 describe("write enforcement (ADR-014)", () => {
-  it("writes require declared_writes membership", async () => {
+  it("writes require both declared_writes membership and a recent user gesture", async () => {
     const { c, store } = await setup({ declaredWrites: ["projects"] });
+    await expect(c.call("db.insert", ["projects", { name: "Boot write", status: "red" }]))
+      .rejects.toMatchObject({ code: "E_VALIDATION" });
+    c.send({ v: 1, kind: "user_gesture" });
+    await sleep(1);
     const row = await c.call("db.insert", ["projects",
       { name: "Denali", status: "red" }]) as { id: string; name: string };
     expect(row.name).toBe("Denali");
@@ -143,9 +147,43 @@ describe("write enforcement (ADR-014)", () => {
       .filter(m => (m as { kind?: string }).kind === "watch")
       .map(m => (m as { rows: unknown[] }).rows.length);
     expect(pushes()).toEqual([1]);          // initial rows
+    c.send({ v: 1, kind: "user_gesture" });
+    await sleep(1);
     await c.call("db.insert", ["projects", { name: "Denali", status: "red" }]);
     await sleep(80);                        // > debounce 50ms
     expect(pushes()).toEqual([1, 2]);
+    store.close();
+  });
+
+  it("expires and budgets a gesture grant", async () => {
+    const { c, store } = await setup(
+      { declaredWrites: ["projects"] },
+      { gestureTtlMs: 50, writesPerGesture: 1 },
+    );
+    c.send({ v: 1, kind: "user_gesture" });
+    await sleep(1);
+    await c.call("db.insert", ["projects", { name: "One", status: "red" }]);
+    await expect(c.call("db.insert", ["projects", { name: "Two", status: "red" }]))
+      .rejects.toMatchObject({ code: "E_VALIDATION" });
+
+    c.send({ v: 1, kind: "user_gesture" });
+    await sleep(80);
+    await expect(c.call("db.insert", ["projects", { name: "Late", status: "red" }]))
+      .rejects.toMatchObject({ code: "E_VALIDATION" });
+    store.close();
+  });
+
+  it("keeps preview bridges read-only even after a gesture grant", async () => {
+    const { c, store } = await setup(
+      { declaredWrites: ["projects"] }, { allowWrites: false },
+    );
+    const before = store.query({ from: "projects" }).length;
+    c.send({ v: 1, kind: "user_gesture" });
+    await sleep(1);
+    await expect(c.call("db.insert", ["projects", { name: "Shadow only", status: "red" }]))
+      .rejects.toMatchObject({ code: "E_VALIDATION",
+        message: expect.stringMatching(/preview is read-only/i) });
+    expect(store.query({ from: "projects" })).toHaveLength(before);
     store.close();
   });
 });
@@ -192,13 +230,15 @@ describe("limits and strikes", () => {
         faults.push(`${id}/${code}/${msg}`),
       onBoundary: () => { tripped = true; },
     });
-    c.send({ v: 1, kind: "panel_error", code: "E_RENDER_TIMEOUT", message: "no render" });
+    c.send({ v: 1, kind: "panel_error", code: "E_RENDER_TIMEOUT",
+      message: "row contained SSN 123-45-6789" });
     c.send({ v: 1, kind: "panel_error", code: "E_PANEL", message: "boom" });
     await sleep(5);
     expect(faults).toEqual([
-      "test_panel/E_RENDER_TIMEOUT/no render",
-      "test_panel/E_PANEL/boom",
+      "test_panel/E_RENDER_TIMEOUT/Panel did not render in time.",
+      "test_panel/E_PANEL/Panel runtime failed.",
     ]);
+    expect(JSON.stringify(faults)).not.toContain("123-45-6789");
     expect(tripped).toBe(false);   // two malformed messages would have tripped
     // and calls still work afterwards
     expect(await c.call("db.query", [STRIP_QUERY])).toHaveLength(1);

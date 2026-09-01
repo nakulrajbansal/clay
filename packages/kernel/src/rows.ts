@@ -3,7 +3,9 @@
 // rejected, computed columns never writable.
 import { ClayError } from "./errors";
 import type { SqlValue } from "./db";
-import { KERNEL_COLUMN_NAMES, type RegColumn, type RegTable } from "./registry";
+import {
+  KERNEL_COLUMN_NAMES, findColumn, type RegColumn, type RegTable,
+} from "./registry";
 
 export function nowIso(): string {
   return new Date().toISOString();
@@ -71,7 +73,7 @@ type RowBinding = { cols: string[]; vals: SqlValue[] };
 function checkKey(t: RegTable, key: string): RegColumn {
   if (KERNEL_COLUMN_NAMES.has(key))
     throw new ClayError("E_VALIDATION", `'${key}' is kernel-managed`);
-  const col = t.columns.find(c => c.name === key);
+  const col = findColumn(t, key);
   if (!col || col.hidden)
     throw new ClayError("E_VALIDATION", `unknown key '${t.name}.${key}'`);
   return col;
@@ -87,7 +89,7 @@ export function validateInsert(t: RegTable, input: Record<string, unknown>): Row
     vals.push(coerceValue(t.name, col, v));
   }
   for (const col of t.columns) {
-    if (col.type === "computed" || col.hidden || !col.required) continue;
+    if (col.type === "computed" || col.hidden || col.inactive || !col.required) continue;
     if (!cols.includes(col.name))
       throw new ClayError("E_VALIDATION", `'${t.name}.${col.name}' is required`);
   }

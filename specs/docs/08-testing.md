@@ -18,7 +18,11 @@ MigrationEngine: per-op forward/inverse pairs against fixture DBs.
 
 PB1 migrate/rollback round-trip: for random sequences of valid forward
     plans (length <= 12), apply all, then roll back all -> schema equals
-    seed AND all row data bit-equal (hidden columns included).
+    seed AND the active row projection is bit-equal. Post-version physical
+    tables/columns stay as inactive tombstones; roll-forward or compatible
+    re-add restores their prior rows/values. System-side missing-cell markers
+    backfill only rows inserted while a column was inactive, preserving an
+    explicit NULL that existed before rewind.
 PB2 fold determinism: replaying version_log on an empty store reproduces
     the exact registry + schema at every version.
 PB3 query safety: random Query objects (valid per schema) never produce SQL
@@ -34,6 +38,8 @@ Headless (Playwright): boot a hostile panel corpus — each tries one escape
 confirm spam, undeclared-table query, forged panel id) — assert: zero
 network requests from frames, correct E_ codes, strikes/boundary behavior.
 This corpus is append-only; every future bypass found becomes a fixture.
+It also boots a declared-write panel that attempts an insert immediately:
+the write must fail until a fixed-runtime rendered action mints a grant.
 
 ## 4. The 25-intent regression suite (the product's exam)
 

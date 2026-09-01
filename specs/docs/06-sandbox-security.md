@@ -34,6 +34,7 @@ panel boundary trips).
 ```
 Panel -> Kernel: {v:1, panel, seq, call: "db.query"|"db.insert"|...,
                   args: [...]}                      // args validated per-call
+Runtime -> Kernel: {v:1, kind:"user_gesture"}      // trusted bootstrap only
 Kernel -> Panel: {v:1, seq, ok, result | error:{code,message}}
 Kernel -> Panel (push): {v:1, kind:"watch", watchId, rows}
                         {v:1, kind:"event", name, payload}
@@ -46,6 +47,16 @@ declared_queries, rate limits (60 calls/min, watch/emit caps per doc 03),
 payload size caps (64KB), and per-call arg schemas. The Bridge is the ONLY
 code path where untrusted input meets trusted state; it gets the densest
 test coverage in the repo (doc 08).
+
+Writes additionally consume a short-lived per-panel gesture grant minted by
+the fixed renderer immediately before it invokes a panel-authored callback from
+a trusted native event; synthetic dispatch cannot refresh it.
+The native event remains inside the fixed renderer. Panel callbacks receive
+only documented plain values, never an Event, Node, ownerDocument, or Window.
+Generated modules never receive the MessagePort, so they cannot mint grants.
+A positive shell-rendered confirmation refreshes the grant after its await.
+Runtime error text is also untrusted and may contain row values: the Bridge
+maps it to a small code-based message before display or model repair input.
 
 ## 4. Shell-rendered system UI
 

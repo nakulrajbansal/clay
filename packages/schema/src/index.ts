@@ -163,6 +163,13 @@ export const BridgeCall = z.object({
     "events.off"]),
   args: z.array(JsonValue).max(4),         // per-call schemas applied next
 });
+/** Trusted panel-runtime signal emitted immediately before it invokes a
+ * panel-authored callback from a rendered control. Generated modules never
+ * receive the MessagePort and cannot mint this signal directly. */
+export const BridgeUserGesture = z.object({
+  v: z.literal(1),
+  kind: z.literal("user_gesture"),
+});
 export const BridgeReply = z.object({
   v: z.literal(1), seq: z.number().int(),
   ok: z.boolean(),

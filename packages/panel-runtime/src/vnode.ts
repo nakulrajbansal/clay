@@ -103,7 +103,13 @@ export type SchemaTable = {
   name: string;
   columns: { name: string; type: string; values?: string[] }[];
 };
-type Ctx = { doc: Document; schema: SchemaTable[] };
+type Ctx = {
+  doc: Document;
+  schema: SchemaTable[];
+  /** Trusted runtime hook. It grants bounded write authority immediately
+   * before panel-authored callback code runs from a rendered control. */
+  userAction<T>(fn: () => T, event?: Event): T;
+};
 
 function el(ctx: Ctx, tag: string, className?: string): HTMLElement {
   const node = ctx.doc.createElement(tag);
@@ -111,7 +117,7 @@ function el(ctx: Ctx, tag: string, className?: string): HTMLElement {
   return node;
 }
 
-function applyTokensAndHandlers(node: HTMLElement, props: Record<string, unknown>): void {
+function applyTokensAndHandlers(ctx: Ctx, node: HTMLElement, props: Record<string, unknown>): void {
   const tone = props.tone;
   if (typeof tone === "string" && TONES.has(tone)) node.classList.add(`clay-tone-${tone}`);
   const size = props.size;
@@ -121,7 +127,13 @@ function applyTokensAndHandlers(node: HTMLElement, props: Record<string, unknown
   for (const [prop, event] of Object.entries(HANDLERS)) {
     const fn = props[prop];
     if (typeof fn === "function") {
-      node.addEventListener(event, (e) => { e.preventDefault(); (fn as (e: Event) => void)(e); });
+      node.addEventListener(event, (e) => {
+        e.preventDefault();
+        // The trusted renderer consumes the native event for isTrusted, but
+        // panel code never receives a DOM object it could follow back to
+        // ownerDocument/defaultView and use as a navigation exfiltration path.
+        ctx.userAction(() => (fn as () => void)(), e);
+      });
       // interactive elements get the pointer cursor + hover affordance
       if (event === "click") node.classList.add("clay-clickable");
     }
@@ -141,7 +153,7 @@ function buildBadge(ctx: Ctx, label: unknown, tone: unknown,
     node.classList.add("clay-clickable", "clay-badge-clickable");
     node.addEventListener("click", (e) => {
       e.preventDefault();
-      (onClick as (e: Event) => void)(e);
+      ctx.userAction(() => (onClick as () => void)(), e);
     });
   }
   return node;
@@ -192,7 +204,8 @@ function buildTable(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
       const tr = el(ctx, "tr");
       if (typeof onRowClick === "function") {
         tr.classList.add("clay-clickable");
-        tr.addEventListener("click", () => (onRowClick as (r: unknown) => void)(row));
+        tr.addEventListener("click", (event) =>
+          ctx.userAction(() => (onRowClick as (r: unknown) => void)(row), event));
       }
       for (const col of columns) {
         const td = el(ctx, "td");
@@ -252,7 +265,7 @@ function buildComponent(ctx: Ctx, node: VNode): HTMLElement {
     case Button: {
       const btn = el(ctx, "button", "clay-button");
       btn.textContent = String(props.label ?? "");
-      applyTokensAndHandlers(btn, props);
+      applyTokensAndHandlers(ctx, btn, props);
       return btn;
     }
     case MetricCard: {
@@ -292,8 +305,8 @@ function buildComponent(ctx: Ctx, node: VNode): HTMLElement {
         props.value);
       const onChange = props.onChange;
       if (typeof onChange === "function")
-        select.addEventListener("change", () =>
-          (onChange as (v: string) => void)(select.value));
+        select.addEventListener("change", (event) =>
+          ctx.userAction(() => (onChange as (v: string) => void)(select.value), event));
       return select;
     }
     default:
@@ -338,8 +351,9 @@ function buildControl(ctx: Ctx, type: string, props: Record<string, unknown>): H
   else if (props.value !== undefined && props.value !== null) input.value = String(props.value);
   const onChange = props.onChange;
   if (typeof onChange === "function")
-    input.addEventListener("change", () =>
-      (onChange as (v: unknown) => void)(type === "checkbox" ? input.checked : input.value));
+    input.addEventListener("change", (event) =>
+      ctx.userAction(() => (onChange as (v: unknown) => void)(
+        type === "checkbox" ? input.checked : input.value), event));
   return input;
 }
 
@@ -384,7 +398,7 @@ function buildForm(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
   form.appendChild(submit);
 
   const onSubmit = props.onSubmit;
-  const doSubmit = (): void => {
+  const doSubmit = (event?: Event): void => {
     if (typeof onSubmit !== "function") return;
     const values: Record<string, unknown> = {};
     for (const [name, { spec, input }] of controls) {
@@ -394,16 +408,16 @@ function buildForm(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
       else if (kind === "number") values[name] = Number(input.value);
       else values[name] = input.value;
     }
-    (onSubmit as (v: Record<string, unknown>) => void)(values);
+    ctx.userAction(() => (onSubmit as (v: Record<string, unknown>) => void)(values), event);
   };
   submit.addEventListener("click", doSubmit);
-  form.addEventListener("submit", (e) => { e.preventDefault(); doSubmit(); });
+  form.addEventListener("submit", (e) => { e.preventDefault(); doSubmit(e); });
   form.addEventListener("keydown", (e) => {
     const key = (e as KeyboardEvent).key;
     const target = e.target as HTMLElement | null;
     if (key === "Enter" && target?.tagName !== "TEXTAREA") {
       e.preventDefault();
-      doSubmit();
+      doSubmit(e);
     }
   });
   return form;
@@ -442,16 +456,17 @@ function buildFilterBar(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
       return Object.values(v as Record<string, unknown>).some(x => x !== "" && x != null);
     return v !== "" && v != null;
   });
-  const emit = (): void => {
+  const emit = (event?: Event): void => {
     FILTER_MEMORY.set(memoryKey, { ...state });
     clear.style.display = active() ? "" : "none";
     if (typeof onChange === "function")
-      (onChange as (s: Record<string, unknown>) => void)({ ...state });
+      ctx.userAction(() =>
+        (onChange as (s: Record<string, unknown>) => void)({ ...state }), event);
   };
-  clear.addEventListener("click", () => {
+  clear.addEventListener("click", (event) => {
     for (const k of Object.keys(state)) delete state[k];
     for (const r of resets) r();
-    emit();
+    emit(event);
   });
   for (const f of filters) {
     if (f.kind === "select") {
@@ -462,7 +477,7 @@ function buildFilterBar(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
       const select = buildSelect(ctx, options, initial[f.field]);
       select.setAttribute("name", f.field);
       select.setAttribute("aria-label", `Filter by ${f.field}`);
-      select.addEventListener("change", () => { state[f.field] = select.value; emit(); });
+      select.addEventListener("change", (event) => { state[f.field] = select.value; emit(event); });
       resets.push(() => { select.value = ""; });
       bar.appendChild(select);
     } else if (f.kind === "search") {
@@ -470,14 +485,14 @@ function buildFilterBar(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
       if (typeof initial[f.field] === "string") input.value = String(initial[f.field]);
       input.setAttribute("name", f.field);
       input.setAttribute("aria-label", `Search ${f.field}`);
-      input.addEventListener("input", () => { state[f.field] = input.value; emit(); });
+      input.addEventListener("input", (event) => { state[f.field] = input.value; emit(event); });
       resets.push(() => { input.value = ""; });
       bar.appendChild(input);
     } else {
       const from = buildControl(ctx, "date", {});
       const to = buildControl(ctx, "date", {});
-      const update = (): void => {
-        state[f.field] = { from: from.value, to: to.value }; emit();
+      const update = (event: Event): void => {
+        state[f.field] = { from: from.value, to: to.value }; emit(event);
       };
       from.addEventListener("change", update);
       to.addEventListener("change", update);
@@ -933,7 +948,7 @@ function build(ctx: Ctx, child: VChild): Node | null {
   let node: HTMLElement;
   if (LAYOUT_TAGS.has(tag)) {
     node = el(ctx, tag);
-    applyTokensAndHandlers(node, child.props);
+    applyTokensAndHandlers(ctx, node, child.props);
   } else {
     node = buildComponent(ctx, child);
   }
@@ -967,7 +982,7 @@ function buildBox(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
   if (props.grow === true) box.classList.add("clay-box-grow");
   const tone = clampTone(props.tone);
   if (tone) box.classList.add(`clay-tone-${tone}`);
-  applyTokensAndHandlers(box, props);
+  applyTokensAndHandlers(ctx, box, props);
   return box;
 }
 
@@ -1113,7 +1128,8 @@ function buildCard(ctx: Ctx, card: CardSpec, large: boolean,
   }
   if (typeof onClick === "function") {
     c.classList.add("clay-clickable");
-    c.addEventListener("click", () => (onClick as (x: unknown) => void)(card));
+    c.addEventListener("click", (event) =>
+      ctx.userAction(() => (onClick as (x: unknown) => void)(card), event));
   }
   return c;
 }
@@ -1159,7 +1175,8 @@ function buildBoard(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
         e.preventDefault();
         col.classList.remove("clay-board-col-over");
         if (dragged && dragged.fromKey !== groupKey)
-          (onCardMove as (c: CardSpec, k: string) => void)(dragged.card, groupKey);
+          ctx.userAction(() =>
+            (onCardMove as (c: CardSpec, k: string) => void)(dragged!.card, groupKey), e);
         dragged = null;
       });
     }
@@ -1270,7 +1287,8 @@ function buildFlow(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
       const row = el(ctx, "div", "clay-flow-item");
       if (typeof onItemClick === "function") {
         row.classList.add("clay-clickable");
-        row.addEventListener("click", () => (onItemClick as (x: Item) => void)(it));
+        row.addEventListener("click", (event) =>
+          ctx.userAction(() => (onItemClick as (x: Item) => void)(it), event));
       }
       const main = el(ctx, "div", "clay-flow-item-main");
       const title = el(ctx, "div", "clay-flow-item-title");
@@ -1308,7 +1326,8 @@ function buildFlow(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
         back.title = `Back to ${labelOf(stages[i - 1]!)}`;
         back.addEventListener("click", (e) => {
           e.stopPropagation();
-          (onAdvance as (x: Item, k: string) => void)(it, keyOf(stages[i - 1]!));
+          ctx.userAction(() =>
+            (onAdvance as (x: Item, k: string) => void)(it, keyOf(stages[i - 1]!)), e);
         });
         actions.appendChild(back);
       }
@@ -1339,7 +1358,8 @@ function buildFlow(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
             return;
           }
           disarm();
-          (onAdvance as (x: Item, k: string) => void)(it, keyOf(stages[i + 1]!));
+          ctx.userAction(() =>
+            (onAdvance as (x: Item, k: string) => void)(it, keyOf(stages[i + 1]!)), e);
         });
         actions.appendChild(adv);
       }
@@ -1377,9 +1397,16 @@ function buildCalendar(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
   const MONTHS = ["January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December"];
   const anchor = /^(\d{4})-(\d{2})/.exec(String(props.month ?? ""));
+  const now = new Date();
+  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const firstItemMonth = [...byDay.keys()].sort()[0]?.slice(0, 7);
+  const defaultMonth = [...byDay.keys()].some(value => value.startsWith(currentMonth))
+    ? currentMonth : firstItemMonth;
+  const fallback = defaultMonth ? /^(\d{4})-(\d{2})/.exec(defaultMonth) : null;
   let cur = anchor
     ? new Date(Number(anchor[1]), Number(anchor[2]) - 1, 1)
-    : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+    : fallback ? new Date(Number(fallback[1]), Number(fallback[2]) - 1, 1)
+      : new Date(now.getFullYear(), now.getMonth(), 1);
   const root = el(ctx, "div", "clay-cal");
 
   const draw = (): void => {
@@ -1422,7 +1449,8 @@ function buildCalendar(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
         chip.title = `${k} · ${String(it.label ?? "")}`;
         if (typeof onItemClick === "function") {
           chip.classList.add("clay-clickable");
-          chip.addEventListener("click", () => (onItemClick as (x: CItem) => void)(it));
+          chip.addEventListener("click", (event) =>
+            ctx.userAction(() => (onItemClick as (x: CItem) => void)(it), event));
         }
         cell.appendChild(chip);
       }
@@ -1525,9 +1553,13 @@ function buildTimeline(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
 export function render(
   vnode: VChild,
   container: Element,
-  opts: { schema?: SchemaTable[] } = {},
+  opts: { schema?: SchemaTable[]; userAction?: <T>(fn: () => T, event?: Event) => T } = {},
 ): void {
   const doc = container.ownerDocument;
-  const built = build({ doc, schema: opts.schema ?? [] }, vnode);
+  const built = build({
+    doc,
+    schema: opts.schema ?? [],
+    userAction: opts.userAction ?? (<T>(fn: () => T): T => fn()),
+  }, vnode);
   container.replaceChildren(...(built ? [built] : []));
 }

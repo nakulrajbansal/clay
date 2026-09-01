@@ -96,6 +96,8 @@ export type PanelRuntimeOptions = {
   onPanelError?: (err: unknown) => void;
   /** ui.render must run within this window after boot (doc 03 §2). */
   renderTimeoutMs?: number;
+  /** Test-only escape hatch for jsdom, whose synthetic clicks are never trusted. */
+  trustSyntheticEvents?: boolean;
 };
 
 export function bootPanelRuntime(opts: PanelRuntimeOptions): void {
@@ -192,7 +194,17 @@ export function bootPanelRuntime(opts: PanelRuntimeOptions): void {
       ui: {
         render: (vnode: VChild): void => {
           rendered = true;
-          render(vnode, container, { schema: boot.meta.schema as SchemaTable[] });
+          render(vnode, container, {
+            schema: boot.meta.schema as SchemaTable[],
+            userAction: <T>(fn: () => T, event?: Event): T => {
+              // This closure belongs to the fixed bootstrap, not generated code.
+              // MessagePort ordering ensures the grant reaches the Bridge before
+              // any db call made synchronously by the callback.
+              if (event?.isTrusted === true || opts.trustSyntheticEvents === true)
+                port.send({ v: 1, kind: "user_gesture" });
+              return fn();
+            },
+          });
           reportHeight();
         },
         toast: (msg: unknown, kind?: unknown): void => {

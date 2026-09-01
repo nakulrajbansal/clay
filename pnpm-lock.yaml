@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       hono:
-        specifier: ^4.12.27
-        version: 4.12.27
+        specifier: ^4.12.34
+        version: 4.13.5
       pg:
         specifier: ^8.22.0
         version: 8.22.0
@@ -31,15 +31,15 @@ importers:
         specifier: workspace:*
         version: link:../schema
       hono:
-        specifier: ^4.6.0
-        version: 4.12.27
+        specifier: ^4.12.34
+        version: 4.13.5
       pg:
         specifier: ^8.22.0
         version: 8.22.0
     devDependencies:
       '@hono/node-server':
         specifier: ^1.13.0
-        version: 1.19.14(hono@4.12.27)
+        version: 1.19.14(hono@4.13.5)
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.2
@@ -999,8 +999,8 @@ packages:
     resolution: {integrity: sha512-3hN7NaskYvMDLQY55gnW3NQ+mesEAepTqlg+VEbj7zzqEMBVNhzcGYYeqFo/TlYz6eQiFcp1HcsCZO+nGgS8zg==}
     engines: {node: '>=6.9.0'}
 
-  hono@4.12.27:
-    resolution: {integrity: sha512-1yrb/+w6HWQJrUCLkJ2IF5jNIPvvFkblV5RNOYl6bV+OA6p9GLcMpHFFGTosSvHvcAUibuUukRqhlYI4z32C7Q==}
+  hono@4.13.5:
+    resolution: {integrity: sha512-O6+/eCYRkzzzy0rPWwKLiGBR1nFuUPZynnwjxN1MBA62NNqbT0wQEzQyK2gSO5yDIDB336sXQleAhOHrzlYyKw==}
     engines: {node: '>=16.9.0'}
 
   html-encoding-sniffer@4.0.0:
@@ -1714,9 +1714,9 @@ snapshots:
   '@esbuild/win32-x64@0.28.1':
     optional: true
 
-  '@hono/node-server@1.19.14(hono@4.12.27)':
+  '@hono/node-server@1.19.14(hono@4.13.5)':
     dependencies:
-      hono: 4.12.27
+      hono: 4.13.5
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:
@@ -2071,7 +2071,7 @@ snapshots:
 
   gensync@1.0.0-beta.2: {}
 
-  hono@4.12.27: {}
+  hono@4.13.5: {}
 
   html-encoding-sniffer@4.0.0:
     dependencies:

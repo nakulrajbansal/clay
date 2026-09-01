@@ -14,6 +14,12 @@ import { seededStore } from "./helpers";
 
 const RUNS = Number(process.env.PB_RUNS ?? "0");
 const runs = (small: number): number => (RUNS > 0 ? RUNS : small);
+const PB_SEED = process.env.PB_SEED === undefined
+  ? undefined : Number(process.env.PB_SEED);
+const propertyOptions = (small: number): { numRuns: number; seed?: number } => ({
+  numRuns: runs(small),
+  ...(PB_SEED === undefined ? {} : { seed: PB_SEED }),
+});
 
 // ---------- PB4: expression totality ----------
 const scope: ExprScope = {
@@ -85,7 +91,7 @@ describe("PB4: expression totality (small scale)", () => {
         const { type } = compileExpr(src, scope);   // must not throw
         expect(type).toBe(wantType);
         evalExpr(compileExpr(src, scope).ast, row); // must not throw
-      }), { numRuns: runs(200) });
+      }), propertyOptions(200));
     });
   }
 
@@ -106,7 +112,7 @@ describe("PB4: expression totality (small scale)", () => {
       } catch (e) {
         return e instanceof ClayError && e.code === "E_EXPR";
       }
-    }), { numRuns: runs(150) });
+    }), propertyOptions(150));
   });
 });
 
@@ -179,7 +185,7 @@ describe("PB1: migrate/rollback round-trip (small scale)", () => {
         const store = await seededStore();
         try {
           const seedVersion = store.headVersion();
-          const dump0 = JSON.stringify(store.dumpTable("projects"));
+          const view0 = JSON.stringify(store.query({ from: "projects" }));
           const reg0 = registryToJson(store.registrySnapshot());
           const ctx: Ctx = { fresh: 0 };
 
@@ -194,19 +200,19 @@ describe("PB1: migrate/rollback round-trip (small scale)", () => {
 
           store.rollbackTo(seedVersion);
           expect(registryToJson(store.registrySnapshot())).toBe(reg0);
-          expect(JSON.stringify(store.dumpTable("projects"))).toBe(dump0);
+          expect(JSON.stringify(store.query({ from: "projects" }))).toBe(view0);
 
-          // roll forward across the whole chain (physical adds legitimately
-          // reappear empty), then back again: still bit-equal to seed
+          // Roll forward across the whole chain, then back again. The active
+          // projection is bit-equal while inactive physical values remain.
           store.rollForwardTo(store.headVersion());
           store.rollbackTo(seedVersion);
           expect(registryToJson(store.registrySnapshot())).toBe(reg0);
-          expect(JSON.stringify(store.dumpTable("projects"))).toBe(dump0);
+          expect(JSON.stringify(store.query({ from: "projects" }))).toBe(view0);
         } finally {
           store.close();
         }
       },
-    ), { numRuns: runs(25) });
+    ), propertyOptions(25));
   }, 600_000);
 });
 
@@ -250,7 +256,7 @@ describe("PB2: fold determinism", () => {
           replay.close();
         }
       },
-    ), { numRuns: runs(25) });
+    ), propertyOptions(25));
   }, 600_000);
 });
 
@@ -298,7 +304,7 @@ describe("PB3: query safety", () => {
           expect(known, `unregistered identifier '${id}' in SQL`).toContain(id);
         // and the query actually runs against the real store
         expect(() => store.query(q, NOW)).not.toThrow();
-      }), { numRuns: runs(50) });
+      }), propertyOptions(50));
     } finally { store.close(); }
   });
 
@@ -324,7 +330,7 @@ describe("PB3: query safety", () => {
           catch (e) { threw = e instanceof ClayError; }
           expect(threw).toBe(true);
         },
-      ), { numRuns: runs(50) });
+      ), propertyOptions(50));
     } finally { store.close(); }
   });
 });

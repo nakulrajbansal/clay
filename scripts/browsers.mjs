@@ -18,6 +18,13 @@ for (const [name, engine] of Object.entries(engines)) {
     const ctx = await browser.newContext({ viewport: { width: 1360, height: 1200 } });
     const page = await ctx.newPage();
     const errors = [];
+    const sentinel = `Private probe ${name} 7f3c`;
+    const leaked = [];
+    page.on("request", request => {
+      const url = request.url();
+      if (url.includes(sentinel) || url.includes(encodeURIComponent(sentinel))
+          || request.postData()?.includes(sentinel)) leaked.push(url);
+    });
     page.on("pageerror", (e) => errors.push(String(e.message).slice(0, 120)));
 
     await page.goto(url, { waitUntil: "domcontentloaded" });
@@ -41,13 +48,16 @@ for (const [name, engine] of Object.entries(engines)) {
     for (const f of page.frames()) if (await f.locator("form.clay-form").count().catch(() => 0)) { form = f; break; }
     check(!!form, "form frame found");
     if (form) {
-      await form.locator("[name=name]").fill(`Probe ${name}`);
+      await form.locator("[name=name]").fill(sentinel);
+      await ctx.setOffline(true);
       await form.locator("form.clay-form button").first().click();
       await page.waitForTimeout(1500);
       let seen = false;
       for (const f of page.frames())
-        if ((await f.locator("body").textContent().catch(() => "")).includes(`Probe ${name}`)) seen = true;
-      check(seen, "form write live-updates panels");
+        if ((await f.locator("body").textContent().catch(() => "")).includes(sentinel)) seen = true;
+      check(seen, "offline form write live-updates panels");
+      check(leaked.length === 0, "row data never enters a network request body");
+      await ctx.setOffline(false);
     }
 
     // the acid test: reload — with OPFS the row must come back
@@ -55,7 +65,7 @@ for (const [name, engine] of Object.entries(engines)) {
     await page.waitForTimeout(4500);
     let persisted = false;
     for (const f of page.frames())
-      if ((await f.locator("body").textContent().catch(() => "")).includes(`Probe ${name}`)) persisted = true;
+      if ((await f.locator("body").textContent().catch(() => "")).includes(sentinel)) persisted = true;
     if (hasOpfs) check(persisted, "row SURVIVES reload (OPFS persistence)");
     else check(!persisted && await page.locator(".panel-frame").count() >= 3,
       "no OPFS: session-only by design, app still boots after reload");

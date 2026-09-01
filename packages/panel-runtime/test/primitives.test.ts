@@ -12,6 +12,43 @@ function mount(vnode: Parameters<typeof render>[0]): HTMLElement {
   return c;
 }
 
+describe("event isolation", () => {
+  it("never exposes a native DOM event to panel-authored callbacks", () => {
+    let callbackArg: unknown = "not called";
+    const container = document.createElement("div");
+    render(h(Button, {
+      label: "Open",
+      onClick: (value: unknown) => { callbackArg = value; },
+    }), container, { userAction: fn => fn() });
+
+    container.querySelector<HTMLButtonElement>("button")!.click();
+
+    expect(callbackArg).toBeUndefined();
+  });
+
+  it("uses the runtime-owned listener primitive when the shared prototype changes", () => {
+    const original = EventTarget.prototype.addEventListener;
+    let replacementCalls = 0;
+    let callbackCalls = 0;
+    EventTarget.prototype.addEventListener = function (): void {
+      replacementCalls++;
+    };
+    try {
+      const container = document.createElement("div");
+      render(h(Button, {
+        label: "Run",
+        onClick: () => { callbackCalls++; },
+      }), container, { userAction: fn => fn() });
+
+      expect(replacementCalls).toBe(0);
+      container.querySelector<HTMLButtonElement>("button")!.click();
+      expect(callbackCalls).toBe(1);
+    } finally {
+      EventTarget.prototype.addEventListener = original;
+    }
+  });
+});
+
 describe("Box", () => {
   it("maps enumerated tokens to classes; ignores unknown values", () => {
     const c = mount(h(Box, { direction: "row", gap: "lg", pad: "sm",

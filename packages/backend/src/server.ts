@@ -20,12 +20,18 @@ const appOrigin = (process.env.APP_ORIGIN ?? `http://localhost:${port}`).replace
 
 async function main(): Promise<void> {
   let auth: BackendOptions["auth"];
+  const production = process.env.NODE_ENV === "production";
+  const devLinks = process.env.AUTH === "dev";
+  if (production && !dbUrl)
+    throw new Error("DATABASE_URL is required in production");
+  if (production && dbUrl && !resendKey)
+    throw new Error("RESEND_API_KEY is required in production");
   if (dbUrl) {
     const store = PostgresAuthStore.connect(dbUrl);
     await store.ensureSchema();
     auth = {
       store, sessions: new PgSessions(store.db),
-      devLinks: !resendKey,
+      devLinks,
       sendEmail: resendKey
         ? async (email, link) => {
             const res = await fetch("https://api.resend.com/emails", {
@@ -43,12 +49,15 @@ async function main(): Promise<void> {
           }
         : undefined,
     };
-  } else if (process.env.AUTH === "dev") {
+  } else if (devLinks) {
     auth = makeDevAuth();
   }
   void MemoryAuthStore;
 
-  const app = createApp({ apiKey, auth });
+  const app = createApp({
+    apiKey, auth,
+    allowedOrigins: production ? [appOrigin] : undefined,
+  });
   const staticDir = process.env.STATIC_DIR;
   if (staticDir) {
     app.use("/*", serveStatic({ root: staticDir }));

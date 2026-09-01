@@ -89,6 +89,29 @@ export class PostgresAuthStore implements AuthStore {
       periodStart: new Date(String(row.period_start)).getTime() };
   }
 
+  async consumeUsage(userId: string, limit: number):
+    Promise<{ allowed: boolean; usage: Usage }> {
+    await this.pool.query(
+      `INSERT INTO usage(user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`, [userId]);
+    const consumed = await this.pool.query(
+      `UPDATE usage SET
+         period_start = CASE
+           WHEN period_start < now() - interval '30 days' THEN now()
+           ELSE period_start END,
+         mutations_used = CASE
+           WHEN period_start < now() - interval '30 days' THEN 1
+           ELSE mutations_used + 1 END
+       WHERE user_id = $1
+         AND (period_start < now() - interval '30 days' OR mutations_used < $2)
+       RETURNING period_start, mutations_used`, [userId, limit]);
+    const row = consumed.rows[0];
+    if (row) return { allowed: true, usage: {
+      used: Number(row.mutations_used),
+      periodStart: new Date(String(row.period_start)).getTime(),
+    } };
+    return { allowed: false, usage: await this.usage(userId) };
+  }
+
   async incrementUsage(userId: string): Promise<number> {
     await this.usage(userId);   // ensure row + rolled window
     const r = await this.pool.query(
@@ -140,5 +163,9 @@ export class PgSessions implements SessionStore {
       `UPDATE sessions SET expires = now() + interval '30 days'
        WHERE id = $1 AND expires > now() RETURNING user_id`, [sid]);
     return r.rows[0] ? String(r.rows[0].user_id) : null;
+  }
+
+  async revoke(sid: string | undefined | null): Promise<void> {
+    if (sid) await this.pool.query("DELETE FROM sessions WHERE id = $1", [sid]);
   }
 }

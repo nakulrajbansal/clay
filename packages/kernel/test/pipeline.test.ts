@@ -183,6 +183,22 @@ describe("pipeline stages", () => {
     store.close();
   });
 
+  it("rejects Keep when a newer shape version lands after preview", async () => {
+    const { store, table, panelId } = await seedShellStore(tracker());
+    const planner = new ScriptedPlanner([
+      priorityPlan(table, panelId, tracker().registry[0]!.columns.map(c => c.name)),
+    ]);
+    const result = await new MutationPipeline(store, planner).run(INTENT);
+    if (result.status !== "preview") throw new Error("expected preview");
+
+    store.renamePanel(panelId, "Changed after preview");
+
+    expect(() => result.preview.keep()).toThrow(/changed while this preview was open/i);
+    expect(store.headVersion()).toBe(2);
+    result.preview.discard();
+    store.close();
+  });
+
   it("S3 failure triggers ONE repair with machine-readable reasons", async () => {
     const { store, table, panelId } = await seedShellStore(tracker());
     const cols = tracker().registry[0]!.columns.map(c => c.name);

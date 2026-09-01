@@ -11,7 +11,7 @@ import {
 import { zipRead, zipWrite } from "./zip";
 import { validateMutationPlan } from "./validate";
 import {
-  cloneRegistry, getTable, type Registry, type RegTable,
+  cloneActiveRegistry, cloneRegistry, findStoredColumn, getTable, type Registry, type RegTable,
 } from "./registry";
 import { nowIso, uuidv7, validateInsert, validatePatch } from "./rows";
 import {
@@ -33,6 +33,18 @@ export type PanelBlobInput = {
 };
 
 export type LivePanel = PanelBlobInput & { version: number };
+
+export type PanelProvenance = {
+  panel_id: string;
+  createdVersion: number;
+  lastChangedVersion: number;
+  createdAt: string;
+  lastChangedAt: string;
+  createdIntent: string;
+  lastChangedIntent: string;
+  createdSummary: string;
+  lastChangedSummary: string;
+};
 
 export type CommitInput = {
   intent: string;
@@ -163,6 +175,13 @@ export class ClayStore {
   }
 
   registrySnapshot(): Registry {
+    return cloneActiveRegistry(this.reg);
+  }
+
+  /** Validator view includes inactive tombstones so a new plan cannot
+   * collide with preserved physical data. Query resolution still treats
+   * those tables and columns as unknown. */
+  validationRegistrySnapshot(): Registry {
     return cloneRegistry(this.reg);
   }
 
@@ -417,6 +436,39 @@ export class ClayStore {
     return out;
   }
 
+  /** Read-only provenance for a panel, derived from the existing blob and
+   * version logs. Old apps gain it immediately without a new metadata table. */
+  panelProvenance(panelId: string, at?: number): PanelProvenance | null {
+    const version = at ?? this.currentVersion();
+    const removed = this.driver.select(
+      `SELECT MAX(version) AS removed_version FROM sys.panel_tombstones
+       WHERE panel_id = ? AND version <= ?`,
+      [panelId, version],
+    )[0]?.removed_version;
+    const afterVersion = removed == null ? 0 : Number(removed);
+    const row = this.driver.select(
+      `SELECT MIN(version) AS created_version, MAX(version) AS changed_version
+       FROM sys.panel_blobs WHERE panel_id = ? AND version > ? AND version <= ?`,
+      [panelId, afterVersion, version],
+    )[0];
+    if (row?.created_version == null || row.changed_version == null) return null;
+    const createdVersion = Number(row.created_version);
+    const lastChangedVersion = Number(row.changed_version);
+    const created = this.getEntry(createdVersion);
+    const changed = this.getEntry(lastChangedVersion);
+    return {
+      panel_id: panelId,
+      createdVersion,
+      lastChangedVersion,
+      createdAt: created.created_at,
+      lastChangedAt: changed.created_at,
+      createdIntent: created.intent_text,
+      lastChangedIntent: changed.intent_text,
+      createdSummary: created.summary,
+      lastChangedSummary: changed.summary,
+    };
+  }
+
   /** The full linear chain, oldest first (history view / time slider).
    * Joins any user-set checkpoint label (named moments on the timeline). */
   history(): HistoryEntry[] {
@@ -533,9 +585,17 @@ export class ClayStore {
     const now = nowIso();
     const allCols = ["id", "created_at", "updated_at", ...cols];
     const allVals: SqlValue[] = [id, now, now, ...vals];
-    this.driver.exec(
-      `INSERT INTO ${qid(table)} (${allCols.map(qid).join(", ")})
-       VALUES (${allCols.map(() => "?").join(", ")})`, allVals);
+    this.driver.tx(() => {
+      this.driver.exec(
+        `INSERT INTO ${qid(table)} (${allCols.map(qid).join(", ")})
+         VALUES (${allCols.map(() => "?").join(", ")})`, allVals);
+      for (const column of t.columns) {
+        if (!column.inactive || column.type === "computed") continue;
+        this.driver.exec(
+          `INSERT OR IGNORE INTO sys.inactive_cells(table_name, column_name, row_id)
+           VALUES (?, ?, ?)`, [table, column.name, id]);
+      }
+    });
     this.observer.record({ kind: "insert", subject: table });
     return this.rowById(table, id);
   }
@@ -561,7 +621,7 @@ export class ClayStore {
         if (isChart) charted.add(q.from);
       }
     }
-    return this.observer.suggestions(this.reg, viewed, boarded, flowed, charted);
+    return this.observer.suggestions(this.registrySnapshot(), viewed, boarded, flowed, charted);
   }
   markSuggestionShown(subject: string, kind: string): void {
     this.observer.markShown(subject, kind);
@@ -624,7 +684,7 @@ export class ClayStore {
   rowHistory(table: string, id: string, limit = 20):
     { at: string; values: Record<string, unknown> }[] {
     const t = getTable(this.reg, table);
-    const live = new Set(t.columns.map(c => c.name));
+    const live = new Set(t.columns.filter(c => !c.inactive).map(c => c.name));
     return this.driver.select(
       `SELECT "at", "before_json" FROM "row_history"
        WHERE "table" = ? AND "row_id" = ? ORDER BY "at" DESC LIMIT ?`,
@@ -650,7 +710,7 @@ export class ClayStore {
     this.mustExist(table, id);
     const before = JSON.parse(String(entry.before_json)) as Record<string, SqlValue>;
     const settable = new Set([
-      ...t.columns.filter(c => c.type !== "computed").map(c => c.name),
+      ...t.columns.filter(c => c.type !== "computed" && !c.inactive).map(c => c.name),
       "deleted_at",
     ]);
     const cols = Object.keys(before).filter(k => settable.has(k));
@@ -748,8 +808,8 @@ export class ClayStore {
   async exportArchive(appName: string): Promise<Uint8Array> {
     const { user, system } = await this.driver.exportDatabases();
     const manifest: ClayManifest = {
-      format: 1, app: appName, exported_at: nowIso(),
-      tables: this.reg.size, versions: this.headVersion(),
+      format: 2, app: appName, exported_at: nowIso(),
+      tables: this.registrySnapshot().size, versions: this.headVersion(),
     };
     return zipWrite([
       { name: "manifest.json", data: new TextEncoder().encode(JSON.stringify(manifest, null, 2)) },
@@ -768,7 +828,7 @@ export class ClayStore {
       return e.data;
     };
     const manifest = JSON.parse(new TextDecoder().decode(get("manifest.json"))) as ClayManifest;
-    if (manifest.format !== 1)
+    if (manifest.format !== 1 && manifest.format !== 2)
       throw new ClayError("E_VALIDATION",
         `unsupported archive format ${String(manifest.format)}`);
     return { manifest, user: get("user.db"), system: get("system.db") };
@@ -786,6 +846,21 @@ export class ClayStore {
       for (const c of t.columns)
         if (c.type !== "computed" && !physical.has(c.name))
           issues.push(`'${t.name}' lacks registered column '${c.name}'`);
+      const registered = new Set([
+        "id", "created_at", "updated_at", "deleted_at",
+        ...t.columns.filter(c => c.type !== "computed").map(c => c.name),
+      ]);
+      for (const column of physical)
+        if (!registered.has(column))
+          issues.push(`'${t.name}' has unregistered physical column '${column}'`);
+    }
+    const markers=this.driver.select("SELECT table_name,column_name,row_id FROM sys.inactive_cells");
+    for(const m of markers){
+      const t=this.reg.get(String(m.table_name));
+      const c=t&&findStoredColumn(t,String(m.column_name));
+      if(!t||!c?.inactive){issues.push("inactive-cell marker has no inactive column");continue;}
+      const r=this.driver.select(`SELECT ${qid(c.name)} AS v FROM ${qid(t.name)} WHERE "id"=?`,[String(m.row_id)]);
+      if(r.length!==1||r[0]?.v!==null)issues.push("inactive-cell marker does not point to a NULL cell");
     }
     const chain = this.history();
     chain.forEach((e, i) => {
@@ -846,7 +921,8 @@ export class ClayStore {
 }
 
 export type ClayManifest = {
-  format: 1;
+  /** v2 adds inactive rollback tombstones; v1 remains import-compatible. */
+  format: 1 | 2;
   app: string;
   exported_at: string;
   tables: number;

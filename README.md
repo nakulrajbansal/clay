@@ -26,6 +26,24 @@ Then describe a change:
 
 > add a priority field and show it as a colored badge
 
+Open **Shape map** to inspect how permanent data becomes live views and how the
+app has evolved. Every table node opens the exact underlying data, every view
+node can point the reshape composer at that panel, and the evolution column
+links back to the reversible timeline. The **Reshape** rail can collapse when
+you want the whole canvas. Every proposed reshape now arrives as a **Change
+contract** that shows the validated diff, panel data access, affected views,
+shadow-test status, reversibility, and row-preservation guarantee before Keep.
+
+After Keep, Clay leaves a **trust receipt** with the exact version, changed
+views, touched tables, and rewind target. Every live panel can explain why it
+exists from its creation and latest-change history. The app bar also offers
+**situational lenses** such as Morning review, Focus, and Update data. Lenses
+change only which views are visible; they never copy or alter records.
+
+The current next-generation product thesis, competitor research, moat, and
+execution sequence live in
+[`specs/docs/15-next-generation-strategy.md`](specs/docs/15-next-generation-strategy.md).
+
 ## Development
 
 ```
@@ -33,6 +51,7 @@ pnpm install
 pnpm dev          # Vite dev server with HMR (use the URL it prints)
 pnpm typecheck    # strict TS across all packages
 pnpm test         # vitest suites (unit, property, integration)
+pnpm check:ordinary # current product gate; deferred boundary work excluded
 ```
 
 Packages: `schema` (the Zod constitution), `kernel` (store, migrations,

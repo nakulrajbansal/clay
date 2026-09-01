@@ -20,6 +20,8 @@ This package is the complete pre-implementation specification. Read order:
 | docs/10-decisions.md | ADR log: every major decision, alternatives, and rationale |
 | docs/12-roadmap.md | Product roadmap: vision → shipped phases (Phase 0 done; 1–4 ahead) |
 | docs/13-moat-and-plan.md | The moat (liquid UI over a permanent substrate) + the step plan to widen it |
+| docs/14-reshaping-roadmap.md | The gentle slope from direct manipulation to structural reshaping |
+| docs/15-next-generation-strategy.md | 2026 category research, competitive map, compounding moat, feature system, and release gates |
 
 Principles (binding, in priority order):
 1. Data outlives interface.

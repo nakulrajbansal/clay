@@ -3,11 +3,11 @@
 // then the ready-made templates. Seeding is local and instant.
 import { STARTER_SHELLS, type StarterShellId } from "../shells/seed";
 
-// A quiet icon per template — enough to make the choices inviting, not loud.
+// Quiet abstract marks per template. They read as product wayfinding, not emoji decoration.
 const SHELL_ICONS: Record<string, string> = {
-  tracker: "🎯", log: "📆", dashboard: "📊",
-  small_business: "🏪", crm: "🤝", financials: "💰", staff: "🗓️", habits: "🔥", inventory: "📦",
-  approvals: "✅", jobs: "💼", content: "📝", okrs: "📈", events: "🎤", library: "📚",
+  tracker: "◩", log: "◷", dashboard: "▥",
+  small_business: "⌂", crm: "◎", financials: "$", staff: "◫", habits: "↻", inventory: "▦",
+  approvals: "✓", jobs: "↗", content: "¶", okrs: "⌁", events: "◇", library: "≡",
 };
 
 export function Onboarding(props: {

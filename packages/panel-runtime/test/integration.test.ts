@@ -194,7 +194,9 @@ describe("W1: hand-written panel through the real Bridge", () => {
         code: `export default function (clay) { throw new Error("boom at boot"); }`,
         declaredQueries: [], declaredWrites: [],
       }, bridgeSide);
-      await waitFor(() => faults.some(f => f.startsWith("crash_panel:E_PANEL:boom")));
+      await waitFor(() => faults.some(f =>
+        f === "crash_panel:E_PANEL:Panel runtime failed."));
+      expect(JSON.stringify(faults)).not.toContain("boom at boot");
     }
 
     // a panel that never renders -> E_RENDER_TIMEOUT (doc 03 §2)
@@ -232,5 +234,73 @@ describe("W1: hand-written panel through the real Bridge", () => {
     }, bridgeSide);
     await waitFor(() => container.textContent!.includes("denied: E_VALIDATION"));
     store.close();
+  });
+
+  it("blocks writes at module boot but allows the same declared write from a rendered action", async () => {
+    const store = await seeded([]);
+    try {
+      const bridge = new Bridge(new InProcessAsyncStore(store));
+
+      {
+        const [bridgeSide, panelSide] = portPair();
+        const container = mount();
+        bootPanelRuntime({ port: panelSide, container });
+        await bridge.attachPanel({
+          panelId: "boot_writer", title: "Boot writer",
+          placement: { region: "main", order: 0 },
+          code: `export default function (clay) {
+            clay.db.insert("projects", { name: "Invisible boot write" })
+              .then(() => clay.ui.render(h("p", {}, "wrong")))
+              .catch((e) => clay.ui.render(h("p", {}, e.message)));
+          }`,
+          declaredQueries: [], declaredWrites: ["projects"],
+        }, bridgeSide);
+        await waitFor(() => container.textContent!.includes("recent user action"));
+        expect(store.query({ from: "projects" })).toHaveLength(0);
+      }
+
+      {
+        const [bridgeSide, panelSide] = portPair();
+        const container = mount();
+        bootPanelRuntime({ port: panelSide, container });
+        await bridge.attachPanel({
+          panelId: "synthetic_writer", title: "Synthetic writer",
+          placement: { region: "main", order: 1 },
+          code: `export default function (clay) {
+            clay.ui.render(h(Button, { label: "Synthetic add", onClick: async () => {
+              try { await clay.db.insert("projects", { name: "Synthetic" }); }
+              catch (e) { clay.ui.render(h("p", {}, e.message)); }
+            }}));
+          }`,
+          declaredQueries: [], declaredWrites: ["projects"],
+        }, bridgeSide);
+        await waitFor(() => container.textContent!.includes("Synthetic add"));
+        (container.querySelector("button") as HTMLButtonElement).click();
+        await waitFor(() => container.textContent!.includes("recent user action"));
+        expect(store.query({ from: "projects" })).toHaveLength(0);
+      }
+
+      {
+        const [bridgeSide, panelSide] = portPair();
+        const container = mount();
+        bootPanelRuntime({ port: panelSide, container, trustSyntheticEvents: true });
+        await bridge.attachPanel({
+          panelId: "click_writer", title: "Click writer",
+          placement: { region: "main", order: 1 },
+          code: `export default function (clay) {
+            clay.ui.render(h(Button, { label: "Add project", onClick: async () => {
+              await clay.db.insert("projects", { name: "Deliberate click" });
+              clay.ui.render(h("p", {}, "saved"));
+            }}));
+          }`,
+          declaredQueries: [], declaredWrites: ["projects"],
+        }, bridgeSide);
+        await waitFor(() => container.textContent!.includes("Add project"));
+        (container.querySelector("button") as HTMLButtonElement).click();
+        await waitFor(() => container.textContent!.includes("saved"));
+        expect(store.query({ from: "projects" }).map(row => row.name))
+          .toEqual(["Deliberate click"]);
+      }
+    } finally { store.close(); }
   });
 });

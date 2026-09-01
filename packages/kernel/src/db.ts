@@ -22,7 +22,7 @@ export interface DbDriver {
 
 export const SYSTEM_TABLES = [
   "tables_registry", "version_log", "panel_blobs", "panel_tombstones",
-  "usage_events", "suggestions", "settings", "attempts",
+  "usage_events", "suggestions", "settings", "checkpoints", "attempts", "inactive_cells",
 ] as const;
 
 let sqlite3Promise: Promise<Sqlite3Static> | null = null;
@@ -348,6 +348,9 @@ CREATE TABLE IF NOT EXISTS sys.checkpoints(
 CREATE TABLE IF NOT EXISTS sys.attempts(
   id TEXT PRIMARY KEY, at TEXT NOT NULL, intent_text TEXT NOT NULL,
   outcome TEXT NOT NULL, error_code TEXT);
+CREATE TABLE IF NOT EXISTS sys.inactive_cells(
+  table_name TEXT NOT NULL, column_name TEXT NOT NULL, row_id TEXT NOT NULL,
+  PRIMARY KEY(table_name, column_name, row_id));
 `;
 
 export function createSystemTables(driver: DbDriver): void {

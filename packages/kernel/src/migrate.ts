@@ -13,7 +13,7 @@ import type { DbDriver, SqlValue } from "./db";
 import { compileExpr, evalExpr, exprFields, type ExprValue } from "./expr";
 import {
   KERNEL_COLUMN_NAMES, cloneRegistry, columnTypeToExprType, exprScope,
-  findColumn, getTable, physicalColumns,
+  findColumn, findStoredColumn, getTable, physicalColumns,
   type ColumnKind, type RegColumn, type RegTable, type Registry,
 } from "./registry";
 import { coerceValue, nowIso, uuidv7 } from "./rows";
@@ -29,6 +29,27 @@ const SQL_TYPE: Record<Exclude<ColumnKind, "computed">, string> = {
 
 const qid = (name: string): string => `"${name}"`;
 const indexName = (table: string, column: string): string => `idx_${table}_${column}`;
+const MOVE_MARKER =
+  "UPDATE sys.inactive_cells SET column_name = ? WHERE table_name = ? AND column_name = ?";
+
+function moveKey(set: Set<string>, from: string, to: string): void {
+  if (set.delete(from)) set.add(to);
+}
+
+function isReservedName(table: RegTable, name: string): boolean {
+  return table.reservedColumnNames?.includes(name) === true;
+}
+
+function recordRename(table: RegTable, from: string, to: string): void {
+  const names = new Set(table.reservedColumnNames);
+  names.add(from);
+  names.delete(to);
+  table.reservedColumnNames = [...names];
+}
+
+function undoRename(table: RegTable, name: string): void {
+  table.reservedColumnNames = table.reservedColumnNames?.filter(item => item !== name);
+}
 
 /** Kernel-owned user.db tables user migrations may not claim (G6). */
 const RESERVED_TABLES = new Set(["row_history", "sqlite_sequence"]);
@@ -56,6 +77,18 @@ function checkComputedExpr(t: RegTable, expr: string): void {
   compileExpr(expr, exprScope(t));   // throws E_EXPR on any problem
 }
 
+/** A compatible reshape may reactivate an inactive physical column. Values
+ * are never replaced. Enum values accumulated while it was active may be a
+ * safe superset of the original declaration. */
+function assertCompatibleStoredColumn(stored: RegColumn, expected: RegColumn): void {
+  const enumCompatible = expected.values === undefined
+    || expected.values.every(value => stored.values?.includes(value));
+  if (stored.type !== expected.type || stored.required !== expected.required
+    || stored.expr !== expected.expr || !enumCompatible) {
+    fail(`inactive column '${stored.name}' has an incompatible preserved shape`);
+  }
+}
+
 /**
  * Simulate a forward op list against a registry copy, checking structural
  * validity of every op in sequence (V5) and expressions (I6), and return
@@ -76,7 +109,8 @@ function computeMirrors(operations: ForwardOpT[], registry: Registry): {
       case "create_table": {
         if (RESERVED_TABLES.has(op.table))
           fail(`'${op.table}' is a reserved table name`);
-        if (sim.has(op.table)) fail(`table '${op.table}' already exists`);
+        const preserved = sim.get(op.table);
+        if (preserved && !preserved.inactive) fail(`table '${op.table}' already exists`);
         const names = new Set<string>();
         for (const c of op.columns) {
           if (KERNEL_COLUMN_NAMES.has(c.name)) fail(`'${c.name}' is a kernel column name`);
@@ -87,7 +121,18 @@ function computeMirrors(operations: ForwardOpT[], registry: Registry): {
           name: op.table,
           columns: op.columns.map(c => specColumnToReg(c as Parameters<typeof specColumnToReg>[0])),
         };
-        sim.set(op.table, table);
+        if (preserved?.inactive) {
+          for (const stored of preserved.columns) stored.inactive = true;
+          for (const expected of table.columns) {
+            const stored = findStoredColumn(preserved, expected.name);
+            if (!stored) fail(`inactive table '${op.table}' lacks preserved column '${expected.name}'`);
+            assertCompatibleStoredColumn(stored, expected);
+            delete stored.inactive;
+          }
+          delete preserved.inactive;
+        } else {
+          sim.set(op.table, table);
+        }
         for (const c of table.columns) {
           if (c.type === "computed") checkComputedExpr(table, c.expr ?? "");
           createdColumns.add(`${op.table}.${c.name}`);
@@ -98,10 +143,18 @@ function computeMirrors(operations: ForwardOpT[], registry: Registry): {
       }
       case "add_column": {
         const t = getTable(sim, op.table);
-        checkNewColumnName(t, op.column.name);
         const col = specColumnToReg(op.column as Parameters<typeof specColumnToReg>[0]);
+        if (isReservedName(t, col.name))
+          fail(`column name '${col.name}' is reserved by history`);
+        const preserved = findStoredColumn(t, col.name);
+        if (preserved?.inactive) {
+          assertCompatibleStoredColumn(preserved, col);
+          delete preserved.inactive;
+        } else {
+          checkNewColumnName(t, op.column.name);
+        }
         if (col.type === "computed") checkComputedExpr(t, col.expr ?? "");
-        t.columns.push(col);
+        if (!preserved) t.columns.push(col);
         createdColumns.add(`${op.table}.${col.name}`);
         mirrors.push({ op: "drop_column_if_added_by_this", table: op.table, column: col.name });
         break;
@@ -110,10 +163,13 @@ function computeMirrors(operations: ForwardOpT[], registry: Registry): {
         const t = getTable(sim, op.table);
         const col = findColumn(t, op.from);
         if (!col) fail(`unknown column '${op.table}.${op.from}'`);
+        if (isReservedName(t, op.to))
+          fail(`column name '${op.to}' is reserved by history`);
         checkNewColumnName(t, op.to);
         for (const c of t.columns)
           if (c.type === "computed" && c.expr && exprFields(compileExpr(c.expr, exprScope(t)).ast).has(op.from))
             fail(`cannot rename '${op.from}': computed column '${c.name}' references it (Q15)`);
+        recordRename(t,op.from,op.to);
         col.name = op.to;
         if (createdColumns.delete(`${op.table}.${op.from}`))
           createdColumns.add(`${op.table}.${op.to}`);
@@ -156,9 +212,20 @@ function computeMirrors(operations: ForwardOpT[], registry: Registry): {
       }
       case "create_computed": {
         const t = getTable(sim, op.table);
-        checkNewColumnName(t, op.column);
         checkComputedExpr(t, op.expr);
-        t.columns.push({ name: op.column, type: "computed", required: false, expr: op.expr });
+        const col: RegColumn = {
+          name: op.column, type: "computed", required: false, expr: op.expr,
+        };
+        if (isReservedName(t, op.column))
+          fail(`column name '${op.column}' is reserved by history`);
+        const preserved = findStoredColumn(t, op.column);
+        if (preserved?.inactive) {
+          assertCompatibleStoredColumn(preserved, col);
+          delete preserved.inactive;
+        } else {
+          checkNewColumnName(t, op.column);
+          t.columns.push(col);
+        }
         createdColumns.add(`${op.table}.${op.column}`);
         mirrors.push({ op: "drop_column_if_added_by_this", table: op.table, column: op.column });
         break;
@@ -240,17 +307,23 @@ function createTableSql(t: RegTable): string {
   return `CREATE TABLE ${qid(t.name)} (${cols.join(", ")})`;
 }
 
-function execBackfill(driver: DbDriver, reg: Registry, op: Extract<ForwardOpT, { op: "backfill" }>): void {
+function execBackfill(driver: DbDriver, reg: Registry,
+  op: Extract<ForwardOpT, { op: "backfill" }>, onlyMissing = false): void {
   const t = getTable(reg, op.table);
   const col = findColumn(t, op.column);
   if (!col) fail(`unknown column '${op.table}.${op.column}'`);
+  const markerWhere = onlyMissing
+    ? ` WHERE "id" IN (SELECT row_id FROM sys.inactive_cells
+         WHERE table_name = ? AND column_name = ?)` : "";
+  const markerParams: SqlValue[] = onlyMissing ? [op.table, op.column] : [];
   if (op.expr !== undefined) {
     const scope = exprScope(t);
     const { ast } = compileExpr(op.expr, scope);
     const deps = [...exprFields(ast)];
     const boolDeps = new Set(deps.filter(d => findColumn(t, d)?.type === "boolean"));
     const rows = driver.select(
-      `SELECT "id"${deps.length ? ", " + deps.map(qid).join(", ") : ""} FROM ${qid(op.table)}`);
+      `SELECT "id"${deps.length ? ", " + deps.map(qid).join(", ") : ""} FROM ${qid(op.table)}`
+      + markerWhere, markerParams);
     for (const row of rows) {
       const scopeRow: Record<string, ExprValue> = {};
       for (const d of deps)
@@ -261,13 +334,14 @@ function execBackfill(driver: DbDriver, reg: Registry, op: Extract<ForwardOpT, {
         [bound, row.id ?? null]);
     }
   } else {
-    driver.exec(`UPDATE ${qid(op.table)} SET ${qid(op.column)} = ?`,
-      [coerceValue(op.table, col, op.value)]);
+    driver.exec(`UPDATE ${qid(op.table)} SET ${qid(op.column)} = ?${markerWhere}`,
+      [coerceValue(op.table, col, op.value), ...markerParams]);
   }
 }
 
 /** Execute validated forward ops; mutates `reg` alongside the SQL. */
 export function applyForwardOps(driver: DbDriver, reg: Registry, ops: ForwardOpT[]): void {
+  const reactivatedColumns = new Set<string>();
   for (const op of ops) {
     switch (op.op) {
       case "create_table": {
@@ -275,24 +349,51 @@ export function applyForwardOps(driver: DbDriver, reg: Registry, ops: ForwardOpT
           name: op.table,
           columns: op.columns.map(c => specColumnToReg(c as Parameters<typeof specColumnToReg>[0])),
         };
-        driver.exec(createTableSql(table));
-        reg.set(op.table, table);
+        const preserved = reg.get(op.table);
+        if (preserved?.inactive) {
+          for (const stored of preserved.columns) stored.inactive = true;
+          for (const expected of table.columns) {
+            const stored = findStoredColumn(preserved, expected.name);
+            if (!stored) fail(`inactive table '${op.table}' lacks preserved column '${expected.name}'`);
+            assertCompatibleStoredColumn(stored, expected);
+            delete stored.inactive;
+            reactivatedColumns.add(`${op.table}.${expected.name}`);
+          }
+          delete preserved.inactive;
+        } else {
+          driver.exec(createTableSql(table));
+          reg.set(op.table, table);
+        }
         break;
       }
       case "add_column": {
         const t = getTable(reg, op.table);
         const col = specColumnToReg(op.column as Parameters<typeof specColumnToReg>[0]);
-        if (col.type !== "computed")
-          driver.exec(`ALTER TABLE ${qid(op.table)} ADD COLUMN ${qid(col.name)} ${SQL_TYPE[col.type as Exclude<ColumnKind, "computed">]}`);
-        t.columns.push(col);
+        if (isReservedName(t, col.name))
+          fail(`column name '${col.name}' is reserved by history`);
+        const preserved = findStoredColumn(t, col.name);
+        if (preserved?.inactive) {
+          assertCompatibleStoredColumn(preserved, col);
+          delete preserved.inactive;
+          reactivatedColumns.add(`${op.table}.${col.name}`);
+        } else {
+          if (col.type !== "computed")
+            driver.exec(`ALTER TABLE ${qid(op.table)} ADD COLUMN ${qid(col.name)} ${SQL_TYPE[col.type as Exclude<ColumnKind, "computed">]}`);
+          t.columns.push(col);
+        }
         break;
       }
       case "rename_column": {
         const t = getTable(reg, op.table);
         const col = findColumn(t, op.from);
         if (!col) fail(`unknown column '${op.table}.${op.from}'`);
+        if (isReservedName(t, op.to))
+          fail(`column name '${op.to}' is reserved by history`);
         if (col.type !== "computed")
           driver.exec(`ALTER TABLE ${qid(op.table)} RENAME COLUMN ${qid(op.from)} TO ${qid(op.to)}`);
+        moveKey(reactivatedColumns,`${op.table}.${op.from}`,`${op.table}.${op.to}`);
+        recordRename(t,op.from,op.to);
+        driver.exec(MOVE_MARKER,[op.to,op.table,op.from]);
         col.name = op.to;
         break;
       }
@@ -300,18 +401,31 @@ export function applyForwardOps(driver: DbDriver, reg: Registry, ops: ForwardOpT
         const t = getTable(reg, op.table);
         const col = findColumn(t, op.column);
         if (!col) fail(`unknown column '${op.table}.${op.column}'`);
-        col.values = [...(col.values ?? []), op.value];
+        if (!(col.values ?? []).includes(op.value))
+          col.values = [...(col.values ?? []), op.value];
         break;   // registry-only: enum membership is kernel-validated (Q14)
       }
       case "add_index":
         driver.exec(`CREATE INDEX IF NOT EXISTS ${qid(indexName(op.table, op.column))} ON ${qid(op.table)}(${qid(op.column)})`);
         break;
       case "backfill":
-        execBackfill(driver, reg, op);
+        execBackfill(driver, reg, op,
+          reactivatedColumns.has(`${op.table}.${op.column}`));
         break;
       case "create_computed": {
         const t = getTable(reg, op.table);
-        t.columns.push({ name: op.column, type: "computed", required: false, expr: op.expr });
+        const col: RegColumn = {
+          name: op.column, type: "computed", required: false, expr: op.expr,
+        };
+        if (isReservedName(t, op.column))
+          fail(`column name '${op.column}' is reserved by history`);
+        const preserved = findStoredColumn(t, op.column);
+        if (preserved?.inactive) {
+          assertCompatibleStoredColumn(preserved, col);
+          delete preserved.inactive;
+        } else {
+          t.columns.push(col);
+        }
         break;
       }
       case "update_computed": {
@@ -349,6 +463,14 @@ export function applyForwardOps(driver: DbDriver, reg: Registry, ops: ForwardOpT
       }
     }
   }
+  // A compatible re-add without a backfill deliberately leaves new cells
+  // NULL; either way, the column is active now and no marker should linger.
+  for (const key of reactivatedColumns) {
+    const dot = key.indexOf(".");
+    driver.exec(
+      `DELETE FROM sys.inactive_cells WHERE table_name = ? AND column_name = ?`,
+      [key.slice(0, dot), key.slice(dot + 1)]);
+  }
 }
 
 /** Execute inverse ops in the order stored (already reversed at plan time). */
@@ -356,18 +478,16 @@ export function applyInverseOps(driver: DbDriver, reg: Registry, ops: InverseOpT
   for (const op of ops) {
     switch (op.op) {
       case "drop_table_if_created_by_this":
-        driver.exec(`DROP TABLE IF EXISTS ${qid(op.table)}`);
-        reg.delete(op.table);
+        {
+          const table = getTable(reg, op.table);
+          table.inactive = true;
+        }
         break;
       case "drop_column_if_added_by_this": {
         const t = getTable(reg, op.table);
         const col = findColumn(t, op.column);
         if (!col) fail(`unknown column '${op.table}.${op.column}'`);
-        if (col.type !== "computed") {
-          driver.exec(`DROP INDEX IF EXISTS ${qid(indexName(op.table, op.column))}`);
-          driver.exec(`ALTER TABLE ${qid(op.table)} DROP COLUMN ${qid(op.column)}`);
-        }
-        t.columns = t.columns.filter(c => c.name !== op.column);
+        col.inactive = true;
         break;
       }
       case "remove_enum_value_if_unused": {
@@ -407,6 +527,8 @@ export function applyInverseOps(driver: DbDriver, reg: Registry, ops: InverseOpT
         if (!col) fail(`unknown column '${op.table}.${op.from}'`);
         if (col.type !== "computed")
           driver.exec(`ALTER TABLE ${qid(op.table)} RENAME COLUMN ${qid(op.from)} TO ${qid(op.to)}`);
+        undoRename(t,op.to);
+        driver.exec(MOVE_MARKER,[op.to,op.table,op.from]);
         col.name = op.to;
         break;
       }

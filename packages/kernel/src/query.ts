@@ -210,7 +210,7 @@ export function compileQuery(reg: Registry, input: QueryT, now: Date): CompiledQ
   const defaultSelect = (): string[] => {
     const cols = ["id", "created_at", "updated_at"];
     if (q.includeDeleted) cols.push("deleted_at");
-    for (const c of t.columns) if (!c.hidden) cols.push(c.name);
+    for (const c of t.columns) if (!c.hidden && !c.inactive) cols.push(c.name);
     return cols;
   };
   const finalSelect = q.select ?? defaultSelect();

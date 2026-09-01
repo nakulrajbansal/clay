@@ -5,7 +5,7 @@
 // access is checked against declared_queries (V4 runtime match, with
 // {$var:true} wildcards) and declared_writes (G22/ADR-014); rate limits and
 // strikes per doc 03/06.
-import { BridgeCall, BridgePanelError } from "@clay/schema";
+import { BridgeCall, BridgePanelError, BridgeUserGesture } from "@clay/schema";
 import { ClayError } from "./errors";
 import type { AsyncStore, MessagePortLike } from "./asyncstore";
 import type { RegTable } from "./registry";
@@ -39,14 +39,31 @@ export type BridgeLimits = {
   emitsPerMin: number;
   maxEventPayload: number;
   confirmsPerMin: number;
+  gestureTtlMs: number;
+  writesPerGesture: number;
+  allowWrites: boolean;
   strikeLimit: number;
   debounceMs: number;
 };
 
 const DEFAULT_LIMITS: BridgeLimits = {
   callsPerMin: 60, maxWatches: 8, emitsPerMin: 20,
-  maxEventPayload: 8192, confirmsPerMin: 5, strikeLimit: 10, debounceMs: 50,
+  maxEventPayload: 8192, confirmsPerMin: 5,
+  gestureTtlMs: 5_000, writesPerGesture: 8,
+  allowWrites: true,
+  strikeLimit: 10, debounceMs: 50,
 };
+
+function safePanelFailure(code: string): { code: string; message: string } {
+  const safeCode = /^[A-Z][A-Z0-9_]{0,39}$/.test(code) ? code : "E_PANEL";
+  const messages: Record<string, string> = {
+    E_RENDER_TIMEOUT: "Panel did not render in time.",
+    E_RENDER: "Panel could not render its interface.",
+    E_VALIDATION: "Panel requested an operation that Clay blocked.",
+    E_LIMIT: "Panel exceeded a runtime safety limit.",
+  };
+  return { code: safeCode, message: messages[safeCode] ?? "Panel runtime failed." };
+}
 
 /** Runtime V4 match: executed equals declared, except condition values the
  * declaration marks {"$var": true}, which accept any concrete value. */
@@ -82,6 +99,7 @@ type PanelState = {
   emitTimes: number[];
   confirmTimes: number[];
   confirmOpen: boolean;
+  writeGrant: { expiresAt: number; remaining: number } | null;
   strikes: number;
   tripped: boolean;
   watches: Map<string, { query: QueryT; table: string }>;
@@ -112,7 +130,8 @@ export class Bridge {
   async attachPanel(manifest: PanelManifest, port: MessagePortLike): Promise<void> {
     const state: PanelState = {
       manifest, port, callTimes: [], emitTimes: [], confirmTimes: [],
-      confirmOpen: false, strikes: 0, tripped: false, watches: new Map(),
+      confirmOpen: false, writeGrant: null,
+      strikes: 0, tripped: false, watches: new Map(),
     };
     this.panels.set(manifest.panelId, state);
     port.onMessage((raw) => { void this.handle(state, raw); });
@@ -179,10 +198,20 @@ export class Bridge {
 
   private async handle(state: PanelState, raw: unknown): Promise<void> {
     if (state.tripped) return;
+    const gesture = BridgeUserGesture.safeParse(raw);
+    if (gesture.success) {
+      state.writeGrant = {
+        expiresAt: Date.now() + this.limits.gestureTtlMs,
+        remaining: this.limits.writesPerGesture,
+      };
+      return;   // trusted bootstrap signal: no reply or rate-limit charge
+    }
     const panelError = BridgePanelError.safeParse(raw);
     if (panelError.success) {
-      this.hooks.onPanelError?.(state.manifest.panelId,
-        panelError.data.code, panelError.data.message);
+      // Error strings originate in untrusted panel code and can contain row
+      // values. Never display or send that raw string into the repair model.
+      const safe = safePanelFailure(panelError.data.code);
+      this.hooks.onPanelError?.(state.manifest.panelId, safe.code, safe.message);
       return;   // not a call: no reply, no strike, no rate-limit charge
     }
     const parsed = BridgeCall.safeParse(raw);
@@ -235,6 +264,12 @@ export class Bridge {
           if (typeof table !== "string" || !state.manifest.declaredWrites.includes(table))
             throw new ClayError("E_VALIDATION",
               `table '${String(table)}' is not in declared_writes (ADR-014)`);
+          if (!this.limits.allowWrites)
+            throw new ClayError("E_VALIDATION", "preview is read-only until kept");
+          const grant = state.writeGrant;
+          if (!grant || grant.remaining <= 0 || now > grant.expiresAt)
+            throw new ClayError("E_VALIDATION", "write requires a recent user action");
+          grant.remaining -= 1;
           if (call.call === "db.insert") {
             const row = await this.store.insert(table, (call.args[1] ?? {}) as Record<string, unknown>);
             this.notifyWrite(table);
@@ -273,6 +308,12 @@ export class Bridge {
             const answer = this.hooks.onConfirm
               ? await this.hooks.onConfirm(state.manifest.panelId, msg)
               : false;
+            // A positive answer is a fresh, trusted shell gesture. Refresh
+            // the budget so the awaited callback can perform its write.
+            if (answer) state.writeGrant = {
+              expiresAt: Date.now() + this.limits.gestureTtlMs,
+              remaining: this.limits.writesPerGesture,
+            };
             this.reply(state, call.seq, answer);
           } finally {
             state.confirmOpen = false;

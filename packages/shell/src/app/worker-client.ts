@@ -1,6 +1,6 @@
 // Typed promise wrapper over the DB worker's command protocol.
 import type {
-  DebugEvent, HistoryEntry, LivePanel, RegTable, Suggestion,
+  DebugEvent, HistoryEntry, LivePanel, PanelProvenance, RegTable, Suggestion,
 } from "@clay/kernel";
 import type { IntentOutcome } from "../worker/db-worker";
 
@@ -59,6 +59,7 @@ export class WorkerClient {
     return this.call("importTable", payload);
   }
   panels(): Promise<LivePanel[]> { return this.call("panels"); }
+  panelProvenance(): Promise<PanelProvenance[]> { return this.call("panelProvenance"); }
   commitLayout(placements: { panel_id: string; region: "top" | "main" | "side"; order: number; w?: number; h?: number; col?: number | null }[]): Promise<LivePanel[]> {
     return this.call("commitLayout", { placements });
   }

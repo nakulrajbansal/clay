@@ -165,6 +165,8 @@ describe("V4 query consistency", () => {
       declared_writes: ["projects"],
     });
     expect(validateMutationPlan(ok, ctx())).toEqual([]);
+    const inactive=ctx();inactive.registry.get("projects")!.inactive=true;
+    expect(rules(validateMutationPlan(ok,inactive))).toContain("V4");
     const undeclared = plan({}, {
       code: `export default function (clay) { clay.db.insert("projects", { name: "X" }); }`,
     });

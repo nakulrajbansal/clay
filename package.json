@@ -4,10 +4,19 @@
   "packageManager": "pnpm@11.9.0",
   "scripts": {
     "dev": "pnpm --filter @clay/shell dev",
-    "build": "pnpm --filter @clay/shell build",
     "backend": "pnpm --filter @clay/backend start",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
+    "test:ordinary": "pnpm --filter @clay/schema test && pnpm --filter @clay/backend test && pnpm --filter @clay/mutation test && pnpm --filter @clay/shell test && pnpm --filter @clay/kernel exec vitest run --exclude test/hostile-corpus.test.ts && pnpm --filter @clay/panel-runtime exec vitest run test/integration.test.ts",
+    "build": "pnpm --filter @clay/shell build",
+    "budget": "node scripts/bundle-budget.mjs",
+    "check": "pnpm typecheck && pnpm test && pnpm build && pnpm budget",
+    "check:ordinary": "pnpm typecheck && pnpm test:ordinary && pnpm build && pnpm budget",
+    "verify:shape-map": "node scripts/shape-map.mjs evidence",
+    "verify:change-contract": "node scripts/change-contract.mjs evidence",
+    "verify:product": "pnpm verify:shape-map && pnpm verify:change-contract",
+    "verify:browsers": "node scripts/browsers.mjs",
+    "verify:multi-app": "node scripts/multi-app-archive.mjs",
     "regression": "pnpm --filter @clay/mutation regression"
   },
   "devDependencies": {
@@ -15,7 +24,7 @@
     "playwright": "^1.61.1"
   },
   "dependencies": {
-    "hono": "^4.12.27",
+    "hono": "^4.12.34",
     "pg": "^8.22.0"
   }
 }

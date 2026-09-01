@@ -5,18 +5,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bridge, StoreRpcClient, portFromMessagePort,
-  type HistoryEntry, type LivePanel, type Suggestion,
+  type HistoryEntry, type LivePanel, type PanelProvenance, type RegTable, type Suggestion,
 } from "@clay/kernel";
 import { WorkerClient } from "./worker-client";
 import type { IntentOutcome, PreviewInfo } from "../worker/db-worker";
 import type { StarterShellId } from "../shells/seed";
-import { ConversationRail, type FeedItem } from "./ConversationRail";
+import { ConversationRail, pruneFeedAfterVersion, type FeedItem } from "./ConversationRail";
 import { DataView } from "./DataView";
 import { HistoryView } from "./HistoryView";
 import { Onboarding } from "./Onboarding";
 import { PanelFrame } from "./PanelFrame";
 import { TimeSlider } from "./TimeSlider";
 import { AppSwitcher } from "./AppSwitcher";
+import { ShapeMapView } from "./ShapeMapView";
 import {
   addForkEntry, createApp, currentApp, currentAppId, deriveAppName, ensureLegacyAdopted,
   listApps, removeApp, renameApp, setCurrentApp, shellName, type AppEntry,
@@ -30,6 +31,10 @@ import {
 } from "./settings";
 import { reorder, type Region } from "./layout";
 import { parseImportFile } from "./importData";
+import { buildTrustReceipt } from "./change-contract";
+import {
+  applyLens, buildSituationalLenses, loadLensId, saveLensId, type LensId,
+} from "./lenses";
 
 type Phase = "loading" | "onboarding" | "main" | "error";
 
@@ -63,11 +68,12 @@ function makeBridge(client: WorkerClient, target: "live" | "shadow",
     onEvent: target === "live"
       ? (_panel, name, payload) => { void client.recordFilter(name, payload); }
       : undefined,
-  });
+  }, { allowWrites: target === "live" });
 }
 
 export function App(): React.JSX.Element {
   const workerRef = useRef<WorkerClient | null>(null);
+  const restoreToRef = useRef<(version: number) => Promise<void>>(async () => {});
   const [phase, setPhase] = useState<Phase>("loading");
   const [apps, setApps] = useState<AppEntry[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
@@ -79,6 +85,8 @@ export function App(): React.JSX.Element {
   const seedIntent = (t: string): void => setIntentSeed(s => ({ text: t, n: s.n + 1 }));
   const [persistent, setPersistent] = useState(true);
   const [panels, setPanels] = useState<LivePanel[]>([]);
+  const [panelProvenance, setPanelProvenance] = useState<PanelProvenance[]>([]);
+  const [registryTables, setRegistryTables] = useState<RegTable[]>([]);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [scrub, setScrub] = useState<{ version: number; panels: LivePanel[] } | null>(null);
   const [liveBridge, setLiveBridge] = useState<Bridge | null>(null);
@@ -92,6 +100,15 @@ export function App(): React.JSX.Element {
   const [showData, setShowData] = useState(false);
   const [dataTable, setDataTable] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [showShapeMap, setShowShapeMap] = useState(false);
+  const [railOpen, setRailOpen] = useState<boolean>(() => {
+    try { return localStorage.getItem("clay_reshape_open") !== "false"; }
+    catch { return true; }
+  });
+  const [lensId, setLensId] = useState<LensId>(() => {
+    if (typeof localStorage === "undefined") return "all";
+    return loadLensId(localStorage, currentAppId() ?? "default");
+  });
   const dataStoreRef = useRef<StoreRpcClient | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastId = useRef(0);
@@ -142,14 +159,24 @@ export function App(): React.JSX.Element {
   }, []);
 
   const refreshPanels = useCallback(async (): Promise<void> => {
-    setPanels(await client().panels());
-    setHistory(await client().history());
+    const [nextPanels, nextHistory, nextTables, nextProvenance] = await Promise.all([
+      client().panels(), client().history(), client().registryTables(),
+      client().panelProvenance(),
+    ]);
+    setPanels(nextPanels);
+    setHistory(nextHistory);
+    setRegistryTables(nextTables);
+    setPanelProvenance(nextProvenance);
     setFaults({});
   }, []);
 
   const refreshSuggestions = useCallback(async (): Promise<void> => {
     try { setSuggestions(await client().suggestions()); }
     catch { /* pre-boot */ }
+  }, []);
+
+  const refreshProvenance = useCallback(async (): Promise<void> => {
+    setPanelProvenance(await client().panelProvenance());
   }, []);
 
   // Ambient: re-derive the Observer's nudges on a gentle idle cadence so a
@@ -243,9 +270,14 @@ export function App(): React.JSX.Element {
         setApps(listApps());
         setCurrentId(currentApp()?.id ?? null);
         setLiveBridge(makeBridge(wc, "live", pushToast, recordFault, askConfirm));
-        setPanels(await wc.panels());
-        setHistory(await wc.history());
-        setSuggestions(await wc.suggestions());
+        const [bootPanels, bootHistory, bootTables, bootSuggestions, bootProvenance] = await Promise.all([
+          wc.panels(), wc.history(), wc.registryTables(), wc.suggestions(), wc.panelProvenance(),
+        ]);
+        setPanels(bootPanels);
+        setHistory(bootHistory);
+        setRegistryTables(bootTables);
+        setSuggestions(bootSuggestions);
+        setPanelProvenance(bootProvenance);
         setPhase("main");
       } catch (e) {
         // Never hang on the spinner: surface the failure and let the user
@@ -325,6 +357,7 @@ export function App(): React.JSX.Element {
   };
 
   const runIntent = async (text: string): Promise<void> => {
+    if (busy || preview || scrub) return;
     setFeed(f => [...f, { kind: "intent", text }]);
     // Dummy/sample-data intents are handled by the trusted shell, not the
     // planner — the model can't insert rows by design, so routing these to
@@ -376,6 +409,7 @@ export function App(): React.JSX.Element {
   };
 
   const acceptSuggestion = (s: Suggestion): void => {
+    if (busy || preview || scrub) return;
     void client().acceptSuggestion(s.subject, s.kind);
     setSuggestions(list => list.filter(x => x.id !== s.id));
     void runIntent(s.intent);
@@ -388,6 +422,7 @@ export function App(): React.JSX.Element {
 
   // doc 05 §7 boundary actions
   const repairPanel = async (panelId: string): Promise<void> => {
+    if (busy || preview || scrub) return;
     const fault = faults[panelId];
     if (!fault) return;
     setFeed(f => [...f, { kind: "info", text: `Repairing ${panelId} (${fault.message.slice(0, 80)})…` }]);
@@ -405,6 +440,7 @@ export function App(): React.JSX.Element {
     try {
       setPanels(await client().revertPanel(panelId));
       setHistory(await client().history());
+      await refreshProvenance();
       setFaults(f => { const { [panelId]: _drop, ...rest } = f; return rest; });
       setFeed(f => [...f, { kind: "info", text: `Rolled back the ${panelId} panel.` }]);
     } catch (e) {
@@ -491,8 +527,21 @@ export function App(): React.JSX.Element {
 
   const keep = async (): Promise<void> => {
     if (!preview) return;
-    const { version } = await client().keep();
-    setFeed(f => [...f, { kind: "committed", summary: preview.summary, version }]);
+    let version: number;
+    try {
+      ({ version } = await client().keep());
+    } catch (error) {
+      try { await client().discard(); } catch { /* preview may already be closed */ }
+      setFeed(feedItems => [...feedItems, { kind: "failure", reasons: [String(error)] }]);
+      closePreview();
+      await refreshPanels();
+      return;
+    }
+    const receipt = buildTrustReceipt(preview, version);
+    setFeed(f => [...f, { kind: "committed", summary: preview.summary, version, receipt }]);
+    setLensId("all");
+    if (typeof localStorage !== "undefined")
+      saveLensId(localStorage, currentId ?? currentAppId() ?? "default", "all");
     closePreview();
     await refreshPanels();   // hot swap: keyed remount against the new blobs
     await refreshSuggestions();
@@ -506,16 +555,11 @@ export function App(): React.JSX.Element {
         setApps(listApps());
       }
     }
-    // Reversibility you can FEEL: one click undoes the keep (same
-    // makeLatest path as the timeline — data rows are kept either way).
+    // Rewind through the same confirmed path as History. If later versions
+    // exist when this toast is clicked, they are named before truncation.
     pushToast(`Kept — your app is now v${version}`, "success", {
       label: "Rewind",
-      run: () => void (async () => {
-        const fresh = await client().makeLatest(version - 1);
-        setPanels(fresh);
-        setHistory(await client().history());
-        setFeed(f => [...f, { kind: "info", text: `Rewound — v${version - 1} is the latest again.` }]);
-      })(),
+      run: () => void restoreToRef.current(version - 1),
     });
   };
 
@@ -600,6 +644,17 @@ export function App(): React.JSX.Element {
     }
   };
   const signOut = async (): Promise<void> => {
+    const backend = getBackendUrl();
+    const session = getSessionToken();
+    if (backend && session) {
+      try {
+        await fetch(`${backend.replace(/\/$/, "")}/auth/logout`, {
+          method: "POST",
+          credentials: "include",
+          headers: { authorization: `Bearer ${session}` },
+        });
+      } catch { /* local state still clears when the backend is unreachable */ }
+    }
     setSessionToken(null);
     await client().setModelAccess(getApiKey(), getBackendUrl(), null);
     setAccount(null); setMeter(null);
@@ -615,6 +670,10 @@ export function App(): React.JSX.Element {
   };
 
   const restoreTo = async (version: number): Promise<void> => {
+    if (busy || preview) {
+      pushToast("Keep or discard the open change before rewinding.", "default");
+      return;
+    }
     if (version >= head) return;
     const dropped = history.filter(h => h.version > version).length;
     if (!(await askConfirm(
@@ -624,8 +683,12 @@ export function App(): React.JSX.Element {
     setScrub(null);
     setPanels(fresh);
     setHistory(await client().history());
-    setFeed(f => [...f, { kind: "info", text: `Rewound — v${version} is the latest again.` }]);
+    await refreshProvenance();
+    setRegistryTables(await client().registryTables());
+    setFeed(f => [...pruneFeedAfterVersion(f, version),
+      { kind: "info", text: `Rewound — v${version} is the latest again.` }]);
   };
+  restoreToRef.current = restoreTo;
   const makeLatest = async (): Promise<void> => {
     if (scrub) await restoreTo(scrub.version);
   };
@@ -668,6 +731,33 @@ export function App(): React.JSX.Element {
       || a.panel.panel_id.localeCompare(b.panel.panel_id));
   }, [panels, preview, scrub]);
 
+  const lenses = useMemo(() => buildSituationalLenses(panels), [panels]);
+  const activeLens = lenses.find(lens => lens.id === lensId) ?? lenses[0]!;
+  const lensPanels = useMemo(() => {
+    const filtered = applyLens(panels, lensId);
+    return filtered.length === 0 && panels.length > 0 ? panels : filtered;
+  }, [panels, lensId]);
+  const lensPanelIds = useMemo(
+    () => new Set(lensPanels.map(panel => panel.panel_id)), [lensPanels]);
+  const visibleDisplay = useMemo(
+    () => preview || scrub ? display
+      : display.filter(item => lensPanelIds.has(item.panel.panel_id)),
+    [display, lensPanelIds, preview, scrub],
+  );
+  const provenanceById = useMemo(
+    () => new Map(panelProvenance.map(item => [item.panel_id, item])),
+    [panelProvenance],
+  );
+
+  useEffect(() => {
+    if (phase === "main" && panels.length > 0
+        && lensId !== "all" && activeLens.panelIds.length === 0) {
+      setLensId("all");
+      if (typeof localStorage !== "undefined")
+        saveLensId(localStorage, currentId ?? currentAppId() ?? "default", "all");
+    }
+  }, [activeLens.panelIds.length, currentId, lensId, panels.length, phase]);
+
   if (phase === "loading") return <div className="boot">Opening your app…</div>;
   if (phase === "error")
     return (
@@ -705,6 +795,7 @@ export function App(): React.JSX.Element {
     const updated = await client().commitLayout(placements);
     setPanels(updated);
     setHistory(await client().history());
+    await refreshProvenance();
     pushToast("Rearranged — rewind any time in the timeline", "success");
   };
   // Resize (B4/ADR-017): toggle a panel between 1 and 2 columns — a
@@ -720,6 +811,7 @@ export function App(): React.JSX.Element {
       [{ panel_id: panelId, region: p.placement.region, order: p.placement.order, ...dim }]);
     setPanels(updated);
     setHistory(await client().history());
+    await refreshProvenance();
   };
   const toggleWidth = (panelId: string): Promise<void> => {
     const p = panels.find(x => x.panel_id === panelId);
@@ -733,6 +825,7 @@ export function App(): React.JSX.Element {
     const updated = await client().renamePanel(panelId, title);
     setPanels(updated);
     setHistory(await client().history());
+    await refreshProvenance();
   };
   const removePanelLocal = async (panelId: string): Promise<void> => {
     const title = panels.find(p => p.panel_id === panelId)?.title ?? panelId;
@@ -741,11 +834,49 @@ export function App(): React.JSX.Element {
     const updated = await client().removePanel(panelId);
     setPanels(updated);
     setHistory(await client().history());
+    await refreshProvenance();
     pushToast("Panel removed — rewind any time in the timeline", "success");
   };
   // Point, then speak (ADR-022d): seed the composer scoped to one panel.
   const askAboutPanel = (panel: LivePanel): void => {
     setIntentSeed(s => ({ text: `In the “${panel.title}” panel: `, n: s.n + 1 }));
+    setRailOpen(true);
+    try { localStorage.setItem("clay_reshape_open", "true"); } catch { /* private mode */ }
+  };
+
+  const toggleRail = (): void => {
+    setRailOpen(open => {
+      const next = !open;
+      try { localStorage.setItem("clay_reshape_open", String(next)); } catch { /* private mode */ }
+      return next;
+    });
+  };
+
+  const selectLens = (id: LensId): void => {
+    const lens = lenses.find(item => item.id === id);
+    if (!lens || (id !== "all" && lens.panelIds.length === 0)) return;
+    setLensId(id);
+    if (typeof localStorage !== "undefined")
+      saveLensId(localStorage, currentId ?? currentAppId() ?? "default", id);
+    pushToast(
+      `${lens.name}: ${lens.panelIds.length} of ${panels.length} views. Your records are unchanged.`,
+      "default",
+      id === "all" ? undefined : {
+        label: "Show all",
+        run: () => {
+          setLensId("all");
+          if (typeof localStorage !== "undefined")
+            saveLensId(localStorage, currentId ?? currentAppId() ?? "default", "all");
+        },
+      },
+    );
+  };
+
+  const openShapeMap = async (): Promise<void> => {
+    try { setRegistryTables(await client().registryTables()); } catch { /* keep last known shape */ }
+    setShowData(false);
+    setShowHistory(false);
+    setShowShapeMap(true);
   };
 
   // View switcher (moat pillar 4): re-lens one panel's data as a different
@@ -807,7 +938,8 @@ export function App(): React.JSX.Element {
   };
 
   const region = (name: "top" | "main" | "side"): React.JSX.Element[] => {
-    const els = display
+    const canArrange = canDrag && lensId === "all";
+    const els = visibleDisplay
       .filter(d => d.panel.placement.region === name)
       .map(d => {
         const bridge = d.isPreview ? shadowBridge : liveBridge;
@@ -824,22 +956,23 @@ export function App(): React.JSX.Element {
           <PanelFrame
             key={`${d.panel.panel_id}@${d.panel.version}${d.isPreview ? ":preview" : ""}:t${themeId}`}
             panel={d.panel}
+            provenance={!d.isPreview && !scrub ? provenanceById.get(d.panel.panel_id) : undefined}
             bridge={bridge}
             themeCss={themeCss}
             preview={d.isPreview}
             fault={faults[d.panel.panel_id]}
-            onRepair={d.isPreview ? undefined : (): void => void repairPanel(d.panel.panel_id)}
+            onRepair={!busy && !d.isPreview ? (): void => void repairPanel(d.panel.panel_id) : undefined}
             onRevert={d.isPreview ? undefined : (): void => void revertPanel(d.panel.panel_id)}
             onDismiss={(): void => dismissFault(d.panel.panel_id)}
-            onDragStart={canDrag && !d.isPreview ? setDragId : undefined}
+            onDragStart={canArrange && !d.isPreview ? setDragId : undefined}
             onDragEnd={(): void => { setDragId(null); setDropTarget(null); }}
             draggingSrc={dragId === d.panel.panel_id}
             wide={(d.panel.placement.w ?? (d.panel.placement.region === "top" ? 4 : 2)) >= 3}
-            onResize={canDrag && !d.isPreview && d.panel.placement.region !== "side"
+            onResize={canArrange && !d.isPreview && d.panel.placement.region !== "side"
               ? (): void => void toggleWidth(d.panel.panel_id) : undefined}
-            onSetWidth={canDrag && !d.isPreview && d.panel.placement.region !== "side"
+            onSetWidth={canArrange && !d.isPreview && d.panel.placement.region !== "side"
               ? (w): void => void setSize(d.panel.panel_id, { w }) : undefined}
-            onSetHeight={canDrag && !d.isPreview
+            onSetHeight={canArrange && !d.isPreview
               ? (h): void => void setSize(d.panel.panel_id, { h }) : undefined}
             onViewAs={canDrag && !d.isPreview && d.panel.declared_queries.length > 0
               ? (view): void => viewAs(d.panel, view) : undefined}
@@ -875,9 +1008,17 @@ export function App(): React.JSX.Element {
         onRename={(id, name) => { renameApp(id, name); setApps(listApps()); }}
         onDelete={id => void deleteApp(id)}
         onOpenData={() => openData()}
+        onOpenShapeMap={() => void openShapeMap()}
+        railOpen={railOpen}
+        onToggleRail={toggleRail}
+        version={head}
+        persistent={persistent}
         themes={THEMES}
         themeId={themeId}
         onSelectTheme={selectTheme}
+        lenses={lenses}
+        lensId={lensId}
+        onSelectLens={selectLens}
       />
       {!persistent ? (
         <div className="banner">
@@ -961,7 +1102,7 @@ export function App(): React.JSX.Element {
           onSchemaChange={() => void refreshPanels()}
         />
       ) : null}
-      <ConversationRail
+      {railOpen ? <ConversationRail
         feed={feed}
         preview={preview}
         busy={busy || scrub !== null}
@@ -981,6 +1122,7 @@ export function App(): React.JSX.Element {
         onIntent={t => void runIntent(t)}
         onKeep={() => void keep()}
         onDiscard={() => void discard()}
+        onRewind={version => void restoreTo(version)}
         onSaveKey={k => void saveKey(k)}
         onSaveBackend={u => void saveBackend(u)}
         onRemoveSamples={() => void removeSamples()}
@@ -988,8 +1130,20 @@ export function App(): React.JSX.Element {
         onExport={() => void exportArchive()}
         onImport={file => void importArchive(file)}
         onCopyDiagnostics={() => void copyDiagnostics()}
-      />
+      /> : null}
       </div>
+      {showShapeMap ? (
+        <ShapeMapView
+          tables={registryTables}
+          panels={panels}
+          history={history}
+          persistent={persistent}
+          onClose={() => setShowShapeMap(false)}
+          onOpenData={table => openData(table)}
+          onOpenHistory={() => setShowHistory(true)}
+          onAskAbout={askAboutPanel}
+        />
+      ) : null}
       {confirmBox ? (
         <div className="confirm-backdrop" onClick={() => settleConfirm(false)}>
           <div className="confirm-card" role="alertdialog" aria-modal="true"

@@ -35,7 +35,7 @@ describe("MetricsCollector", () => {
     expect(s.attempts).toBe(1);
     expect(s.firstPassCommitRate).toBe(1);
     expect(s.repairRate).toBe(0);
-    expect(s.firstPassByDiffKind.add_field.rate).toBe(1);
+    expect(s.firstPassByDiffKind.add_field!.rate).toBe(1);
   });
 
   it("does not count a repaired attempt as first-pass", () => {
@@ -88,7 +88,7 @@ describe("MetricsCollector", () => {
       { stage: "outcome", status: "preview", repaired: false },
     ]);
     c.markCommitted();
-    expect(c.all()[0].outcome).toBe("committed");
+    expect(c.all()[0]!.outcome).toBe("committed");
     // still counts as first-pass
     expect(c.summary().firstPassCommitRate).toBe(1);
   });
@@ -112,7 +112,7 @@ describe("MetricsCollector", () => {
       { stage: "outcome", status: "preview", repaired: false },
     ]);
     const r = c.all()[0];
-    expect(r.intentLength).toBe("secret private business idea about tacos".length);
+    expect(r!.intentLength).toBe("secret private business idea about tacos".length);
     expect(JSON.stringify(r)).not.toContain("tacos");
   });
 });

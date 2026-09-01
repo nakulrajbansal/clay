@@ -221,7 +221,7 @@ export function DataView(props: {
     columns.some(c => String(r[c.name] ?? "").toLowerCase().includes(q)));
 
   return (
-    <div className="dataview">
+    <div className="dataview" role="dialog" aria-label="Your data">
       <header className="dataview-header">
         <div className="dataview-title">
           <strong>Your data</strong>
@@ -265,7 +265,8 @@ export function DataView(props: {
               }}
             >⬇ CSV</button>
           ) : null}
-          <button className="dataview-close" title="Close (Esc)" onClick={props.onClose}>✕</button>
+          <button className="dataview-close" aria-label="Close data view"
+            title="Close (Esc)" onClick={props.onClose}>✕</button>
         </div>
       </header>
 

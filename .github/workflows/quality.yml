@@ -1,0 +1,74 @@
+name: Clay quality gate
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clay-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Audit production dependencies
+        run: pnpm audit --prod
+
+      - name: Strict typecheck, ordinary tests, and production build
+        run: pnpm check:ordinary
+
+      - name: Run the 10,000-case property gate
+        run: PB_RUNS=10000 pnpm --filter @clay/kernel test:pb
+
+      - name: Install browsers for product gates
+        run: pnpm exec playwright install --with-deps chromium firefox webkit
+
+      - name: Run product, responsive, and accessibility gates
+        run: |
+          pnpm --filter @clay/shell exec vite preview --host 127.0.0.1 --port 4173 --strictPort > preview.log 2>&1 &
+          preview_pid=$!
+          trap 'kill "$preview_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:4173/ > /dev/null; then
+              pnpm verify:product
+              pnpm verify:multi-app
+              pnpm verify:browsers
+              exit $?
+            fi
+            sleep 1
+          done
+          cat preview.log
+          exit 1
+
+      - name: Upload visual proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clay-shape-map-proof
+          path: evidence/nextgen-*.png
+          if-no-files-found: error

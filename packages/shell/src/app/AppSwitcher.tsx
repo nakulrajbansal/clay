@@ -2,9 +2,10 @@
 // a new one, or delete the current one. Switching is reload-based (App
 // handles the reload); this is just the chrome. Also hosts a theme
 // quick-switch (palette popover) on the right.
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { AppEntry } from "./apps";
 import type { Theme } from "./themes";
+import type { LensId, SituationalLens } from "./lenses";
 
 export function AppSwitcher(props: {
   apps: AppEntry[];
@@ -15,16 +16,27 @@ export function AppSwitcher(props: {
   onRename: (id: string, name: string) => void;
   onDelete: (id: string) => void;
   onOpenData: () => void;
+  onOpenShapeMap: () => void;
+  railOpen: boolean;
+  onToggleRail: () => void;
+  version: number;
+  persistent: boolean;
   themes: Theme[];
   themeId: string;
   onSelectTheme: (id: string) => void;
+  lenses: SituationalLens[];
+  lensId: LensId;
+  onSelectLens: (id: LensId) => void;
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState("");
   const [themeOpen, setThemeOpen] = useState(false);
+  const [lensOpen, setLensOpen] = useState(false);
+  const lensButtonRef = useRef<HTMLButtonElement>(null);
   const current = props.apps.find(a => a.id === props.currentId) ?? null;
   const currentTheme = props.themes.find(t => t.id === props.themeId) ?? props.themes[0]!;
+  const currentLens = props.lenses.find(lens => lens.id === props.lensId) ?? props.lenses[0]!;
   const startRename = (): void => { if (current) { setDraft(current.name); setRenaming(true); } };
   const saveRename = (): void => {
     if (current && draft.trim()) props.onRename(current.id, draft.trim());
@@ -33,7 +45,7 @@ export function AppSwitcher(props: {
 
   return (
     <header className="appbar">
-      <span className="appbar-brand">Clay</span>
+      <span className="appbar-brand"><span className="appbar-mark" aria-hidden="true" />Clay</span>
       <div className="appbar-switch">
         <button className="appbar-current" onClick={() => setOpen(o => !o)}>
           {current ? current.name : "My app"}
@@ -96,22 +108,80 @@ export function AppSwitcher(props: {
         ) : null}
       </div>
 
+      <span className={`appbar-trust${props.persistent ? "" : " appbar-trust-warn"}`}>
+        <span className="appbar-trust-dot" aria-hidden="true" />
+        {props.persistent ? "On this device" : "Session only"} · v{props.version}
+      </span>
+      <div className="appbar-lens">
+        <button
+          ref={lensButtonRef}
+          className={`appbar-action appbar-lens-btn${props.lensId === "all" ? "" : " active"}`}
+          aria-label={`Choose situational lens. Current: ${currentLens.name}`}
+          aria-expanded={lensOpen}
+          aria-haspopup="menu"
+          title="Change which views are visible without changing your data"
+          onClick={() => { setOpen(false); setThemeOpen(false); setLensOpen(value => !value); }}
+        >
+          <span className="appbar-action-icon" aria-hidden="true">◉</span>
+          <span className="appbar-action-label">{currentLens.name}</span>
+        </button>
+        {lensOpen ? (
+          <>
+            <div className="appbar-backdrop" onClick={() => setLensOpen(false)} />
+            <div className="appbar-lens-menu" role="menu" aria-label="Situational lenses"
+              onKeyDown={event => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setLensOpen(false);
+                  lensButtonRef.current?.focus();
+                }
+              }}>
+              <span className="appbar-menu-label">Same data, different moment</span>
+              {props.lenses.map((lens, index) => (
+                <button
+                  key={lens.id}
+                  role="menuitemradio"
+                  aria-checked={lens.id === props.lensId}
+                  disabled={lens.id !== "all" && lens.panelIds.length === 0}
+                  autoFocus={index === 0}
+                  className={`appbar-lens-item${lens.id === props.lensId ? " selected" : ""}`}
+                  onClick={() => { props.onSelectLens(lens.id); setLensOpen(false); }}
+                >
+                  <span><b>{lens.name}</b><small>{lens.description}</small></span>
+                  <em>{lens.panelIds.length}</em>
+                </button>
+              ))}
+            </div>
+          </>
+        ) : null}
+      </div>
       <button
-        className="appbar-theme-btn appbar-data-btn"
+        className="appbar-action appbar-data-btn"
+        aria-label="Open data"
         title="See, edit, and import your data"
         onClick={props.onOpenData}
       >
-        <span className="appbar-data-icon">▦</span>
-        Data
+        <span className="appbar-action-icon" aria-hidden="true">▦</span>
+        <span className="appbar-action-label">Data</span>
+      </button>
+      <button
+        className="appbar-action appbar-shape-btn"
+        aria-label="Open shape map"
+        title="See how your data, views, and history connect"
+        onClick={props.onOpenShapeMap}
+      >
+        <span className="appbar-action-icon" aria-hidden="true">⌘</span>
+        <span className="appbar-action-label">Shape map</span>
       </button>
       <div className="appbar-theme">
         <button
           className="appbar-theme-btn"
+          aria-label="Choose color scheme"
           title="Color scheme"
           onClick={() => setThemeOpen(o => !o)}
         >
           <span className="appbar-theme-dot" style={{ background: currentTheme.vars.accent }} />
-          Theme
+          <span className="appbar-action-label">Theme</span>
         </button>
         {themeOpen ? (
           <>
@@ -133,6 +203,14 @@ export function AppSwitcher(props: {
           </>
         ) : null}
       </div>
+      <button
+        className={`appbar-rail-toggle${props.railOpen ? " active" : ""}`}
+        aria-label={props.railOpen ? "Hide reshape" : "Show reshape"}
+        title={props.railOpen ? "Hide reshape" : "Show reshape"}
+        onClick={props.onToggleRail}
+      >
+        <span aria-hidden="true">{props.railOpen ? "◧" : "◨"}</span>
+      </button>
     </header>
   );
 }

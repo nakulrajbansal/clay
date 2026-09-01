@@ -32,6 +32,7 @@ const FORBIDDEN = new Set([
   "fetch", "XMLHttpRequest", "WebSocket", "EventSource", "navigator",
   "window", "document", "globalThis", "self", "top", "parent", "frames",
   "location", "history", "localStorage", "sessionStorage", "indexedDB",
+  "ownerDocument", "defaultView", "currentTarget",
   "caches", "cookie", "import", "eval", "Function", "setTimeout",
   "setInterval", "postMessage", "Worker", "SharedArrayBuffer", "Atomics",
   "WebAssembly", "Proxy", "Reflect", "constructor", "__proto__", "prototype",
@@ -292,7 +293,7 @@ function checkDeclarations(panel: PanelT, reg: Registry): ValidationIssue[] {
     }
   }
   for (const table of panel.declared_writes) {
-    if (!reg.has(table))
+    if (!reg.has(table) || reg.get(table)?.inactive)
       issues.push({ rule: "V4", panel: panel.panel_id,
         message: `declared_writes table '${table}' does not exist` });
   }

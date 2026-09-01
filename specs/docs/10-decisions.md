@@ -521,3 +521,91 @@ ADR-031 (2026-07-17) Serverless deploy target: durable sessions in Postgres
   CONSEQUENCE: redeploys no longer sign users out on any platform with
   DATABASE_URL set; test/serverless.test.ts simulates fresh instances
   per request over a shared fake pool and pins the SQL semantics.
+
+ADR-032 (2026-08-31) Rollback hides physical shape instead of deleting data
+  CONTEXT: inverse operations for a post-version table or column executed
+  `DROP TABLE` / `DROP COLUMN`. That contradicted Principle 1 and doc 04 §5:
+  rows and edited field values created after a shape change vanished on
+  rewind, while the old property test normalized the loss before comparing.
+  DECISION: inverse create/add operations mark registry tables or columns as
+  kernel-only `inactive` tombstones and leave SQLite bytes in place. The
+  public registry, query compiler, writes, Observer, and row history project
+  inactive shape away. Roll-forward or a compatible same-name re-add clears
+  the tombstone. A returning backfill updates only NULL cells, preserving
+  prior values while initializing rows created during the rewind.
+  CONSEQUENCE: rollback is information-preserving, truncated history still
+  retains recoverable physical values, and incompatible name reuse fails
+  rather than overwriting preserved data. Four direct regression tests plus
+  PB1 pin table rows, column values, marker-scoped backfill, and truncated re-add.
+  Archive format 2 carries the tombstones plus missing-cell markers while
+  retaining format-1 import compatibility; old binaries reject format 2.
+
+ADR-033 (2026-08-31) Panel writes require a fixed-runtime gesture grant
+  CONTEXT: declared_writes limited table scope but any panel could still call
+  insert/update/softDelete during module boot. Preview shadow writes were not
+  replayed by Keep, creating divergence, and live boot could mutate records
+  without an action. Raw panel error strings could also include row values and
+  flow into display or a model repair request.
+  DECISION: the trusted vnode renderer emits a protocol-level user_gesture
+  immediately before invoking a panel-authored callback from a trusted native
+  event. Synthetic `.click()`/dispatch paths cannot refresh the grant. The
+  Bridge grants up
+  to 8 declared writes for 5 seconds, refreshes the grant after a positive
+  shell confirmation, and rejects all background/boot writes. Generated code
+  never receives the MessagePort. The Bridge maps runtime errors to a small
+  code-based message and discards the untrusted raw string.
+  Shadow bridges set `allowWrites: false`; preview remains interactive for
+  sorting/filtering but data-entry actions unlock only after Keep.
+  CONSEQUENCE: forms, boards, and multi-write workflows continue to work, but
+  no record mutation can occur merely because a panel loaded. Integration
+  tests boot a hostile writer and then prove the same write succeeds on click.
+
+ADR-034 (2026-08-31) Hosted production is fail-closed
+  CONTEXT: a Vercel deploy without DATABASE_URL created an open mutation proxy;
+  a missing RESEND_API_KEY returned magic links in API responses. Cookie
+  sessions could not be revoked, body caps trusted Content-Length, and quota
+  check plus increment could race under serverless concurrency.
+  DECISION: Vercel requires model key, Postgres, Resend, and HTTPS APP_ORIGIN
+  before any endpoint is enabled. Local dev links require explicit AUTH=dev.
+  HTTPS cookies are Secure; POST /auth/logout revokes server state; request
+  streams are counted to 64KB; and free quota uses one conditional Postgres
+  update. Production CORS is pinned to APP_ORIGIN.
+  CONSEQUENCE: partial production configuration returns 503 rather than
+  silently weakening auth. Backend tests cover fail-closed config, logout,
+  Secure cookies, chunked oversize bodies, and concurrent quota admission.
+
+ADR-035 (2026-08-31) Provenance, trust receipts, and situational lenses are
+derived trusted-shell projections
+  CONTEXT: Shape Map and Change Contracts made proposed changes legible, but a
+  kept change lost its contract in the session feed, panels could not answer
+  “why is this here?”, and one app still exposed one fixed panel arrangement.
+  DECISION: derive panel provenance from existing panel_blobs plus version_log;
+  add no metadata table. Convert a kept Change Contract into a trust receipt
+  carrying the exact version, diff, affected views, touched tables, and rewind
+  target. Derive four app-local lenses from live panel manifests and persist
+  only the selected lens id in browser storage. A lens filters trusted-shell
+  visibility and never copies records, changes queries, or creates a version.
+  CONSEQUENCE: old apps gain provenance immediately, every kept reshape leaves
+  an actionable proof artifact, and users can move between review, focus, and
+  update contexts over one permanent substrate. Custom saved filter/layout
+  presets remain a later extension.
+
+ADR-036 (2026-08-31) Preview and restore actions bind to current history
+  CONTEXT: a kept-preview toast could outlive its original head, and a live
+  shape change could land while an older preview remained open.
+  DECISION: a PreviewHandle records its base version and refuses Keep after
+  any newer shape version. Every rewind entry point uses the current confirmed
+  restore path, and receipts for truncated versions are removed from the feed.
+  CONSEQUENCE: stale controls cannot silently truncate unrelated history or
+  commit a plan against an obsolete app shape. Ordinary row edits remain valid
+  during preview because they do not create a shape version.
+
+ADR-037 (2026-08-31) Archive import replaces only the current app namespace
+  CONTEXT: the validated import path wiped the whole OPFS pool and reopened
+  legacy default files, which could remove sibling apps and restore into the
+  wrong app.
+  DECISION: after staging and integrity checks pass, close only the current
+  app, delete only its namespaced user/system files, and reopen that same app
+  id before copying the staged archive.
+  CONSEQUENCE: importing a backup intentionally replaces the selected app while
+  every sibling app and its records remain untouched.

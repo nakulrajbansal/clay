@@ -14,8 +14,10 @@ export interface AuthStore {
   getUser(id: string): Promise<User | null>;
   /** current rolling-30d usage row, creating/rolling as needed */
   usage(userId: string): Promise<Usage>;
-  /** atomically increment and return the new count (Postgres: single
-   * UPDATE ... RETURNING; memory impl is trivially atomic) */
+  /** Atomically admit one metered attempt without ever crossing limit. */
+  consumeUsage(userId: string, limit: number):
+    Promise<{ allowed: boolean; usage: Usage }>;
+  /** atomically increment and return the new count (legacy/admin path) */
   incrementUsage(userId: string): Promise<number>;
 }
 
@@ -49,6 +51,13 @@ export class MemoryAuthStore implements AuthStore {
     }
     return u;
   }
+  async consumeUsage(userId: string, limit: number):
+    Promise<{ allowed: boolean; usage: Usage }> {
+    const u = await this.usage(userId);
+    if (u.used >= limit) return { allowed: false, usage: { ...u } };
+    u.used += 1;
+    return { allowed: true, usage: { ...u } };
+  }
   async incrementUsage(userId: string): Promise<number> {
     const u = await this.usage(userId);
     u.used += 1;
@@ -67,6 +76,8 @@ export interface SessionStore {
   redeem(token: string): Promise<string | null>;
   /** resolve a session id to a user id, rolling the expiry */
   userIdFor(sid: string | undefined | null): Promise<string | null>;
+  /** revoke a bearer/cookie session immediately */
+  revoke(sid: string | undefined | null): Promise<void>;
 }
 
 /** Magic-link tokens (15 min, single-use) and sessions (30d, rolling),
@@ -103,5 +114,9 @@ export class Sessions implements SessionStore {
     if (!s || s.expires < Date.now()) return null;
     s.expires = Date.now() + PERIOD_MS;           // rolling
     return s.userId;
+  }
+
+  async revoke(sid: string | undefined | null): Promise<void> {
+    if (sid) this.sessions.delete(sid);
   }
 }

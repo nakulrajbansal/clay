@@ -254,7 +254,7 @@ export class MutationPipeline {
 
       // S3: the Validator (V1–V7)
       const issues = [...blueprintIssues, ...validateMutationPlan(result.plan, {
-        registry: this.store.registrySnapshot(),
+        registry: this.store.validationRegistrySnapshot(),
         livePanelIds: this.store.livePanels().map(p => p.panel_id),
       })];
       if (issues.length > 0) {
@@ -308,9 +308,13 @@ export class MutationPipeline {
 
       // S5: preview in place; S6 on the caller's Keep/Discard
       const store = this.store;
+      const baseVersion = store.headVersion();
       const preview: PreviewHandle = {
-        plan, shadow, version: store.headVersion() + 1,
+        plan, shadow, version: baseVersion + 1,
         keep: (): number => {
+          if (store.headVersion() !== baseVersion)
+            throw new ClayError("E_VALIDATION",
+              "App changed while this preview was open. Discard it and reshape again.");
           // migrations are shape-level: applying to the LIVE db is safe even
           // if rows were added while previewing (G8)
           const version = store.commit({

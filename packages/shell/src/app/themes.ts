@@ -7,20 +7,21 @@
 export type ThemeVars = {
   bg: string; panel: string; border: string; borderStrong: string; border2: string;
   bgSoft: string; text: string; text2: string; text3: string;
-  accent: string; accentHover: string; accentSoft: string; accentText: string;
+  accent: string; accentHover: string; accentSoft: string; accentText: string; accentOn: string;
   chartArea: string;
 };
 export type Theme = { id: string; name: string; dark?: boolean; vars: ThemeVars };
 
 const LIGHT = {
   panel: "#ffffff", border: "#efeef3", borderStrong: "#e6e4ee", border2: "#e7e5ee",
-  bgSoft: "#f8f7fb", text: "#2b2a33", text2: "#6d6b78", text3: "#75737e",
+  bgSoft: "#f8f7fb", text: "#2b2a33", text2: "#6d6b78", text3: "#716f7a",
 };
 function light(
   id: string, name: string, bg: string,
   accent: string, accentHover: string, accentSoft: string, accentText: string, chartArea: string,
+  accentOn = "#ffffff",
 ): Theme {
-  return { id, name, vars: { ...LIGHT, bg, accent, accentHover, accentSoft, accentText, chartArea } };
+  return { id, name, vars: { ...LIGHT, bg, accent, accentHover, accentSoft, accentText, accentOn, chartArea } };
 }
 function dark(
   id: string, name: string,
@@ -31,18 +32,28 @@ function dark(
     vars: {
       border: "#2a2a37", borderStrong: "#35354c", border2: "#2a2a37", bgSoft: "#22222e",
       text: "#e8e7ef", text2: "#a8a6b8", text3: "#8f8da4", accentHover: v.accent,
+      accentOn: "#111118",
       ...v,
     } as ThemeVars,
   };
 }
 
 export const THEMES: Theme[] = [
-  light("indigo", "Indigo", "#f7f6f9", "#6a67e6", "#5b58dc", "#f1f0fc", "#4b47c4", "rgba(106,103,230,.12)"),
-  light("violet", "Violet", "#f8f6fc", "#8b5cf6", "#7c48f0", "#f3edfe", "#6d3fd4", "rgba(139,92,246,.12)"),
-  light("emerald", "Emerald", "#f5f8f6", "#10b981", "#0e9f70", "#e5f7f0", "#0b7a5e", "rgba(16,185,129,.12)"),
-  light("sky", "Sky", "#f5f8fb", "#2f8fd8", "#2680c6", "#e8f3fc", "#1f6fb0", "rgba(47,143,216,.12)"),
-  light("rose", "Rose", "#faf6f8", "#ec4899", "#e0357f", "#fdeef5", "#bd2e70", "rgba(236,72,153,.11)"),
-  light("amber", "Amber", "#faf7f2", "#e08c00", "#c97d00", "#fdf3e0", "#9a6200", "rgba(224,140,0,.12)"),
+  {
+    id: "kiln", name: "Kiln",
+    vars: {
+      bg: "#f3f0e9", panel: "#fbfaf6", border: "#e5dfd4", borderStrong: "#d4ccbf",
+      border2: "#ddd6ca", bgSoft: "#f0ebe2", text: "#25211d", text2: "#5f574f",
+      text3: "#6d655c", accent: "#bd5035", accentHover: "#a9432b", accentSoft: "#f6e4dc",
+      accentText: "#963c27", accentOn: "#ffffff", chartArea: "rgba(189,80,53,.13)",
+    },
+  },
+  light("indigo", "Indigo", "#f7f6f9", "#5b58dc", "#4f4ccf", "#f1f0fc", "#4b47c4", "rgba(91,88,220,.12)"),
+  light("violet", "Violet", "#f8f6fc", "#7440dc", "#6433c7", "#f3edfe", "#6337bd", "rgba(116,64,220,.12)"),
+  light("emerald", "Emerald", "#f5f8f6", "#10b981", "#0e9f70", "#e5f7f0", "#0b7a5e", "rgba(16,185,129,.12)", "#17231e"),
+  light("sky", "Sky", "#f5f8fb", "#2f8fd8", "#2680c6", "#e8f3fc", "#1f6fb0", "rgba(47,143,216,.12)", "#17231e"),
+  light("rose", "Rose", "#faf6f8", "#ec4899", "#e0357f", "#fdeef5", "#bd2e70", "rgba(236,72,153,.11)", "#17231e"),
+  light("amber", "Amber", "#faf7f2", "#e08c00", "#c97d00", "#fdf3e0", "#9a6200", "rgba(224,140,0,.12)", "#17231e"),
   light("graphite", "Graphite", "#f6f6f8", "#5b6472", "#4c5563", "#eef0f3", "#3a4150", "rgba(91,100,114,.12)"),
   dark("midnight", "Midnight", {
     bg: "#131319", panel: "#1b1b24", accent: "#7d7aec", accentHover: "#8f8cf0",
@@ -62,7 +73,7 @@ export const THEMES: Theme[] = [
   }),
 ];
 
-export const DEFAULT_THEME_ID = "ocean";
+export const DEFAULT_THEME_ID = "kiln";
 export function themeById(id: string | null | undefined): Theme {
   return THEMES.find(t => t.id === id) ?? THEMES[0]!;
 }
@@ -82,7 +93,7 @@ const CSS: Record<keyof ThemeVars, string> = {
   bg: "--bg", panel: "--panel", border: "--border", borderStrong: "--border-strong",
   border2: "--border-2", bgSoft: "--bg-soft", text: "--text", text2: "--text-2", text3: "--text-3",
   accent: "--accent", accentHover: "--accent-hover", accentSoft: "--accent-soft",
-  accentText: "--accent-text", chartArea: "--chart-area",
+  accentText: "--accent-text", accentOn: "--accent-on", chartArea: "--chart-area",
 };
 
 /** Apply a theme to the trusted shell (document root) live. */

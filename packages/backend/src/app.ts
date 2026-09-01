@@ -29,6 +29,8 @@ export type BackendOptions = {
      * an email provider is a deploy-time concern (OPEN-QUESTIONS) */
     devLinks?: boolean;
     sendEmail?: (email: string, link: string) => Promise<void> };
+  /** Production deployments pin CORS to their known shell origin. */
+  allowedOrigins?: string[];
 };
 
 export function makeDevAuth(): NonNullable<BackendOptions["auth"]> {
@@ -36,11 +38,40 @@ export function makeDevAuth(): NonNullable<BackendOptions["auth"]> {
 }
 
 export function createApp(opts: BackendOptions): Hono {
+  if (opts.auth && !opts.auth.devLinks && !opts.auth.sendEmail)
+    throw new Error("magic-link delivery is not configured");
   const app = new Hono();
+  const origins = new Set(opts.allowedOrigins ?? []);
   app.use("/*", cors({
-    origin: (o) => o ?? "*", credentials: true,
+    origin: (o) => origins.size === 0 ? (o ?? "*") : (o && origins.has(o) ? o : ""),
+    credentials: true,
     allowMethods: ["POST", "GET", "OPTIONS"],
   }));
+
+  const readBody = async (c: Context): Promise<unknown> => {
+    const len = Number(c.req.header("content-length") ?? "0");
+    if (Number.isFinite(len) && len > BODY_CAP)
+      throw new Response("body too large", { status: 413 });
+    const stream = c.req.raw.body;
+    if (!stream) throw new SyntaxError("empty body");
+    const reader = stream.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > BODY_CAP) {
+        await reader.cancel("body too large");
+        throw new Response("body too large", { status: 413 });
+      }
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(total);
+    let at = 0;
+    for (const chunk of chunks) { bytes.set(chunk, at); at += chunk.byteLength; }
+    return JSON.parse(new TextDecoder().decode(bytes));
+  };
 
   const client = (): Pick<MutationClient, "rawPlan" | "rawRepair"> => {
     if (!opts.apiKey) throw new Error("server is not configured with a model key");
@@ -52,15 +83,29 @@ export function createApp(opts: BackendOptions): Hono {
 
   // ---------- Phase 1.2: magic-link auth + quotas (doc 07 §1–3) ----------
   const auth = opts.auth;
+  const sessionId = (c: Context): string | null => {
+    const bearer = c.req.header("authorization")?.replace(/^Bearer\s+/i, "");
+    return bearer ?? getCookie(c, "clay_session") ?? null;
+  };
+  const writeSessionCookie = (c: Context, sid: string, maxAge: number): void =>
+    setCookie(c, "clay_session", sid, {
+      httpOnly: true, sameSite: "Lax", secure: new URL(c.req.url).protocol === "https:",
+      path: "/", maxAge,
+    });
   const sessionUser = async (c: Context): Promise<string | null> => {
     if (!auth) return null;
-    const bearer = c.req.header("authorization")?.replace(/^Bearer\s+/i, "");
-    return auth.sessions.userIdFor(bearer ?? getCookie(c, "clay_session"));
+    const sid = sessionId(c);
+    const userId = await auth.sessions.userIdFor(sid);
+    if (userId && sid && getCookie(c, "clay_session") === sid)
+      writeSessionCookie(c, sid, 30 * 86400);   // browser expiry rolls with server expiry
+    return userId;
   };
 
   if (auth) {
     app.post("/auth/magic-link", async (c) => {
-      const body = await c.req.json().catch(() => null) as { email?: string } | null;
+      let body: { email?: string } | null = null;
+      try { body = (await readBody(c)) as { email?: string }; }
+      catch (e) { if (e instanceof Response) return e; return c.json({ error: "bad JSON" }, 400); }
       const email = body?.email?.trim().toLowerCase();
       if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
         return c.json({ error: "a real email address is required" }, 400);
@@ -81,8 +126,7 @@ export function createApp(opts: BackendOptions): Hono {
       if (!sid) return wantsHtml
         ? c.redirect("/?auth=expired", 302)
         : c.json({ error: "link expired — request a fresh one" }, 401);
-      setCookie(c, "clay_session", sid,
-        { httpOnly: true, sameSite: "Lax", path: "/", maxAge: 30 * 86400 });
+      writeSessionCookie(c, sid, 30 * 86400);
       if (wantsHtml) return c.redirect("/?auth=ok", 302);
       // bearer echo: lets a cross-origin client store the session itself
       return c.json({ ok: true, session: sid });
@@ -100,6 +144,12 @@ export function createApp(opts: BackendOptions): Hono {
         period_end: new Date(usage.periodStart + 30 * 86_400_000).toISOString(),
       });
     });
+
+    app.post("/auth/logout", async (c) => {
+      await auth.sessions.revoke(sessionId(c));
+      writeSessionCookie(c, "", 0);
+      return c.body(null, 204);
+    });
   }
 
   /** Plan calls are metered; repairs are free (they're Clay's failure, not
@@ -110,22 +160,15 @@ export function createApp(opts: BackendOptions): Hono {
     const user = userId ? await auth.store.getUser(userId) : null;
     if (!user) return c.json({ error: "sign in first" }, 401);
     if (metered && user.plan !== "pro") {
-      const usage = await auth.store.usage(user.id);
-      if (usage.used >= FREE_QUOTA)
+      const consumed = await auth.store.consumeUsage(user.id, FREE_QUOTA);
+      if (!consumed.allowed)
         return c.json({
           error: `free plan is ${FREE_QUOTA} reshapes per 30 days — resets `
-            + new Date(usage.periodStart + 30 * 86_400_000).toISOString().slice(0, 10),
-          mutations_used: usage.used, quota: FREE_QUOTA,
+            + new Date(consumed.usage.periodStart + 30 * 86_400_000).toISOString().slice(0, 10),
+          mutations_used: consumed.usage.used, quota: FREE_QUOTA,
         }, 429);
-      await auth.store.incrementUsage(user.id);
     }
     return null;
-  };
-
-  const readBody = async (c: Context): Promise<unknown> => {
-    const len = Number(c.req.header("content-length") ?? "0");
-    if (len > BODY_CAP) throw new Response("body too large", { status: 413 });
-    return c.req.json();
   };
 
   app.post("/mutations/plan", async (c) => {

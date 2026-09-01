@@ -52,7 +52,8 @@ async function bootShellPanel(shellId: StarterShellId, panelId: string): Promise
   const [bridgeSide, panelSide] = portPair();
   const container = document.createElement("div");
   document.body.appendChild(container);
-  bootPanelRuntime({ port: panelSide, container, onPanelError: e => errors.push(e) });
+  bootPanelRuntime({ port: panelSide, container, onPanelError: e => errors.push(e),
+    trustSyntheticEvents: true });
   await bridge.attachPanel({
     panelId: panel.panel_id, title: panel.title, placement: panel.placement,
     code: panel.code, declaredQueries: panel.declared_queries,

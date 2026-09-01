@@ -28,6 +28,7 @@ export {
 export {
   ClayStore,
   type ClayManifest, type CommitInput, type HistoryEntry, type LivePanel,
+  type PanelProvenance,
   type PanelBlobInput, type VersionEntry,
 } from "./store";
 export {

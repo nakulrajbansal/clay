@@ -4,17 +4,19 @@
 // is one transferred MessagePort speaking the Bridge protocol.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { portFromMessagePort, type Bridge, type LivePanel } from "@clay/kernel";
+import {
+  portFromMessagePort, type Bridge, type LivePanel, type PanelProvenance,
+} from "@clay/kernel";
 // The fixed bootstrap, built to a single file and inlined (doc 06 §2).
 import runtimeBundle from "@clay/panel-runtime/iframe-bundle?raw";
 
 const PANEL_CSS = `
   :root { color-scheme: light;
-    --font: "Segoe UI Variable Text", "SF Pro Text", -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
-    --font-display: "Segoe UI Variable Display", "SF Pro Display", -apple-system, system-ui, "Segoe UI", sans-serif;
-    --panel: #ffffff; --text: #2b2a33; --text-2: #6d6b78; --text-3: #75737e;
+    --font: "Aptos", "Segoe UI Variable Text", "SF Pro Text", -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+    --font-display: "Aptos Display", "Segoe UI Variable Display", "SF Pro Display", -apple-system, system-ui, "Segoe UI", sans-serif;
+    --panel: #ffffff; --text: #2b2a33; --text-2: #6d6b78; --text-3: #716f7a;
     --border: #efeef3; --border-2: #e7e5ee; --bg-soft: #f8f7fb;
-    --accent: #6a67e6; --accent-soft: #f1f0fc; --accent-text: #4b47c4;
+    --accent: #6a67e6; --accent-soft: #f1f0fc; --accent-text: #4b47c4; --accent-on: #ffffff;
     --chart-area: rgba(106,103,230,.12);
     /* categorical series palette (light steps) — validated order, never cycle
        or reorder without re-running the palette validator (dataviz ADR-023) */
@@ -64,11 +66,9 @@ const PANEL_CSS = `
     grid-template-columns: repeat(auto-fit, minmax(108px, 1fr)); }
   .clay-grid { grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); }
   .clay-metric { position: relative; display: flex; flex-direction: column; gap: 6px;
-    padding: 13px 13px 12px 15px; background: linear-gradient(180deg, var(--panel), var(--bg-soft));
+    padding: 13px; background: var(--panel);
     border: 1px solid var(--border); border-radius: 14px; min-width: 0; overflow: hidden;
     box-shadow: 0 1px 2px rgba(40,38,60,.04); transition: transform .16s ease, box-shadow .16s ease; }
-  .clay-metric::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
-    background: linear-gradient(180deg, var(--accent), #a29ff5); }
   .clay-metric:hover { transform: translateY(-2px); box-shadow: 0 10px 26px rgba(40,38,60,.09); }
   .clay-metric-label { font-size: 10px; font-weight: 700; color: var(--text-3);
     text-transform: uppercase; letter-spacing: .06em; line-height: 1.35; }
@@ -87,8 +87,8 @@ const PANEL_CSS = `
   .clay-input:focus, .clay-select:focus, .clay-form textarea:focus { outline: none;
     border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   .clay-button { border: 0; border-radius: 10px; padding: 9px 15px; font: inherit;
-    font-weight: 600; color: #fff; cursor: pointer;
-    background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 86%, #fff), var(--accent));
+    font-weight: 600; color: var(--accent-on); cursor: pointer;
+    background: var(--accent);
     box-shadow: 0 2px 9px color-mix(in srgb, var(--accent) 38%, transparent), inset 0 1px 0 rgba(255,255,255,.18);
     transition: transform .08s ease, box-shadow .12s ease, filter .12s ease; }
   .clay-button:hover { filter: brightness(1.06); box-shadow: 0 4px 15px color-mix(in srgb, var(--accent) 45%, transparent); }
@@ -154,7 +154,7 @@ const PANEL_CSS = `
   .clay-box.clay-tone-amber { background: var(--tone-amber-bg); border-radius: 8px; }
   .clay-box.clay-tone-red { background: var(--tone-red-bg); border-radius: 8px; }
   .clay-box.clay-tone-gray, .clay-box.clay-tone-default { background: var(--tone-gray-bg); border-radius: 8px; }
-  .clay-box.clay-tone-accent { background: #eef2ff; border-radius: 8px; }
+  .clay-box.clay-tone-accent { background: var(--accent-soft); border-radius: 8px; }
   .clay-text-xs { font-size: 11px; } .clay-text-sm { font-size: 12px; }
   .clay-text-md { font-size: 14px; } .clay-text-lg { font-size: 18px; } .clay-text-xl { font-size: 24px; }
   .clay-text-bold { font-weight: 700; } .clay-text-muted { color: var(--text-3); }
@@ -164,9 +164,9 @@ const PANEL_CSS = `
   .clay-bar { display: flex; align-items: center; gap: 8px; }
   .clay-bar-label { font-size: 12px; min-width: 90px; color: var(--text-2); }
   .clay-bar-track { flex: 1; height: 14px; background: var(--bg-soft); border-radius: 999px; overflow: hidden; }
-  .clay-bar-fill { height: 100%; border-radius: 999px; background: #6366f1; }
+  .clay-bar-fill { height: 100%; border-radius: 999px; background: var(--accent); }
   .clay-bar-fill.clay-tone-green { background: #22c55e; } .clay-bar-fill.clay-tone-amber { background: #f59e0b; }
-  .clay-bar-fill.clay-tone-red { background: #ef4444; } .clay-bar-fill.clay-tone-accent { background: #6366f1; }
+  .clay-bar-fill.clay-tone-red { background: #ef4444; } .clay-bar-fill.clay-tone-accent { background: var(--accent); }
   .clay-bar-fill.clay-tone-gray { background: #a8a29e; }
   .clay-bar-caption { font-size: 11px; color: var(--text-3); }
   /* view components: kanban board + card grid */
@@ -322,9 +322,9 @@ const PANEL_CSS = `
     font-size: 11px; color: var(--text-2); white-space: nowrap; }
 
   .clay-scene svg { width: 100%; height: auto; display: block; }
-  .clay-fill-default, .clay-fill-accent { fill: #6366f1; } .clay-fill-green { fill: #22c55e; }
+  .clay-fill-default, .clay-fill-accent { fill: var(--accent); } .clay-fill-green { fill: #22c55e; }
   .clay-fill-amber { fill: #f59e0b; } .clay-fill-red { fill: #ef4444; } .clay-fill-gray { fill: #d6d3d1; }
-  .clay-stroke-gray { stroke: #d6d3d1; fill: #78716c; } .clay-stroke-accent { stroke: #6366f1; fill: #6366f1; }
+  .clay-stroke-gray { stroke: #d6d3d1; fill: #78716c; } .clay-stroke-accent { stroke: var(--accent); fill: var(--accent); }
   .clay-stroke-green { stroke: #22c55e; fill: #166534; } .clay-stroke-amber { stroke: #f59e0b; fill: #92400e; }
   .clay-stroke-red { stroke: #ef4444; fill: #991b1b; }
   .clay-scene-text { font-size: 11px; stroke: none; }
@@ -352,6 +352,7 @@ const VIEW_OPTIONS: { key: string; label: string; icon: string }[] = [
 
 export function PanelFrame(props: {
   panel: LivePanel;
+  provenance?: PanelProvenance;
   bridge: Bridge;
   preview?: boolean;
   fault?: PanelFaultInfo;
@@ -375,15 +376,20 @@ export function PanelFrame(props: {
   const { panel, bridge, preview } = props;
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const headerRef = useRef<HTMLElement>(null);
+  const provenanceRef = useRef<HTMLElement>(null);
   const [height, setHeight] = useState<number | null>(null);
   const [headerH, setHeaderH] = useState(49);
+  const [provenanceH, setProvenanceH] = useState(0);
   const [editTitle, setEditTitle] = useState<string | null>(null);
+  const [provenanceOpen, setProvenanceOpen] = useState(false);
   // Masonry (ADR-022a): the section spans exact 1px grid rows for its
   // measured height, so uneven panels pack without holes. Header height is
   // measured because titles can wrap.
   useLayoutEffect(() => {
     const h = headerRef.current?.offsetHeight;
     if (h && h !== headerH) setHeaderH(h);
+    const ph = provenanceRef.current?.offsetHeight ?? 0;
+    if (ph !== provenanceH) setProvenanceH(ph);
   });
   const [viewsOpen, setViewsOpen] = useState(false);
   const [dragW, setDragW] = useState<number | null>(null);   // live width preview (cols 1–4)
@@ -504,7 +510,7 @@ export function PanelFrame(props: {
     sectionStyle.gridColumn = col != null ? `${col + 1} / span ${span}` : `span ${span}`;
     // masonry row span (ADR-022a): header + iframe + borders + 16px gap,
     // in 1px implicit rows (see .region-top/.region-main in styles.css)
-    sectionStyle.gridRow = `span ${(effHeight ?? 180) + headerH + 2 + 16}`;
+    sectionStyle.gridRow = `span ${(effHeight ?? 180) + headerH + provenanceH + 2 + 16}`;
   }
   return (
     <section
@@ -555,9 +561,19 @@ export function PanelFrame(props: {
         )}
         {preview ? <span className="panel-proposed">proposed</span> : null}
         <span className="panel-tools">
+          {props.provenance ? (
+            <button
+              className={`panel-tool${provenanceOpen ? " active" : ""}`}
+              aria-label={`Why ${panel.title} exists`}
+              aria-expanded={provenanceOpen}
+              title="See this panel’s provenance"
+              onClick={() => setProvenanceOpen(open => !open)}
+            >◎</button>
+          ) : null}
           {props.onAskAbout ? (
             <button
               className="panel-tool"
+              aria-label={`Reshape ${panel.title}`}
               title="Reshape this panel — describe the change"
               onClick={props.onAskAbout}
             >✨</button>
@@ -565,6 +581,7 @@ export function PanelFrame(props: {
           {props.onEditData && editTable ? (
             <button
               className="panel-tool"
+              aria-label={`Edit ${editTable} data`}
               title={`Edit the ${editTable} data`}
               onClick={() => props.onEditData!(editTable)}
             >✎</button>
@@ -574,6 +591,7 @@ export function PanelFrame(props: {
               <button
                 ref={viewsBtnRef}
                 className="panel-tool"
+                aria-label={`Change view for ${panel.title}`}
                 title="Show this data another way"
                 onClick={openViews}
               >⇄</button>
@@ -599,6 +617,7 @@ export function PanelFrame(props: {
           {props.onResize ? (
             <button
               className="panel-resize panel-tool"
+              aria-label={`${props.wide ? "Make narrow" : "Make wide"}: ${panel.title}`}
               title={props.wide ? "Make narrow" : "Make wide"}
               onClick={props.onResize}
             >{props.wide ? "◨" : "▭"}</button>
@@ -606,12 +625,40 @@ export function PanelFrame(props: {
           {props.onRemove ? (
             <button
               className="panel-tool panel-tool-remove"
+              aria-label={`Remove ${panel.title}`}
               title="Remove this panel — rewind the timeline to bring it back"
               onClick={props.onRemove}
             >✕</button>
           ) : null}
         </span>
       </header>
+      {provenanceOpen && props.provenance ? (
+        <aside ref={provenanceRef} className="panel-provenance"
+          aria-label={`${panel.title} provenance`}>
+          <div className="panel-provenance-head">
+            <span>Why this view exists</span>
+            <button className="link" onClick={() => setProvenanceOpen(false)}>close</button>
+          </div>
+          <div className="panel-provenance-step">
+            <b>Created at v{props.provenance.createdVersion}</b>
+            <span>{props.provenance.createdIntent}</span>
+          </div>
+          {props.provenance.lastChangedVersion !== props.provenance.createdVersion ? (
+            <div className="panel-provenance-step">
+              <b>Last shaped at v{props.provenance.lastChangedVersion}</b>
+              <span>{props.provenance.lastChangedSummary}</span>
+            </div>
+          ) : null}
+          <div className="panel-provenance-data">
+            {panel.declared_queries.map(query => query.from).filter((name, index, all) => all.indexOf(name) === index)
+              .map(name => <span key={`read:${name}`}>{name}<small>read</small></span>)}
+            {panel.declared_writes.filter((name, index, all) => all.indexOf(name) === index)
+              .map(name => <span key={`write:${name}`}>{name}<small>write</small></span>)}
+            {panel.declared_queries.length === 0 && panel.declared_writes.length === 0
+              ? <span>Presentation only</span> : null}
+          </div>
+        </aside>
+      ) : null}
       <iframe
         ref={iframeRef}
         title={panel.panel_id}

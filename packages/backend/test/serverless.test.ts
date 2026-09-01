@@ -8,6 +8,8 @@ import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
 import { PgSessions, PostgresAuthStore, SCHEMA_SQL } from "../src/pg-store";
 import type { Queryable } from "../src/pg-store";
+import { buildServerlessApp } from "../../../api/index";
+import { FREE_QUOTA } from "../src/auth";
 
 const fakeClient = { rawPlan: async () => "{}", rawRepair: async () => "{}" };
 
@@ -43,6 +45,15 @@ function fakePool(): Queryable & { now: () => number; skew: number } {
         if (u && u.period_start < now - 30 * 86_400_000)
           Object.assign(u, { period_start: now, mutations_used: 0 });
         return { rows: [] };
+      }
+      if (/mutations_used < \$2/.test(sql)) {
+        const u = usage.get(p[0]!)!;
+        if (u.period_start < now - 30 * 86_400_000)
+          Object.assign(u, { period_start: now, mutations_used: 0 });
+        if (u.mutations_used >= Number(p[1])) return { rows: [] };
+        u.mutations_used += 1;
+        return { rows: [{ period_start: new Date(u.period_start).toISOString(),
+          mutations_used: u.mutations_used }] };
       }
       if (/SELECT period_start, mutations_used FROM usage/.test(sql)) {
         const u = usage.get(p[0]!)!;
@@ -80,6 +91,10 @@ function fakePool(): Queryable & { now: () => number; skew: number } {
         s.expires = now + 30 * 86_400_000;
         return { rows: [{ user_id: s.user_id }] };
       }
+      if (/DELETE FROM sessions/.test(sql)) {
+        sessions.delete(p[0]!);
+        return { rows: [] };
+      }
       throw new Error(`fakePool: unrecognized SQL: ${sql}`);
     },
   };
@@ -94,6 +109,12 @@ function instance(pool: Queryable): ReturnType<typeof createApp> {
 }
 
 describe("serverless statelessness (Vercel deploy path)", () => {
+  it("fails closed when any production auth dependency is missing", async () => {
+    const app = await buildServerlessApp({ ANTHROPIC_API_KEY: "sk-test" });
+    expect((await app.request("/healthz")).status).toBe(503);
+    expect((await app.request("/mutations/plan", { method: "POST" })).status).toBe(503);
+  });
+
   it("sign-in on instance A is visible to instances B and C", async () => {
     const pool = fakePool();
     const a = instance(pool);
@@ -145,5 +166,21 @@ describe("serverless statelessness (Vercel deploy path)", () => {
     pool.skew = 31 * 86_400_000;                    // a month later
     expect((await instance(pool).request("/me",
       { headers: { authorization: `Bearer ${session}` } })).status).toBe(401);
+  });
+
+  it("keeps the Postgres quota atomic across concurrent serverless instances", async () => {
+    const pool = fakePool();
+    const start = instance(pool);
+    const { link } = await (await start.request("/auth/magic-link", { method: "POST",
+      body: JSON.stringify({ email: "atomic@example.com" }),
+      headers: { "content-type": "application/json" } })).json() as { link: string };
+    const { session } = await (await instance(pool).request(link)).json() as { session: string };
+    const calls = await Promise.all(Array.from({ length: FREE_QUOTA + 8 }, () =>
+      instance(pool).request("/mutations/plan", { method: "POST",
+        body: JSON.stringify({ context: { intent: "x", registry: [], panels: [] } }),
+        headers: { "content-type": "application/json", authorization: `Bearer ${session}` },
+      })));
+    expect(calls.filter(response => response.status === 200)).toHaveLength(FREE_QUOTA);
+    expect(calls.filter(response => response.status === 429)).toHaveLength(8);
   });
 });

@@ -3,7 +3,7 @@
 // G15 rule — imported panel blobs are re-validated, never trusted.
 import { describe, expect, it } from "vitest";
 import {
-  ClayStore, crc32, registryToJson, zipRead, zipWrite,
+  ClayStore, crc32, deriveInverse, registryToJson, zipRead, zipWrite, type DbDriver,
 } from "../src/index";
 import { HEALTH_COMPUTED, seededStore } from "./helpers";
 
@@ -45,11 +45,12 @@ async function richStore(): Promise<ClayStore> {
 describe("export -> import round trip", () => {
   it("reproduces registry, data, history, panels, and row_history", async () => {
     const original = await richStore();
+    original.setCheckpoint(2, "milestone");
     const bytes = await original.exportArchive("test-app");
 
     const { store: imported, manifest, invalidPanels } =
       await ClayStore.importArchive(bytes);
-    expect(manifest).toMatchObject({ format: 1, app: "test-app", versions: 2 });
+    expect(manifest).toMatchObject({ format: 2, app: "test-app", versions: 2 });
     expect(invalidPanels).toEqual([]);
 
     expect(registryToJson(imported.registrySnapshot()))
@@ -79,6 +80,49 @@ describe("export -> import round trip", () => {
       .rejects.toThrowError(/unsupported archive format/);
   });
 
+  it("continues to import legacy format-1 archives", async () => {
+    const source = await richStore();
+    const parts = zipRead(await source.exportArchive("legacy"));
+    const legacy = zipWrite(parts.map(part => part.name === "manifest.json"
+      ? { ...part, data: new TextEncoder().encode(JSON.stringify({
+          ...JSON.parse(new TextDecoder().decode(part.data)), format: 1,
+        })) }
+      : part));
+    const { store, manifest } = await ClayStore.importArchive(legacy);
+    expect(manifest.format).toBe(1);
+    expect(store.query({ from: "projects" })).toHaveLength(3);
+    source.close(); store.close();
+  });
+
+  it("format 2 preserves inactive rollback values across export and import", async () => {
+    const source = await richStore();
+    const ops = [{ op: "add_column" as const, table: "projects",
+      column: { name: "private_note", type: "text" as const, required: false } }];
+    source.commit({ intent: "note", summary: "Adds note.",
+      migration: { operations: ops, inverse: deriveInverse(ops, source.registrySnapshot()) } });
+    const id = String(source.query({ from: "projects" })[0]!.id);
+    source.update("projects", id, { private_note: "must survive" });
+    source.rollbackTo(2, { truncate: true });
+    source.insert("projects", { name: "Added while note was inactive" });
+    const driver=(source as unknown as {driver:DbDriver}).driver;
+    driver.exec("INSERT INTO sys.inactive_cells VALUES(?,?,?)",["projects","private_note",id]);
+    expect(source.verifyIntegrity()).toContain("inactive-cell marker does not point to a NULL cell");
+    driver.exec("DELETE FROM sys.inactive_cells WHERE row_id=?",[id]);
+
+    const { store, manifest } = await ClayStore.importArchive(
+      await source.exportArchive("retained"));
+    expect(manifest.format).toBe(2);
+    const restored = [...ops, { op: "backfill" as const, table: "projects",
+      column: "private_note", value: "new default" }];
+    store.commit({ intent: "restore note", summary: "Restores note.",
+      migration: { operations: restored, inverse: deriveInverse(restored, store.registrySnapshot()) } });
+    expect(store.query({ from: "projects" })[0]!.private_note).toBe("must survive");
+    const later = store.query({ from: "projects" }).find(row =>
+      row.name === "Added while note was inactive");
+    expect(later?.private_note).toBe("new default");
+    source.close(); store.close();
+  });
+
   it("aborts on integrity failure (mixed-up databases)", async () => {
     const a = await richStore();
     const empty = await ClayStore.openMemory();
@@ -96,6 +140,18 @@ describe("export -> import round trip", () => {
       .rejects.toThrowError(/integrity/);
     a.close();
     empty.close();
+  });
+
+  it("rejects physical user columns missing from the registry", async () => {
+    const store = await richStore();
+    try {
+      const driver = (store as unknown as { driver: DbDriver }).driver;
+      driver.exec(`ALTER TABLE "projects" ADD COLUMN "orphan_note" TEXT`);
+
+      expect(store.verifyIntegrity()).toContain(
+        "'projects' has unregistered physical column 'orphan_note'",
+      );
+    } finally { store.close(); }
   });
 
   it("re-validates imported panel blobs (G15)", async () => {

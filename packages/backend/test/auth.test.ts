@@ -63,6 +63,39 @@ describe("magic-link auth (Phase 1.2)", () => {
     expect(expired.headers.get("location")).toBe("/?auth=expired");
   });
 
+  it("marks session cookies Secure on HTTPS and logout revokes bearer and cookie", async () => {
+    const { app } = appWithAuth();
+    const linkRes = await app.request("/auth/magic-link", { method: "POST",
+      body: JSON.stringify({ email: "secure@example.com" }),
+      headers: { "content-type": "application/json" } });
+    const { link } = await linkRes.json() as { link: string };
+    const callback = await app.request(`https://clay.example${link}`);
+    const { session } = await callback.json() as { session: string };
+    expect(callback.headers.get("set-cookie")).toContain("Secure");
+
+    const rolled = await app.request("https://clay.example/me", {
+      headers: { cookie: `clay_session=${session}` },
+    });
+    expect(rolled.status).toBe(200);
+    expect(rolled.headers.get("set-cookie")).toMatch(/Max-Age=2592000/i);
+
+    const logout = await app.request("https://clay.example/auth/logout", {
+      method: "POST", headers: { authorization: `Bearer ${session}` },
+    });
+    expect(logout.status).toBe(204);
+    expect(logout.headers.get("set-cookie")).toMatch(/clay_session=;.*Max-Age=0/i);
+    expect((await app.request("/me", {
+      headers: { authorization: `Bearer ${session}` },
+    })).status).toBe(401);
+  });
+
+  it("refuses an auth configuration that cannot deliver links", () => {
+    const dev = makeDevAuth();
+    expect(() => createApp({ apiKey: "sk-test", auth: {
+      store: dev.store, sessions: dev.sessions,
+    } })).toThrow(/magic-link delivery/i);
+  });
+
   it("magic-link tokens are single-use", async () => {
     const { app } = appWithAuth();
     const linkRes = await app.request("/auth/magic-link", { method: "POST",
@@ -101,6 +134,14 @@ describe("quotas (Phase 1.2)", () => {
     expect(repair.status).toBe(200);
     const me = await app.request("/me", { headers: { authorization: `Bearer ${sid}` } });
     expect(((await me.json()) as { mutations_used: number }).mutations_used).toBe(FREE_QUOTA);
+  });
+
+  it("atomically admits at most the free quota under concurrent requests", async () => {
+    const { app } = appWithAuth();
+    const sid = await signIn(app, "race@example.com");
+    const results = await Promise.all(Array.from({ length: FREE_QUOTA + 8 }, () => plan(app, sid)));
+    expect(results.filter(response => response.status === 200)).toHaveLength(FREE_QUOTA);
+    expect(results.filter(response => response.status === 429)).toHaveLength(8);
   });
 
   it("without an auth store the proxy stays open (Phase 1.1 local mode)", async () => {

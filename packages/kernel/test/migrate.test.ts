@@ -10,9 +10,9 @@ const expectCode = (fn: () => unknown, code: string): void => {
 };
 
 describe("per-op forward/inverse pairs", () => {
-  it("add_column round-trips bit-equal", async () => {
+  it("add_column rolls back as a hidden projection while physical values remain", async () => {
     const store = await seededStore();
-    const dump0 = JSON.stringify(store.dumpTable("projects"));
+    const view0 = JSON.stringify(store.query({ from: "projects" }));
     store.commit({
       intent: "add notes", summary: "Adds notes.",
       migration: {
@@ -23,7 +23,8 @@ describe("per-op forward/inverse pairs", () => {
     });
     expect(store.query({ from: "projects" })[0]).toHaveProperty("notes", null);
     store.rollbackTo(1);
-    expect(JSON.stringify(store.dumpTable("projects"))).toBe(dump0);
+    expect(JSON.stringify(store.query({ from: "projects" }))).toBe(view0);
+    expect(store.dumpTable("projects")[0]).toHaveProperty("notes");
     store.rollForwardTo(2);
     expect(store.query({ from: "projects" })[0]).toHaveProperty("notes", null);
     store.close();
@@ -84,12 +85,14 @@ describe("per-op forward/inverse pairs", () => {
     used.insert("projects", { name: "Denali", status: "blue" });
     used.rollbackTo(1);
     expect(statusCol(used.registrySnapshot())).toEqual(["green", "amber", "red", "blue"]);
+    used.rollForwardTo(2);
+    expect(statusCol(used.registrySnapshot())).toEqual(["green", "amber", "red", "blue"]);
     used.close();
   });
 
-  it("backfill fills a same-plan column; rollback drops it", async () => {
+  it("backfill fills a same-plan column; rollback hides it without deleting values", async () => {
     const store = await seededStore();
-    const dump0 = JSON.stringify(store.dumpTable("projects"));
+    const view0 = JSON.stringify(store.query({ from: "projects" }));
     store.commit({
       intent: "priority", summary: "Adds priority defaulting to medium.",
       migration: {
@@ -103,7 +106,8 @@ describe("per-op forward/inverse pairs", () => {
     });
     expect(store.query({ from: "projects" }).map(r => r.priority)).toEqual(["medium", "medium", "medium"]);
     store.rollbackTo(1);
-    expect(JSON.stringify(store.dumpTable("projects"))).toBe(dump0);
+    expect(JSON.stringify(store.query({ from: "projects" }))).toBe(view0);
+    expect(store.dumpTable("projects")[0]).toHaveProperty("priority", "medium");
     store.close();
   });
 

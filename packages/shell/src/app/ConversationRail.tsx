@@ -6,14 +6,19 @@ import type { Suggestion } from "@clay/kernel";
 import type { PreviewInfo } from "../worker/db-worker";
 import type { StatusInfo } from "./worker-client";
 import type { Theme } from "./themes";
+import { buildChangeContract, type TrustReceipt } from "./change-contract";
 
 export type FeedItem =
   | { kind: "intent"; text: string }
   | { kind: "clarify"; question: string }
   | { kind: "failure"; reasons: string[] }
-  | { kind: "committed"; summary: string; version: number }
+  | { kind: "committed"; summary: string; version: number; receipt?: TrustReceipt }
   | { kind: "discarded"; summary: string }
   | { kind: "info"; text: string };
+
+export function pruneFeedAfterVersion(feed: FeedItem[], version: number): FeedItem[] {
+  return feed.filter(item => item.kind !== "committed" || item.version <= version);
+}
 
 // Reshapes take 10–40s; a wait that TALKS reads as working, a spinner
 // reads as stuck. Purely cosmetic pacing — real stages live in the worker.
@@ -33,6 +38,7 @@ export function ConversationRail(props: {
   onIntent: (text: string) => void;
   onKeep: () => void;
   onDiscard: () => void;
+  onRewind: (version: number) => void;
   onSaveKey: (key: string) => void;
   onSaveBackend: (url: string) => void;
   onRemoveSamples: () => void;
@@ -87,6 +93,7 @@ export function ConversationRail(props: {
 
   const mb = (n: number | null): string =>
     n == null ? "—" : n < 1e6 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1e6).toFixed(1)} MB`;
+  const contract = props.preview ? buildChangeContract(props.preview) : null;
 
   const submit = (): void => {
     const t = text.trim();
@@ -265,9 +272,33 @@ export function ConversationRail(props: {
               );
             case "committed":
               return (
-                <div key={i} className="feed-item feed-committed">
-                  {item.summary} <span className="feed-version">v{item.version}</span>
-                </div>
+                <details key={i} className="feed-item feed-committed trust-receipt">
+                  <summary>
+                    <span><b>Kept</b> {item.summary}</span>
+                    <span className="feed-version">v{item.version}</span>
+                  </summary>
+                  {item.receipt ? (
+                    <div className="trust-receipt-body">
+                      <div className="trust-receipt-proof">
+                        <span>✓ Rows retained</span><span>✓ Reversible</span>
+                        <span>✓ {item.receipt.affectedViews.length} view{item.receipt.affectedViews.length === 1 ? "" : "s"}</span>
+                      </div>
+                      <ul className="trust-receipt-changes">
+                        {item.receipt.changes.map((change, index) =>
+                          <li key={index}>{change.detail}</li>)}
+                      </ul>
+                      {item.receipt.dataAccess.length > 0 ? (
+                        <p className="trust-receipt-access">
+                          Data: {item.receipt.dataAccess.map(access => access.table).join(", ")}
+                        </p>
+                      ) : null}
+                      <button className="link" disabled={props.busy || props.preview !== null}
+                        onClick={() => props.onRewind(item.receipt!.rewindTo)}>
+                        Rewind to v{item.receipt.rewindTo}
+                      </button>
+                    </div>
+                  ) : null}
+                </details>
               );
             case "discarded":
               return <div key={i} className="feed-item feed-discarded">Discarded: {item.summary}</div>;
@@ -289,7 +320,8 @@ export function ConversationRail(props: {
             <div key={s.id} className="suggestion-chip">
               <span className="suggestion-reason">{s.reason}</span>
               <span className="rail-actions">
-                <button className="primary" onClick={() => props.onAcceptSuggestion(s)}>
+                <button className="primary" disabled={props.busy}
+                  onClick={() => props.onAcceptSuggestion(s)}>
                   Do it
                 </button>
                 <button className="link" onClick={() => props.onDismissSuggestion(s)}>
@@ -301,19 +333,72 @@ export function ConversationRail(props: {
         </div>
       ) : null}
 
-      {props.preview ? (
-        <div className="diff-card">
-          <p className="diff-summary">{props.preview.summary}</p>
-          <ul className="diff-lines">
-            {props.preview.diff.map((d, i) => (
-              <li key={i} className={`diff-${d.kind}`}>{d.detail}</li>
+      {contract ? (
+        <div className="change-contract" role="region" aria-label="Change contract">
+          <header className="contract-header">
+            <div>
+              <span className="contract-eyebrow">Change contract</span>
+              <strong>Ready as v{contract.version}</strong>
+            </div>
+            <span className="contract-verified"><i aria-hidden="true">✓</i> verified</span>
+          </header>
+
+          <p className="contract-summary">{contract.summary}</p>
+
+          <div className="contract-guarantees" aria-label="Safety guarantees">
+            {contract.guarantees.map(guarantee => (
+              <span key={guarantee.id} className="contract-guarantee" title={guarantee.detail}>
+                <i aria-hidden="true">✓</i>{guarantee.label}
+              </span>
             ))}
-          </ul>
-          {props.preview.repaired ? (
-            <p className="diff-note">Took one repair round.</p>
+          </div>
+
+          <section className="contract-section">
+            <span className="contract-label">What changes</span>
+            <ul className="diff-lines">
+              {contract.changes.map((change, index) => (
+                <li key={index} className={`diff-${change.kind}`}>{change.detail}</li>
+              ))}
+            </ul>
+          </section>
+
+          {contract.dataAccess.length > 0 ? (
+            <section className="contract-section">
+              <span className="contract-label">Panel data access</span>
+              <div className="contract-chips">
+                {contract.dataAccess.map(access => (
+                  <span key={access.table} className={`contract-chip contract-chip-${access.mode}`}>
+                    {access.table}<small>{access.mode === "read_write" ? "read + write" : access.mode}</small>
+                  </span>
+                ))}
+              </div>
+            </section>
           ) : null}
-          <div className="rail-actions">
-            <button className="primary" onClick={props.onKeep}>Keep</button>
+
+          {contract.changedViews.length > 0 || contract.removedPanelIds.length > 0 ? (
+            <section className="contract-section">
+              <span className="contract-label">Affected views</span>
+              <div className="contract-chips">
+                {contract.changedViews.map(view => (
+                  <span key={view.id} className="contract-chip contract-view">
+                    {view.title}<small>{view.access === "none" ? "presentation" : view.access.replace("_", " + ")}</small>
+                  </span>
+                ))}
+                {contract.removedPanelIds.length > 0 ? (
+                  <span className="contract-chip contract-remove">
+                    {contract.removedPanelIds.length} removed<small>rewindable</small>
+                  </span>
+                ) : null}
+              </div>
+            </section>
+          ) : null}
+
+          {contract.repaired ? (
+            <p className="contract-repair">One repair round was needed before this preview passed.</p>
+          ) : null}
+          <p className="contract-promise">Nothing is live until you keep it.</p>
+          <div className="contract-actions">
+            <button className="primary" onClick={props.onKeep}>Keep change</button>
             <button onClick={props.onDiscard}>Discard</button>
           </div>
         </div>

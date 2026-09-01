@@ -8,8 +8,8 @@ origin (same origin → session cookies work with no CORS gymnastics).
   auth state — sessions, magic-link tokens, rate limits — lives in
   Postgres (`PgSessions`), because serverless instances share no memory.
 - **Fly.io** (alternative): one long-running container (`Dockerfile` +
-  `fly.toml`), backend serves `STATIC_DIR`. Works with either Postgres
-  or the in-memory session store.
+  `fly.toml`), backend serves `STATIC_DIR`. Production still requires
+  Postgres and real email delivery.
 
 ## Accounts you need (once)
 1. **Anthropic** — server API key (`ANTHROPIC_API_KEY`).
@@ -21,8 +21,9 @@ origin (same origin → session cookies work with no CORS gymnastics).
    connections (5432) exhaust fast under serverless. Free-tier Supabase
    pauses after ~1 week of inactivity; open the dashboard to wake it.
 4. **Email** — Resend: `RESEND_API_KEY` + a verified `FROM_EMAIL` domain.
-   Without it, magic links are returned in the API response (dev mode) —
-   fine for staging, not for production.
+   Missing production dependencies fail closed with HTTP 503. Magic links
+   are returned in an API response only when a local server explicitly sets
+   `AUTH=dev`.
 5. **Domain** — set `APP_ORIGIN=https://yourdomain.com` so emailed links
    resolve (on Vercel this is your `*.vercel.app` URL until you attach a
    domain).
@@ -36,7 +37,8 @@ origin (same origin → session cookies work with no CORS gymnastics).
 3. Project → Settings → Environment Variables:
    `ANTHROPIC_API_KEY`, `DATABASE_URL` (pooler string), `RESEND_API_KEY`,
    `FROM_EMAIL`, `APP_ORIGIN` (the deployment URL).
-   Omit `RESEND_API_KEY` on a staging deploy to get dev links.
+   All five variables are required. A partially configured deployment does
+   not expose an unauthenticated mutation proxy or dev magic links.
 4. Deploy. Nothing to configure in the app: on an https deploy the shell
    defaults its backend to the page's own origin (Settings can still
    override for cross-origin setups), and clicking a magic-link email
@@ -62,7 +64,9 @@ fly deploy
 ## Notes
 - With `DATABASE_URL` set, sessions/tokens/rate-limits are durable
   (Postgres, `PgSessions`) — redeploys keep users signed in. The
-  in-memory store remains for local dev (`AUTH=dev`) and container
-  deploys without a database.
+  in-memory store remains for explicit local development only (`AUTH=dev`).
+- Session cookies are `Secure` on HTTPS, logout revokes the server session,
+  body limits are enforced while streaming, and free-plan quota admission is
+  atomic under concurrent requests.
 - The privacy commitment holds server-side: users + usage counters +
   opaque session ids only, no intent text, no schema payloads (doc 07 §2).

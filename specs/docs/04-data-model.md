@@ -91,12 +91,15 @@ Evaluation budget: 10k steps (defensive; grammar can't loop anyway).
 
 ## 7. Export / import
 
-.clay archive = zip{ manifest.json (format version, app name, counts),
+.clay archive format 2 = zip{ manifest.json (format version, app name, counts),
 user.db, system.db }. Import validates format version, opens in a staging
 OPFS dir, runs integrity checks (registry vs actual schema; version_log
 chain continuity; panel blob presence), then atomically swaps directories.
 Export is also the backup story and a trust artifact: the user can hold
 their whole app in one file.
+Format 2 records inactive rollback tombstones and missing-cell markers.
+Current builds continue to import format 1; older builds reject format 2 so
+they cannot accidentally expose inactive future shape.
 
 ## 8. Storage lifecycle
 
