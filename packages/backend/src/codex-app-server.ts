@@ -133,7 +133,7 @@ export async function terminateProcessTree(child: ChildProcessWithoutNullStreams
       "try{",
       "$targets=New-Object 'System.Collections.Generic.HashSet[int]'",
       "$frontier=@($root)",
-      "while($frontier.Count -gt 0){$next=@();foreach($parentId in $frontier){$children=@(Get-CimInstance Win32_Process -Filter \"ParentProcessId = $parentId\" -ErrorAction Stop);foreach($p in $children){if($targets.Add([int]$p.ProcessId)){$next+=[int]$p.ProcessId}}};$frontier=$next}",
+      "while($frontier.Count -gt 0){$next=@();foreach($parentId in $frontier){$children=@(Get-WmiObject Win32_Process -Filter \"ParentProcessId = $parentId\" -ErrorAction Stop);foreach($p in $children){if($targets.Add([int]$p.ProcessId)){$next+=[int]$p.ProcessId}}};$frontier=$next}",
       "foreach($processId in $targets){Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue}",
       "Stop-Process -Id $root -Force -ErrorAction SilentlyContinue",
       "Start-Sleep -Milliseconds 50",
@@ -143,10 +143,11 @@ export async function terminateProcessTree(child: ChildProcessWithoutNullStreams
       "}catch{exit 2}",
     ].join(";");
     const orphanSweep = await runBoundedCleanup(
-      "powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], 2_500,
+      "powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], 5_000,
     );
     if (!orphanSweep.completed || orphanSweep.code !== 0)
-      throw new Error("Codex process cleanup could not be verified.");
+      throw new Error(`Codex process cleanup could not be verified `
+        + `(completed=${orphanSweep.completed}, code=${String(orphanSweep.code)}).`);
   } else {
     try { process.kill(-child.pid, "SIGKILL"); }
     catch { try { child.kill("SIGKILL"); } catch { /* already gone */ } }
