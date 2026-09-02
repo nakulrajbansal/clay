@@ -193,6 +193,26 @@ export async function waitForExit(
   });
 }
 
+export async function waitForProcessGroupExit(
+  processGroupId: number,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try { process.kill(-processGroupId, 0); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
+      throw error;
+    }
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  try { process.kill(-processGroupId, 0); return false; }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
+    throw error;
+  }
+}
+
 export async function terminateProcessTree(
   child: ChildProcessWithoutNullStreams,
 ): Promise<void> {
@@ -201,11 +221,20 @@ export async function terminateProcessTree(
     if (child.exitCode === null && child.signalCode === null) {
       try { child.kill("SIGKILL"); } catch { /* job runner already stopped */ }
     }
-  } else {
-    try { process.kill(-child.pid, "SIGKILL"); }
-    catch { try { child.kill("SIGKILL"); } catch { /* already gone */ } }
+    if (!await waitForExit(child, 2_000))
+      throw new Error("Codex process cleanup could not be verified.");
+    return;
   }
-  if (!await waitForExit(child, 2_000))
+  try { process.kill(-child.pid, "SIGKILL"); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    if (child.exitCode === null && child.signalCode === null)
+      try { child.kill("SIGKILL"); } catch { /* already gone */ }
+  }
+  const [rootExited, groupExited] = await Promise.all([
+    waitForExit(child, 2_000), waitForProcessGroupExit(child.pid, 2_000),
+  ]);
+  if (!rootExited || !groupExited)
     throw new Error("Codex process cleanup could not be verified.");
 }
 
