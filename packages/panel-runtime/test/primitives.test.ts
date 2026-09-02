@@ -41,8 +41,13 @@ describe("event isolation", () => {
       }), container, { userAction: fn => fn() });
 
       expect(replacementCalls).toBe(0);
-      container.querySelector<HTMLButtonElement>("button")!.click();
+      (container.firstElementChild as HTMLButtonElement).click();
       expect(callbackCalls).toBe(1);
+
+      const chart = document.createElement("div");
+      render(h(Chart, { kind: "bar", data: [{ x: "A", y: 1 }] }), chart);
+      expect(replacementCalls).toBe(0);
+      expect(chart.querySelector("[aria-label]")).not.toBeNull();
     } finally {
       EventTarget.prototype.addEventListener = original;
     }

@@ -31,6 +31,7 @@ export function addColumnCommit(store: ClayStore, table: string, column: NewColu
   return store.commit({
     intent: `add a ${name} column to ${table}`,
     summary: `Added a “${name}” column to ${table}.`,
+    semanticOrigin: "direct",
     migration: { operations: ops, inverse: deriveInverse(ops, store.registrySnapshot()) },
     panels: [],
     diff: [{ kind: "add_field", detail: `${name} (${column.type}) on ${table}` }],
@@ -45,6 +46,7 @@ export function renameColumnCommit(store: ClayStore, table: string, from: string
   return store.commit({
     intent: `rename ${table}.${from} to ${next}`,
     summary: `Renamed “${from}” to “${next}” on ${table}.`,
+    semanticOrigin: "direct",
     migration: { operations: ops, inverse: deriveInverse(ops, store.registrySnapshot()) },
     panels: [],
     diff: [{ kind: "change_field", detail: `${from} → ${next} on ${table}` }],

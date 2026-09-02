@@ -5,6 +5,7 @@ import { Hono } from "hono";
 import { handle } from "hono/vercel";
 import { createApp } from "../packages/backend/src/app";
 import { PgSessions, PostgresAuthStore } from "../packages/backend/src/pg-store";
+import { resolveProductionConfig } from "../packages/backend/src/model-config";
 
 export type ServerlessEnv = {
   DATABASE_URL?: string;
@@ -12,6 +13,11 @@ export type ServerlessEnv = {
   FROM_EMAIL?: string;
   APP_ORIGIN?: string;
   ANTHROPIC_API_KEY?: string;
+  ANTHROPIC_MODEL?: string;
+  OPENAI_API_KEY?: string;
+  OPENAI_MODEL?: string;
+  MODEL_PROVIDER?: string;
+  AUTH?: string;
 };
 
 function unavailable(): Hono {
@@ -21,23 +27,15 @@ function unavailable(): Hono {
 }
 
 export async function buildServerlessApp(env: ServerlessEnv): Promise<Hono> {
-  const dbUrl = env.DATABASE_URL?.trim();
-  const resendKey = env.RESEND_API_KEY?.trim();
-  const apiKey = env.ANTHROPIC_API_KEY?.trim();
-  const appOrigin = env.APP_ORIGIN?.replace(/\/$/, "").trim();
-  if (!dbUrl || !resendKey || !apiKey || !appOrigin) return unavailable();
+  let config;
+  try { config = resolveProductionConfig(env); }
+  catch { return unavailable(); }
 
-  try {
-    const parsedOrigin = new URL(appOrigin);
-    if (parsedOrigin.protocol !== "https:") return unavailable();
-  } catch { return unavailable(); }
-
-  const store = PostgresAuthStore.connect(dbUrl);
+  const store = PostgresAuthStore.connect(config.databaseUrl);
   await store.ensureSchema();
-  const fromEmail = env.FROM_EMAIL ?? "Clay <login@example.com>";
   const app = createApp({
-    apiKey,
-    allowedOrigins: [appOrigin],
+    model: config.model,
+    allowedOrigins: [config.appOrigin],
     auth: {
       store,
       sessions: new PgSessions(store.db),
@@ -47,13 +45,13 @@ export async function buildServerlessApp(env: ServerlessEnv): Promise<Hono> {
           method: "POST",
           headers: {
             "content-type": "application/json",
-            authorization: `Bearer ${resendKey}`,
+            authorization: `Bearer ${config.resendApiKey}`,
           },
           body: JSON.stringify({
-            from: fromEmail,
+            from: config.fromEmail,
             to: [email],
             subject: "Your Clay sign-in link",
-            text: `Sign in to Clay: ${appOrigin}${link}\n\n`
+            text: `Sign in to Clay: ${config.appOrigin}${link}\n\n`
               + "The link works once and expires in 15 minutes.",
           }),
         });

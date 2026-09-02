@@ -93,6 +93,12 @@ check(await dialog.getByText("deals", { exact: true }).count() >= 1,
   "shape map contains real registry tables");
 check(await dialog.getByText("Pipeline · drag a deal between stages", { exact: true }).count() >= 1,
   "shape map contains real live panels");
+const explainField = dialog.getByRole("button", { name: /^Explain deals\./ }).first();
+await explainField.click();
+check(await dialog.getByText("Why this field exists", { exact: true }).count() === 1,
+  "field provenance explains stable semantic history");
+check(await dialog.getByText(/Field ID/).count() === 1,
+  "field provenance exposes its stable trusted identity");
 await page.waitForTimeout(350); // audit the settled state, after the entry transition
 const axe = await new AxeBuilder({ page }).include(".shape-map").analyze();
 const blockingA11y = axe.violations.filter(violation =>
@@ -109,9 +115,27 @@ await page.screenshot({ path: `${outDir}/nextgen-shape-map-desktop.png`, fullPag
 
 await dialog.getByRole("button", { name: "Open deals data" }).click();
 await page.locator(".dataview").waitFor();
+check(await page.locator(".dataview").evaluate(element => element.contains(document.activeElement)),
+  "Shape Map hands focus to the opened Data surface");
 check(await page.locator(".dataview-tab.selected").textContent() === "deals",
   "a substrate node opens the exact real data table");
 await page.locator(".dataview-close").click();
+check(await page.getByRole("button", { name: "Open shape map" })
+  .evaluate(element => element === document.activeElement),
+  "closing Data returns focus to the Shape Map trigger");
+
+await page.getByRole("button", { name: "Open shape map" }).click();
+await dialog.waitFor();
+await dialog.getByRole("button", { name: "Open the full timeline" }).click();
+const historyDialog = page.getByRole("dialog", { name: "App history" });
+await historyDialog.waitFor();
+check(await historyDialog.evaluate(element => element.contains(document.activeElement)),
+  "Shape Map hands focus to the opened History surface");
+await page.keyboard.press("Escape");
+await historyDialog.waitFor({ state: "detached" });
+check(await page.getByRole("button", { name: "Open shape map" })
+  .evaluate(element => element === document.activeElement),
+  "closing History returns focus to the Shape Map trigger");
 
 await page.getByRole("button", { name: "Open shape map" }).click();
 await dialog.waitFor();
@@ -126,6 +150,8 @@ await page.waitForFunction(prefix =>
 );
 check((await composer.inputValue()).startsWith(panelPrefix),
   "a live-view node points the reshape composer at that exact panel");
+check(await composer.evaluate(element => element === document.activeElement),
+  "Shape Map hands focus to the targeted reshape composer");
 
 await page.setViewportSize({ width: 820, height: 980 });
 await page.getByRole("button", { name: "Open shape map" }).click();

@@ -27,6 +27,21 @@ function stripAnnotations(node: unknown): unknown {
 }
 const apiSchema = stripAnnotations(apiSchemaRaw);
 
+function strictifyObjects(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(strictifyObjects);
+  if (node && typeof node === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(node)) out[key] = strictifyObjects(value);
+    if (out.properties && typeof out.properties === "object") {
+      out.required = Object.keys(out.properties as Record<string, unknown>);
+      out.additionalProperties = false;
+    }
+    return out;
+  }
+  return node;
+}
+const openaiApiSchema = strictifyObjects(apiSchema);
+
 /**
  * Trim display strings to the constitution's limits BEFORE Zod, so a merely
  * over-long summary/detail/assumption never fails validation and burns the
@@ -88,7 +103,8 @@ export function hydrateApiPlan(input: unknown): unknown {
   return plan;
 }
 import {
-  ANTHROPIC_API_URL, ANTHROPIC_VERSION, DEFAULT_MODEL, MAX_TOKENS,
+  ANTHROPIC_API_URL, ANTHROPIC_VERSION, DEFAULT_MODEL, DEFAULT_OPENAI_MODEL,
+  MAX_TOKENS, OPENAI_API_URL,
   REPAIR_MODEL, TEMPERATURE,
 } from "./config/models";
 import {
@@ -100,6 +116,7 @@ type MutationPlanT = import("@clay/schema").MutationPlan;
 
 export type Transport =
   | { mode: "byo"; apiKey: string }
+  | { mode: "openai"; apiKey: string; model?: string; endpoint?: string }
   | { mode: "hosted"; endpoint: string; session?: string };
 
 export type PlanResult =
@@ -130,6 +147,14 @@ type AnthropicResponse = {
   content?: { type: string; text?: string }[];
   usage?: { input_tokens: number; output_tokens: number };
   stop_reason?: string;
+};
+
+type OpenAIResponse = {
+  status?: string;
+  output?: Array<{ type?: string; content?: Array<{
+    type?: string; text?: string; refusal?: string;
+  }> }>;
+  usage?: { input_tokens: number; output_tokens: number };
 };
 
 export class MutationClient {
@@ -183,6 +208,9 @@ export class MutationClient {
     try {
       if (this.transport.mode === "byo") {
         const r = await this.byoRequest(ctx, repair);
+        raw = r.raw; usage = r.usage;
+      } else if (this.transport.mode === "openai") {
+        const r = await this.openaiRequest(ctx, repair);
         raw = r.raw; usage = r.usage;
       } else {
         raw = await this.hostedRequest(this.transport.endpoint, ctx, repair);
@@ -264,6 +292,50 @@ export class MutationClient {
     if (!block?.text)
       throw new MutationRequestError("E_MODEL", "no text block in response");
     return { raw: block.text, usage: parsed.usage };
+  }
+
+  private async openaiRequest(
+    ctx: S1Context,
+    repair: { priorPlanRaw: string; failures: string[] } | null,
+  ): Promise<{ raw: string; usage?: { input_tokens: number; output_tokens: number } }> {
+    if (this.transport.mode !== "openai")
+      throw new MutationRequestError("E_NET", "not openai");
+    const body = {
+      model: this.transport.model ?? DEFAULT_OPENAI_MODEL,
+      instructions: this.systemPrompt,
+      input: this.buildMessages(ctx, repair),
+      max_output_tokens: MAX_TOKENS,
+      store: false,
+      tools: [],
+      text: { format: {
+        type: "json_schema", name: "clay_mutation_plan", strict: true,
+        schema: openaiApiSchema,
+      } },
+    };
+    const endpoint = this.transport.endpoint ?? OPENAI_API_URL;
+    const res = await this.fetchFn(endpoint, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${this.transport.apiKey}`,
+      },
+      body: JSON.stringify(body),
+    });
+    const text = await res.text();
+    if (!res.ok)
+      throw new MutationRequestError("E_MODEL",
+        `openai ${res.status}: ${text.slice(0, 400)}`);
+    const parsed = JSON.parse(text) as OpenAIResponse;
+    if (parsed.status === "incomplete")
+      throw new MutationRequestError("E_MODEL", "OpenAI response was incomplete");
+    const blocks = (parsed.output ?? []).flatMap(item => item.content ?? []);
+    const refusal = blocks.find(block => block.type === "refusal")?.refusal;
+    if (refusal)
+      throw new MutationRequestError("E_MODEL", `OpenAI refused the request: ${refusal}`);
+    const raw = blocks.find(block => block.type === "output_text")?.text;
+    if (!raw)
+      throw new MutationRequestError("E_MODEL", "no output_text in OpenAI response");
+    return parsed.usage ? { raw, usage: parsed.usage } : { raw };
   }
 
   private async hostedRequest(

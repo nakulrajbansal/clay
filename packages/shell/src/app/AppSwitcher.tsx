@@ -5,7 +5,8 @@
 import { useRef, useState } from "react";
 import type { AppEntry } from "./apps";
 import type { Theme } from "./themes";
-import type { LensId, SituationalLens } from "./lenses";
+import { isSavedLensId, type LensId, type SituationalLens } from "./lenses";
+import { ModalDialog } from "./ModalDialog";
 
 export function AppSwitcher(props: {
   apps: AppEntry[];
@@ -26,14 +27,22 @@ export function AppSwitcher(props: {
   onSelectTheme: (id: string) => void;
   lenses: SituationalLens[];
   lensId: LensId;
+  lensReady: boolean;
   onSelectLens: (id: LensId) => void;
+  onSaveLens: (name: string) => Promise<void>;
+  onDeleteLens: (id: LensId) => Promise<void>;
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState("");
   const [themeOpen, setThemeOpen] = useState(false);
   const [lensOpen, setLensOpen] = useState(false);
+  const [savingLens, setSavingLens] = useState(false);
+  const [lensDraft, setLensDraft] = useState("");
+  const [confirmDeleteLens, setConfirmDeleteLens] = useState<LensId | null>(null);
   const lensButtonRef = useRef<HTMLButtonElement>(null);
+  const firstLensRef = useRef<HTMLButtonElement>(null);
+  const lensItemRefs = useRef(new Map<LensId, HTMLButtonElement>());
   const current = props.apps.find(a => a.id === props.currentId) ?? null;
   const currentTheme = props.themes.find(t => t.id === props.themeId) ?? props.themes[0]!;
   const currentLens = props.lenses.find(lens => lens.id === props.lensId) ?? props.lenses[0]!;
@@ -41,6 +50,20 @@ export function AppSwitcher(props: {
   const saveRename = (): void => {
     if (current && draft.trim()) props.onRename(current.id, draft.trim());
     setRenaming(false); setOpen(false);
+  };
+  const closeLens = (restoreFocus = true): void => {
+    setLensOpen(false); setSavingLens(false); setConfirmDeleteLens(null);
+    if (restoreFocus) lensButtonRef.current?.focus();
+  };
+  const selectLens = (id: LensId): void => { props.onSelectLens(id); closeLens(); };
+  const saveLens = async (): Promise<void> => {
+    const name = lensDraft.trim();
+    if (!name) return;
+    await props.onSaveLens(name);
+    setLensDraft(""); closeLens();
+  };
+  const deleteLens = async (id: LensId): Promise<void> => {
+    await props.onDeleteLens(id); closeLens();
   };
 
   return (
@@ -118,7 +141,7 @@ export function AppSwitcher(props: {
           className={`appbar-action appbar-lens-btn${props.lensId === "all" ? "" : " active"}`}
           aria-label={`Choose situational lens. Current: ${currentLens.name}`}
           aria-expanded={lensOpen}
-          aria-haspopup="menu"
+          aria-haspopup="dialog"
           title="Change which views are visible without changing your data"
           onClick={() => { setOpen(false); setThemeOpen(false); setLensOpen(value => !value); }}
         >
@@ -126,33 +149,80 @@ export function AppSwitcher(props: {
           <span className="appbar-action-label">{currentLens.name}</span>
         </button>
         {lensOpen ? (
-          <>
-            <div className="appbar-backdrop" onClick={() => setLensOpen(false)} />
-            <div className="appbar-lens-menu" role="menu" aria-label="Situational lenses"
-              onKeyDown={event => {
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  setLensOpen(false);
-                  lensButtonRef.current?.focus();
-                }
-              }}>
+          <ModalDialog className="appbar-lens-menu"
+            backdropClassName="appbar-backdrop appbar-lens-backdrop"
+            ariaLabel="Situational lenses" onClose={() => closeLens()}
+            returnFocusRef={lensButtonRef}>
               <span className="appbar-menu-label">Same data, different moment</span>
               {props.lenses.map((lens, index) => (
-                <button
-                  key={lens.id}
-                  role="menuitemradio"
-                  aria-checked={lens.id === props.lensId}
-                  disabled={lens.id !== "all" && lens.panelIds.length === 0}
-                  autoFocus={index === 0}
-                  className={`appbar-lens-item${lens.id === props.lensId ? " selected" : ""}`}
-                  onClick={() => { props.onSelectLens(lens.id); setLensOpen(false); }}
-                >
-                  <span><b>{lens.name}</b><small>{lens.description}</small></span>
-                  <em>{lens.panelIds.length}</em>
-                </button>
+                <div key={lens.id} className="appbar-lens-row">
+                  <button
+                    ref={element => {
+                      if (element) lensItemRefs.current.set(lens.id, element);
+                      else lensItemRefs.current.delete(lens.id);
+                      if (index === 0) firstLensRef.current = element;
+                    }}
+                    aria-pressed={lens.id === props.lensId}
+                    disabled={lens.id !== "all" && lens.panelIds.length === 0}
+                    autoFocus={index === 0}
+                    className={`appbar-lens-item${lens.id === props.lensId ? " selected" : ""}`}
+                    onClick={() => selectLens(lens.id)}>
+                    <span><b>{lens.name}</b><small>{lens.description}</small></span>
+                    <em>{lens.capturedCount === undefined
+                      ? lens.panelIds.length : `${lens.panelIds.length}/${lens.capturedCount}`}</em>
+                  </button>
+                  {isSavedLensId(lens.id) ? (
+                    confirmDeleteLens === lens.id ? (
+                      <div className="appbar-lens-delete-confirm" role="group"
+                        aria-label={`Confirm delete lens ${lens.name}`}
+                        onKeyDown={event => {
+                          if (event.key !== "Escape") return;
+                          event.preventDefault(); event.stopPropagation();
+                          setConfirmDeleteLens(null);
+                          lensItemRefs.current.get(lens.id)?.focus();
+                        }}>
+                        <button autoFocus className="danger" onClick={() => void deleteLens(lens.id)}>Delete</button>
+                        <button onClick={() => {
+                          setConfirmDeleteLens(null);
+                          lensItemRefs.current.get(lens.id)?.focus();
+                        }}>Cancel</button>
+                      </div>
+                    ) : (
+                      <button className="appbar-lens-delete"
+                        aria-label={`Delete lens ${lens.name}`}
+                        onClick={() => setConfirmDeleteLens(lens.id)}>×</button>
+                    )
+                  ) : null}
+                </div>
               ))}
-            </div>
-          </>
+              {savingLens ? (
+                <div className="appbar-lens-save">
+                  <input autoFocus value={lensDraft} maxLength={40}
+                    aria-label="Saved lens name" placeholder="Lens name"
+                    onChange={event => setLensDraft(event.target.value)}
+                    onKeyDown={event => {
+                      if (event.key === "Enter" && lensDraft.trim()) {
+                        void saveLens();
+                      }
+                      if (event.key === "Escape") {
+                        event.preventDefault(); event.stopPropagation();
+                        setSavingLens(false);
+                        firstLensRef.current?.focus();
+                      }
+                    }} />
+                  <button disabled={!lensDraft.trim()}
+                    onClick={() => void saveLens()}>
+                    Save
+                  </button>
+                </div>
+              ) : (
+                <button className="appbar-lens-create" disabled={!props.lensReady}
+                  title={props.lensReady ? undefined : "Saved lenses are still loading"}
+                  onClick={() => setSavingLens(true)}>
+                  + Save current view
+                </button>
+              )}
+          </ModalDialog>
         ) : null}
       </div>
       <button

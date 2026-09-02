@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
+    "codex": "tsx src/codex-server.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

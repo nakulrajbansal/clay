@@ -1,13 +1,18 @@
-import type { LivePanel, RegTable } from "@clay/kernel";
+import type {
+  FieldProvenance, LivePanel, RegTable, SemanticSchemaTraceV1,
+} from "@clay/kernel";
 
 export type ShapeField = {
+  id?: string;
   name: string;
   type: string;
   computed: boolean;
   required: boolean;
+  provenance?: FieldProvenance;
 };
 
 export type ShapeTable = {
+  id?: string;
   name: string;
   fields: ShapeField[];
   connectedPanelIds: string[];
@@ -54,7 +59,12 @@ export function buildShapeMap(
   registryTables: RegTable[],
   livePanels: LivePanel[],
   versions: number,
+  semanticTrace?: SemanticSchemaTraceV1 | null,
+  fieldProvenance: FieldProvenance[] = [],
 ): ShapeMap {
+  const tableIds = new Map((semanticTrace?.tables ?? []).map(table => [table.name, table.tableId]));
+  const fieldsByName = new Map(fieldProvenance.map(field =>
+    [`${field.tableName}.${field.fieldName}`, field]));
   const panels: ShapePanel[] = livePanels
     .map(panel => ({
       id: panel.panel_id,
@@ -83,14 +93,17 @@ export function buildShapeMap(
 
   const tables: ShapeTable[] = registryTables
     .map(table => ({
+      id: tableIds.get(table.name),
       name: table.name,
       fields: table.columns
         .filter(column => !column.hidden)
         .map(column => ({
+          id: fieldsByName.get(`${table.name}.${column.name}`)?.fieldId,
           name: column.name,
           type: column.type,
           computed: column.type === "computed",
           required: column.required,
+          provenance: fieldsByName.get(`${table.name}.${column.name}`),
         }))
         .sort((a, b) => a.name.localeCompare(b.name)),
       connectedPanelIds: uniqueSorted(

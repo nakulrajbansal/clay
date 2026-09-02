@@ -25,6 +25,36 @@ rewind, export, and carry away.
 Every phase below names which principles/ADRs it leans on so the guardrails
 stay visible as scope grows.
 
+## Next-generation moat workstream (FIRST SLICE SHIPPED 2026-09-01)
+
+The first compounding moat slice is now implemented and release-gated:
+
+1. **Stable semantic subjects and relationships.** Tables, fields, and typed
+   relationships have private UUIDv7 identities that survive rename, rollback,
+   reactivation, fork, and archive import. `contains` and computed
+   `derived_from` edges are lifecycle-aware. Optional concept classification
+   requires reviewed metadata and is never inferred from labels (ADR-039).
+2. **User-saved situational lenses.** A user can save, reload, apply, and delete
+   named per-app panel projections with incarnation-safe panel references and
+   bounded layout snapshots. Records and canonical layout are never copied or
+   versioned by a lens. Saved filter restoration, rename, and full edit mode
+   remain the next lens slice (ADR-040).
+3. **Field-level provenance.** Shape Map exposes stable field history,
+   aliases, creation or legacy-backfill status, latest shaping version,
+   required state, computed expressions, and stable dependency IDs.
+4. **Private activation and trust evidence.** A closed enum-only vocabulary is
+   reduced immediately into local daily integer counters. No prompts, names,
+   records, identifiers, free-form metadata, or exact timestamps are stored.
+   Users can inspect, disable, or erase it independently (ADR-041).
+5. **Semantic code-split boundaries.** PanelFrame, Data, History, Shape Map,
+   and Private activity load on demand. Vite-manifest tests enforce entry,
+   boot-critical, lazy-closure, total-shell, worker, and CSS budgets. Lens
+   storage and commands have been extracted from the app orchestrator.
+
+This work makes the moat concrete: permanent semantics, reversible change,
+visible trust, contextual projections, and a verified reshape corpus all meet
+at the same trusted transaction boundary.
+
 ---
 
 ## Phase 0 — The malleable core (SHIPPED)
@@ -55,22 +85,21 @@ operated against the launch gates. That is Phase 1.
 ## Phase 1 — Make it real (hosted, deployed, verifiably private)
 
 Goal: anyone can use Clay **without bringing their own API key**, on the
-web, and can *see* that their data never leaves their device. This is the
-gap between "runs on my machine" and "a product." (ADR-011: hosted proxy
-AND BYO, both first-class; today only BYO exists.)
+web, and can *see* that their data never leaves their device. The repository
+now supports Clay hosted, OpenAI Responses, Local Codex Preview, and Anthropic
+BYO through one certified reshape protocol (ADR-011, ADR-038).
 
 1. **Hosted backend** (doc 07). A thin Hono proxy: `/mutations/plan` and
    `/mutations/repair` assemble the prompt server-side (reusing
    `@clay/mutation`) and call the model with a server-held key; records
-   never cross the wire (B2, ADR-009). Server re-validates plans before
-   returning (never relays malformed output).
-   - First slice (buildable/testable now): the proxy with the key in server
-     env, no auth — makes hosted mode work locally and centralizes the model
-     request in one controllable place.
-   - Then: magic-link auth, per-account quotas (atomic in Postgres), the
-     `/me` meter, quota-exhaustion UX (G10).
-2. **Deploy**. Vercel (static shell + worker assets) + backend on Fly.io /
-   Cloudflare Workers + Neon Postgres. `.env.example`, no secrets in repo.
+   never cross the wire (B2, ADR-009). The server returns strict structured
+   output; the worker hydrates and validates it before shadow execution.
+   - Local development can run the open proxy explicitly.
+   - Production enables magic-link auth, atomic Postgres quotas, and the `/me`
+     meter; it cannot start with dev links or incomplete configuration.
+2. **Deploy**. Same-origin Vercel or the Node/Fly entry with Postgres and
+   transactional email. Both production paths share one fail-closed config
+   validator. `.env.example` contains no secrets.
 3. **Landing page** with the live DevTools privacy-verification section: a
    visitor watches the network tab during real use and sees zero record
    traffic (P1–P4 backed by CI, not adjectives).
@@ -170,9 +199,12 @@ These stay on the horizon until Phases 1–3 prove the core with real users.
 
 ## Immediate next step
 
-Phase 1.1 — the **hosted backend proxy**, built as a runnable local server
-first (key in env, no auth), so hosted mode works without a browser-stored
-key and the model request lives in one controllable place. Auth, quotas,
-and deploy configs follow. This is the one piece of the original four-week
-plan still unbuilt, and it makes ADR-011's "hosted, first-class" promise
-true.
+Complete the real subscription-backed Local Codex acceptance run after the
+operator refreshes the machine's Codex login. Clay hosted, Anthropic BYO,
+OpenAI Responses, and Local Codex now share one validated MutationPlan,
+Change contract, preview, Keep or Discard, and repair protocol (ADR-038).
+
+After that acceptance run, the next product slice is **Counterfactual Lab**:
+compare two live app shapes on shadow data and keep either or neither. It must
+reuse the existing reversible transaction boundary rather than introducing a
+second change system.

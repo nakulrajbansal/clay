@@ -3,7 +3,7 @@
 // jump to (render the app as it was, read-only) or restore to (rewind the
 // live app). No model call, no data risk — a trusted read over the version
 // log (created_at / intent_text / summary per version, ADR-007 linear).
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { HistoryEntry } from "@clay/kernel";
 
 export function relTime(iso: string): string {
@@ -29,10 +29,22 @@ export function HistoryView(props: {
   const entries = [...props.history].reverse();   // newest first
   const [editing, setEditing] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() =>
+      dialogRef.current?.querySelector<HTMLElement>("button")?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, []);
   const startEdit = (v: number, label: string): void => { setEditing(v); setDraft(label); };
   const save = (v: number): void => { props.onSetCheckpoint(v, draft); setEditing(null); };
   return (
-    <div className="historyview" role="dialog" aria-label="App history">
+    <div ref={dialogRef} className="historyview" role="dialog" aria-label="App history"
+      tabIndex={-1} onKeyDown={event => {
+        if (event.key !== "Escape") return;
+        event.preventDefault(); event.stopPropagation();
+        if (editing !== null) setEditing(null);
+        else props.onClose();
+      }}>
       <div className="historyview-header">
         <div>
           <h2 className="historyview-title">History</h2>

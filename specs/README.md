@@ -18,7 +18,7 @@ This package is the complete pre-implementation specification. Read order:
 | docs/08-testing.md | Regression suite, property tests, quality gates, launch criteria |
 | docs/09-build-plan.md | Milestones, exit tests, cut order, post-launch instrumentation |
 | docs/10-decisions.md | ADR log: every major decision, alternatives, and rationale |
-| docs/12-roadmap.md | Product roadmap: vision → shipped phases (Phase 0 done; 1–4 ahead) |
+| docs/12-roadmap.md | Product roadmap: shipped core and moat slices, current acceptance dependency, and later phases |
 | docs/13-moat-and-plan.md | The moat (liquid UI over a permanent substrate) + the step plan to widen it |
 | docs/14-reshaping-roadmap.md | The gentle slope from direct manipulation to structural reshaping |
 | docs/15-next-generation-strategy.md | 2026 category research, competitive map, compounding moat, feature system, and release gates |

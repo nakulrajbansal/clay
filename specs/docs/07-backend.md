@@ -8,19 +8,21 @@ POST /auth/magic-link {email} -> 204 (sends link; rate: 3/hour/email)
 GET  /auth/callback?token=    -> session cookie (httpOnly, 30d, rolling)
 POST /auth/logout             -> revokes session + expires cookie
 GET  /me                      -> {user_id, plan, mutations_used, quota, period_end}
-POST /mutations/plan          -> proxies to Anthropic
-     body: {context: S1Context, intent: string}   // Zod-validated
-     resp: MutationPlan (validated server-side against the same Zod schema
-           before returning — the server never relays malformed plans)
+POST /mutations/plan          -> proxies to the selected hosted model provider
+     body: {context: S1Context}
+     resp: raw structured-output text. The worker hydrates and validates it
+           before shadow execution; malformed output is never executed.
      guards: auth required; quota check+increment (atomic, Postgres);
-             body <= 64KB; 2 concurrent per user; 30s upstream timeout
+             application/json; body <= 64KB
 POST /mutations/repair        -> same shape + error payload; counts against
                                  the SAME attempt (no double quota charge)
 GET  /healthz
 
-Production is fail-closed. Vercel requires `ANTHROPIC_API_KEY`,
-`DATABASE_URL`, `RESEND_API_KEY`, and an HTTPS `APP_ORIGIN`; missing any one
-returns 503 and never exposes the open local proxy or a dev magic link.
+Production is fail-closed. Vercel and the Node/Fly entry require
+`DATABASE_URL`, `RESEND_API_KEY`, a valid `FROM_EMAIL`, a bare HTTPS
+`APP_ORIGIN`, and the credential for the selected `MODEL_PROVIDER`
+(`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`). Missing or malformed configuration
+returns 503 on Vercel or prevents the Node server from starting.
 Dev links require the explicit local-only `AUTH=dev` switch.
 
 ## 2. Data (Postgres)
@@ -44,14 +46,14 @@ against the 64KB cap even when Content-Length is absent.
 
 ## 4. Model proxy behavior
 
-Adds server key, sets structured-output schema, streams disabled v1
-(plans are all-or-nothing), retries 429/5xx twice with jitter, tags requests
-with hashed user id for Anthropic-side abuse visibility. Prompt version
-pinned per deploy; prompt changes ship like code (PR + regression gate).
+Adds the server-held provider key and uses the shared prompt and simplified
+MutationPlan output schema. Anthropic uses `output_config`; OpenAI Responses
+uses strict JSON schema with `store:false` and no tools. Streams are disabled.
+Prompt changes ship like code through regression and product gates.
 
 ## 5. Ops
 
-Deploy: Fly.io or Cloudflare Workers (+ Neon Postgres). Logs: structured,
+Deploy: Fly.io or Vercel (+ Postgres). Logs: structured,
 no payload bodies. Alerts: first-pass commit rate (from client-reported
 attempt beacons, opt-in), 5xx rate, upstream latency p95. Backups: Postgres
 daily (accounts only — user app data doesn't exist here, the backup story
@@ -61,6 +63,6 @@ for app data is the client-side .clay export).
 
 Client calls api.anthropic.com directly (CORS-permitting endpoint w/
 anthropic-dangerous-direct-browser-access acknowledged in settings UX),
-key in system.db settings, never sent to Clay. Backend untouched. Feature
+key in device-local browser storage, never sent to Clay. Backend untouched. Feature
 parity except quota UI. This mode must remain first-class: it is the trust
 anchor and the HN launch story.

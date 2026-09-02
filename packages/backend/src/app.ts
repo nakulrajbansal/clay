@@ -11,17 +11,28 @@
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { getCookie, setCookie } from "hono/cookie";
-import { MutationClient, type S1Context } from "@clay/mutation";
+import { timingSafeEqual } from "node:crypto";
+import {
+  DEFAULT_MODEL, DEFAULT_OPENAI_MODEL, MutationClient, type S1Context,
+} from "@clay/mutation";
 import {
   FREE_QUOTA, MemoryAuthStore, Sessions, type AuthStore, type SessionStore,
 } from "./auth";
 
 const BODY_CAP = 64 * 1024;   // doc 07: body <= 64KB
 
+export type ModelProvider = "anthropic" | "openai" | "codex";
+export type ModelConfig = { provider: ModelProvider; apiKey?: string; model?: string };
+
 export type BackendOptions = {
-  apiKey: string | undefined;
+  apiKey?: string;
+  model?: ModelConfig;
+  modelStatus?: () => {
+    model: boolean; provider?: string; model_id?: string;
+    reachable?: boolean; detail?: string;
+  };
   /** injectable for tests; defaults to a real MutationClient */
-  makeClient?: (apiKey: string) => Pick<MutationClient, "rawPlan" | "rawRepair">;
+  makeClient?: (model: ModelConfig) => Pick<MutationClient, "rawPlan" | "rawRepair">;
   /** Phase 1.2: providing an auth store turns on auth + quotas. Omitted =
    * Phase 1.1 open local proxy (first-class dev mode, doc 07 §6 spirit). */
   auth?: { store: AuthStore; sessions: SessionStore;
@@ -31,6 +42,11 @@ export type BackendOptions = {
     sendEmail?: (email: string, link: string) => Promise<void> };
   /** Production deployments pin CORS to their known shell origin. */
   allowedOrigins?: string[];
+  mutationToken?: string;
+  exposeMutationTokenOnHealth?: boolean;
+  requireAllowedMutationOrigin?: boolean;
+  mutationRate?: { max: number; windowMs: number };
+  mutationConcurrency?: number;
 };
 
 export function makeDevAuth(): NonNullable<BackendOptions["auth"]> {
@@ -41,7 +57,11 @@ export function createApp(opts: BackendOptions): Hono {
   if (opts.auth && !opts.auth.devLinks && !opts.auth.sendEmail)
     throw new Error("magic-link delivery is not configured");
   const app = new Hono();
+  const configuredModel: ModelConfig | null = opts.model
+    ?? (opts.apiKey ? { provider: "anthropic", apiKey: opts.apiKey, model: DEFAULT_MODEL } : null);
   const origins = new Set(opts.allowedOrigins ?? []);
+  const recentMutations: number[] = [];
+  let activeMutations = 0;
   app.use("/*", cors({
     origin: (o) => origins.size === 0 ? (o ?? "*") : (o && origins.has(o) ? o : ""),
     credentials: true,
@@ -73,13 +93,76 @@ export function createApp(opts: BackendOptions): Hono {
     return JSON.parse(new TextDecoder().decode(bytes));
   };
 
-  const client = (): Pick<MutationClient, "rawPlan" | "rawRepair"> => {
-    if (!opts.apiKey) throw new Error("server is not configured with a model key");
-    return (opts.makeClient ?? ((k) =>
-      new MutationClient({ mode: "byo", apiKey: k }, { modelRepair: true })))(opts.apiKey);
+  const tokenMatches = (candidate: string | null): boolean => {
+    if (!opts.mutationToken || !candidate) return false;
+    const expected = Buffer.from(opts.mutationToken);
+    const actual = Buffer.from(candidate);
+    return expected.length === actual.length && timingSafeEqual(expected, actual);
+  };
+  const mutationRequestGuard = (c: Context): Response | null => {
+    const contentType = c.req.header("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+    if (contentType !== "application/json")
+      return c.json({ error: "content-type must be application/json" }, 415);
+    if (opts.mutationToken) {
+      const bearer = c.req.header("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1] ?? null;
+      if (!tokenMatches(bearer)) return c.json({ error: "connector token required" }, 401);
+    }
+    if (opts.requireAllowedMutationOrigin) {
+      const origin = c.req.header("origin");
+      const site = c.req.header("sec-fetch-site");
+      if ((origin && !origins.has(origin)) || site === "cross-site")
+        return c.json({ error: "origin is not allowed" }, 403);
+    }
+    if (opts.mutationRate) {
+      const now = Date.now();
+      while (recentMutations[0] !== undefined
+          && recentMutations[0] <= now - opts.mutationRate.windowMs) recentMutations.shift();
+      if (recentMutations.length >= opts.mutationRate.max)
+        return c.json({ error: "too many mutation requests" }, 429);
+      recentMutations.push(now);
+    }
+    return null;
+  };
+  const withMutationSlot = async (
+    c: Context,
+    run: () => Promise<Response>,
+  ): Promise<Response> => {
+    const limit = opts.mutationConcurrency ?? Number.POSITIVE_INFINITY;
+    if (activeMutations >= limit)
+      return c.json({ error: "another mutation is already running" }, 429);
+    activeMutations++;
+    try { return await run(); }
+    finally { activeMutations--; }
   };
 
-  app.get("/healthz", (c) => c.json({ ok: true, model: Boolean(opts.apiKey) }));
+  const client = (): Pick<MutationClient, "rawPlan" | "rawRepair"> => {
+    if (!configuredModel) throw new Error("server is not configured with a model provider");
+    if (opts.makeClient) return opts.makeClient(configuredModel);
+    if (!configuredModel.apiKey)
+      throw new Error(`${configuredModel.provider} requires a configured model credential`);
+    return configuredModel.provider === "openai"
+      ? new MutationClient({ mode: "openai", apiKey: configuredModel.apiKey,
+          model: configuredModel.model ?? DEFAULT_OPENAI_MODEL }, { modelRepair: true })
+      : new MutationClient({ mode: "byo", apiKey: configuredModel.apiKey }, { modelRepair: true });
+  };
+
+  app.get("/healthz", (c) => {
+    c.header("Cache-Control", "no-store");
+    const origin = c.req.header("origin");
+    const exposeConnectorToken = Boolean(
+      opts.exposeMutationTokenOnHealth && opts.mutationToken && origin
+      && opts.allowedOrigins?.includes(origin),
+    );
+    return c.json({ ok: true,
+      ...(opts.modelStatus?.() ?? {
+        model: Boolean(configuredModel),
+        ...(opts.model ? { provider: configuredModel?.provider,
+          model_id: configuredModel?.model ?? (configuredModel?.provider === "openai"
+            ? DEFAULT_OPENAI_MODEL : DEFAULT_MODEL) } : {}),
+      }),
+      ...(exposeConnectorToken ? { connector_token: opts.mutationToken } : {}),
+    });
+  });
 
   // ---------- Phase 1.2: magic-link auth + quotas (doc 07 §1–3) ----------
   const auth = opts.auth;
@@ -172,21 +255,27 @@ export function createApp(opts: BackendOptions): Hono {
   };
 
   app.post("/mutations/plan", async (c) => {
+    const requestDenied = mutationRequestGuard(c);
+    if (requestDenied) return requestDenied;
     const denied = await guard(c, true);
     if (denied) return denied;
     let body: { context?: S1Context };
     try { body = (await readBody(c)) as typeof body; }
     catch (e) { if (e instanceof Response) return e; return c.json({ error: "bad JSON" }, 400); }
     if (!body?.context) return c.json({ error: "missing context" }, 400);
-    try {
-      const raw = await client().rawPlan(body.context);
-      return c.body(raw, 200, { "content-type": "application/json" });
-    } catch (e) {
-      return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
-    }
+    return withMutationSlot(c, async () => {
+      try {
+        const raw = await client().rawPlan(body.context!);
+        return c.body(raw, 200, { "content-type": "application/json" });
+      } catch (e) {
+        return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
+      }
+    });
   });
 
   app.post("/mutations/repair", async (c) => {
+    const requestDenied = mutationRequestGuard(c);
+    if (requestDenied) return requestDenied;
     const denied = await guard(c, false);   // repairs never double-charge (doc 07 §3)
     if (denied) return denied;
     let body: { context?: S1Context; prior_plan?: string; failures?: string[] };
@@ -194,12 +283,16 @@ export function createApp(opts: BackendOptions): Hono {
     catch (e) { if (e instanceof Response) return e; return c.json({ error: "bad JSON" }, 400); }
     if (!body?.context || typeof body.prior_plan !== "string")
       return c.json({ error: "missing context or prior_plan" }, 400);
-    try {
-      const raw = await client().rawRepair(body.context, body.prior_plan, body.failures ?? []);
-      return c.body(raw, 200, { "content-type": "application/json" });
-    } catch (e) {
-      return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
-    }
+    return withMutationSlot(c, async () => {
+      try {
+        const raw = await client().rawRepair(
+          body.context!, body.prior_plan!, body.failures ?? [],
+        );
+        return c.body(raw, 200, { "content-type": "application/json" });
+      } catch (e) {
+        return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
+      }
+    });
   });
 
   return app;

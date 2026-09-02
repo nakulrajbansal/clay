@@ -104,5 +104,17 @@ P2 Hosted mutations transmit schema shapes + intent text only.
 P3 BYO key is stored locally and sent only to api.anthropic.com.
 P4 Export produces a complete, portable archive; deleting the OPFS directory
    removes all local data.
+P5 Private activity metrics accept only a closed enum/boolean vocabulary;
+   unknown events, keys, caller timestamps, ids, and arbitrary strings fail.
+P6 Private metric storage contains integer daily counters and numeric state only,
+   never records, prompts, names, identifiers, errors, or exact timestamps.
+P7 Metrics remain worker-local and are absent from panels, model context,
+   backends, diagnostics, shadows, archives, forks, and network requests.
+P8 Valid events reduce immediately into counters; no raw metric event log exists;
+   cells expire after 35 UTC days and can be erased independently.
+P9 Metric recording is best-effort after product actions and cannot alter a
+   reshape, Keep, Discard, rewind, restore, import, or export outcome.
+P10 Copying a fixed content-free summary requires an explicit user action;
+    Clay performs no automatic metric upload and creates no stable metric id.
 Each commitment maps to an automated test (doc 08 §5) so the marketing page
 is backed by CI, not adjectives.

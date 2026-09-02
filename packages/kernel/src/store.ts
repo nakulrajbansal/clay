@@ -11,7 +11,8 @@ import {
 import { zipRead, zipWrite } from "./zip";
 import { validateMutationPlan } from "./validate";
 import {
-  cloneActiveRegistry, cloneRegistry, findStoredColumn, getTable, type Registry, type RegTable,
+  cloneActiveRegistry, cloneFieldSemantic, cloneRegistry, cloneTableSemantic,
+  findStoredColumn, getTable, type Registry, type RegColumn, type RegTable,
 } from "./registry";
 import { nowIso, uuidv7, validateInsert, validatePatch } from "./rows";
 import {
@@ -19,7 +20,19 @@ import {
   type MigrationPlanT,
 } from "./migrate";
 import { runQuery, type QueryRow } from "./query";
+import { exprFields, parseExpr } from "./expr";
 import { Observer, type Suggestion, type UsageEvent } from "./observe";
+import {
+  PrivateMetricsReducer, type PrivateMetricEvent, type PrivateMetricsSummary,
+} from "./private-metrics";
+import { SqlitePrivateMetricDriver } from "./private-metrics-sqlite";
+import {
+  createFieldId, createRelationshipId, createTableId, semanticRegistryIssues,
+  type FieldId, type FieldSemanticV1, type PreparedSemanticAssignmentsV1,
+  type SemanticIdentityEventV1, type SemanticOperationBounds, type SemanticOrigin,
+  type SemanticRelationshipRecordV1, type SemanticSchemaTraceV1,
+  type TableId, type TableSemanticV1,
+} from "./semantic";
 
 type QueryT = import("@clay/schema").Query;
 
@@ -46,10 +59,26 @@ export type PanelProvenance = {
   lastChangedSummary: string;
 };
 
+export type FieldProvenance = {
+  tableId: TableId;
+  fieldId: FieldId;
+  tableName: string;
+  fieldName: string;
+  fieldType: string;
+  aliases: string[];
+  origin: SemanticOrigin;
+  state: "visible" | "hidden" | "inactive";
+  createdVersion: number;
+  lastChangedVersion: number;
+  derivation?: { expression: string; dependencyFieldIds: FieldId[] };
+};
+
 export type CommitInput = {
   intent: string;
   summary: string;
   migration: MigrationPlanT | null;
+  semanticOrigin?: SemanticOrigin;
+  semanticAssignments?: PreparedSemanticAssignmentsV1;
   panels?: PanelBlobInput[];
   removePanels?: string[];
   diff?: unknown;
@@ -100,9 +129,11 @@ function parseDiff(json: string): { kind: string; detail: string }[] {
 export class ClayStore {
   private reg: Registry = new Map();
   readonly observer: Observer;
+  readonly privateMetrics: PrivateMetricsReducer;
 
   private constructor(private readonly driver: DbDriver) {
     this.observer = new Observer(driver);
+    this.privateMetrics = new PrivateMetricsReducer(new SqlitePrivateMetricDriver(driver));
   }
 
   static async openMemory(): Promise<ClayStore> {
@@ -110,16 +141,49 @@ export class ClayStore {
   }
 
   /** Bind a store to an already-open driver (browser worker, imports). */
-  static fromDriver(driver: DbDriver): ClayStore {
+  static fromDriver(
+    driver: DbDriver,
+    options: { requireSemanticRegistry?: boolean } = {},
+  ): ClayStore {
     createSystemTables(driver);
     // G6: row-level undo lives in user.db so it travels with exports.
     driver.exec(`CREATE TABLE IF NOT EXISTS "row_history"(
       "id" TEXT PRIMARY KEY, "table" TEXT NOT NULL, "row_id" TEXT NOT NULL,
       "at" TEXT NOT NULL, "before_json" TEXT NOT NULL)`);
     const store = new ClayStore(driver);
-    store.migrateLayoutScheme();
-    store.loadRegistry();
-    return store;
+    try {
+      store.migrateLayoutScheme();
+      store.loadRegistry();
+      const current = store.currentVersion();
+      const guard = driver.select(
+        "SELECT value_json FROM sys.settings WHERE key = 'semantic_registry_v1'",
+      )[0];
+      if (options.requireSemanticRegistry || guard) {
+        const semanticIssues = semanticRegistryIssues(
+          store.reg, store.headVersion(), store.semanticOperationBounds(),
+        );
+        if (semanticIssues.length > 0)
+          throw new ClayError("E_VALIDATION",
+            `semantic registry failed integrity checks: ${semanticIssues.join("; ")}`,
+            semanticIssues);
+        if (!guard) driver.tx(() => {
+          driver.exec(`INSERT OR REPLACE INTO sys.settings(key, value_json)
+            VALUES ('semantic_registry_v1', 'true')`);
+        });
+      } else {
+        driver.tx(() => {
+          const prepared = store.prepareSemanticAssignments(null, "legacy_backfill");
+          if (store.ensureSemanticMetadata(prepared.version, "legacy_backfill", prepared))
+            store.persistRegistry(current);
+          driver.exec(`INSERT OR REPLACE INTO sys.settings(key, value_json)
+            VALUES ('semantic_registry_v1', 'true')`);
+        });
+      }
+      return store;
+    } catch (error) {
+      driver.close();
+      throw error;
+    }
   }
 
   /**
@@ -164,6 +228,383 @@ export class ClayStore {
     }
   }
 
+  private ensureSemanticMetadata(
+    version: number,
+    origin: SemanticOrigin,
+    prepared?: PreparedSemanticAssignmentsV1,
+  ): boolean {
+    if (prepared) {
+      if (prepared.origin !== origin || prepared.version !== version)
+        throw new ClayError("E_VALIDATION", "semantic assignment does not match this commit");
+      let changed = false;
+      for (const table of this.reg.values()) {
+        const tableSemantic = prepared.tableSemantics.get(table.name);
+        if (!tableSemantic)
+          throw new ClayError("E_VALIDATION", `semantic assignment is missing table '${table.name}'`);
+        table.semantic = cloneTableSemantic(tableSemantic);
+        for (const column of table.columns) {
+          const fieldSemantic = prepared.fieldSemantics.get(`${table.name}\u0000${column.name}`);
+          if (!fieldSemantic)
+            throw new ClayError("E_VALIDATION",
+              `semantic assignment is missing field '${table.name}.${column.name}'`);
+          column.semantic = cloneFieldSemantic(fieldSemantic);
+        }
+        changed = true;
+      }
+      return changed;
+    }
+
+    // Legacy-only fallback. New commits prepare exact operation bindings before
+    // either shadow or live execution; this path upgrades pre-semantic stores.
+    let changed = false;
+    for (const table of this.reg.values()) {
+      if (!table.semantic) {
+        table.semantic = {
+          v: 1, tableId: createTableId(), label: table.name, aliases: [],
+          origin: "legacy_backfill",
+          events: [{ v: 1, version, operationIndex: 0,
+            disposition: "legacy_unknown", origin: "legacy_backfill" }],
+          relationships: [],
+        };
+        changed = true;
+      }
+      table.columns.forEach((column, columnIndex) => {
+        if (!column.semantic) {
+          column.semantic = {
+            v: 1, fieldId: createFieldId(), label: column.name, aliases: [],
+            origin: "legacy_backfill",
+            events: [{ v: 1, version, operationIndex: 0, columnIndex,
+              disposition: "legacy_unknown", origin: "legacy_backfill" }],
+          };
+          changed = true;
+        }
+        const fieldId = column.semantic.fieldId;
+        if (!table.semantic!.relationships.some(relationship =>
+          relationship.kind === "contains" && relationship.toFieldId === fieldId)) {
+          table.semantic!.relationships.push({
+            v: 1, kind: "contains", relationshipId: createRelationshipId(),
+            origin: "legacy_backfill", fromTableId: table.semantic!.tableId,
+            toFieldId: fieldId, baselineActive: !column.inactive,
+            events: [{ v: 1, version, operationIndex: 0, columnIndex,
+              action: "activate" }],
+          });
+          changed = true;
+        }
+      });
+    }
+    return changed;
+  }
+
+  prepareSemanticAssignments(
+    migration: MigrationPlanT | null,
+    origin: SemanticOrigin,
+  ): PreparedSemanticAssignmentsV1 {
+    if (migration) validateMigrationPlan(migration, this.reg);
+    const version = origin === "legacy_backfill" && migration === null
+      ? 0 : this.headVersion() + 1;
+    const sim = cloneRegistry(this.reg);
+    const ref = (operationIndex: number, columnIndex?: number) => ({
+      version, operationIndex, ...(columnIndex === undefined ? {} : { columnIndex }),
+    });
+    const fieldKey = (table: string, field: string): string => `${table}\u0000${field}`;
+    const relationKey = (kind: string, from: string, to: string): string =>
+      `${kind}\u0000${from}\u0000${to}`;
+    const addAlias = (aliases: string[], label: string): void => {
+      if (!aliases.includes(label)) aliases.push(label);
+      if (aliases.length > 64) aliases.splice(0, aliases.length - 64);
+    };
+    const columnFrom = (column: {
+      name: string; type: RegColumn["type"]; required?: boolean;
+      values?: string[]; expr?: string;
+    }): RegColumn => ({
+      name: column.name, type: column.type, required: column.required ?? false,
+      ...(column.values ? { values: [...column.values] } : {}),
+      ...(column.expr !== undefined ? { expr: column.expr } : {}),
+    });
+    const newTableSemantic = (
+      name: string, operationIndex: number,
+      disposition: SemanticIdentityEventV1["disposition"],
+    ): TableSemanticV1 => ({
+      v: 1, tableId: createTableId(), label: name, aliases: [], origin,
+      events: [{ v: 1, ...ref(operationIndex), disposition, origin }],
+      relationships: [],
+    });
+    const newFieldSemantic = (
+      name: string, operationIndex: number,
+      disposition: SemanticIdentityEventV1["disposition"],
+      columnIndex?: number,
+    ): FieldSemanticV1 => ({
+      v: 1, fieldId: createFieldId(), label: name, aliases: [], origin,
+      events: [{ v: 1, ...ref(operationIndex, columnIndex), disposition, origin }],
+    });
+    const pushFieldEvent = (
+      column: RegColumn, operationIndex: number,
+      disposition: SemanticIdentityEventV1["disposition"] = "modify",
+      columnIndex?: number,
+    ): void => {
+      column.semantic!.events.push({
+        v: 1, ...ref(operationIndex, columnIndex), disposition, origin,
+      });
+    };
+    const lastAction = (relationship: SemanticRelationshipRecordV1): "activate" | "retire" | null =>
+      relationship.events.at(-1)?.action ?? (relationship.baselineActive ? "activate" : null);
+    const activateContains = (
+      table: RegTable, column: RegColumn, operationIndex: number,
+      columnIndex?: number, force = false,
+    ): void => {
+      const semantic = table.semantic!;
+      const fieldId = column.semantic!.fieldId;
+      let relationship = semantic.relationships.find(candidate =>
+        candidate.kind === "contains" && candidate.toFieldId === fieldId);
+      if (!relationship) {
+        relationship = {
+          v: 1, kind: "contains", relationshipId: createRelationshipId(), origin,
+          fromTableId: semantic.tableId, toFieldId: fieldId,
+          events: [{ v: 1, ...ref(operationIndex, columnIndex), action: "activate" }],
+        };
+        semantic.relationships.push(relationship);
+      } else if (force || lastAction(relationship) !== "activate") {
+        relationship.events.push({
+          v: 1, ...ref(operationIndex, columnIndex), action: "activate",
+        });
+      }
+    };
+    const syncDerived = (
+      table: RegTable, computed: RegColumn, expression: string,
+      operationIndex: number, force = false,
+    ): void => {
+      const fromFieldId = computed.semantic!.fieldId;
+      const desired = new Set([...exprFields(parseExpr(expression))].map(name =>
+        table.columns.find(column => column.name === name)?.semantic?.fieldId
+      ).filter((id): id is FieldId => id !== undefined));
+      const existing = table.semantic!.relationships.filter(
+        (relationship): relationship is Extract<SemanticRelationshipRecordV1,
+          { kind: "derived_from" }> =>
+          relationship.kind === "derived_from" && relationship.fromFieldId === fromFieldId,
+      );
+      for (const relationship of existing) {
+        if (!desired.has(relationship.toFieldId) && lastAction(relationship) !== "retire") {
+          relationship.events.push({ v: 1, ...ref(operationIndex), action: "retire" });
+        }
+      }
+      for (const toFieldId of desired) {
+        let relationship = existing.find(candidate => candidate.toFieldId === toFieldId);
+        if (!relationship) {
+          relationship = {
+            v: 1, kind: "derived_from", relationshipId: createRelationshipId(), origin,
+            fromFieldId, toFieldId,
+            events: [{ v: 1, ...ref(operationIndex), action: "activate" }],
+          };
+          table.semantic!.relationships.push(relationship);
+        } else if (force || lastAction(relationship) !== "activate") {
+          relationship.events.push({ v: 1, ...ref(operationIndex), action: "activate" });
+        }
+      }
+    };
+
+    // A store created before semantic metadata is upgraded without pretending
+    // that its true introduction coordinates are known.
+    for (const table of sim.values()) {
+      if (!table.semantic) {
+        table.semantic = {
+          v: 1, tableId: createTableId(), label: table.name, aliases: [],
+          origin: "legacy_backfill",
+          events: [{ v: 1, version, operationIndex: 0,
+            disposition: "legacy_unknown", origin: "legacy_backfill" }],
+          relationships: [],
+        };
+      }
+      table.columns.forEach((column, columnIndex) => {
+        if (!column.semantic) column.semantic = {
+          v: 1, fieldId: createFieldId(), label: column.name, aliases: [],
+          origin: "legacy_backfill",
+          events: [{ v: 1, version, operationIndex: 0,
+            columnIndex, disposition: "legacy_unknown", origin: "legacy_backfill" }],
+        };
+        if (!table.inactive && !column.inactive)
+          activateContains(table, column, 0, columnIndex);
+      });
+      for (const column of table.columns) {
+        if (!table.inactive && !column.inactive && column.type === "computed" && column.expr)
+          syncDerived(table, column, column.expr, 0);
+      }
+    }
+
+    for (const [operationIndex, op] of (migration?.operations ?? []).entries()) {
+      switch (op.op) {
+        case "create_table": {
+          const preserved = sim.get(op.table);
+          let table: RegTable;
+          const reactivated = preserved?.inactive === true;
+          if (reactivated) {
+            table = preserved;
+            delete table.inactive;
+            table.semantic!.events.push({
+              v: 1, ...ref(operationIndex), disposition: "reactivate", origin,
+            });
+            for (const column of table.columns) column.inactive = true;
+          } else {
+            table = { name: op.table, columns: [],
+              semantic: newTableSemantic(op.table, operationIndex, "introduce") };
+            sim.set(op.table, table);
+          }
+          op.columns.forEach((spec, columnIndex) => {
+            let column = table.columns.find(candidate => candidate.name === spec.name);
+            const disposition = column?.inactive ? "reactivate" as const : "introduce" as const;
+            if (column) {
+              delete column.inactive;
+              pushFieldEvent(column, operationIndex, disposition, columnIndex);
+            } else {
+              column = columnFrom(spec as Parameters<typeof columnFrom>[0]);
+              column.semantic = newFieldSemantic(spec.name, operationIndex, disposition, columnIndex);
+              table.columns.push(column);
+            }
+            activateContains(table, column, operationIndex, columnIndex, disposition === "reactivate");
+          });
+          for (const spec of op.columns) {
+            const column = table.columns.find(candidate => candidate.name === spec.name)!;
+            if (column.type === "computed" && column.expr)
+              syncDerived(table, column, column.expr, operationIndex, reactivated);
+          }
+          break;
+        }
+        case "add_column": {
+          const table = getTable(sim, op.table);
+          let column = findStoredColumn(table, op.column.name);
+          const disposition = column?.inactive ? "reactivate" as const : "introduce" as const;
+          if (column) {
+            delete column.inactive;
+            pushFieldEvent(column, operationIndex, disposition);
+          } else {
+            column = columnFrom(op.column as Parameters<typeof columnFrom>[0]);
+            column.semantic = newFieldSemantic(column.name, operationIndex, disposition);
+            table.columns.push(column);
+          }
+          activateContains(table, column, operationIndex, undefined, disposition === "reactivate");
+          if (column.type === "computed" && column.expr)
+            syncDerived(table, column, column.expr, operationIndex, disposition === "reactivate");
+          break;
+        }
+        case "create_computed": {
+          const table = getTable(sim, op.table);
+          let column = findStoredColumn(table, op.column);
+          const disposition = column?.inactive ? "reactivate" as const : "introduce" as const;
+          if (column) {
+            delete column.inactive;
+            pushFieldEvent(column, operationIndex, disposition);
+          } else {
+            column = { name: op.column, type: "computed", required: false, expr: op.expr,
+              semantic: newFieldSemantic(op.column, operationIndex, disposition) };
+            table.columns.push(column);
+          }
+          activateContains(table, column, operationIndex, undefined, disposition === "reactivate");
+          syncDerived(table, column, op.expr, operationIndex, disposition === "reactivate");
+          break;
+        }
+        case "rename_column": {
+          const table = getTable(sim, op.table);
+          const column = table.columns.find(candidate => candidate.name === op.from)!;
+          pushFieldEvent(column, operationIndex);
+          addAlias(column.semantic!.aliases, column.semantic!.label);
+          column.name = op.to;
+          column.semantic!.label = op.to;
+          break;
+        }
+        case "update_computed": {
+          const table = getTable(sim, op.table);
+          const column = table.columns.find(candidate => candidate.name === op.column)!;
+          pushFieldEvent(column, operationIndex);
+          column.expr = op.expr;
+          syncDerived(table, column, op.expr, operationIndex);
+          break;
+        }
+        case "add_enum_value": {
+          const column = getTable(sim, op.table).columns.find(candidate =>
+            candidate.name === op.column)!;
+          pushFieldEvent(column, operationIndex);
+          column.values = [...(column.values ?? []), op.value];
+          break;
+        }
+        case "hide_column": {
+          const column = getTable(sim, op.table).columns.find(candidate =>
+            candidate.name === op.column)!;
+          pushFieldEvent(column, operationIndex); column.hidden = true;
+          break;
+        }
+        case "set_required": {
+          const column = getTable(sim, op.table).columns.find(candidate =>
+            candidate.name === op.column)!;
+          pushFieldEvent(column, operationIndex); column.required = true;
+          break;
+        }
+        case "add_index":
+        case "backfill": {
+          const column = getTable(sim, op.table).columns.find(candidate =>
+            candidate.name === op.column)!;
+          pushFieldEvent(column, operationIndex);
+          break;
+        }
+      }
+    }
+
+    const tables = new Map<string, TableId>();
+    const fields = new Map<string, FieldId>();
+    const relationships = new Map<string, ReturnType<typeof createRelationshipId>>();
+    const tableSemantics = new Map<string, TableSemanticV1>();
+    const fieldSemantics = new Map<string, FieldSemanticV1>();
+    for (const table of sim.values()) {
+      const semantic = table.semantic!;
+      tables.set(table.name, semantic.tableId);
+      tableSemantics.set(table.name, cloneTableSemantic(semantic));
+      for (const column of table.columns) {
+        fields.set(fieldKey(table.name, column.name), column.semantic!.fieldId);
+        fieldSemantics.set(fieldKey(table.name, column.name),
+          cloneFieldSemantic(column.semantic!));
+      }
+      for (const relationship of semantic.relationships) {
+        const from = relationship.kind === "derived_from"
+          ? relationship.fromFieldId : relationship.fromTableId;
+        const to = relationship.kind === "contains"
+          ? relationship.toFieldId
+          : relationship.kind === "derived_from" ? relationship.toFieldId : relationship.toTableId;
+        relationships.set(relationKey(relationship.kind, from, to), relationship.relationshipId);
+      }
+    }
+    return {
+      v: 1, version, origin, tables, fields, relationships,
+      tableSemantics, fieldSemantics,
+    };
+  }
+
+  private pruneSemanticAfter(version: number): void {
+    for (const table of this.reg.values()) {
+      if (!table.semantic) continue;
+      table.semantic.events = table.semantic.events.filter(event => event.version <= version);
+      for (const relationship of table.semantic.relationships)
+        relationship.events = relationship.events.filter(event => event.version <= version);
+      for (const column of table.columns) {
+        if (column.semantic)
+          column.semantic.events = column.semantic.events.filter(event => event.version <= version);
+      }
+    }
+  }
+
+  private alignSemanticLabelsToPhysicalShape(): void {
+    for (const table of this.reg.values()) {
+      if (table.semantic && table.semantic.label !== table.name) {
+        if (!table.semantic.aliases.includes(table.semantic.label))
+          table.semantic.aliases.push(table.semantic.label);
+        table.semantic.label = table.name;
+      }
+      for (const column of table.columns) {
+        if (!column.semantic || column.semantic.label === column.name) continue;
+        if (!column.semantic.aliases.includes(column.semantic.label))
+          column.semantic.aliases.push(column.semantic.label);
+        column.semantic.label = column.name;
+      }
+    }
+  }
+
   private persistRegistry(version: number): void {
     this.driver.exec("DELETE FROM sys.tables_registry");
     for (const t of this.reg.values()) {
@@ -184,6 +625,115 @@ export class ClayStore {
   validationRegistrySnapshot(): Registry {
     return cloneRegistry(this.reg);
   }
+
+  semanticSchemaTrace(): SemanticSchemaTraceV1 {
+    const atVersion = this.currentVersion();
+    this.ensureSemanticMetadata(atVersion, "legacy_backfill");
+    const tables: Array<SemanticSchemaTraceV1["tables"][number]> = [];
+    const fields: Array<SemanticSchemaTraceV1["fields"][number]> = [];
+    const relationships: Array<SemanticSchemaTraceV1["relationships"][number]> = [];
+    const opBindings: Array<SemanticSchemaTraceV1["opBindings"][number]> = [];
+    for (const table of this.reg.values()) {
+      const semantic = table.semantic!;
+      tables.push({ tableId: semantic.tableId, conceptId: semantic.conceptId,
+        name: table.name, label: semantic.label, aliases: [...semantic.aliases],
+        state: table.inactive ? "inactive" : "visible" });
+      semantic.events.filter(event => event.version <= atVersion)
+        .forEach(event => opBindings.push({ ref: event,
+        tableId: semantic.tableId, disposition: event.disposition, origin: event.origin }));
+      for (const column of table.columns) {
+        const field = column.semantic!;
+        fields.push({ tableId: semantic.tableId, fieldId: field.fieldId,
+          conceptId: field.conceptId, tableName: table.name, fieldName: column.name,
+          label: field.label, aliases: [...field.aliases],
+          state: table.inactive || column.inactive
+            ? "inactive" : column.hidden ? "hidden" : "visible" });
+        field.events.filter(event => event.version <= atVersion)
+          .forEach(event => opBindings.push({ ref: event,
+          tableId: semantic.tableId, fieldId: field.fieldId,
+          disposition: event.disposition, origin: event.origin }));
+      }
+      for (const rel of semantic.relationships) {
+        const target = rel.kind === "contains"
+          ? table.columns.find(column => column.semantic?.fieldId === rel.toFieldId) : undefined;
+        const fromField = rel.kind === "derived_from"
+          ? table.columns.find(column => column.semantic?.fieldId === rel.fromFieldId)
+          : rel.kind === "references"
+            ? table.columns.find(column => column.semantic?.fieldId === rel.viaFieldId)
+            : undefined;
+        const toField = rel.kind === "derived_from"
+          ? table.columns.find(column => column.semantic?.fieldId === rel.toFieldId) : undefined;
+        const lifecycle = [...rel.events]
+          .filter(event => event.version <= atVersion)
+          .sort((left, right) => left.version - right.version
+            || left.operationIndex - right.operationIndex
+            || (left.columnIndex ?? -1) - (right.columnIndex ?? -1))
+          .at(-1)?.action ?? (rel.baselineActive ? "activate" : "retire");
+        const endpointInactive = target?.inactive || fromField?.inactive || toField?.inactive;
+        const endpointHidden = target?.hidden || fromField?.hidden || toField?.hidden;
+        relationships.push({ relationshipId: rel.relationshipId, kind: rel.kind,
+          state: lifecycle === "retire" ? "retired"
+            : table.inactive || endpointInactive ? "inactive"
+              : endpointHidden ? "hidden" : "active",
+          from: rel.kind === "derived_from" ? rel.fromFieldId : rel.fromTableId,
+          to: rel.kind === "contains" ? rel.toFieldId
+            : rel.kind === "derived_from" ? rel.toFieldId : rel.toTableId,
+          ...(rel.kind === "references" ? { via: rel.viaFieldId } : {}),
+        });
+      }
+    }
+    return { v: 1, atVersion,
+      tables: [...tables].sort((a, b) => a.name.localeCompare(b.name)),
+      fields: [...fields].sort((a, b) => a.tableName.localeCompare(b.tableName)
+        || a.fieldName.localeCompare(b.fieldName)),
+      relationships: [...relationships], opBindings: [...opBindings] };
+  }
+
+  fieldProvenance(): FieldProvenance[] {
+    this.ensureSemanticMetadata(this.currentVersion(), "legacy_backfill");
+    const out: FieldProvenance[] = [];
+    for (const table of this.reg.values()) {
+      const tableId = table.semantic!.tableId;
+      for (const column of table.columns) {
+        const semantic = column.semantic!;
+        const events = [...semantic.events].sort((a, b) =>
+          a.version - b.version || a.operationIndex - b.operationIndex
+          || (a.columnIndex ?? -1) - (b.columnIndex ?? -1));
+        let derivation: FieldProvenance["derivation"];
+        if (column.type === "computed" && column.expr) {
+          const dependencies = [...exprFields(parseExpr(column.expr))]
+            .map(name => table.columns.find(candidate => candidate.name === name)?.semantic?.fieldId)
+            .filter((id): id is FieldId => id !== undefined);
+          derivation = { expression: column.expr, dependencyFieldIds: dependencies };
+        }
+        out.push({ tableId, fieldId: semantic.fieldId,
+          tableName: table.name, fieldName: column.name, fieldType: column.type,
+          aliases: [...semantic.aliases], origin: semantic.origin,
+          state: table.inactive || column.inactive
+            ? "inactive" : column.hidden ? "hidden" : "visible",
+          createdVersion: events[0]?.version ?? 0,
+          lastChangedVersion: events.at(-1)?.version ?? 0,
+          ...(derivation ? { derivation } : {}),
+        });
+      }
+    }
+    return out.sort((a, b) => a.tableName.localeCompare(b.tableName)
+      || a.fieldName.localeCompare(b.fieldName));
+  }
+
+  recordPrivateMetric(event: PrivateMetricEvent): void {
+    this.privateMetrics.record(event);
+  }
+
+  privateMetricsSummary(): PrivateMetricsSummary {
+    return this.privateMetrics.summary();
+  }
+
+  setPrivateMetricsEnabled(enabled: boolean): void {
+    this.privateMetrics.setCollectionEnabled(enabled);
+  }
+
+  clearPrivateMetrics(): void { this.privateMetrics.clear(); }
 
   // ---------- versions ----------
   headVersion(): number {
@@ -215,6 +765,19 @@ export class ClayStore {
       [key, JSON.stringify(value)]);
   }
 
+  deleteSetting(key: string): void {
+    this.driver.exec("DELETE FROM sys.settings WHERE key = ?", [key]);
+  }
+
+  scrubLegacyCredentialSettings(): void {
+    const keys = [
+      "byo_api_key", "anthropic_api_key", "openai_api_key", "api_key", "clay_session",
+    ];
+    this.driver.tx(() => {
+      for (const key of keys) this.deleteSetting(key);
+    });
+  }
+
   getEntry(version: number): VersionEntry {
     const rows = this.driver.select(
       "SELECT * FROM sys.version_log WHERE version = ?", [version]);
@@ -233,6 +796,24 @@ export class ClayStore {
     };
   }
 
+  private semanticOperationBounds(): SemanticOperationBounds {
+    const bounds = new Map<number, readonly (number | null)[]>();
+    for (const row of this.driver.select(
+      "SELECT version, migration_json FROM sys.version_log WHERE migration_json IS NOT NULL",
+    )) {
+      let operations: MigrationPlanT["operations"];
+      try {
+        operations = JSON.parse(String(row.migration_json)) as MigrationPlanT["operations"];
+      } catch {
+        bounds.set(Number(row.version), []);
+        continue;
+      }
+      bounds.set(Number(row.version), operations.map(operation =>
+        operation.op === "create_table" ? operation.columns.length : null));
+    }
+    return bounds;
+  }
+
   /** Commit a mutation: validate, migrate, write panel blobs/tombstones,
    * persist registry, append log — one transaction (doc 04 §4). */
   commit(input: CommitInput): number {
@@ -240,6 +821,9 @@ export class ClayStore {
     if (this.currentVersion() !== head)
       throw new ClayError("E_VALIDATION",
         "store is rolled back (scrub preview); roll forward or truncate first");
+    const semanticOrigin = input.semanticOrigin ?? "system";
+    const semanticAssignments = input.semanticAssignments
+      ?? this.prepareSemanticAssignments(input.migration, semanticOrigin);
     try {
       return this.driver.tx(() => {
         // capture the pre-commit manifest for the G16 rename rewrite
@@ -253,11 +837,16 @@ export class ClayStore {
         const priorSize = new Map(preLive.map(p =>
           [p.panel_id, { w: p.placement.w, h: p.placement.h, col: p.placement.col }]));
 
+        const version = head + 1;
         if (input.migration) {
           validateMigrationPlan(input.migration, this.reg);
           applyForwardOps(this.driver, this.reg, input.migration.operations);
         }
-        const version = head + 1;
+        this.ensureSemanticMetadata(
+          version,
+          semanticOrigin,
+          semanticAssignments,
+        );
         this.persistRegistry(version);
         this.driver.exec(
           `INSERT INTO sys.version_log(version, parent, created_at, intent_text,
@@ -357,7 +946,7 @@ export class ClayStore {
     return this.commit({
       intent: "rearrange layout",
       summary: "Rearranged the layout by hand.",
-      migration: null, panels: moved,
+      migration: null, semanticOrigin: "direct", panels: moved,
       diff: moved.map(p => ({
         kind: "change_panel",
         detail: `Moved ${p.title} to ${p.placement.region}`,
@@ -378,7 +967,7 @@ export class ClayStore {
     return this.commit({
       intent: `rename the ${p.title} panel`,
       summary: `Renamed “${p.title}” to “${next}”.`,
-      migration: null,
+      migration: null, semanticOrigin: "direct",
       panels: [{
         panel_id: p.panel_id, title: next, placement: p.placement,
         code: p.code, declared_queries: p.declared_queries, declared_writes: p.declared_writes,
@@ -396,7 +985,7 @@ export class ClayStore {
     return this.commit({
       intent: `remove the ${p.title} panel`,
       summary: `Removed the “${p.title}” panel.`,
-      migration: null, removePanels: [panelId],
+      migration: null, semanticOrigin: "direct", removePanels: [panelId],
       diff: [{ kind: "remove_panel", detail: `Removed ${p.title}` }],
     });
   }
@@ -540,12 +1129,15 @@ export class ClayStore {
           if (entry.migration)
             applyInverseOps(this.driver, this.reg, entry.migration.inverse);
         }
+        this.alignSemanticLabelsToPhysicalShape();
         this.persistRegistry(target);
         if (opts.truncate) {
           this.driver.exec("DELETE FROM sys.version_log WHERE version > ?", [target]);
           this.driver.exec("DELETE FROM sys.panel_blobs WHERE version > ?", [target]);
           this.driver.exec("DELETE FROM sys.panel_tombstones WHERE version > ?", [target]);
           this.driver.exec("DELETE FROM sys.checkpoints WHERE version > ?", [target]);
+          this.pruneSemanticAfter(target);
+          this.persistRegistry(target);
         }
         this.setCurrentVersion(target);
       });
@@ -568,6 +1160,7 @@ export class ClayStore {
           if (entry.migration)
             applyForwardOps(this.driver, this.reg, entry.migration.operations);
         }
+        this.alignSemanticLabelsToPhysicalShape();
         this.persistRegistry(target);
         this.setCurrentVersion(target);
       });
@@ -806,9 +1399,10 @@ export class ClayStore {
   /** zip{ manifest.json, user.db, system.db } — the backup story and a
    * trust artifact: the whole app in one file. */
   async exportArchive(appName: string): Promise<Uint8Array> {
+    this.scrubLegacyCredentialSettings();
     const { user, system } = await this.driver.exportDatabases();
     const manifest: ClayManifest = {
-      format: 2, app: appName, exported_at: nowIso(),
+      format: 3, app: appName, exported_at: nowIso(),
       tables: this.registrySnapshot().size, versions: this.headVersion(),
     };
     return zipWrite([
@@ -828,15 +1422,39 @@ export class ClayStore {
       return e.data;
     };
     const manifest = JSON.parse(new TextDecoder().decode(get("manifest.json"))) as ClayManifest;
-    if (manifest.format !== 1 && manifest.format !== 2)
+    if (manifest.format !== 1 && manifest.format !== 2 && manifest.format !== 3)
       throw new ClayError("E_VALIDATION",
         `unsupported archive format ${String(manifest.format)}`);
     return { manifest, user: get("user.db"), system: get("system.db") };
   }
 
   /** Integrity checks run on an import staging store (doc 04 §7). */
-  verifyIntegrity(): string[] {
-    const issues: string[] = [];
+  verifyIntegrity(manifest?: ClayManifest): string[] {
+    const issues: string[] = [...semanticRegistryIssues(
+      this.reg, this.headVersion(), this.semanticOperationBounds(),
+    )];
+    const registryNames = new Set(this.reg.keys());
+    const physicalTables = new Set(this.driver.select(
+      `SELECT name FROM main.sqlite_master
+       WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> 'row_history'`,
+    ).map(row => String(row.name)));
+    for (const table of physicalTables)
+      if (!registryNames.has(table)) issues.push(`physical table '${table}' is not registered`);
+    for (const row of this.driver.select(
+      "SELECT table_name, spec_json FROM sys.tables_registry",
+    )) {
+      try {
+        const spec = JSON.parse(String(row.spec_json)) as { name?: unknown };
+        if (spec.name !== row.table_name)
+          issues.push(`registry key '${String(row.table_name)}' does not match its spec name`);
+      } catch { issues.push(`registry row '${String(row.table_name)}' is not valid JSON`); }
+    }
+    if (manifest) {
+      if (manifest.tables !== this.reg.size)
+        issues.push(`manifest table count ${manifest.tables} does not match registry ${this.reg.size}`);
+      if (manifest.versions !== this.headVersion())
+        issues.push(`manifest version count ${manifest.versions} does not match head ${this.headVersion()}`);
+    }
     for (const t of this.reg.values()) {
       const info = this.driver.select(`PRAGMA main.table_info(${qid(t.name)})`);
       const physical = new Set(info.map(r => String(r.name)));
@@ -884,9 +1502,13 @@ export class ClayStore {
     openFresh?: () => Promise<DbDriver>,
   ): Promise<{ store: ClayStore; manifest: ClayManifest; invalidPanels: string[] }> {
     const { manifest, user, system } = ClayStore.parseArchive(bytes);
-    const staging = ClayStore.fromDriver(await openDriverFromBytes(user, system));
+    const staging = ClayStore.fromDriver(
+      await openDriverFromBytes(user, system),
+      { requireSemanticRegistry: manifest.format === 3 },
+    );
     try {
-      const issues = staging.verifyIntegrity();
+      staging.scrubLegacyCredentialSettings();
+      const issues = staging.verifyIntegrity(manifest.format === 3 ? manifest : undefined);
       if (issues.length > 0)
         throw new ClayError("E_VALIDATION",
           `archive failed integrity checks: ${issues.join("; ")}`, issues);
@@ -921,8 +1543,8 @@ export class ClayStore {
 }
 
 export type ClayManifest = {
-  /** v2 adds inactive rollback tombstones; v1 remains import-compatible. */
-  format: 1 | 2;
+  /** v2 adds rollback tombstones; v3 requires the semantic registry. */
+  format: 1 | 2 | 3;
   app: string;
   exported_at: string;
   tables: number;

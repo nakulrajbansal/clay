@@ -32,7 +32,7 @@ const FORBIDDEN = new Set([
   "fetch", "XMLHttpRequest", "WebSocket", "EventSource", "navigator",
   "window", "document", "globalThis", "self", "top", "parent", "frames",
   "location", "history", "localStorage", "sessionStorage", "indexedDB",
-  "ownerDocument", "defaultView", "currentTarget",
+  "ownerDocument", "defaultView", "currentTarget", "EventTarget",
   "caches", "cookie", "import", "eval", "Function", "setTimeout",
   "setInterval", "postMessage", "Worker", "SharedArrayBuffer", "Atomics",
   "WebAssembly", "Proxy", "Reflect", "constructor", "__proto__", "prototype",

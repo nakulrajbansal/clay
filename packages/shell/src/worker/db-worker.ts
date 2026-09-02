@@ -7,7 +7,7 @@ import {
   ClayStore, MutationPipeline, deleteAppStorage, deriveInverse, openBrowserDriver,
   portFromMessagePort, serveStore, wipeBrowserStorage,
   type DbDriver, type DebugEvent, type LivePanel, type MigrationPlanT,
-  type PanelProvenance, type PreviewHandle,
+  type PanelProvenance, type PreviewHandle, type PrivateMetricEvent,
 } from "@clay/kernel";
 import { MutationClient } from "@clay/mutation";
 import { removeSampleRows, seedStarterShell, type StarterShellId } from "../shells/seed";
@@ -24,9 +24,9 @@ export type PreviewInfo = {
 };
 
 export type IntentOutcome =
-  | { status: "clarify"; question: string }
+  | { status: "clarify"; question: string; repaired: boolean }
   | { status: "preview"; preview: PreviewInfo }
-  | { status: "failed"; stage: string; reasons: string[] };
+  | { status: "failed"; stage: string; reasons: string[]; repaired: boolean };
 
 type Request = { id: number; op: string; payload?: Record<string, unknown> };
 
@@ -57,7 +57,11 @@ let pipelineRun: Promise<IntentOutcome> | null = null;
 let currentAppId: string | undefined;   // which app's OPFS files are open (G4)
 // Device-global model access (B1): set by the main thread from localStorage,
 // shared across every app, never persisted in an app DB.
-let modelAccess: { apiKey?: string; backendUrl?: string; session?: string } = {};
+type ModelProviderId = "clay" | "openai" | "anthropic" | "codex";
+let modelAccess: {
+  provider?: ModelProviderId; apiKey?: string; backendUrl?: string;
+  session?: string; providerToken?: string;
+} = {};
 
 // A ring of recent pipeline traces the user can review/copy (the user
 // asked for logs of inputs -> processing -> outputs). Also mirrored to the
@@ -88,7 +92,8 @@ async function runPipelineTextOnce(text: string): Promise<IntentOutcome> {
   // browser key is needed. Otherwise fall back to BYO.
   const client = backendUrl
     ? new MutationClient({ mode: "hosted", endpoint: backendUrl.replace(/\/$/, ""),
-        session: modelAccess.session })
+        session: modelAccess.provider === "clay" ? modelAccess.session
+          : modelAccess.provider === "codex" ? modelAccess.providerToken : undefined })
     : apiKey
       ? new MutationClient({ mode: "byo", apiKey })
       : null;
@@ -96,7 +101,7 @@ async function runPipelineTextOnce(text: string): Promise<IntentOutcome> {
     return { status: "failed", stage: "plan", reasons: [
       "No model access configured. In Settings, either add a Clay backend URL "
       + "(hosted) or your own Anthropic API key (BYO).",
-    ] };
+    ], repaired: false };
   }
   const events: DebugEvent[] = [];
   const pipeline = new MutationPipeline(s, client, {
@@ -111,9 +116,12 @@ async function runPipelineTextOnce(text: string): Promise<IntentOutcome> {
   const result = await pipeline.run(text);
   recordTrace({ at: new Date().toISOString(), intent: text, events });
   if (result.status === "clarify")
-    return { status: "clarify", question: result.question };
+    return { status: "clarify", question: result.question, repaired: result.repaired };
   if (result.status === "failed")
-    return { status: "failed", stage: result.stage, reasons: result.reasons };
+    return {
+      status: "failed", stage: result.stage, reasons: result.reasons,
+      repaired: result.repaired,
+    };
   pending = result.preview;
   return {
     status: "preview",
@@ -135,7 +143,7 @@ async function runPipelineTextOnce(text: string): Promise<IntentOutcome> {
 function runPipelineText(text: string): Promise<IntentOutcome> {
   if (pending || pipelineRun)
     return Promise.resolve({ status: "failed", stage: "plan",
-      reasons: ["Finish the current reshape before starting another."] });
+      reasons: ["Finish the current reshape before starting another."], repaired: false });
   pipelineRun = runPipelineTextOnce(text).finally(() => { pipelineRun = null; });
   return pipelineRun;
 }
@@ -158,10 +166,17 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       };
     }
     case "setModelAccess": {
+      const provider = p.provider;
+      if (provider !== "clay" && provider !== "openai"
+          && provider !== "anthropic" && provider !== "codex")
+        throw new Error("invalid model provider");
       modelAccess = {
+        provider,
         apiKey: p.apiKey ? String(p.apiKey) : undefined,
         backendUrl: p.backendUrl ? String(p.backendUrl) : undefined,
-        session: p.session ? String(p.session) : undefined,
+        session: provider === "clay" && p.session ? String(p.session) : undefined,
+        providerToken: provider === "codex" && p.providerToken
+          ? String(p.providerToken) : undefined,
       };
       return null;
     }
@@ -232,6 +247,21 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       return mustStore().livePanels()
         .map(panel => mustStore().panelProvenance(panel.panel_id))
         .filter((item): item is PanelProvenance => item !== null);
+    case "semanticTrace":
+      return mustStore().semanticSchemaTrace();
+    case "fieldProvenance":
+      return mustStore().fieldProvenance();
+    case "recordPrivateMetric":
+      mustStore().recordPrivateMetric(p.event as PrivateMetricEvent);
+      return null;
+    case "privateMetricsSummary":
+      return mustStore().privateMetricsSummary();
+    case "setPrivateMetricsEnabled":
+      mustStore().setPrivateMetricsEnabled(Boolean(p.enabled));
+      return mustStore().privateMetricsSummary();
+    case "clearPrivateMetrics":
+      mustStore().clearPrivateMetrics();
+      return mustStore().privateMetricsSummary();
     case "commitLayout":
       mustStore().commitLayout(
         p.placements as { panel_id: string; region: "top" | "main" | "side"; order: number; w?: number }[]);
@@ -386,10 +416,38 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
           quotaBytes = est.quota ?? null;
         }
       } catch { /* estimate unavailable */ }
+      let modelConnection = {
+        provider: "none", model: null as string | null,
+        configured: false, reachable: false, detail: "No model connection selected",
+      };
+      if (modelAccess.apiKey) {
+        modelConnection = { provider: "anthropic", model: null,
+          configured: true, reachable: true, detail: "API key stored on this device" };
+      } else if (modelAccess.backendUrl) {
+        try {
+          const healthUrl = `${modelAccess.backendUrl.replace(/\/$/, "")}/healthz`;
+          const response = await fetch(healthUrl, { signal: AbortSignal.timeout(2500) });
+          const health = await response.json() as {
+            model?: boolean; provider?: string; model_id?: string;
+            reachable?: boolean; detail?: string;
+          };
+          modelConnection = {
+            provider: health.provider ?? "hosted", model: health.model_id ?? null,
+            configured: health.model === true,
+            reachable: health.reachable ?? response.ok,
+            detail: health.detail ?? (health.model
+              ? "Connected" : "Backend reachable; model not configured"),
+          };
+        } catch {
+          modelConnection = { provider: "hosted", model: null,
+            configured: true, reachable: false, detail: "Backend is not reachable" };
+        }
+      }
       return {
         persistent, persisted, usageBytes, quotaBytes,
         versions: mustStore().headVersion(),
         stats: mustStore().attemptStats(),
+        modelConnection,
       };
     }
     case "requestPersist": {
@@ -404,6 +462,19 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "setSetting":
       mustStore().setSetting(String(p.key), p.value);
       return null;
+    case "deleteSetting":
+      mustStore().deleteSetting(String(p.key));
+      return null;
+    case "compareAndSetSetting": {
+      const key = String(p.key);
+      const current = mustStore().getSetting<unknown>(key);
+      const revision = current && typeof current === "object"
+        && Number.isSafeInteger((current as { revision?: unknown }).revision)
+        ? Number((current as { revision: number }).revision) : 0;
+      if (revision !== Number(p.expectedRevision)) return { ok: false, current };
+      mustStore().setSetting(key, p.value);
+      return { ok: true, current: p.value };
+    }
     default:
       throw new Error(`unknown op '${req.op}'`);
   }

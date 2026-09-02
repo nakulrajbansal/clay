@@ -8,7 +8,8 @@ export {
   type MutationClientOptions, type PlanResult, type Transport,
 } from "./client";
 export {
-  ANTHROPIC_API_URL, ANTHROPIC_VERSION, DEFAULT_MODEL, MAX_TOKENS,
+  ANTHROPIC_API_URL, ANTHROPIC_VERSION, DEFAULT_MODEL, DEFAULT_OPENAI_MODEL,
+  MAX_TOKENS, OPENAI_API_URL,
   REPAIR_MODEL, TEMPERATURE,
 } from "./config/models";
 export { EXEMPLARS } from "./assets.gen";

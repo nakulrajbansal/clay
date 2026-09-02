@@ -597,6 +597,7 @@ export function seedStarterShell(store: ClayStore, id: StarterShellId): void {
     }));
     store.commit({
       intent: "first run", summary: `Sets up ${group.map(t => t.name).join(", ")}.`,
+      semanticOrigin: "seed",
       migration: { operations, inverse: deriveInverse(operations, store.registrySnapshot()) },
     });
   }
@@ -618,6 +619,7 @@ export function seedStarterShell(store: ClayStore, id: StarterShellId): void {
   store.commit({
     intent: "first run",
     summary: isBlank ? "Starts a blank canvas." : `Creates your ${shell.name} views.`,
+    semanticOrigin: "seed",
     migration: null, panels,
     diff: isBlank ? [] : [{ kind: "add_panel", detail: `${shell.name} starter panels` }],
   });

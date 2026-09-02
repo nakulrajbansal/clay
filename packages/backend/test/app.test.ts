@@ -42,6 +42,21 @@ describe("healthz", () => {
     const res = await createApp({ apiKey: undefined }).request("/healthz");
     expect(await res.json()).toEqual({ ok: true, model: false });
   });
+
+  it("reports and passes an explicit OpenAI model configuration", async () => {
+    let received: unknown;
+    const configured = createApp({
+      model: { provider: "openai", apiKey: "openai-test", model: "gpt-5.6" },
+      makeClient: config => { received = config; return fakeClient(); },
+    });
+    expect(await (await configured.request("/healthz")).json())
+      .toEqual({ ok: true, model: true, provider: "openai", model_id: "gpt-5.6" });
+    await configured.request("/mutations/plan", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ context: ctx }),
+    });
+    expect(received).toEqual({ provider: "openai", apiKey: "openai-test", model: "gpt-5.6" });
+  });
 });
 
 describe("/mutations/plan", () => {
@@ -118,5 +133,93 @@ describe("privacy: only context crosses the wire (ADR-009)", () => {
     expect(body).toContain("\"intent\"");
     expect(body).toContain("\"registry\"");
     expect(body).not.toContain("\"rows\"");
+  });
+});
+
+describe("local connector mutation boundary", () => {
+  const token = "connector-token-for-tests-1234567890";
+  const origin = "http://127.0.0.1:4173";
+  const headers = {
+    "content-type": "application/json",
+    authorization: `Bearer ${token}`,
+    origin,
+  };
+
+  it("fails closed before invoking Codex for text/plain, missing tokens, or bad origins", async () => {
+    let calls = 0;
+    const guarded = createApp({
+      model: { provider: "codex" },
+      makeClient: () => ({
+        rawPlan: async () => { calls++; return RAW_PLAN; },
+        rawRepair: async () => RAW_PLAN,
+      }),
+      allowedOrigins: [origin], mutationToken: token,
+      requireAllowedMutationOrigin: true,
+    });
+    const plain = await guarded.request("/mutations/plan", {
+      method: "POST", headers: { "content-type": "text/plain" },
+      body: JSON.stringify({ context: ctx }),
+    });
+    expect(plain.status).toBe(415);
+    const unauthenticated = await guarded.request("/mutations/plan", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ context: ctx }),
+    });
+    expect(unauthenticated.status).toBe(401);
+    const badOrigin = await guarded.request("/mutations/plan", {
+      method: "POST", headers: { ...headers, origin: "https://evil.example" },
+      body: JSON.stringify({ context: ctx }),
+    });
+    expect(badOrigin.status).toBe(403);
+    expect(calls).toBe(0);
+  });
+
+  it("exposes a per-launch token only when configured and accepts the matching bearer", async () => {
+    const guarded = createApp({
+      model: { provider: "codex" }, makeClient: () => fakeClient(),
+      allowedOrigins: [origin], mutationToken: token,
+      exposeMutationTokenOnHealth: true, requireAllowedMutationOrigin: true,
+    });
+    const anonymousHealth = await guarded.request("/healthz");
+    expect(await anonymousHealth.json()).not.toHaveProperty("connector_token");
+    const browserHealth = await guarded.request("/healthz", { headers: { origin } });
+    expect(browserHealth.headers.get("cache-control")).toBe("no-store");
+    expect(await browserHealth.json()).toMatchObject({
+      provider: "codex", connector_token: token,
+    });
+    const response = await guarded.request("/mutations/plan", {
+      method: "POST", headers, body: JSON.stringify({ context: ctx }),
+    });
+    expect(response.status).toBe(200);
+  });
+
+  it("enforces one active mutation and the configured request rate", async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const guarded = createApp({
+      model: { provider: "codex" },
+      makeClient: () => ({
+        rawPlan: async () => { entered(); await held; return RAW_PLAN; },
+        rawRepair: async () => RAW_PLAN,
+      }),
+      allowedOrigins: [origin], mutationToken: token,
+      mutationConcurrency: 1, mutationRate: { max: 2, windowMs: 60_000 },
+    });
+    const first = guarded.request("/mutations/plan", {
+      method: "POST", headers, body: JSON.stringify({ context: ctx }),
+    });
+    await started;
+    const concurrent = await guarded.request("/mutations/plan", {
+      method: "POST", headers, body: JSON.stringify({ context: ctx }),
+    });
+    expect(concurrent.status).toBe(429);
+    release();
+    expect((await first).status).toBe(200);
+    const rateLimited = await guarded.request("/mutations/plan", {
+      method: "POST", headers, body: JSON.stringify({ context: ctx }),
+    });
+    expect(rateLimited.status).toBe(429);
   });
 });

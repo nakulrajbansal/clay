@@ -55,6 +55,15 @@ const TONES = new Set(["default", "accent", "success", "warning", "danger",
 const HANDLERS: Record<string, string> = {
   onClick: "click", onSubmit: "submit", onChange: "change",
 };
+const RUNTIME_ADD_EVENT_LISTENER = EventTarget.prototype.addEventListener;
+
+function listen(
+  target: EventTarget,
+  type: string,
+  listener: EventListenerOrEventListenerObject,
+): void {
+  RUNTIME_ADD_EVENT_LISTENER.call(target, type, listener);
+}
 
 export function h(tag: string, props?: Record<string, unknown> | null, ...children: VChild[]): VNode {
   if (typeof tag !== "string") throw new Error("E_RENDER: tag must be a string");
@@ -113,6 +122,12 @@ type Ctx = {
 
 function el(ctx: Ctx, tag: string, className?: string): HTMLElement {
   const node = ctx.doc.createElement(tag);
+  Object.defineProperty(node, "addEventListener", {
+    configurable: false,
+    enumerable: false,
+    writable: false,
+    value: RUNTIME_ADD_EVENT_LISTENER.bind(node),
+  });
   if (className) node.className = className;
   return node;
 }
@@ -541,7 +556,7 @@ function makeTip(ctx: Ctx, wrap: HTMLElement): (mark: Element, text: string) => 
   wrap.appendChild(tip);
   return (mark, text) => {
     mark.setAttribute("aria-label", text);
-    mark.addEventListener("pointerenter", () => {
+    listen(mark, "pointerenter", () => {
       const w = wrap.getBoundingClientRect();
       const m = mark.getBoundingClientRect();
       tip.textContent = text;
@@ -549,7 +564,7 @@ function makeTip(ctx: Ctx, wrap: HTMLElement): (mark: Element, text: string) => 
       tip.style.top = `${m.top - w.top}px`;
       tip.classList.add("on");
     });
-    mark.addEventListener("pointerleave", () => tip.classList.remove("on"));
+    listen(mark, "pointerleave", () => tip.classList.remove("on"));
   };
 }
 

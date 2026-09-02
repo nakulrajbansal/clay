@@ -2,22 +2,20 @@
 // regions + conversation rail. Live panels bind to the live store's Bridge;
 // during S5 the proposed panels render in place with a dashed frame,
 // bound to a SECOND Bridge over the shadow store (preview-before-commit).
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Bridge, StoreRpcClient, portFromMessagePort,
-  type HistoryEntry, type LivePanel, type PanelProvenance, type RegTable, type Suggestion,
+  Bridge, StoreRpcClient, deriveSafeDiffKind, portFromMessagePort,
+  type FieldProvenance, type HistoryEntry, type LivePanel, type PanelProvenance,
+  type PrivateMetricEvent, type PrivateMetricsSummary, type RegTable,
+  type SemanticSchemaTraceV1, type Suggestion,
 } from "@clay/kernel";
 import { WorkerClient } from "./worker-client";
 import type { IntentOutcome, PreviewInfo } from "../worker/db-worker";
 import type { StarterShellId } from "../shells/seed";
 import { ConversationRail, pruneFeedAfterVersion, type FeedItem } from "./ConversationRail";
-import { DataView } from "./DataView";
-import { HistoryView } from "./HistoryView";
 import { Onboarding } from "./Onboarding";
-import { PanelFrame } from "./PanelFrame";
 import { TimeSlider } from "./TimeSlider";
 import { AppSwitcher } from "./AppSwitcher";
-import { ShapeMapView } from "./ShapeMapView";
 import {
   addForkEntry, createApp, currentApp, currentAppId, deriveAppName, ensureLegacyAdopted,
   listApps, removeApp, renameApp, setCurrentApp, shellName, type AppEntry,
@@ -26,17 +24,79 @@ import {
   THEMES, applyThemeToRoot, getThemeId, panelThemeCss, setThemeId as saveThemeId, themeById,
 } from "./themes";
 import {
-  getApiKey, getBackendUrl, getSessionToken, hasModelAccess, setApiKey,
-  setBackendUrl, setSessionToken,
+  getActiveModelAccess, getApiKey, getBackendUrl, getModelProvider,
+  getSessionToken, hasModelAccess, normalizeBackendUrl, setApiKey, setBackendUrl, setModelProvider,
+  setSessionToken, type ModelProviderId,
 } from "./settings";
 import { reorder, type Region } from "./layout";
 import { parseImportFile } from "./importData";
 import { buildTrustReceipt } from "./change-contract";
-import {
-  applyLens, buildSituationalLenses, loadLensId, saveLensId, type LensId,
-} from "./lenses";
+import { useLensController } from "./useLensController";
+import { LazySurfaceBoundary } from "./LazySurfaceBoundary";
+import { ModalDialog } from "./ModalDialog";
 
 type Phase = "loading" | "onboarding" | "main" | "error";
+
+const DataView = lazy(() => import("./DataView").then(module => ({ default: module.DataView })));
+const HistoryView = lazy(() => import("./HistoryView").then(module => ({ default: module.HistoryView })));
+const PanelFrame = lazy(() => import("./PanelFrame").then(module => ({ default: module.PanelFrame })));
+const ShapeMapView = lazy(() => import("./ShapeMapView").then(module => ({ default: module.ShapeMapView })));
+const PrivateMetricsView = lazy(() => import("./PrivateMetricsView")
+  .then(module => ({ default: module.PrivateMetricsView })));
+
+function SurfaceFallback({ label, modal = false }: {
+  label: string; modal?: boolean;
+}): React.JSX.Element {
+  const status = <div className="surface-loading" role="status">Opening {label}…</div>;
+  return modal ? <div className="surface-loading-backdrop">{status}</div> : status;
+}
+
+function durationBucket(ms: number): "under_3m" | "3_to_10m" | "10_to_30m" | "over_30m" {
+  if (ms < 180_000) return "under_3m";
+  if (ms < 600_000) return "3_to_10m";
+  if (ms < 1_800_000) return "10_to_30m";
+  return "over_30m";
+}
+
+async function wipeOpfsWithoutWorker(): Promise<void> {
+  type IterableDirectory = {
+    entries: () => AsyncIterableIterator<[string, unknown]>;
+    removeEntry: (name: string, options?: { recursive?: boolean }) => Promise<void>;
+  };
+  const storage = navigator.storage;
+  const getDirectory = (storage as unknown as {
+    getDirectory?: () => Promise<IterableDirectory>;
+  }).getDirectory;
+  if (!getDirectory) return;
+  const root = await getDirectory.call(storage);
+  for await (const [name] of root.entries())
+    await root.removeEntry(name, { recursive: true });
+}
+
+async function prepareWorkerModelAccess(
+  access: ReturnType<typeof getActiveModelAccess>,
+  claySession: string | null,
+): Promise<ReturnType<typeof getActiveModelAccess> & {
+  session: string | null; providerToken?: string | null;
+}> {
+  let providerToken: string | null = null;
+  if (access.provider === "codex" && access.backendUrl) {
+    try {
+      const response = await fetch(`${access.backendUrl.replace(/\/$/, "")}/healthz`);
+      const health = await response.json() as {
+        provider?: string; connector_token?: string;
+      };
+      if (response.ok && health.provider === "codex"
+          && typeof health.connector_token === "string"
+          && health.connector_token.length >= 32) providerToken = health.connector_token;
+    } catch { /* the status surface reports an unreachable connector */ }
+  }
+  return {
+    ...access,
+    session: access.provider === "clay" ? claySession : null,
+    ...(access.provider === "codex" ? { providerToken } : {}),
+  };
+}
 
 /** Reject if a promise doesn't settle in time — turns a silent OPFS/worker
  * stall into a visible, recoverable error instead of an eternal spinner. */
@@ -51,6 +111,14 @@ type Toast = { id: number; msg: string; kind: string;
   action?: { label: string; run: () => void } };
 
 type PanelFault = { code: string; message: string };
+type RecoveryMethod = "panel_repair" | "panel_revert" | "row_restore" | "history_rewind";
+
+function privateFaultKind(code: string): "runtime" | "strike_limit" | "render_timeout" | "unknown" {
+  if (/strike/i.test(code)) return "strike_limit";
+  if (/timeout/i.test(code)) return "render_timeout";
+  if (/runtime|panel/i.test(code)) return "runtime";
+  return "unknown";
+}
 
 function makeBridge(client: WorkerClient, target: "live" | "shadow",
   onToast: (msg: string, kind: string) => void,
@@ -73,6 +141,12 @@ function makeBridge(client: WorkerClient, target: "live" | "shadow",
 
 export function App(): React.JSX.Element {
   const workerRef = useRef<WorkerClient | null>(null);
+  const appReadyAt = useRef(Date.now());
+  const activationRecorded = useRef(false);
+  const firstKeepAt = useRef<number | null>(null);
+  const proofLoopRecorded = useRef(false);
+  const pendingRecovery = useRef<RecoveryMethod | null>(null);
+  const surfaceReturnFocus = useRef<HTMLElement | null>(null);
   const restoreToRef = useRef<(version: number) => Promise<void>>(async () => {});
   const [phase, setPhase] = useState<Phase>("loading");
   const [apps, setApps] = useState<AppEntry[]>([]);
@@ -86,6 +160,8 @@ export function App(): React.JSX.Element {
   const [persistent, setPersistent] = useState(true);
   const [panels, setPanels] = useState<LivePanel[]>([]);
   const [panelProvenance, setPanelProvenance] = useState<PanelProvenance[]>([]);
+  const [fieldProvenance, setFieldProvenance] = useState<FieldProvenance[]>([]);
+  const [semanticTrace, setSemanticTrace] = useState<SemanticSchemaTraceV1 | null>(null);
   const [registryTables, setRegistryTables] = useState<RegTable[]>([]);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [scrub, setScrub] = useState<{ version: number; panels: LivePanel[] } | null>(null);
@@ -95,19 +171,18 @@ export function App(): React.JSX.Element {
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [busy, setBusy] = useState(false);
   const [hasKey, setHasKey] = useState(false);
+  const [modelProvider, setModelProviderState] = useState<ModelProviderId>(() => getModelProvider());
   const [faults, setFaults] = useState<Record<string, PanelFault>>({});
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [showData, setShowData] = useState(false);
   const [dataTable, setDataTable] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [showShapeMap, setShowShapeMap] = useState(false);
+  const [showPrivateMetrics, setShowPrivateMetrics] = useState(false);
+  const [privateMetricsSummary, setPrivateMetricsSummary] = useState<PrivateMetricsSummary | null>(null);
   const [railOpen, setRailOpen] = useState<boolean>(() => {
     try { return localStorage.getItem("clay_reshape_open") !== "false"; }
     catch { return true; }
-  });
-  const [lensId, setLensId] = useState<LensId>(() => {
-    if (typeof localStorage === "undefined") return "all";
-    return loadLensId(localStorage, currentAppId() ?? "default");
   });
   const dataStoreRef = useRef<StoreRpcClient | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -155,18 +230,24 @@ export function App(): React.JSX.Element {
   };
 
   const recordFault = useCallback((panelId: string, fault: PanelFault): void => {
+    void client().recordPrivateMetric({
+      type: "fault_seen", fault: privateFaultKind(fault.code),
+    }).catch(() => undefined);
     setFaults(f => (f[panelId] ? f : { ...f, [panelId]: fault }));
   }, []);
 
   const refreshPanels = useCallback(async (): Promise<void> => {
-    const [nextPanels, nextHistory, nextTables, nextProvenance] = await Promise.all([
+    const [nextPanels, nextHistory, nextTables, nextProvenance,
+      nextSemanticTrace, nextFieldProvenance] = await Promise.all([
       client().panels(), client().history(), client().registryTables(),
-      client().panelProvenance(),
+      client().panelProvenance(), client().semanticTrace(), client().fieldProvenance(),
     ]);
     setPanels(nextPanels);
     setHistory(nextHistory);
     setRegistryTables(nextTables);
     setPanelProvenance(nextProvenance);
+    setSemanticTrace(nextSemanticTrace);
+    setFieldProvenance(nextFieldProvenance);
     setFaults({});
   }, []);
 
@@ -177,6 +258,10 @@ export function App(): React.JSX.Element {
 
   const refreshProvenance = useCallback(async (): Promise<void> => {
     setPanelProvenance(await client().panelProvenance());
+  }, []);
+
+  const recordPrivateMetric = useCallback((event: PrivateMetricEvent): void => {
+    void client().recordPrivateMetric(event).catch(() => undefined);
   }, []);
 
   // Ambient: re-derive the Observer's nudges on a gentle idle cadence so a
@@ -246,13 +331,23 @@ export function App(): React.JSX.Element {
         // app — no re-entry on switch.
         if (!getApiKey()) {
           const legacy = await wc.getSetting<string>("byo_api_key");
-          if (legacy) setApiKey(legacy);
+          if (legacy) {
+            setApiKey(legacy);
+            await wc.deleteSetting("byo_api_key");
+          }
+        } else {
+          await wc.deleteSetting("byo_api_key");
         }
         if (!getBackendUrl()) {
           const legacyB = await wc.getSetting<string>("backend_url");
           if (legacyB) setBackendUrl(legacyB);
         }
-        await wc.setModelAccess(getApiKey(), getBackendUrl(), getSessionToken());
+        const selectedProvider = getModelProvider();
+        const access = getActiveModelAccess();
+        setModelProviderState(selectedProvider);
+        await wc.setModelAccess(await prepareWorkerModelAccess(
+          access, selectedProvider === "clay" ? getSessionToken(access.backendUrl) : null,
+        ));
         setHasKey(hasModelAccess());
 
         // Existing single-app user with data but no registry: adopt it (G4).
@@ -270,15 +365,21 @@ export function App(): React.JSX.Element {
         setApps(listApps());
         setCurrentId(currentApp()?.id ?? null);
         setLiveBridge(makeBridge(wc, "live", pushToast, recordFault, askConfirm));
-        const [bootPanels, bootHistory, bootTables, bootSuggestions, bootProvenance] = await Promise.all([
+        const [bootPanels, bootHistory, bootTables, bootSuggestions, bootProvenance,
+          bootSemanticTrace, bootFieldProvenance] = await Promise.all([
           wc.panels(), wc.history(), wc.registryTables(), wc.suggestions(), wc.panelProvenance(),
+          wc.semanticTrace(), wc.fieldProvenance(),
         ]);
         setPanels(bootPanels);
         setHistory(bootHistory);
         setRegistryTables(bootTables);
         setSuggestions(bootSuggestions);
         setPanelProvenance(bootProvenance);
+        setSemanticTrace(bootSemanticTrace);
+        setFieldProvenance(bootFieldProvenance);
         setPhase("main");
+        void wc.recordPrivateMetric({ type: "app_ready",
+          entry: boot.seeded ? "existing" : "new_starter" }).catch(() => undefined);
       } catch (e) {
         // Never hang on the spinner: surface the failure and let the user
         // recover (retry, switch to another app, or start over).
@@ -306,6 +407,7 @@ export function App(): React.JSX.Element {
       setFeed([{ kind: "info", text: "Your app is ready. Describe any change to reshape it." }]);
       setBusy(false);
       setPhase("main");
+      recordPrivateMetric({ type: "app_ready", entry: "new_starter" });
     } else {
       // an additional app: reboot so the worker opens its own files, then seed
       reloadApp();
@@ -347,17 +449,28 @@ export function App(): React.JSX.Element {
 
   const handleOutcome = (outcome: IntentOutcome): void => {
     if (outcome.status === "clarify") {
+      recordPrivateMetric({ type: "reshape_finished", outcome: "clarify",
+        repaired: outcome.repaired, stage: "plan", diff: "unknown" });
       setFeed(f => [...f, { kind: "clarify", question: outcome.question }]);
     } else if (outcome.status === "failed") {
+      recordPrivateMetric({ type: "reshape_finished", outcome: "failed",
+        repaired: outcome.repaired, stage: outcome.stage as "plan" | "validate" | "dry_run",
+        diff: "unknown" });
       setFeed(f => [...f, { kind: "failure", reasons: outcome.reasons }]);
     } else {
+      recordPrivateMetric({ type: "reshape_finished", outcome: "preview",
+        repaired: outcome.preview.repaired, stage: "none",
+        diff: deriveSafeDiffKind(outcome.preview.diff) });
       setPreview(outcome.preview);
       setShadowBridge(makeBridge(client(), "shadow", pushToast, recordFault, askConfirm));
     }
   };
 
-  const runIntent = async (text: string): Promise<void> => {
+  const runIntent = async (
+    text: string, origin: "composer" | "observer_suggestion" = "composer",
+  ): Promise<void> => {
     if (busy || preview || scrub) return;
+    recordPrivateMetric({ type: "reshape_started", origin });
     setFeed(f => [...f, { kind: "intent", text }]);
     // Dummy/sample-data intents are handled by the trusted shell, not the
     // planner — the model can't insert rows by design, so routing these to
@@ -404,7 +517,7 @@ export function App(): React.JSX.Element {
     } finally {
       setBusy(false);
       // hosted mode: every plan call moves the quota — keep the meter honest
-      if (getBackendUrl()) setAccountN(n => n + 1);
+      if (modelProvider === "clay" && getBackendUrl()) setAccountN(n => n + 1);
     }
   };
 
@@ -412,7 +525,7 @@ export function App(): React.JSX.Element {
     if (busy || preview || scrub) return;
     void client().acceptSuggestion(s.subject, s.kind);
     setSuggestions(list => list.filter(x => x.id !== s.id));
-    void runIntent(s.intent);
+    void runIntent(s.intent, "observer_suggestion");
   };
 
   const dismissSuggestion = (s: Suggestion): void => {
@@ -425,11 +538,18 @@ export function App(): React.JSX.Element {
     if (busy || preview || scrub) return;
     const fault = faults[panelId];
     if (!fault) return;
+    recordPrivateMetric({ type: "reshape_started", origin: "panel_repair" });
     setFeed(f => [...f, { kind: "info", text: `Repairing ${panelId} (${fault.message.slice(0, 80)})…` }]);
     setBusy(true);
     try {
-      handleOutcome(await client().repairPanel(panelId, fault.message));
+      const outcome = await client().repairPanel(panelId, fault.message);
+      if (outcome.status === "preview") pendingRecovery.current = "panel_repair";
+      else recordPrivateMetric({ type: "recovery_finished",
+        method: "panel_repair", result: "failed" });
+      handleOutcome(outcome);
     } catch (e) {
+      recordPrivateMetric({ type: "recovery_finished",
+        method: "panel_repair", result: "failed" });
       setFeed(f => [...f, { kind: "failure", reasons: [String(e)] }]);
     } finally {
       setBusy(false);
@@ -443,7 +563,11 @@ export function App(): React.JSX.Element {
       await refreshProvenance();
       setFaults(f => { const { [panelId]: _drop, ...rest } = f; return rest; });
       setFeed(f => [...f, { kind: "info", text: `Rolled back the ${panelId} panel.` }]);
+      recordPrivateMetric({ type: "recovery_finished",
+        method: "panel_revert", result: "success" });
     } catch (e) {
+      recordPrivateMetric({ type: "recovery_finished",
+        method: "panel_revert", result: "failed" });
       pushToast(String(e instanceof Error ? e.message : e), "danger");
     }
   };
@@ -462,6 +586,7 @@ export function App(): React.JSX.Element {
     URL.revokeObjectURL(url);
     try { localStorage.setItem("clay_last_backup", String(Date.now())); } catch { /* private mode */ }
     pushToast("Exported your whole app to one file", "success");
+    recordPrivateMetric({ type: "backup_finished", action: "export", result: "success" });
   };
 
   // Local-first means the user carries the backup burden — carry it FOR
@@ -494,8 +619,10 @@ export function App(): React.JSX.Element {
           `Imported, but ${result.invalidPanels.length} panel(s) failed validation `
           + `and were flagged: ${result.invalidPanels.join(", ")} (G15).`);
       }
-      window.location.reload();   // clean re-boot against the imported app
+      recordPrivateMetric({ type: "backup_finished", action: "import", result: "success" });
+      window.location.reload();
     } catch (e) {
+      recordPrivateMetric({ type: "backup_finished", action: "import", result: "failed" });
       pushToast(e instanceof Error ? e.message : String(e), "danger");
     }
   };
@@ -513,11 +640,27 @@ export function App(): React.JSX.Element {
     }
   };
 
+  const rememberSurfaceReturnFocus = (): void => {
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    surfaceReturnFocus.current = active?.closest(".shape-map")
+      ? document.querySelector<HTMLElement>('button[aria-label="Open shape map"]')
+      : active;
+  };
+  const restoreSurfaceFocus = (): void => {
+    const target = surfaceReturnFocus.current;
+    surfaceReturnFocus.current = null;
+    target?.focus();
+  };
   const openData = (table?: string): void => {
+    rememberSurfaceReturnFocus();
     dataStoreRef.current ??= new StoreRpcClient(
       portFromMessagePort(client().openStorePort("live")));
     setDataTable(table ?? null);
     setShowData(true);
+  };
+  const closeData = (): void => {
+    setShowData(false);
+    restoreSurfaceFocus();
   };
 
   const closePreview = (): void => {
@@ -535,13 +678,29 @@ export function App(): React.JSX.Element {
       setFeed(feedItems => [...feedItems, { kind: "failure", reasons: [String(error)] }]);
       closePreview();
       await refreshPanels();
+      if (pendingRecovery.current) {
+        recordPrivateMetric({ type: "recovery_finished",
+          method: pendingRecovery.current, result: "failed" });
+        pendingRecovery.current = null;
+      }
       return;
     }
     const receipt = buildTrustReceipt(preview, version);
+    recordPrivateMetric({ type: "preview_decided", decision: "kept",
+      repaired: preview.repaired, diff: deriveSafeDiffKind(preview.diff) });
+    if (pendingRecovery.current) {
+      recordPrivateMetric({ type: "recovery_finished",
+        method: pendingRecovery.current, result: "success" });
+      pendingRecovery.current = null;
+    }
+    if (!activationRecorded.current) {
+      activationRecorded.current = true;
+      firstKeepAt.current = Date.now();
+      recordPrivateMetric({ type: "activation_completed",
+        elapsed: durationBucket(Date.now() - appReadyAt.current) });
+    }
     setFeed(f => [...f, { kind: "committed", summary: preview.summary, version, receipt }]);
-    setLensId("all");
-    if (typeof localStorage !== "undefined")
-      saveLensId(localStorage, currentId ?? currentAppId() ?? "default", "all");
+    resetLens();
     closePreview();
     await refreshPanels();   // hot swap: keyed remount against the new blobs
     await refreshSuggestions();
@@ -566,22 +725,50 @@ export function App(): React.JSX.Element {
   const discard = async (): Promise<void> => {
     if (!preview) return;
     await client().discard();
+    recordPrivateMetric({ type: "preview_decided", decision: "discarded",
+      repaired: preview.repaired, diff: deriveSafeDiffKind(preview.diff) });
+    if (pendingRecovery.current) {
+      recordPrivateMetric({ type: "recovery_finished",
+        method: pendingRecovery.current, result: "discarded" });
+      pendingRecovery.current = null;
+    }
     setFeed(f => [...f, { kind: "discarded", summary: preview.summary }]);
     closePreview();
   };
 
-  const saveKey = async (key: string): Promise<void> => {
-    setApiKey(key || null);                                   // device-global
-    await client().setModelAccess(getApiKey(), getBackendUrl(), getSessionToken());
+  const applyModelAccess = async (): Promise<void> => {
+    const access = getActiveModelAccess();
+    await client().setModelAccess(await prepareWorkerModelAccess(
+      access, access.provider === "clay" ? getSessionToken(access.backendUrl) : null,
+    ));
     setHasKey(hasModelAccess());
-    pushToast("API key saved on this device — used by all your apps", "success");
+  };
+
+  const selectModelProvider = async (provider: ModelProviderId): Promise<void> => {
+    setModelProvider(provider);
+    setModelProviderState(provider);
+    await applyModelAccess();
+    if (provider !== "clay") { setAccount(null); setMeter(null); }
+    pushToast(`Model connection: ${provider === "codex" ? "Local Codex" : provider}`, "success");
+  };
+
+  const saveKey = async (key: string): Promise<void> => {
+    setApiKey(key || null);
+    setModelProvider("anthropic");
+    setModelProviderState("anthropic");
+    await applyModelAccess();
+    pushToast("Anthropic key saved on this device — used by all your apps", "success");
   };
 
   const saveBackend = async (url: string): Promise<void> => {
-    setBackendUrl(url || null);                               // device-global
-    await client().setModelAccess(getApiKey(), getBackendUrl(), getSessionToken());
-    setHasKey(hasModelAccess());
-    pushToast(url ? "Hosted backend set for all apps" : "Hosted backend cleared", "success");
+    try {
+      const normalized = url ? normalizeBackendUrl(url) : null;
+      setBackendUrl(normalized);
+      await applyModelAccess();
+      pushToast(normalized ? "Model backend set for all apps" : "Model backend cleared", "success");
+    } catch (error) {
+      pushToast(error instanceof Error ? error.message : String(error), "danger");
+    }
   };
 
   // Hosted-mode account (Phase 1.2): /me feeds the rail meter and the
@@ -592,11 +779,12 @@ export function App(): React.JSX.Element {
   const [accountN, setAccountN] = useState(0);   // bump to refetch
   useEffect(() => {
     if (phase !== "main") return;
+    if (modelProvider !== "clay") { setMeter(null); setAccount(null); return; }
     const url = getBackendUrl();
     if (!url) { setMeter(null); setAccount(null); return; }
     void (async () => {
       try {
-        const token = getSessionToken();
+        const token = getSessionToken(url);
         const res = await fetch(url.replace(/\/$/, "") + "/me", {
           credentials: "include",
           headers: token ? { authorization: `Bearer ${token}` } : {},
@@ -608,12 +796,12 @@ export function App(): React.JSX.Element {
         setAccount({ email: b.email });
       } catch { setMeter(null); setAccount(null); }
     })();
-  }, [phase, hasKey, accountN]);
+  }, [phase, accountN, modelProvider]);
 
   // Magic-link sign-in. Dev backends return the link directly (no email
   // hop); production sends an email and we wait for the user to click.
   const signIn = async (email: string): Promise<void> => {
-    const url = getBackendUrl()?.replace(/\/$/, "");
+    const url = getActiveModelAccess().backendUrl?.replace(/\/$/, "");
     if (!url) { pushToast("Set the backend URL first", "danger"); return; }
     try {
       const res = await fetch(url + "/auth/magic-link", {
@@ -634,8 +822,11 @@ export function App(): React.JSX.Element {
       const cb = await fetch(url + body.link, { credentials: "include" });
       const got = await cb.json() as { session?: string };
       if (got.session) {
-        setSessionToken(got.session);
-        await client().setModelAccess(getApiKey(), getBackendUrl(), got.session);
+        setSessionToken(got.session, url);
+        const access = getActiveModelAccess();
+        await client().setModelAccess(await prepareWorkerModelAccess(
+          access, access.provider === "clay" ? got.session : null,
+        ));
         setAccountN(n => n + 1);
         pushToast("Signed in — your reshapes now count against your plan", "success");
       }
@@ -644,8 +835,8 @@ export function App(): React.JSX.Element {
     }
   };
   const signOut = async (): Promise<void> => {
-    const backend = getBackendUrl();
-    const session = getSessionToken();
+    const backend = getActiveModelAccess().backendUrl;
+    const session = getSessionToken(backend);
     if (backend && session) {
       try {
         await fetch(`${backend.replace(/\/$/, "")}/auth/logout`, {
@@ -656,12 +847,24 @@ export function App(): React.JSX.Element {
       } catch { /* local state still clears when the backend is unreachable */ }
     }
     setSessionToken(null);
-    await client().setModelAccess(getApiKey(), getBackendUrl(), null);
+    const access = getActiveModelAccess();
+    await client().setModelAccess(await prepareWorkerModelAccess(access, null));
     setAccount(null); setMeter(null);
     pushToast("Signed out on this device", "default");
   };
 
   const head = history.length > 0 ? history[history.length - 1]!.version : 0;
+  const {
+    lensId, lenses, lensPanels, lensReady, selectLens, resetLens,
+    saveCurrentLens, removeSavedLens,
+  } = useLensController({
+    ready: phase === "main", appId: currentId ?? currentAppId() ?? "default",
+    client: workerRef.current, panels, provenance: panelProvenance, head,
+    notify: pushToast,
+    onLensChanged: id => recordPrivateMetric({
+      type: "lens_changed", mode: id === "all" ? "all" : "situational",
+    }),
+  });
 
   const scrubTo = async (version: number): Promise<void> => {
     if (version >= head) { setScrub(null); return; }
@@ -669,35 +872,60 @@ export function App(): React.JSX.Element {
     setScrub({ version, panels: panelsAt });
   };
 
-  const restoreTo = async (version: number): Promise<void> => {
+  const restoreTo = async (
+    version: number, source: "trust_receipt" | "history" | "time_slider" = "history",
+  ): Promise<void> => {
     if (busy || preview) {
       pushToast("Keep or discard the open change before rewinding.", "default");
       return;
     }
     if (version >= head) return;
     const dropped = history.filter(h => h.version > version).length;
+    const depth = dropped <= 1 ? "one" : dropped <= 5 ? "two_to_five" : "six_plus";
     if (!(await askConfirm(
       `Rewind your app to v${version}? The ${dropped} newer change${dropped === 1 ? "" : "s"} `
-      + `will be removed from history. Data rows are always kept.`))) return;
-    const fresh = await client().makeLatest(version);
-    setScrub(null);
-    setPanels(fresh);
-    setHistory(await client().history());
-    await refreshProvenance();
-    setRegistryTables(await client().registryTables());
-    setFeed(f => [...pruneFeedAfterVersion(f, version),
-      { kind: "info", text: `Rewound — v${version} is the latest again.` }]);
+      + `will be removed from history. Data rows are always kept.`))) {
+      recordPrivateMetric({ type: "rewind_finished", source, result: "cancelled", depth });
+      recordPrivateMetric({ type: "recovery_finished",
+        method: "history_rewind", result: "discarded" });
+      return;
+    }
+    try {
+      await client().makeLatest(version);
+      setScrub(null);
+      await refreshPanels();
+      setFeed(f => [...pruneFeedAfterVersion(f, version),
+        { kind: "info", text: `Rewound — v${version} is the latest again.` }]);
+      recordPrivateMetric({ type: "rewind_finished", source, result: "success", depth });
+      recordPrivateMetric({ type: "recovery_finished",
+        method: "history_rewind", result: "success" });
+    } catch (error) {
+      recordPrivateMetric({ type: "rewind_finished", source, result: "failed", depth });
+      recordPrivateMetric({ type: "recovery_finished",
+        method: "history_rewind", result: "failed" });
+      pushToast(error instanceof Error ? error.message : String(error), "danger");
+    }
   };
   restoreToRef.current = restoreTo;
   const makeLatest = async (): Promise<void> => {
-    if (scrub) await restoreTo(scrub.version);
+    if (scrub) await restoreTo(scrub.version, "time_slider");
   };
 
   const resetApp = async (): Promise<void> => {
     if (!(await askConfirm(
       "Erase EVERYTHING and start over? All apps and their data are deleted. "
       + "This is the one action Clay cannot undo."))) return;
-    await client().reset();
+    try {
+      if (!workerRef.current) throw new Error("worker unavailable");
+      await withTimeout(workerRef.current.reset(), 5_000, "Erasing local data");
+    } catch {
+      try {
+        await wipeOpfsWithoutWorker();
+      } catch (error) {
+        setBootError(`Could not erase local data: ${error instanceof Error ? error.message : String(error)}`);
+        return;
+      }
+    }
     try { localStorage.removeItem("clay_apps"); localStorage.removeItem("clay_current_app"); }
     catch { /* ignore */ }
     window.location.reload();
@@ -731,36 +959,34 @@ export function App(): React.JSX.Element {
       || a.panel.panel_id.localeCompare(b.panel.panel_id));
   }, [panels, preview, scrub]);
 
-  const lenses = useMemo(() => buildSituationalLenses(panels), [panels]);
-  const activeLens = lenses.find(lens => lens.id === lensId) ?? lenses[0]!;
-  const lensPanels = useMemo(() => {
-    const filtered = applyLens(panels, lensId);
-    return filtered.length === 0 && panels.length > 0 ? panels : filtered;
-  }, [panels, lensId]);
-  const lensPanelIds = useMemo(
-    () => new Set(lensPanels.map(panel => panel.panel_id)), [lensPanels]);
-  const visibleDisplay = useMemo(
-    () => preview || scrub ? display
-      : display.filter(item => lensPanelIds.has(item.panel.panel_id)),
-    [display, lensPanelIds, preview, scrub],
-  );
+  const visibleDisplay = useMemo(() => {
+    if (preview || scrub) return display;
+    const byId = new Map(display.map(item => [item.panel.panel_id, item]));
+    return lensPanels.flatMap(panel => {
+      const item = byId.get(panel.panel_id);
+      return item ? [{ ...item, panel }] : [];
+    });
+  }, [display, lensPanels, preview, scrub]);
+  const confirmDialog = confirmBox ? (
+    <ModalDialog role="alertdialog" className="confirm-card"
+      backdropClassName="confirm-backdrop" ariaLabelledBy="confirm-title"
+      ariaDescribedBy="confirm-message" onClose={() => settleConfirm(false)}>
+      <h2 id="confirm-title" className="confirm-title">Confirm action</h2>
+      <p id="confirm-message" className="confirm-msg">{confirmBox.msg}</p>
+      <div className="rail-actions confirm-actions">
+        <button autoFocus className="primary" onClick={() => settleConfirm(true)}>Confirm</button>
+        <button onClick={() => settleConfirm(false)}>Cancel</button>
+      </div>
+    </ModalDialog>
+  ) : null;
   const provenanceById = useMemo(
     () => new Map(panelProvenance.map(item => [item.panel_id, item])),
     [panelProvenance],
   );
 
-  useEffect(() => {
-    if (phase === "main" && panels.length > 0
-        && lensId !== "all" && activeLens.panelIds.length === 0) {
-      setLensId("all");
-      if (typeof localStorage !== "undefined")
-        saveLensId(localStorage, currentId ?? currentAppId() ?? "default", "all");
-    }
-  }, [activeLens.panelIds.length, currentId, lensId, panels.length, phase]);
-
   if (phase === "loading") return <div className="boot">Opening your app…</div>;
   if (phase === "error")
-    return (
+    return (<>
       <div className="boot boot-error">
         <h2>This app didn’t open</h2>
         <p className="boot-error-msg">{bootError}</p>
@@ -776,7 +1002,8 @@ export function App(): React.JSX.Element {
           console (F12) and send the [clay boot] error.
         </p>
       </div>
-    );
+      {confirmDialog}
+    </>);
   if (phase === "onboarding")
     return (
       <Onboarding
@@ -852,27 +1079,76 @@ export function App(): React.JSX.Element {
     });
   };
 
-  const selectLens = (id: LensId): void => {
-    const lens = lenses.find(item => item.id === id);
-    if (!lens || (id !== "all" && lens.panelIds.length === 0)) return;
-    setLensId(id);
-    if (typeof localStorage !== "undefined")
-      saveLensId(localStorage, currentId ?? currentAppId() ?? "default", id);
-    pushToast(
-      `${lens.name}: ${lens.panelIds.length} of ${panels.length} views. Your records are unchanged.`,
-      "default",
-      id === "all" ? undefined : {
-        label: "Show all",
-        run: () => {
-          setLensId("all");
-          if (typeof localStorage !== "undefined")
-            saveLensId(localStorage, currentId ?? currentAppId() ?? "default", "all");
-        },
+  const receiptOpened = (): void => {
+    recordPrivateMetric({ type: "trust_surface_opened", surface: "trust_receipt" });
+    if (!proofLoopRecorded.current && firstKeepAt.current !== null) {
+      proofLoopRecorded.current = true;
+      recordPrivateMetric({ type: "proof_loop_completed",
+        elapsed: durationBucket(Date.now() - firstKeepAt.current) });
+    }
+  };
+
+  const openPrivateMetrics = async (): Promise<void> => {
+    recordPrivateMetric({ type: "trust_surface_opened", surface: "storage_status" });
+    setPrivateMetricsSummary(await client().privateMetricsSummary());
+    setShowPrivateMetrics(true);
+  };
+
+  const setPrivateMetricsEnabled = async (enabled: boolean): Promise<boolean> => {
+    try {
+      setPrivateMetricsSummary(await client().setPrivateMetricsEnabled(enabled));
+      return true;
+    } catch (error) {
+      pushToast(error instanceof Error ? error.message : String(error), "danger");
+      return false;
+    }
+  };
+
+  const clearPrivateMetrics = async (): Promise<boolean> => {
+    try {
+      setPrivateMetricsSummary(await client().clearPrivateMetrics());
+      return true;
+    } catch (error) {
+      pushToast(error instanceof Error ? error.message : String(error), "danger");
+      return false;
+    }
+  };
+
+  const copyPrivateMetrics = async (): Promise<boolean> => {
+    if (!privateMetricsSummary) return false;
+    const summary = {
+      ...privateMetricsSummary,
+      reshape: {
+        ...privateMetricsSummary.reshape,
+        discardByDiff: privateMetricsSummary.reshape.discardByDiff
+          .filter(item => item.decisions >= 3),
       },
-    );
+      recovery: {
+        ...privateMetricsSummary.recovery,
+        byMethod: privateMetricsSummary.recovery.byMethod
+          .filter(item => item.completed >= 3),
+      },
+    };
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(summary, null, 2));
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const openHistory = (): void => {
+    rememberSurfaceReturnFocus();
+    recordPrivateMetric({ type: "trust_surface_opened", surface: "history" });
+    setShowHistory(true);
+  };
+  const closeHistory = (): void => {
+    setShowHistory(false);
+    restoreSurfaceFocus();
   };
 
   const openShapeMap = async (): Promise<void> => {
+    recordPrivateMetric({ type: "trust_surface_opened", surface: "shape_map" });
     try { setRegistryTables(await client().registryTables()); } catch { /* keep last known shape */ }
     setShowData(false);
     setShowHistory(false);
@@ -952,9 +1228,23 @@ export function App(): React.JSX.Element {
             </section>
           );
         }
+        const loadingStyle: React.CSSProperties = {
+          minHeight: (d.panel.placement.h ?? 180) + 54,
+        };
+        if (name !== "side") {
+          const span = d.panel.placement.w ?? (name === "top" ? 4 : 2);
+          const col = d.panel.placement.col;
+          loadingStyle.gridColumn = col == null ? `span ${span}` : `${col + 1} / span ${span}`;
+          loadingStyle.gridRow = `span ${(d.panel.placement.h ?? 180) + 72}`;
+        }
         return (
-          <PanelFrame
+          <Suspense
             key={`${d.panel.panel_id}@${d.panel.version}${d.isPreview ? ":preview" : ""}:t${themeId}`}
+            fallback={<section className="panel-frame panel-loading" style={loadingStyle}>
+              <header className="panel-title">Opening {d.panel.title}…</header>
+            </section>}
+          >
+          <PanelFrame
             panel={d.panel}
             provenance={!d.isPreview && !scrub ? provenanceById.get(d.panel.panel_id) : undefined}
             bridge={bridge}
@@ -983,6 +1273,7 @@ export function App(): React.JSX.Element {
               ? (): void => void removePanelLocal(d.panel.panel_id) : undefined}
             onAskAbout={!d.isPreview ? (): void => askAboutPanel(d.panel) : undefined}
           />
+          </Suspense>
         );
       });
     // a clear placeholder marking exactly where the dragged panel will land —
@@ -1018,7 +1309,10 @@ export function App(): React.JSX.Element {
         onSelectTheme={selectTheme}
         lenses={lenses}
         lensId={lensId}
+        lensReady={lensReady}
         onSelectLens={selectLens}
+        onSaveLens={saveCurrentLens}
+        onDeleteLens={removeSavedLens}
       />
       {!persistent ? (
         <div className="banner">
@@ -1033,6 +1327,7 @@ export function App(): React.JSX.Element {
         </div>
       ) : null}
       <div className="app-body">
+      <LazySurfaceBoundary label="views">
       <main className="regions">
         <TimeSlider
           history={history}
@@ -1041,7 +1336,7 @@ export function App(): React.JSX.Element {
           disabled={busy || preview !== null}
           onScrub={v => void scrubTo(v)}
           onMakeLatest={() => void makeLatest()}
-          onOpenHistory={() => setShowHistory(true)}
+          onOpenHistory={openHistory}
         />
         {display.length === 0 && !preview && !scrub ? (
           <div className="empty-canvas">
@@ -1078,29 +1373,41 @@ export function App(): React.JSX.Element {
           </>
         )}
       </main>
+      </LazySurfaceBoundary>
       {showHistory ? (
+        <LazySurfaceBoundary label="history" modal>
+        <Suspense fallback={<SurfaceFallback label="history" modal />}>
         <HistoryView
           history={history}
           head={head}
           current={scrub?.version ?? head}
-          onJump={v => { void scrubTo(v); setShowHistory(false); }}
+          onJump={v => { void scrubTo(v); closeHistory(); }}
           onRestore={v => void restoreTo(v)}
           onSetCheckpoint={(v, label) => void client().setCheckpoint(v, label).then(setHistory)}
-          onClose={() => setShowHistory(false)}
+          onClose={closeHistory}
         />
+        </Suspense>
+        </LazySurfaceBoundary>
       ) : null}
       {showData && dataStoreRef.current && workerRef.current ? (
+        <LazySurfaceBoundary label="data" modal>
+        <Suspense fallback={<SurfaceFallback label="data" modal />}>
         <DataView
           worker={workerRef.current}
           store={dataStoreRef.current}
           initialTable={dataTable}
           onImport={file => void importFile(file)}
           onWrite={table => liveBridge?.notifyWrite(table)}
-          onClose={() => setShowData(false)}
+          onClose={closeData}
           onError={msg => pushToast(msg, "danger")}
           onInfo={msg => pushToast(msg, "info")}
           onSchemaChange={() => void refreshPanels()}
+          onRecovery={result => recordPrivateMetric({
+            type: "recovery_finished", method: "row_restore", result,
+          })}
         />
+        </Suspense>
+        </LazySurfaceBoundary>
       ) : null}
       {railOpen ? <ConversationRail
         feed={feed}
@@ -1119,10 +1426,13 @@ export function App(): React.JSX.Element {
         themes={THEMES}
         themeId={themeId}
         onSelectTheme={selectTheme}
+        modelProvider={modelProvider}
+        onSelectModelProvider={provider => void selectModelProvider(provider)}
         onIntent={t => void runIntent(t)}
         onKeep={() => void keep()}
         onDiscard={() => void discard()}
-        onRewind={version => void restoreTo(version)}
+        onRewind={version => void restoreTo(version, "trust_receipt")}
+        onReceiptOpened={receiptOpened}
         onSaveKey={k => void saveKey(k)}
         onSaveBackend={u => void saveBackend(u)}
         onRemoveSamples={() => void removeSamples()}
@@ -1130,32 +1440,42 @@ export function App(): React.JSX.Element {
         onExport={() => void exportArchive()}
         onImport={file => void importArchive(file)}
         onCopyDiagnostics={() => void copyDiagnostics()}
+        onOpenPrivateMetrics={() => void openPrivateMetrics()}
       /> : null}
       </div>
       {showShapeMap ? (
+        <LazySurfaceBoundary label="shape map" modal>
+        <Suspense fallback={<SurfaceFallback label="shape map" modal />}>
         <ShapeMapView
           tables={registryTables}
           panels={panels}
           history={history}
+          semanticTrace={semanticTrace}
+          fieldProvenance={fieldProvenance}
           persistent={persistent}
           onClose={() => setShowShapeMap(false)}
           onOpenData={table => openData(table)}
-          onOpenHistory={() => setShowHistory(true)}
+          onOpenHistory={openHistory}
           onAskAbout={askAboutPanel}
         />
+        </Suspense>
+        </LazySurfaceBoundary>
       ) : null}
-      {confirmBox ? (
-        <div className="confirm-backdrop" onClick={() => settleConfirm(false)}>
-          <div className="confirm-card" role="alertdialog" aria-modal="true"
-            onClick={e => e.stopPropagation()}>
-            <p className="confirm-msg">{confirmBox.msg}</p>
-            <div className="rail-actions confirm-actions">
-              <button autoFocus className="primary" onClick={() => settleConfirm(true)}>Confirm</button>
-              <button onClick={() => settleConfirm(false)}>Cancel</button>
-            </div>
-          </div>
-        </div>
+      {showPrivateMetrics && privateMetricsSummary ? (
+        <LazySurfaceBoundary label="private activity" modal>
+        <Suspense fallback={<SurfaceFallback label="private activity" modal />}>
+          <PrivateMetricsView
+            summary={privateMetricsSummary}
+            persistent={persistent}
+            onClose={() => setShowPrivateMetrics(false)}
+            onToggle={setPrivateMetricsEnabled}
+            onClear={clearPrivateMetrics}
+            onCopy={copyPrivateMetrics}
+          />
+        </Suspense>
+        </LazySurfaceBoundary>
       ) : null}
+      {confirmDialog}
       <div className="toasts">
         {toasts.map(t => (
           <div key={t.id} className={`toast toast-${t.kind}`}>

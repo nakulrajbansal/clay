@@ -177,6 +177,21 @@ function buildOps(reg: Registry, d1: number, d2: number, ctx: Ctx): ForwardOpT[]
   }
 }
 
+function semanticProjection(store: ClayStore): string {
+  const trace = store.semanticSchemaTrace();
+  return JSON.stringify({
+    tables: trace.tables.filter(table => table.state === "visible")
+      .map(table => [table.name, table.tableId]),
+    fields: trace.fields.filter(field => field.state !== "inactive")
+      .map(field => [field.tableName, field.fieldName, field.fieldId]),
+    relationships: trace.relationships
+      .filter(relationship => relationship.state !== "inactive"
+        && relationship.state !== "retired")
+      .map(relationship => [relationship.kind, relationship.relationshipId,
+        relationship.from, relationship.to]),
+  });
+}
+
 describe("PB1: migrate/rollback round-trip (small scale)", () => {
   it("apply all, roll back all -> schema equals seed, data bit-equal", async () => {
     await fc.assert(fc.asyncProperty(
@@ -187,6 +202,7 @@ describe("PB1: migrate/rollback round-trip (small scale)", () => {
           const seedVersion = store.headVersion();
           const view0 = JSON.stringify(store.query({ from: "projects" }));
           const reg0 = registryToJson(store.registrySnapshot());
+          const semantic0 = semanticProjection(store);
           const ctx: Ctx = { fresh: 0 };
 
           for (const [d1, d2] of decisions) {
@@ -201,6 +217,7 @@ describe("PB1: migrate/rollback round-trip (small scale)", () => {
           store.rollbackTo(seedVersion);
           expect(registryToJson(store.registrySnapshot())).toBe(reg0);
           expect(JSON.stringify(store.query({ from: "projects" }))).toBe(view0);
+          expect(semanticProjection(store)).toBe(semantic0);
 
           // Roll forward across the whole chain, then back again. The active
           // projection is bit-equal while inactive physical values remain.
@@ -208,6 +225,7 @@ describe("PB1: migrate/rollback round-trip (small scale)", () => {
           store.rollbackTo(seedVersion);
           expect(registryToJson(store.registrySnapshot())).toBe(reg0);
           expect(JSON.stringify(store.query({ from: "projects" }))).toBe(view0);
+          expect(semanticProjection(store)).toBe(semantic0);
         } finally {
           store.close();
         }

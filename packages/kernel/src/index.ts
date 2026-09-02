@@ -27,10 +27,20 @@ export {
 } from "./migrate";
 export {
   ClayStore,
-  type ClayManifest, type CommitInput, type HistoryEntry, type LivePanel,
+  type ClayManifest, type CommitInput, type FieldProvenance, type HistoryEntry, type LivePanel,
   type PanelProvenance,
   type PanelBlobInput, type VersionEntry,
 } from "./store";
+export {
+  bindingForSemanticOp, createConceptId, createFieldId, createRelationshipId,
+  createTableId, isConceptId, isFieldId, isRelationshipId, isTableId,
+  type ConceptId, type FieldId, type RelationshipId,
+  type SemanticOpBinding, type SemanticSchemaTraceV1, type TableId,
+} from "./semantic";
+export {
+  deriveSafeDiffKind, PrivateMetricEventSchema, PrivateMetricsReducer,
+  type PrivateMetricEvent, type PrivateMetricsSummary, type Rate,
+} from "./private-metrics";
 export {
   MutationPipeline, defaultSmokeTest,
   type AttemptResult, type DebugEvent, type Planner, type PlannerContext,

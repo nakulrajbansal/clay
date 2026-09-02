@@ -67,10 +67,10 @@ export type PreviewHandle = {
 };
 
 export type AttemptResult =
-  | { status: "clarify"; question: string; attemptId: string }
+  | { status: "clarify"; question: string; attemptId: string; repaired: boolean }
   | { status: "preview"; preview: PreviewHandle; attemptId: string; repaired: boolean }
   | { status: "failed"; stage: "plan" | "validate" | "dry_run";
-      reasons: string[]; attemptId: string };
+      reasons: string[]; attemptId: string; repaired: boolean };
 
 const hasVar = (q: unknown): boolean => JSON.stringify(q).includes('"$var"');
 
@@ -154,7 +154,7 @@ export class MutationPipeline {
       code: string): AttemptResult => {
       this.store.finishAttempt(attemptId, "failed", code);
       debug({ stage: "outcome", status: `failed@${stage}`, repaired: repairUsed });
-      return { status: "failed", stage, reasons, attemptId };
+      return { status: "failed", stage, reasons, attemptId, repaired: repairUsed };
     };
 
     // S2
@@ -279,18 +279,35 @@ export class MutationPipeline {
       if (plan.clarifying_question) {
         this.store.finishAttempt(attemptId, "clarify");
         debug({ stage: "outcome", status: "clarify", repaired: repairUsed });
-        return { status: "clarify", question: plan.clarifying_question, attemptId };
+        return {
+          status: "clarify", question: plan.clarifying_question,
+          attemptId, repaired: repairUsed,
+        };
       }
 
+      // S4: prepare semantic IDs once, then use the same immutable assignment
+      // batch in the disposable shadow and the eventual live Keep.
+      const baseVersion = this.store.headVersion();
+      const semanticAssignments = this.store.prepareSemanticAssignments(
+        plan.migration,
+        "model",
+      );
       // S4: shadow dry-run — backup, migrate shadow, smoke
       const shadow = await this.store.shadowCopy();
       try {
         shadow.commit({
           intent, summary: plan.summary, migration: plan.migration,
+          semanticOrigin: "model", semanticAssignments,
           panels: toCommitPanels(plan), removePanels: plan.remove_panels,
           diff: plan.user_facing_diff,
         });
         await this.smokeTest(shadow, plan);
+        if (this.store.headVersion() !== baseVersion) {
+          shadow.close();
+          return fail("dry_run", [
+            "App changed during validation. Reshape again from the latest version.",
+          ], "E_CONFLICT");
+        }
         debug({ stage: "dry_run", ok: true });
       } catch (e) {
         shadow.close();
@@ -308,7 +325,6 @@ export class MutationPipeline {
 
       // S5: preview in place; S6 on the caller's Keep/Discard
       const store = this.store;
-      const baseVersion = store.headVersion();
       const preview: PreviewHandle = {
         plan, shadow, version: baseVersion + 1,
         keep: (): number => {
@@ -319,6 +335,7 @@ export class MutationPipeline {
           // if rows were added while previewing (G8)
           const version = store.commit({
             intent, summary: plan.summary, migration: plan.migration,
+            semanticOrigin: "model", semanticAssignments,
             panels: toCommitPanels(plan), removePanels: plan.remove_panels,
             diff: plan.user_facing_diff,
           });

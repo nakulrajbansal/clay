@@ -165,6 +165,26 @@ describe("W2 EXIT: the priority sentence commits on all three shells", () => {
   }
 });
 
+it("uses byte-identical semantic assignments in preview and Keep", async () => {
+  const shell = seedableShells[0]!;
+  const { store, table, panelId } = await seedShellStore(shell);
+  try {
+    const columns = shell.registry[0]!.columns.map(column => column.name);
+    const pipeline = new MutationPipeline(
+      store,
+      new ScriptedPlanner([priorityPlan(table, panelId, columns)]),
+    );
+    const result = await pipeline.run(INTENT);
+    if (result.status !== "preview") throw new Error(JSON.stringify(result));
+    const shadowField = result.preview.shadow.semanticSchemaTrace().fields
+      .find(field => field.fieldName === "priority")!;
+    result.preview.keep();
+    const liveField = store.semanticSchemaTrace().fields
+      .find(field => field.fieldName === "priority")!;
+    expect(liveField.fieldId).toBe(shadowField.fieldId);
+  } finally { store.close(); }
+});
+
 describe("pipeline stages", () => {
   const tracker = (): Shell => shells.find(s => s.shell_id === "tracker")!;
 
@@ -196,6 +216,23 @@ describe("pipeline stages", () => {
     expect(() => result.preview.keep()).toThrow(/changed while this preview was open/i);
     expect(store.headVersion()).toBe(2);
     result.preview.discard();
+    store.close();
+  });
+
+  it("rejects the attempt when the live head changes during shadow smoke", async () => {
+    const { store, table, panelId } = await seedShellStore(tracker());
+    const planner = new ScriptedPlanner([
+      priorityPlan(table, panelId, tracker().registry[0]!.columns.map(c => c.name)),
+    ]);
+    const pipeline = new MutationPipeline(store, planner, {
+      smokeTest: async () => { store.renamePanel(panelId, "Concurrent shape change"); },
+    });
+
+    const result = await pipeline.run(INTENT);
+    expect(result).toMatchObject({ status: "failed", stage: "dry_run", repaired: false });
+    if (result.status === "failed")
+      expect(result.reasons.join(" ")).toMatch(/changed during validation/i);
+    expect(store.headVersion()).toBe(2);
     store.close();
   });
 
@@ -297,7 +334,9 @@ describe("pipeline stages", () => {
 }`;
     const planner = new ScriptedPlanner([bad, JSON.parse(JSON.stringify(bad)) as Record<string, unknown>]);
     const result = await new MutationPipeline(store, planner).run(INTENT);
-    expect(result).toMatchObject({ status: "failed", stage: "validate" });
+    expect(result).toMatchObject({
+      status: "failed", stage: "validate", repaired: true,
+    });
     if (result.status === "failed") expect(result.reasons.join(" ")).toContain("V4");
     expect(planner.repairCalls).toHaveLength(1);
     store.close();
@@ -311,8 +350,31 @@ describe("pipeline stages", () => {
       migration: null, panels: [], remove_panels: [], confidence: 0.3,
     }]);
     const result = await new MutationPipeline(store, planner).run(INTENT);
-    expect(result).toMatchObject({ status: "clarify", question: "Priority on which table?" });
+    expect(result).toMatchObject({
+      status: "clarify", question: "Priority on which table?", repaired: false,
+    });
     expect(store.headVersion()).toBe(1);
+    store.close();
+  });
+
+  it("marks a clarification returned by the repair round as repaired", async () => {
+    const { store, table, panelId } = await seedShellStore(tracker());
+    const cols = tracker().registry[0]!.columns.map(c => c.name);
+    const bad = priorityPlan(table, panelId, cols);
+    (bad.panels as { code: string }[])[0]!.code = `export default function (clay) {
+  clay.db.query({ from: ${JSON.stringify(table)}, select: ["owner"] });
+}`;
+    const clarification = {
+      api: 1, summary: "", user_facing_diff: [],
+      clarifying_question: "Which view should change?", assumptions: [],
+      migration: null, panels: [], remove_panels: [], confidence: 0.3,
+    };
+    const result = await new MutationPipeline(
+      store, new ScriptedPlanner([bad, clarification]),
+    ).run(INTENT);
+    expect(result).toMatchObject({
+      status: "clarify", question: "Which view should change?", repaired: true,
+    });
     store.close();
   });
 

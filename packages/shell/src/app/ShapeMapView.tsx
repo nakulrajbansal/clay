@@ -1,10 +1,13 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { HistoryEntry, LivePanel, RegTable } from "@clay/kernel";
+import type {
+  FieldProvenance, HistoryEntry, LivePanel, RegTable, SemanticSchemaTraceV1,
+} from "@clay/kernel";
 import { buildShapeMap, type ShapeLink } from "./shape-map";
 import { relTime } from "./HistoryView";
 
 const tableLabel = (name: string): string => name.replaceAll("_", " ");
+const shortSemanticId = (id: string): string => `${id.slice(0, 3)}…${id.slice(-8)}`;
 const modeLabel = (mode: ShapeLink["mode"]): string => {
   if (mode === "read_write") return "reads + writes";
   if (mode === "write") return "writes";
@@ -15,6 +18,8 @@ export function ShapeMapView(props: {
   tables: RegTable[];
   panels: LivePanel[];
   history: HistoryEntry[];
+  semanticTrace?: SemanticSchemaTraceV1 | null;
+  fieldProvenance?: FieldProvenance[];
   persistent: boolean;
   onClose: () => void;
   onOpenData: (table: string) => void;
@@ -24,15 +29,22 @@ export function ShapeMapView(props: {
   const dialogRef = useRef<HTMLElement>(null);
   const onCloseRef = useRef(props.onClose);
   const restoreFocusRef = useRef(true);
+  const [selectedFieldId, setSelectedFieldId] = useState<string | null>(null);
   onCloseRef.current = props.onClose;
   const map = useMemo(
-    () => buildShapeMap(props.tables, props.panels, props.history.length),
-    [props.tables, props.panels, props.history.length],
+    () => buildShapeMap(props.tables, props.panels, props.history.length,
+      props.semanticTrace, props.fieldProvenance),
+    [props.tables, props.panels, props.history.length,
+      props.semanticTrace, props.fieldProvenance],
   );
   const panelById = useMemo(
     () => new Map(props.panels.map(panel => [panel.panel_id, panel])),
     [props.panels],
   );
+  const fieldNameById = useMemo(() => new Map(map.tables.flatMap(table =>
+    table.fields.flatMap(field => field.id
+      ? [[field.id, `${table.name}.${field.name}`] as const] : []),
+  )), [map.tables]);
   const connectedTables = map.tables.filter(table => table.connectedPanelIds.length > 0).length;
   const recent = [...props.history].reverse().slice(0, 6);
 
@@ -128,35 +140,71 @@ export function ShapeMapView(props: {
             </div>
             <p className="shape-column-copy">Your records survive every interface and every rewind.</p>
             <div className="shape-list">
-              {map.tables.map(table => (
-                <button
-                  key={table.name}
+              {map.tables.map(table => {
+                const selected = table.fields.find(field => field.id === selectedFieldId);
+                return (
+                <article
+                  key={table.id ?? table.name}
                   className={`shape-node shape-data-node${table.connectedPanelIds.length === 0 ? " shape-node-dim" : ""}`}
-                  aria-label={`Open ${table.name} data`}
-                  onClick={() => {
-                    restoreFocusRef.current = false;
-                    props.onOpenData(table.name); props.onClose();
-                  }}
                 >
-                  <span className="shape-node-topline">
-                    <span className="shape-node-icon shape-node-icon-data" aria-hidden="true">▦</span>
-                    <span className="shape-node-title">{tableLabel(table.name)}</span>
-                    <span className="shape-node-meta">
-                      {table.connectedPanelIds.length === 0
-                        ? "not shown"
-                        : `${table.connectedPanelIds.length} view${table.connectedPanelIds.length === 1 ? "" : "s"}`}
+                  <button className="shape-table-open"
+                    aria-label={`Open ${table.name} data`}
+                    onClick={() => {
+                      restoreFocusRef.current = false;
+                      props.onOpenData(table.name); props.onClose();
+                    }}>
+                    <span className="shape-node-topline">
+                      <span className="shape-node-icon shape-node-icon-data" aria-hidden="true">▦</span>
+                      <span className="shape-node-title">{tableLabel(table.name)}</span>
+                      <span className="shape-node-meta">
+                        {table.connectedPanelIds.length === 0
+                          ? "not shown"
+                          : `${table.connectedPanelIds.length} view${table.connectedPanelIds.length === 1 ? "" : "s"}`}
+                      </span>
                     </span>
-                  </span>
+                  </button>
                   <span className="shape-fields">
-                    {table.fields.slice(0, 6).map(field => (
+                    {table.fields.map(field => field.provenance ? (
+                      <button key={field.id ?? field.name}
+                        className={`shape-field${field.computed ? " shape-field-computed" : ""}`}
+                        aria-expanded={field.id === selectedFieldId}
+                        aria-label={`Explain ${table.name}.${field.name}`}
+                        onClick={() => setSelectedFieldId(current => current === field.id ? null : field.id ?? null)}>
+                        {field.name}{field.computed ? " ƒ" : ""}
+                      </button>
+                    ) : (
                       <span key={field.name} className={`shape-field${field.computed ? " shape-field-computed" : ""}`}>
                         {field.name}{field.computed ? " ƒ" : ""}
                       </span>
                     ))}
-                    {table.fields.length > 6 ? <span className="shape-field">+{table.fields.length - 6}</span> : null}
                   </span>
-                </button>
-              ))}
+                  {selected?.provenance ? (
+                    <aside className="shape-field-provenance" aria-label={`${table.name}.${selected.name} provenance`}>
+                      <b>Why this field exists</b>
+                      <span>{selected.provenance.origin === "legacy_backfill" ? "Known since" : "Created"} v{selected.provenance.createdVersion} · last shaped v{selected.provenance.lastChangedVersion}</span>
+                      <span>{selected.provenance.fieldType}{selected.required ? " · required" : " · optional"}</span>
+                      <span>Field ID <code title={selected.provenance.fieldId}>
+                        {shortSemanticId(selected.provenance.fieldId)}
+                      </code></span>
+                      {selected.provenance.aliases.length > 0
+                        ? <span>Previously {selected.provenance.aliases.join(", ")}</span> : null}
+                      {selected.provenance.derivation ? (
+                        <>
+                          <code>{selected.provenance.derivation.expression}</code>
+                          <span className="shape-field-dependencies">Depends on{" "}
+                            {selected.provenance.derivation.dependencyFieldIds.map((id, index) => (
+                              <code key={id} title={id}>{index > 0 ? ", " : ""}
+                                {fieldNameById.get(id) ?? "field"} · {shortSemanticId(id)}
+                              </code>
+                            ))}
+                          </span>
+                        </>
+                      ) : null}
+                    </aside>
+                  ) : null}
+                </article>
+                );
+              })}
             </div>
           </section>
 

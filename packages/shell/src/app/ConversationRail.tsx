@@ -7,6 +7,14 @@ import type { PreviewInfo } from "../worker/db-worker";
 import type { StatusInfo } from "./worker-client";
 import type { Theme } from "./themes";
 import { buildChangeContract, type TrustReceipt } from "./change-contract";
+import { CODEX_BACKEND_URL, type ModelProviderId } from "./settings";
+
+const MODEL_PROVIDERS: Array<{ id: ModelProviderId; name: string; detail: string }> = [
+  { id: "clay", name: "Clay hosted", detail: "Managed backend and account" },
+  { id: "openai", name: "OpenAI", detail: "Responses API through your backend" },
+  { id: "codex", name: "Local Codex (Preview)", detail: "Use this computer’s Codex login" },
+  { id: "anthropic", name: "Anthropic", detail: "Bring your browser API key" },
+];
 
 export type FeedItem =
   | { kind: "intent"; text: string }
@@ -39,6 +47,7 @@ export function ConversationRail(props: {
   onKeep: () => void;
   onDiscard: () => void;
   onRewind: (version: number) => void;
+  onReceiptOpened: () => void;
   onSaveKey: (key: string) => void;
   onSaveBackend: (url: string) => void;
   onRemoveSamples: () => void;
@@ -50,6 +59,7 @@ export function ConversationRail(props: {
   onDismissSuggestion: (s: Suggestion) => void;
   loadStatus: () => Promise<StatusInfo>;
   onCopyDiagnostics: () => void;
+  onOpenPrivateMetrics: () => void;
   seed?: { text: string; n: number };
   /** hosted-mode usage meter from /me (Phase 1.2); null quota = unlimited */
   meter?: { used: number; quota: number | null } | null;
@@ -59,6 +69,8 @@ export function ConversationRail(props: {
   themes: Theme[];
   themeId: string;
   onSelectTheme: (id: string) => void;
+  modelProvider: ModelProviderId;
+  onSelectModelProvider: (provider: ModelProviderId) => void;
 }): React.JSX.Element {
   const [text, setText] = useState("");
   const [keyDraft, setKeyDraft] = useState("");
@@ -115,6 +127,34 @@ export function ConversationRail(props: {
 
       {showSettings ? (
         <div className="rail-settings">
+          <fieldset className="model-provider-picker">
+            <legend>Model connection</legend>
+            <div className="model-provider-options">
+              {MODEL_PROVIDERS.map(provider => (
+                <button key={provider.id} type="button"
+                  className={`model-provider-option${props.modelProvider === provider.id ? " selected" : ""}`}
+                  aria-pressed={props.modelProvider === provider.id}
+                  onClick={() => props.onSelectModelProvider(provider.id)}>
+                  <b>{provider.name}</b><span>{provider.detail}</span>
+                </button>
+              ))}
+            </div>
+          </fieldset>
+          {status ? (
+            <div className={`model-connection-status${status.modelConnection.reachable ? " connected" : ""}`}>
+              <span className="model-status-dot" aria-hidden="true" />
+              <span><b>{status.modelConnection.provider}</b>
+                {status.modelConnection.model ? ` · ${status.modelConnection.model}` : ""}
+                <small>{status.modelConnection.detail}</small></span>
+            </div>
+          ) : null}
+          {props.modelProvider === "codex" ? (
+            <div className="model-provider-note">
+              <b>Local connector</b>
+              <span>Run <code>pnpm codex</code>, then Clay connects to {CODEX_BACKEND_URL}.</span>
+              <span>Your Codex login stays on this computer.</span>
+            </div>
+          ) : null}
           <div className="theme-picker">
             <span className="rail-label" style={{ marginBottom: 6 }}>Color scheme</span>
             <div className="theme-swatches">
@@ -148,6 +188,9 @@ export function ConversationRail(props: {
                 {status.stats.kept} kept · {status.stats.discarded} discarded ·{" "}
                 {status.stats.clarify} clarified
               </div>
+              <button className="link" onClick={props.onOpenPrivateMetrics}>
+                Private activity & trust
+              </button>
             </div>
           ) : null}
           {props.meter && props.meter.quota !== null ? (
@@ -159,12 +202,12 @@ export function ConversationRail(props: {
               </span>
             </div>
           ) : null}
-          {props.account ? (
+          {props.modelProvider === "clay" && props.account ? (
             <div className="rail-account">
               <span className="rail-account-who">Signed in as <b>{props.account.email}</b></span>
               <button className="link" onClick={props.onSignOut}>sign out</button>
             </div>
-          ) : props.onSignIn ? (
+          ) : props.modelProvider === "clay" && props.onSignIn ? (
             <div className="rail-account rail-account-signin">
               <label className="rail-label">
                 Sign in (hosted mode) — we email you a link, no password
@@ -189,40 +232,44 @@ export function ConversationRail(props: {
               </div>
             </div>
           ) : null}
-          <label className="rail-label">
-            Clay backend URL (hosted — no key needed in the browser)
-            <input
-              type="text"
-              value={backendDraft}
-              placeholder="http://localhost:8787"
-              onChange={e => setBackendDraft(e.target.value)}
-            />
-          </label>
+          {props.modelProvider === "clay" || props.modelProvider === "openai" ? (
+            <>
+              <label className="rail-label">
+                {props.modelProvider === "openai"
+                  ? "OpenAI backend URL (the API key stays on that server)"
+                  : "Clay backend URL (hosted — no key needed in the browser)"}
+                <input
+                  type="text"
+                  value={backendDraft}
+                  placeholder="http://localhost:8787"
+                  onChange={e => setBackendDraft(e.target.value)}
+                />
+              </label>
+              <div className="rail-actions">
+                <button className="primary"
+                  onClick={() => { props.onSaveBackend(backendDraft.trim()); setBackendDraft(""); }}>
+                  Save backend
+                </button>
+              </div>
+            </>
+          ) : null}
+          {props.modelProvider === "anthropic" ? (
+            <>
+              <label className="rail-label">
+                Anthropic API key (stored in this browser and sent only to Anthropic)
+                <input type="password" value={keyDraft}
+                  placeholder={props.hasKey ? "saved" : "sk-ant-…"}
+                  onChange={e => setKeyDraft(e.target.value)} />
+              </label>
+              <div className="rail-actions">
+                <button className="primary" disabled={keyDraft.trim().length === 0}
+                  onClick={() => { props.onSaveKey(keyDraft.trim()); setKeyDraft(""); }}>
+                  Save Anthropic key
+                </button>
+              </div>
+            </>
+          ) : null}
           <div className="rail-actions">
-            <button
-              className="primary"
-              onClick={() => { props.onSaveBackend(backendDraft.trim()); setBackendDraft(""); setShowSettings(false); }}
-            >
-              Use hosted backend
-            </button>
-          </div>
-          <label className="rail-label">
-            or your own Anthropic API key (BYO — stored in this browser, sent only to Anthropic)
-            <input
-              type="password"
-              value={keyDraft}
-              placeholder={props.hasKey ? "saved" : "sk-ant-…"}
-              onChange={e => setKeyDraft(e.target.value)}
-            />
-          </label>
-          <div className="rail-actions">
-            <button
-              className="primary"
-              disabled={keyDraft.trim().length === 0}
-              onClick={() => { props.onSaveKey(keyDraft.trim()); setKeyDraft(""); setShowSettings(false); }}
-            >
-              Save key
-            </button>
             <button className="link" onClick={props.onRemoveSamples}>
               Remove sample rows
             </button>
@@ -272,7 +319,8 @@ export function ConversationRail(props: {
               );
             case "committed":
               return (
-                <details key={i} className="feed-item feed-committed trust-receipt">
+                <details key={i} className="feed-item feed-committed trust-receipt"
+                  onToggle={event => { if (event.currentTarget.open) props.onReceiptOpened(); }}>
                   <summary>
                     <span><b>Kept</b> {item.summary}</span>
                     <span className="feed-version">v{item.version}</span>

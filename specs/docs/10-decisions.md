@@ -609,3 +609,78 @@ ADR-037 (2026-08-31) Archive import replaces only the current app namespace
   id before copying the staged archive.
   CONSEQUENCE: importing a backup intentionally replaces the selected app while
   every sibling app and its records remain untouched.
+
+ADR-038 (2026-09-01) Model connections share one certified reshape contract
+  CONTEXT: Clay exposed only Anthropic BYO and an opaque hosted URL, while
+  users may already have OpenAI API infrastructure or a local Codex subscription.
+  DECISION: keep the MutationPlan validator, shadow preview, Change Contract,
+  Keep/Discard, and repair loop provider-independent. Add an OpenAI Responses
+  adapter with strict structured output and store:false; retain Anthropic BYO;
+  expose explicit Clay hosted and OpenAI backend choices; and add a loopback
+  Codex connector that uses the existing CLI login without browser credentials.
+  The connector uses ephemeral read-only codex exec on every OS; app-server is
+  rejected because it cannot ignore user MCP and tool configuration.
+  CONSEQUENCE: providers can change without changing Clay's data or safety
+  grammar. OpenAI and Codex credentials stay server-side or in the local Codex
+  process, and every route is validated through the same preview pipeline.
+
+ADR-039 (2026-09-01) Semantic identity is private kernel metadata
+  CONTEXT: names and version coordinates are not durable identities across
+  rename, rollback, truncation, reactivation, fork, and archive import.
+  DECISION: assign immutable UUIDv7 table, field, and relationship IDs
+  after validation; persist them inside internal registry specs; preserve them
+  through inactive tombstones and archives; and strip them from planner, model,
+  panel, query, and Bridge projections. The first closed relationship is
+  contains(table, field), with computed derived_from edges folded by lifecycle.
+  Optional concept IDs require an explicit reviewed marker and are never inferred
+  from labels; reviewed references remain typed. Archive format 3 requires a
+  complete, integrity-checked semantic registry; formats 1 and 2 backfill once.
+  CONSEQUENCE: provenance and future cross-app semantics key by stable identity
+  without widening generated-code authority or changing user tables.
+
+ADR-040 (2026-09-01) Saved lenses are versioned projections, not data copies
+  CONTEXT: built-in situational lenses could not capture a user's own operating
+  mode, and panel names alone could accidentally bind a re-created panel.
+  DECISION: store a bounded per-app lens library in trusted settings, use opaque
+  saved IDs, capture visible panel incarnations plus bounded placement snapshots,
+  and apply them as shell-only projections with no version commit. Filter-state
+  restoration remains a later version because the runtime has no trusted channel.
+  Field provenance projects semantic events and computed dependencies by stable
+  field ID into clickable Shape Map disclosures.
+  CONSEQUENCE: users can save/delete contextual workspaces and inspect field
+  lineage while records, canonical panel layout, and model context remain unchanged.
+
+ADR-041 (2026-09-01) Trust instrumentation is local aggregate state
+  CONTEXT: Clay needed activation and trust evidence without collecting records,
+  prompts, names, exact timestamps, identifiers, or free-form event payloads.
+  DECISION: validate a closed enum-only event union and reduce it immediately
+  into 35 days of integer daily counters plus numeric milestone state in local
+  system tables. Omit those tables from archives, forks, model context,
+  diagnostics, and every network path. Expose only a user-visible 30-day summary
+  with independent disable and erase controls. Lazy-load PanelFrame, Data,
+  History, Shape Map, and metrics; enforce entry, closure, workers, WASM,
+  sandbox bootstrap, total-runtime, CSS, and artifact-freshness budgets.
+  CONSEQUENCE: Clay can improve trust loops privately while boot-critical JS is
+  smaller and heavy trusted surfaces load only when needed.
+
+ADR-042 (2026-09-01) Local Codex is a separately authenticated tool-less boundary
+  CONTEXT: CORS alone does not stop a hostile page from sending a request to a
+  loopback service, and a read-only agent can still inspect local files.
+  DECISION: generate a per-launch connector bearer, expose it only through the
+  allowed-origin health handshake, require JSON and the bearer for mutations,
+  enforce origin, rate, and single-concurrency guards, dynamically disable every
+  supported Codex feature under strict config, ignore user config, pass an
+  environment allowlist, and terminate the complete OS process group before
+  deleting request artifacts. Clay hosted sessions never cross provider boundaries.
+  CONSEQUENCE: Local Codex reuses subscription authentication without granting a
+  web page, model turn, or stale process ambient authority over Clay credentials.
+
+ADR-043 (2026-09-01) Lazy surfaces fail inside recoverable product boundaries
+  CONTEXT: a rejected dynamic import could unmount the whole React root, while
+  narrow loading strips made the canvas jump during normal chunk fetches.
+  DECISION: contain the canvas and every optional surface in trusted error
+  boundaries with reload recovery, preserve panel geometry in Suspense fallbacks,
+  and inject real chunk failures in the product gate. Both production entry points
+  also share one fail-closed configuration validator.
+  CONSEQUENCE: transient asset failure keeps app chrome and recovery visible, and
+  production cannot launch with dev auth or incomplete credentials.

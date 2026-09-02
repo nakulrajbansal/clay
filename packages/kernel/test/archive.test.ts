@@ -3,7 +3,8 @@
 // G15 rule — imported panel blobs are re-validated, never trusted.
 import { describe, expect, it } from "vitest";
 import {
-  ClayStore, crc32, deriveInverse, registryToJson, zipRead, zipWrite, type DbDriver,
+  ClayStore, crc32, deriveInverse, isFieldId, registryToJson,
+  zipRead, zipWrite, type DbDriver,
 } from "../src/index";
 import { HEALTH_COMPUTED, seededStore } from "./helpers";
 
@@ -42,6 +43,22 @@ async function richStore(): Promise<ClayStore> {
   return store;
 }
 
+function stripSemanticMetadata(store: ClayStore, removeGuard: boolean): void {
+  const driver = (store as unknown as { driver: DbDriver }).driver;
+  for (const row of driver.select("SELECT table_name, spec_json FROM sys.tables_registry")) {
+    const spec = JSON.parse(String(row.spec_json)) as {
+      semantic?: unknown; columns: Array<{ semantic?: unknown }>;
+    };
+    delete spec.semantic;
+    for (const column of spec.columns) delete column.semantic;
+    driver.exec("UPDATE sys.tables_registry SET spec_json = ? WHERE table_name = ?", [
+      JSON.stringify(spec), String(row.table_name),
+    ]);
+  }
+  if (removeGuard)
+    driver.exec("DELETE FROM sys.settings WHERE key = 'semantic_registry_v1'");
+}
+
 describe("export -> import round trip", () => {
   it("reproduces registry, data, history, panels, and row_history", async () => {
     const original = await richStore();
@@ -50,7 +67,7 @@ describe("export -> import round trip", () => {
 
     const { store: imported, manifest, invalidPanels } =
       await ClayStore.importArchive(bytes);
-    expect(manifest).toMatchObject({ format: 2, app: "test-app", versions: 2 });
+    expect(manifest).toMatchObject({ format: 3, app: "test-app", versions: 2 });
     expect(invalidPanels).toEqual([]);
 
     expect(registryToJson(imported.registrySnapshot()))
@@ -94,7 +111,30 @@ describe("export -> import round trip", () => {
     source.close(); store.close();
   });
 
-  it("format 2 preserves inactive rollback values across export and import", async () => {
+  it("backfills a genuinely pre-semantic format-2 archive locally", async () => {
+    const source = await richStore();
+    stripSemanticMetadata(source, true);
+    const parts = zipRead(await source.exportArchive("legacy-v2"));
+    const legacy = zipWrite(parts.map(part => part.name === "manifest.json"
+      ? { ...part, data: new TextEncoder().encode(JSON.stringify({
+          ...JSON.parse(new TextDecoder().decode(part.data)), format: 2,
+        })) }
+      : part));
+    const { store, manifest } = await ClayStore.importArchive(legacy);
+    expect(manifest.format).toBe(2);
+    expect(store.semanticSchemaTrace().fields.every(field => isFieldId(field.fieldId))).toBe(true);
+    source.close(); store.close();
+  });
+
+  it("rejects a format-3 archive whose semantic registry was stripped", async () => {
+    const source = await richStore();
+    stripSemanticMetadata(source, false);
+    const archive = await source.exportArchive("broken-semantic");
+    await expect(ClayStore.importArchive(archive)).rejects.toThrow(/semantic/i);
+    source.close();
+  });
+
+  it("format 3 preserves inactive rollback values across export and import", async () => {
     const source = await richStore();
     const ops = [{ op: "add_column" as const, table: "projects",
       column: { name: "private_note", type: "text" as const, required: false } }];
@@ -111,7 +151,7 @@ describe("export -> import round trip", () => {
 
     const { store, manifest } = await ClayStore.importArchive(
       await source.exportArchive("retained"));
-    expect(manifest.format).toBe(2);
+    expect(manifest.format).toBe(3);
     const restored = [...ops, { op: "backfill" as const, table: "projects",
       column: "private_note", value: "new default" }];
     store.commit({ intent: "restore note", summary: "Restores note.",
@@ -152,6 +192,53 @@ describe("export -> import round trip", () => {
         "'projects' has unregistered physical column 'orphan_note'",
       );
     } finally { store.close(); }
+  });
+
+  it("rejects format-3 orphan tables, registry key mismatches, and manifest counts", async () => {
+    const orphan = await richStore();
+    const orphanDriver = (orphan as unknown as { driver: DbDriver }).driver;
+    orphanDriver.exec("DELETE FROM sys.tables_registry WHERE table_name = 'projects'");
+    await expect(ClayStore.importArchive(await orphan.exportArchive("orphan")))
+      .rejects.toThrow(/physical table|manifest table count/i);
+    orphan.close();
+
+    const mismatch = await richStore();
+    const mismatchDriver = (mismatch as unknown as { driver: DbDriver }).driver;
+    mismatchDriver.exec(
+      "UPDATE sys.tables_registry SET table_name = 'wrong_key' WHERE table_name = 'projects'",
+    );
+    await expect(ClayStore.importArchive(await mismatch.exportArchive("mismatch")))
+      .rejects.toThrow(/registry key/i);
+    mismatch.close();
+
+    const count = await richStore();
+    const parts = zipRead(await count.exportArchive("count"));
+    const badCount = zipWrite(parts.map(part => part.name === "manifest.json"
+      ? { ...part, data: new TextEncoder().encode(JSON.stringify({
+          ...JSON.parse(new TextDecoder().decode(part.data)), tables: 999,
+        })) }
+      : part));
+    await expect(ClayStore.importArchive(badCount)).rejects.toThrow(/manifest table count/i);
+    count.close();
+  });
+
+  it("removes legacy provider credentials before archive export and import", async () => {
+    const source = await richStore();
+    source.setSetting("byo_api_key", "must-never-leave-this-device");
+    const bytes = await source.exportArchive("credential-free");
+    expect(source.getSetting("byo_api_key")).toBeUndefined();
+    const imported = await ClayStore.importArchive(bytes);
+    expect(imported.store.getSetting("byo_api_key")).toBeUndefined();
+    source.close(); imported.store.close();
+  });
+
+  it("does not export private activity counters", async () => {
+    const source = await richStore();
+    source.recordPrivateMetric({ type: "trust_surface_opened", surface: "shape_map" });
+    expect(source.privateMetricsSummary().trust.shapeMapOpened).toBe(1);
+    const imported = await ClayStore.importArchive(await source.exportArchive("private"));
+    expect(imported.store.privateMetricsSummary().trust.shapeMapOpened).toBe(0);
+    source.close(); imported.store.close();
   });
 
   it("re-validates imported panel blobs (G15)", async () => {

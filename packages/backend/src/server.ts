@@ -1,5 +1,7 @@
 // Server entry. Local dev: `pnpm --filter @clay/backend start`.
-//   ANTHROPIC_API_KEY  server model key (required for reshapes)
+//   MODEL_PROVIDER     anthropic (default) or openai
+//   ANTHROPIC_API_KEY  Anthropic credential when selected
+//   OPENAI_API_KEY     OpenAI credential when selected
 //   AUTH=dev           magic links returned in the response (no email)
 //   DATABASE_URL       Postgres -> real accounts (enables auth)
 //   RESEND_API_KEY     transactional email for magic links (with FROM_EMAIL)
@@ -10,22 +12,22 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { createApp, makeDevAuth, type BackendOptions } from "./app";
 import { MemoryAuthStore, Sessions } from "./auth";
 import { PgSessions, PostgresAuthStore } from "./pg-store";
+import { resolveModelConfig, resolveProductionConfig } from "./model-config";
 
 const port = Number(process.env.PORT ?? "8787");
-const apiKey = process.env.ANTHROPIC_API_KEY;
-const dbUrl = process.env.DATABASE_URL;
-const resendKey = process.env.RESEND_API_KEY;
-const fromEmail = process.env.FROM_EMAIL ?? "Clay <login@example.com>";
-const appOrigin = (process.env.APP_ORIGIN ?? `http://localhost:${port}`).replace(/\/$/, "");
+const production = process.env.NODE_ENV === "production";
+const productionConfig = production ? resolveProductionConfig(process.env) : null;
+const dbUrl = productionConfig?.databaseUrl ?? process.env.DATABASE_URL;
+const resendKey = productionConfig?.resendApiKey ?? process.env.RESEND_API_KEY;
+const fromEmail = productionConfig?.fromEmail
+  ?? process.env.FROM_EMAIL ?? "Clay <login@example.com>";
+const appOrigin = productionConfig?.appOrigin
+  ?? (process.env.APP_ORIGIN ?? `http://localhost:${port}`).replace(/\/$/, "");
 
 async function main(): Promise<void> {
+  const model = productionConfig?.model ?? resolveModelConfig(process.env);
   let auth: BackendOptions["auth"];
-  const production = process.env.NODE_ENV === "production";
-  const devLinks = process.env.AUTH === "dev";
-  if (production && !dbUrl)
-    throw new Error("DATABASE_URL is required in production");
-  if (production && dbUrl && !resendKey)
-    throw new Error("RESEND_API_KEY is required in production");
+  const devLinks = !production && process.env.AUTH === "dev";
   if (dbUrl) {
     const store = PostgresAuthStore.connect(dbUrl);
     await store.ensureSchema();
@@ -55,7 +57,7 @@ async function main(): Promise<void> {
   void MemoryAuthStore;
 
   const app = createApp({
-    apiKey, auth,
+    model, auth,
     allowedOrigins: production ? [appOrigin] : undefined,
   });
   const staticDir = process.env.STATIC_DIR;
@@ -66,7 +68,7 @@ async function main(): Promise<void> {
 
   serve({ fetch: app.fetch, port }, () => {
     console.log(`Clay backend on http://localhost:${port}`);
-    console.log(apiKey ? "model key: configured" : "model key: MISSING");
+    console.log(`model: ${model.provider} / ${model.model ?? "default"}`);
     console.log(auth
       ? `auth: ON (${dbUrl ? "postgres" : "dev/in-memory"}, links via ${resendKey ? "resend email" : "dev response"})`
       : "auth: open (local mode)");

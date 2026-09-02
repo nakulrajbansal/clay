@@ -1,6 +1,7 @@
 # 15 - Next-generation product strategy
 
-Status: working strategy, grounded in the repository and competitive research on 2026-08-31.
+Status: active strategy. The first five moat slices are implemented; release
+status is defined by the current executable gates and CI, not by this document.
 
 ## Executive verdict
 
@@ -30,14 +31,19 @@ The category is **malleable personal operations software**, not AI app building.
 1. **The moat was mostly implicit.** A user could see panels and a reshape box, but not the permanent substrate, data-view dependencies, sandbox boundary, or evolution model in one place.
 2. **The shell gave too much permanent width to the reshape rail.** At common laptop widths, the 360px rail and 300px side region compressed the actual work surface.
 3. **The visual language was competent but generic.** The default cool-indigo SaaS palette, gradient controls, emoji template marks, and accent rails did not express Clay's material, reversible identity.
-4. **The main orchestration component is too large.** `packages/shell/src/app/App.tsx` is more than 1,000 lines and owns boot, persistence, mutation, layout, auth, import/export, history, data, notifications, dialogs, and most shell state.
+4. **The main orchestration component remains too large.** Lens persistence and
+   commands now live in `useLensController`, and heavy surfaces are lazy, but
+   `packages/shell/src/app/App.tsx` still owns too many unrelated concerns.
 5. **Quality gates were not yet a release system.** The repository had useful Playwright scripts, but no checked-in CI workflow making typecheck, unit, property, browser, accessibility, privacy, and visual gates mandatory.
-6. **The production bundle is heavy.** The current build reports an application chunk above 800 kB and a worker chunk above 600 kB before gzip. Code splitting and route/surface boundaries are needed before broad web distribution.
+6. **The database worker remains heavy.** The former monolithic application
+   entry has been split into semantic surface closures and is protected by
+   manifest-derived budgets. The SQLite worker remains above 600 kB raw and is
+   the next distribution-performance target.
 7. **The latest instrumentation commit did not typecheck before this initiative.** Unit tests passed, but strict TypeScript found unsafe indexed access in `metrics.ts` and its tests. This shows why typecheck must be a hard first gate.
 
-This slice addresses liabilities 1, 2, 3, 5, and 7. The large shell controller
-and heavy production chunks remain explicit engineering work rather than hidden
-completion claims.
+The shipped work addresses liabilities 1, 2, 3, 5, and 7, and delivers the
+first decomposition and code-splitting slice for 4 and 6. Further App controller
+decomposition and worker optimization remain explicit engineering work.
 
 ## Competitive landscape
 
@@ -87,7 +93,12 @@ Clay's moat is not a feature checklist. It is a compounding system with five lay
 
 ### Layer 1: The permanent semantic substrate
 
-Data, relationships, meanings, constraints, provenance, and history remain stable while interfaces change. The next step is to grow the registry from column types into a semantic substrate that understands concepts such as customer, owner, amount, due date, lifecycle state, source, and policy.
+Data, relationships, meanings, constraints, provenance, and history remain
+stable while interfaces change. The registry now supplies durable private
+identity for tables, fields, and typed relationships. Concept classification
+is an optional reviewed layer, never an inference from a label. The next depth
+step is reviewed meaning for customer, owner, amount, due date, lifecycle
+state, source, and policy.
 
 **Why it compounds:** every reshape inherits a richer understanding of the user's world. A new lens or rule becomes easier and more correct than the last one.
 
@@ -183,24 +194,32 @@ version, affected views, touched tables, and rewind action.
 
 Moat contribution: turns safe transformation from an implementation detail into the product's grammar.
 
-### C. Semantic substrate and provenance - first slice implemented
+### C. Semantic substrate and provenance - stable-identity slice implemented
 
-Add stable concept IDs, field meaning, relationships, source, derivation, and policy metadata. Then support panel-level and element-level "Why is this here?" inspection.
+The trusted registry now assigns stable UUIDv7 identities to tables, fields,
+and typed relationships. Identity survives rename, rollback,
+reactivation, fork, and archive import while remaining hidden from models,
+panels, queries, and Bridge messages. Shape Map explains panel provenance and
+field-level history, aliases, creation or legacy status, latest shaping,
+computed expressions, and dependency IDs without introspecting generated code.
 
-The first slice explains a panel from its declared queries, writes, creating
-version and intent, and latest shaping version without introspecting arbitrary
-generated code. Stable semantic concept IDs and relationships remain next.
+Reviewed cross-app references, richer concept classification, and policy
+metadata remain later slices.
 
 Moat contribution: every reshape becomes more context-aware and auditable.
 
-### D. Situational lenses - first slice implemented
+### D. Situational lenses - user-saved slice implemented
 
 Let one app have named, reversible operating modes such as Morning review, Client call, Weekly planning, and Deep work. A lens changes visible panels, emphasis, filters, density, and ordering without duplicating records.
 
-The first slice provides app-local All views, Morning review, Focus, and Update
-data lenses derived from panel manifests. The active lens persists per app and
-has one-click return to the complete shape. Custom layout/filter presets remain
-next.
+Clay provides app-local built-in lenses plus user-saved named lenses. Saved
+lenses persist visible panel incarnations and bounded layout; they survive
+reload, can be deleted, and return safely to All views. Applying a
+lens changes only a shell projection and never copies records or creates a
+shape version.
+
+Saved filter restoration, rename/update, and full edit mode remain the next
+lens slice rather than being implied by the v1 layout snapshot.
 
 Moat contribution: the same app adapts to context instead of forcing users into one canonical dashboard.
 
@@ -277,24 +296,27 @@ A moat succeeds only if it is valuable, legible, hard to copy structurally, and 
 
 ## Execution sequence
 
-### Current slice: make the moat legible and release-safe
+### Shipped: make the moat legible, deep, and release-safe
 
 - Implement Shape Map, Change Contracts, and the collapsible reshape rail.
 - Establish the warm Kiln visual system and responsive shell hierarchy.
 - Make typecheck, tests, build, browser smoke, axe, privacy, screenshots, and
   bundle budgets enforceable local and CI gates.
+- Add private stable semantic subjects, relationships, and field provenance.
+- Add user-saved situational lenses with bounded panel/layout snapshots.
+- Add local aggregate activation, trust, discard, and recovery evidence without
+  collecting record content.
+- Lazy-load PanelFrame, Data, History, Shape Map, and Private activity with
+  manifest-derived closure budgets.
+- Extract lens persistence and commands from `App.tsx`.
 
-Remaining before a broad release:
+Remaining architecture work before broad release:
 
-- Split `App.tsx` into boot/session, mutation, layout, and overlay controllers.
-- Split heavy surfaces such as Data, History, Shape Map, and Settings.
-
-### Next: deepen the substrate
-
-- Extend panel provenance into stable semantic concepts and relationships.
-- Define semantic concept and relationship metadata behind an ADR.
-- Add user-saved layout and filter presets to the situational-lens system.
-- Instrument activation, trust, discard, and recovery without collecting record content.
+- Split `App.tsx` further into boot/session, mutation, layout, and overlay
+  controllers.
+- Reduce or stream the SQLite database worker payload.
+- Complete the real subscription-backed Local Codex acceptance run after the
+  operator refreshes the Codex login.
 
 ### Then: make safe exploration unmatched
 

@@ -10,6 +10,8 @@ export const REPAIR_MODEL = "claude-opus-4-8";
 
 export const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 export const ANTHROPIC_VERSION = "2023-06-01";
+export const OPENAI_API_URL = "https://api.openai.com/v1/responses";
+export const DEFAULT_OPENAI_MODEL = "gpt-5.6";
 
 /** Decoding parameters (doc 05 §3). */
 export const MAX_TOKENS = 6000;

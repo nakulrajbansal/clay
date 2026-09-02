@@ -3,7 +3,7 @@
 // per-row snapshots from row_history; soft-deleted rows come back too).
 // Designed as a spreadsheet the user already knows: tabs per table,
 // click-any-cell editing, a search box, and a clear add-row.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { AsyncStore, QueryRow, RegTable } from "@clay/kernel";
 import type { WorkerClient } from "./worker-client";
 
@@ -31,6 +31,7 @@ export function DataView(props: {
   onError: (msg: string) => void;
   onInfo: (msg: string) => void;
   onSchemaChange?: () => void;
+  onRecovery?: (result: "success" | "failed") => void;
 }): React.JSX.Element {
   const { worker, store } = props;
   const [tables, setTables] = useState<RegTable[]>([]);
@@ -47,6 +48,12 @@ export function DataView(props: {
     entries: { at: string; values: Record<string, unknown> }[] } | null>(null);
   const [addingCol, setAddingCol] = useState<{ name: string; type: string } | null>(null);
   const [renamingCol, setRenamingCol] = useState<{ from: string; value: string } | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() =>
+      dialogRef.current?.querySelector<HTMLElement>(".dataview-close")?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, []);
 
   const toggleHistory = async (id: string): Promise<void> => {
     if (histFor?.id === id) { setHistFor(null); return; }
@@ -127,13 +134,18 @@ export function DataView(props: {
     await reload(name);
   };
 
-  const act = async (fn: () => Promise<unknown>): Promise<void> => {
+  const act = async (
+    fn: () => Promise<unknown>,
+    recovery = false,
+  ): Promise<void> => {
     if (!selected) return;
     try {
       await fn();
       await reload(selected);
       props.onWrite(selected);
+      if (recovery) props.onRecovery?.("success");
     } catch (e) {
+      if (recovery) props.onRecovery?.("failed");
       props.onError(e instanceof Error ? e.message : String(e));
     }
   };
@@ -221,7 +233,7 @@ export function DataView(props: {
     columns.some(c => String(r[c.name] ?? "").toLowerCase().includes(q)));
 
   return (
-    <div className="dataview" role="dialog" aria-label="Your data">
+    <div ref={dialogRef} className="dataview" role="dialog" aria-label="Your data" tabIndex={-1}>
       <header className="dataview-header">
         <div className="dataview-title">
           <strong>Your data</strong>
@@ -411,7 +423,7 @@ export function DataView(props: {
                           onClick={() => void act(async () => {
                             await worker.restoreRow(selected!, String(r.id));
                             setHistFor(null);
-                          })}>
+                          }, true)}>
                           ↩ restore previous values
                         </button>
                       </div>
@@ -458,7 +470,7 @@ export function DataView(props: {
                 <div key={String(r.id)} className="dataview-deleted-row">
                   <span>{columns.slice(0, 3).map(c => String(r[c.name] ?? "")).join(" · ")}</span>
                   <button className="link"
-                    onClick={() => void act(async () => worker.restoreRow(selected!, String(r.id)))}>
+                    onClick={() => void act(async () => worker.restoreRow(selected!, String(r.id)), true)}>
                     restore
                   </button>
                 </div>

@@ -351,6 +351,16 @@ CREATE TABLE IF NOT EXISTS sys.attempts(
 CREATE TABLE IF NOT EXISTS sys.inactive_cells(
   table_name TEXT NOT NULL, column_name TEXT NOT NULL, row_id TEXT NOT NULL,
   PRIMARY KEY(table_name, column_name, row_id));
+CREATE TABLE IF NOT EXISTS sys.private_metric_state(
+  id INTEGER PRIMARY KEY CHECK(id = 1), schema_version INTEGER NOT NULL,
+  collection_enabled INTEGER NOT NULL, first_ready_day INTEGER,
+  first_keep_day INTEGER, first_keep_elapsed_bucket INTEGER,
+  ever_activated INTEGER NOT NULL, ever_proof_loop INTEGER NOT NULL,
+  proof_loop_elapsed_bucket INTEGER, d14_strict INTEGER, d14_window INTEGER);
+CREATE TABLE IF NOT EXISTS sys.private_metric_daily(
+  day_utc INTEGER NOT NULL, metric_code INTEGER NOT NULL,
+  variant_code INTEGER NOT NULL, n INTEGER NOT NULL,
+  PRIMARY KEY(day_utc, metric_code, variant_code));
 `;
 
 export function createSystemTables(driver: DbDriver): void {

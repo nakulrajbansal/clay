@@ -1,6 +1,7 @@
 // Typed promise wrapper over the DB worker's command protocol.
 import type {
-  DebugEvent, HistoryEntry, LivePanel, PanelProvenance, RegTable, Suggestion,
+  DebugEvent, FieldProvenance, HistoryEntry, LivePanel, PanelProvenance,
+  PrivateMetricEvent, PrivateMetricsSummary, RegTable, SemanticSchemaTraceV1, Suggestion,
 } from "@clay/kernel";
 import type { IntentOutcome } from "../worker/db-worker";
 
@@ -12,6 +13,10 @@ export type StatusInfo = {
   usageBytes: number | null; quotaBytes: number | null;
   versions: number;
   stats: { kept: number; discarded: number; failed: number; clarify: number };
+  modelConnection: {
+    provider: string; model: string | null; configured: boolean;
+    reachable: boolean; detail?: string;
+  };
 };
 
 export class WorkerClient {
@@ -44,11 +49,19 @@ export class WorkerClient {
   terminate(): void { try { this.worker.terminate(); } catch { /* already gone */ } }
 
   boot(appId?: string): Promise<BootInfo> { return this.call("boot", { appId }); }
-  setModelAccess(apiKey: string | null, backendUrl: string | null,
-    session?: string | null): Promise<null> {
-    return this.call("setModelAccess",
-      { apiKey: apiKey ?? undefined, backendUrl: backendUrl ?? undefined,
-        session: session ?? undefined });
+  setModelAccess(access: {
+    provider: "clay" | "openai" | "anthropic" | "codex";
+    apiKey: string | null; backendUrl: string | null;
+    session: string | null; providerToken?: string | null;
+  }): Promise<null> {
+    return this.call("setModelAccess", {
+      provider: access.provider,
+      ...(access.apiKey ? { apiKey: access.apiKey } : {}),
+      ...(access.backendUrl ? { backendUrl: access.backendUrl } : {}),
+      ...(access.provider === "clay" && access.session ? { session: access.session } : {}),
+      ...(access.provider === "codex" && access.providerToken
+        ? { providerToken: access.providerToken } : {}),
+    });
   }
   deleteApp(appId: string): Promise<null> { return this.call("deleteApp", { appId }); }
   forkApp(newAppId: string): Promise<null> { return this.call("forkApp", { newAppId }); }
@@ -60,6 +73,20 @@ export class WorkerClient {
   }
   panels(): Promise<LivePanel[]> { return this.call("panels"); }
   panelProvenance(): Promise<PanelProvenance[]> { return this.call("panelProvenance"); }
+  semanticTrace(): Promise<SemanticSchemaTraceV1> { return this.call("semanticTrace"); }
+  fieldProvenance(): Promise<FieldProvenance[]> { return this.call("fieldProvenance"); }
+  recordPrivateMetric(event: PrivateMetricEvent): Promise<null> {
+    return this.call("recordPrivateMetric", { event });
+  }
+  privateMetricsSummary(): Promise<PrivateMetricsSummary> {
+    return this.call("privateMetricsSummary");
+  }
+  setPrivateMetricsEnabled(enabled: boolean): Promise<PrivateMetricsSummary> {
+    return this.call("setPrivateMetricsEnabled", { enabled });
+  }
+  clearPrivateMetrics(): Promise<PrivateMetricsSummary> {
+    return this.call("clearPrivateMetrics");
+  }
   commitLayout(placements: { panel_id: string; region: "top" | "main" | "side"; order: number; w?: number; h?: number; col?: number | null }[]): Promise<LivePanel[]> {
     return this.call("commitLayout", { placements });
   }
@@ -128,6 +155,12 @@ export class WorkerClient {
   getSetting<T>(key: string): Promise<T | null> { return this.call("getSetting", { key }); }
   setSetting(key: string, value: unknown): Promise<null> {
     return this.call("setSetting", { key, value });
+  }
+  deleteSetting(key: string): Promise<null> { return this.call("deleteSetting", { key }); }
+  compareAndSetSetting<T>(
+    key: string, expectedRevision: number, value: T,
+  ): Promise<{ ok: boolean; current: unknown }> {
+    return this.call("compareAndSetSetting", { key, expectedRevision, value });
   }
 
   /** Open a serveStore RPC port on the worker for the Bridge's AsyncStore. */

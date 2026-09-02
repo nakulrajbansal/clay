@@ -3,6 +3,12 @@
 // derived from it and never inspected directly.
 import { ClayError } from "./errors";
 import type { ExprScope, ExprType } from "./expr";
+import type {
+  FieldSemanticV1,
+  SemanticIdentityEventV1,
+  SemanticRelationshipRecordV1,
+  TableSemanticV1,
+} from "./semantic";
 
 export type ColumnKind =
   | "text" | "number" | "integer" | "boolean" | "date" | "enum" | "json" | "computed";
@@ -17,6 +23,8 @@ export type RegColumn = {
   /** Kernel-only tombstone used by time travel. Physical values stay in
    * SQLite while the column is absent from the active app projection. */
   inactive?: boolean;
+  /** Trusted-kernel identity and lineage. Never expose in public projections. */
+  semantic?: FieldSemanticV1;
 };
 
 export type RegTable = {
@@ -25,6 +33,8 @@ export type RegTable = {
   /** Kernel-only tombstone for a table created after the viewed version. */
   inactive?: boolean;
   reservedColumnNames?: string[];
+  /** Trusted-kernel identity, lineage, and owned relationship records. */
+  semantic?: TableSemanticV1;
 };
 export type Registry = Map<string, RegTable>;
 
@@ -96,20 +106,69 @@ export function exprScope(t: RegTable): ExprScope {
   return scope;
 }
 
+function cloneIdentityEvent(event: SemanticIdentityEventV1): SemanticIdentityEventV1 {
+  return { ...event };
+}
+
+function cloneRelationship(
+  relationship: SemanticRelationshipRecordV1,
+): SemanticRelationshipRecordV1 {
+  return {
+    ...relationship,
+    events: relationship.events.map(event => ({ ...event })),
+  };
+}
+
+export function cloneFieldSemantic(semantic: FieldSemanticV1): FieldSemanticV1 {
+  return {
+    ...semantic,
+    aliases: [...semantic.aliases],
+    events: semantic.events.map(cloneIdentityEvent),
+  };
+}
+
+export function cloneTableSemantic(semantic: TableSemanticV1): TableSemanticV1 {
+  return {
+    ...semantic,
+    aliases: [...semantic.aliases],
+    events: semantic.events.map(cloneIdentityEvent),
+    relationships: semantic.relationships.map(cloneRelationship),
+  };
+}
+
+function cloneStoredColumn(column: RegColumn): RegColumn {
+  const cloned: RegColumn = {
+    ...column,
+    values: column.values ? [...column.values] : undefined,
+  };
+  if (column.semantic) cloned.semantic = cloneFieldSemantic(column.semantic);
+  return cloned;
+}
+
+function cloneProjectedColumn(column: RegColumn): RegColumn {
+  const { semantic: _semantic, ...projected } = column;
+  return {
+    ...projected,
+    values: column.values ? [...column.values] : undefined,
+  };
+}
+
 export function cloneRegistry(reg: Registry): Registry {
   const out: Registry = new Map();
   for (const [name, t] of reg) {
-    out.set(name, {
+    const cloned: RegTable = {
       name: t.name,
       inactive: t.inactive,
       reservedColumnNames: t.reservedColumnNames ? [...t.reservedColumnNames] : undefined,
-      columns: t.columns.map(c => ({ ...c, values: c.values ? [...c.values] : undefined })),
-    });
+      columns: t.columns.map(cloneStoredColumn),
+    };
+    if (t.semantic) cloned.semantic = cloneTableSemantic(t.semantic);
+    out.set(name, cloned);
   }
   return out;
 }
 
-/** Public app projection. Rollback tombstones are persistence metadata, not schema. */
+/** Public app projection. Rollback tombstones and semantics are not schema. */
 export function cloneActiveRegistry(reg: Registry): Registry {
   const out: Registry = new Map();
   for (const [name, t] of reg) {
@@ -118,7 +177,7 @@ export function cloneActiveRegistry(reg: Registry): Registry {
       name: t.name,
       columns: t.columns
         .filter(c => !c.inactive)
-        .map(c => ({ ...c, values: c.values ? [...c.values] : undefined })),
+        .map(cloneProjectedColumn),
     });
   }
   return out;
@@ -129,6 +188,9 @@ export function registryToJson(reg: Registry): string {
   const tables = [...reg.values()]
     .filter(t => !t.inactive)
     .sort((a, b) => a.name.localeCompare(b.name))
-    .map(t => ({ name: t.name, columns: t.columns.filter(c => !c.inactive) }));
+    .map(t => ({
+      name: t.name,
+      columns: t.columns.filter(c => !c.inactive).map(cloneProjectedColumn),
+    }));
   return JSON.stringify(tables);
 }

@@ -28,6 +28,15 @@ function anthropicBody(text: string): string {
   });
 }
 
+function openaiBody(text: string): string {
+  return JSON.stringify({
+    output: [{ type: "message", role: "assistant",
+      content: [{ type: "output_text", text }] }],
+    usage: { input_tokens: 4200, output_tokens: 700 },
+    status: "completed",
+  });
+}
+
 type Captured = { url: string; headers: Record<string, string>; body: Record<string, unknown> };
 
 function fakeFetch(status: number, responseText: string): {
@@ -161,6 +170,41 @@ describe("BYO request shape", () => {
     const client = new MutationClient({ mode: "byo", apiKey: "k" }, { fetchFn });
     expect(await client.requestPlan(ctx())).toMatchObject({
       ok: false, error: { code: "E_PARSE" } });
+  });
+});
+
+describe("OpenAI Responses request shape", () => {
+  it("uses bearer auth and the existing MutationPlan schema", async () => {
+    const { fetchFn, calls } = fakeFetch(200, openaiBody(VALID_PLAN));
+    const client = new MutationClient(
+      { mode: "openai", apiKey: "openai-test", model: "gpt-5.6" }, { fetchFn });
+    const result = await client.requestPlan(ctx());
+
+    expect(result.ok).toBe(true);
+    const call = calls[0]!;
+    expect(call.url).toBe("https://api.openai.com/v1/responses");
+    expect(call.headers.authorization).toBe("Bearer openai-test");
+    expect(call.body.model).toBe("gpt-5.6");
+    expect(call.body.store).toBe(false);
+    expect(call.body.tools).toEqual([]);
+    expect(call.body.instructions).toContain("You write MutationPlans for Clay");
+    const format = (call.body.text as { format: Record<string, unknown> }).format;
+    expect(format).toMatchObject({ type: "json_schema", name: "clay_mutation_plan", strict: true });
+    expect(JSON.stringify(format.schema)).not.toContain("$comment");
+    const panels = (format.schema as { properties: { panels: { items: { required: string[] } } } })
+      .properties.panels.items;
+    expect(panels.required).toContain("declared_writes");
+  });
+
+  it("extracts structured output, usage, and repair turns", async () => {
+    const { fetchFn, calls } = fakeFetch(200, openaiBody(VALID_PLAN));
+    const client = new MutationClient(
+      { mode: "openai", apiKey: "openai-test", model: "gpt-5.6" }, { fetchFn });
+    const result = await client.requestRepair(ctx(), `{}`, ["V5: repair"]);
+    if (!result.ok) throw new Error("expected OpenAI result");
+    expect(result.usage).toEqual({ input_tokens: 4200, output_tokens: 700 });
+    const input = calls[0]!.body.input as { role: string; content: string }[];
+    expect(input.map(item => item.role)).toEqual(["user", "assistant", "user"]);
   });
 });
 

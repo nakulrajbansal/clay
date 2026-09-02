@@ -33,6 +33,9 @@ claude key.txt
 *.key
 .env
 
+# Agent planning artifacts
+.hermes/
+
 # harness output
 *.png
 uatdiag-plan.json
