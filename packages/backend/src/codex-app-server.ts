@@ -28,6 +28,13 @@ const ENV_ALLOWLIST = [
   "CODEX_HOME", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
 ] as const;
 
+const WINDOWS_CLEANUP_ENV_ALLOWLIST = [
+  "ALLUSERSPROFILE", "ProgramData", "ProgramFiles", "ProgramFiles(x86)",
+  "ProgramW6432", "PSModulePath", "SystemDrive", "OS", "NUMBER_OF_PROCESSORS",
+  "PROCESSOR_ARCHITECTURE", "PROCESSOR_IDENTIFIER", "PROCESSOR_LEVEL",
+  "PROCESSOR_REVISION", "USERDOMAIN", "USERNAME",
+] as const;
+
 export function codexChildEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of ENV_ALLOWLIST) {
@@ -35,6 +42,15 @@ export function codexChildEnv(extra: Record<string, string> = {}): NodeJS.Proces
     if (value !== undefined) env[key] = value;
   }
   return { ...env, ...extra, RUST_LOG: "warn" };
+}
+
+export function windowsCleanupEnv(): NodeJS.ProcessEnv {
+  const env = codexChildEnv();
+  for (const key of WINDOWS_CLEANUP_ENV_ALLOWLIST) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
+  return env;
 }
 
 export function codexLoginStatus(
@@ -94,10 +110,11 @@ export async function runBoundedCleanup(
   command: string,
   args: readonly string[],
   timeoutMs: number,
+  env: NodeJS.ProcessEnv = codexChildEnv(),
 ): Promise<CleanupResult> {
   return new Promise(resolve => {
     const helper = spawn(command, [...args], {
-      windowsHide: true, stdio: ["ignore", "ignore", "ignore"], env: codexChildEnv(),
+      windowsHide: true, stdio: ["ignore", "ignore", "ignore"], env,
     });
     let settled = false;
     const finish = (result: CleanupResult): void => {
@@ -120,10 +137,11 @@ export async function terminateProcessTree(child: ChildProcessWithoutNullStreams
   if (child.pid === undefined) return;
   if (process.platform === "win32") {
     const root = child.pid;
+    const cleanupEnv = windowsCleanupEnv();
     const parentWasRunning = child.exitCode === null && child.signalCode === null;
     if (parentWasRunning) {
       const direct = await runBoundedCleanup(
-        "taskkill", ["/PID", String(root), "/T", "/F"], 1_500,
+        "taskkill", ["/PID", String(root), "/T", "/F"], 1_500, cleanupEnv,
       );
       if (direct.completed && direct.code === 0 && await waitForExit(child, 1_000)) return;
     }
@@ -143,7 +161,8 @@ export async function terminateProcessTree(child: ChildProcessWithoutNullStreams
       "}catch{exit 2}",
     ].join(";");
     const orphanSweep = await runBoundedCleanup(
-      "powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], 5_000,
+      "powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script],
+      10_000, cleanupEnv,
     );
     if (!orphanSweep.completed || orphanSweep.code !== 0)
       throw new Error(`Codex process cleanup could not be verified `

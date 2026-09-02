@@ -8,7 +8,7 @@ import type { S1Context } from "@clay/mutation";
 import {
   CODEX_DISABLED_FEATURES, CodexAppServerModelClient, CodexExecModelClient,
   codexChildEnv, codexLoginStatus, codexSupportedFeatures, runBoundedCleanup,
-  waitForExit,
+  waitForExit, windowsCleanupEnv,
 } from "../src/codex-app-server";
 
 const RAW_PLAN = JSON.stringify({
@@ -71,7 +71,7 @@ describe("Codex app-server model client", () => {
     expect(threadParams.baseInstructions).toContain("You write MutationPlans for Clay");
     expect((turnParams.input as Array<{ text: string }>)[0]!.text)
       .toContain("<intent>add a panel</intent>");
-  }, 10_000);
+  }, 20_000);
 
   it("runs the Windows-safe exec transport as ephemeral read-only", async () => {
     const dir = await mkdtemp(join(tmpdir(), "clay-codex-exec-"));
@@ -96,7 +96,7 @@ describe("Codex app-server model client", () => {
       expect(call.args[index - 1]).toBe("--disable");
     }
     expect(call.input).toContain("<intent>add a panel</intent>");
-  }, 10_000);
+  }, 20_000);
 
   it("maps an expired Codex login to one actionable error", async () => {
     const dir = await mkdtemp(join(tmpdir(), "clay-codex-auth-"));
@@ -108,7 +108,7 @@ describe("Codex app-server model client", () => {
     await expect(client.rawPlan(context)).rejects.toThrow(
       "Codex login expired. Run `codex logout`, then `codex login`, and restart `pnpm codex`.",
     );
-  }, 10_000);
+  }, 20_000);
 
   it("fails immediately when app-server exits cleanly before a turn completes", async () => {
     const dir = await mkdtemp(join(tmpdir(), "clay-codex-exit-"));
@@ -119,7 +119,7 @@ describe("Codex app-server model client", () => {
     await expect(client.rawPlan(context)).rejects.toThrow(
       "Codex app-server stopped before completing the turn.",
     );
-  }, 10_000);
+  }, 20_000);
 
   it("aborts the turn if app-server attempts any tool request", async () => {
     const dir = await mkdtemp(join(tmpdir(), "clay-codex-tool-"));
@@ -128,15 +128,18 @@ describe("Codex app-server model client", () => {
       env: { CLAY_CODEX_TOOL_REQUEST: "1" },
     });
     await expect(client.rawPlan(context)).rejects.toThrow(/disallowed request: tool\/call/);
-  }, 10_000);
+  }, 20_000);
 
   it("passes only an allowlisted environment unless the caller explicitly injects a test value", () => {
     process.env.CLAY_SECRET_SENTINEL = "must-not-cross";
     try {
-      const env = codexChildEnv({ CLAY_TEST_ONLY: "yes" });
+      const env = codexChildEnv({ CLAY_EXPLICIT: "yes" });
       expect(env.CLAY_SECRET_SENTINEL).toBeUndefined();
-      expect(env.CLAY_TEST_ONLY).toBe("yes");
+      expect(env.CLAY_EXPLICIT).toBe("yes");
       expect(env.PATH).toBe(process.env.PATH);
+      const cleanupEnv = windowsCleanupEnv();
+      expect(cleanupEnv.CLAY_SECRET_SENTINEL).toBeUndefined();
+      expect(cleanupEnv.PSModulePath).toBe(process.env.PSModulePath);
     } finally {
       delete process.env.CLAY_SECRET_SENTINEL;
     }
@@ -178,7 +181,7 @@ describe("Codex app-server model client", () => {
     expect(await client.rawPlan(context)).toBe(RAW_PLAN);
     await new Promise(resolve => setTimeout(resolve, 750));
     await expect(access(marker)).rejects.toThrow();
-  }, 15_000);
+  }, 25_000);
 
   if (process.platform === "win32") {
     it("kills the complete Windows process tree before deleting request artifacts", async () => {
@@ -196,6 +199,6 @@ describe("Codex app-server model client", () => {
       await expect(access(marker)).rejects.toThrow();
       expect((await readdir(dir)).filter(name => name.startsWith("clay-codex-output-")
         || name === "clay-mutation-plan.schema.json")).toEqual([]);
-    }, 10_000);
+    }, 20_000);
   }
 });
