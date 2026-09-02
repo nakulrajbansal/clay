@@ -84,8 +84,17 @@ to the normal local validator and preview pipeline. Set `CODEX_MODEL` only when
 you need to override the model selected by the Codex CLI. The connector uses
 `codex exec --ephemeral --ignore-user-config` on every OS. App-server mode is
 deliberately rejected because it cannot ignore user MCP and tool configuration.
-
-Windows cleanup is verified on Windows 11 and Windows Server 2022. The
-connector fails closed on Windows Server 2025 when its noninteractive WMI
-provider cannot return process ancestry, because Clay will not delete request
-artifacts or report success while descendant cleanup is unverified.
+On Windows, the first reshape compiles the source-controlled
+`windows-job-runner.cs` with the in-box .NET Framework compiler. That runner
+creates Codex suspended inside a `KILL_ON_JOB_CLOSE` Job Object before resuming
+it and watches the Clay connector's process handle. Normal exec-root completion
+or an observed connector-owner exit calls `TerminateJobObject` explicitly.
+App-server teardown and exec timeout force-stop the runner, so
+`KILL_ON_JOB_CLOSE` terminates the contained job; it also backs unexpected
+runner termination. This is defense in depth for the no-tool Codex CLI and its
+descendants, not an OS-account boundary against an already-compromised
+same-user native process. Clay
+refuses the request if the runner cannot be built or assigned; it does not fall
+back to PID-tree guessing. Leave `CODEX_BIN` unset for the npm-installed CLI.
+A Windows override must resolve to a native `.exe` or `.com`; Clay deliberately
+rejects batch shims rather than routing model execution through `cmd.exe`.

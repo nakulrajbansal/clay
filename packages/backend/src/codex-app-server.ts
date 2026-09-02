@@ -1,7 +1,10 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { readFile, unlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { delimiter, extname, isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import apiSchemaRaw from "@clay/schema/mutation-plan-api.json";
 import {
   buildRepairTurn, buildSystemPrompt, buildUserTurn, type S1Context,
@@ -28,9 +31,9 @@ const ENV_ALLOWLIST = [
   "CODEX_HOME", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
 ] as const;
 
-const WINDOWS_CLEANUP_ENV_ALLOWLIST = [
+const WINDOWS_COMPILER_ENV_ALLOWLIST = [
   "ALLUSERSPROFILE", "ProgramData", "ProgramFiles", "ProgramFiles(x86)",
-  "ProgramW6432", "PSModulePath", "SystemDrive", "OS", "NUMBER_OF_PROCESSORS",
+  "ProgramW6432", "SystemDrive", "OS", "NUMBER_OF_PROCESSORS",
   "PROCESSOR_ARCHITECTURE", "PROCESSOR_IDENTIFIER", "PROCESSOR_LEVEL",
   "PROCESSOR_REVISION", "USERDOMAIN", "USERNAME",
 ] as const;
@@ -44,13 +47,99 @@ export function codexChildEnv(extra: Record<string, string> = {}): NodeJS.Proces
   return { ...env, ...extra, RUST_LOG: "warn" };
 }
 
-export function windowsCleanupEnv(): NodeJS.ProcessEnv {
+export function windowsCompilerEnv(): NodeJS.ProcessEnv {
   const env = codexChildEnv();
-  for (const key of WINDOWS_CLEANUP_ENV_ALLOWLIST) {
+  for (const key of WINDOWS_COMPILER_ENV_ALLOWLIST) {
     const value = process.env[key];
     if (value !== undefined) env[key] = value;
   }
   return env;
+}
+
+let cachedWindowsJobRunner: string | null = null;
+
+export function windowsJobRunnerPath(): string {
+  if (process.platform !== "win32")
+    throw new Error("The Clay Job Object runner is Windows-only.");
+  if (cachedWindowsJobRunner && existsSync(cachedWindowsJobRunner))
+    return cachedWindowsJobRunner;
+
+  const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
+  if (!systemRoot)
+    throw new Error("SystemRoot is unavailable; cannot build the Clay Job Object runner.");
+  const compiler = [
+    join(systemRoot, "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe"),
+    join(systemRoot, "Microsoft.NET", "Framework", "v4.0.30319", "csc.exe"),
+  ].find(existsSync);
+  if (!compiler)
+    throw new Error("The in-box .NET Framework compiler is unavailable; cannot isolate Codex.");
+
+  const source = fileURLToPath(new URL("./windows-job-runner.cs", import.meta.url));
+  if (!existsSync(source))
+    throw new Error("The Clay Job Object runner source is unavailable.");
+  const directory = mkdtempSync(join(tmpdir(), "clay-job-runner-"));
+  const output = join(directory, "clay-job-runner.exe");
+  const result = spawnSync(compiler, [
+    "/nologo", "/optimize+", "/target:exe", `/out:${output}`, source,
+  ], {
+    encoding: "utf8", windowsHide: true, timeout: 30_000,
+    env: windowsCompilerEnv(),
+  });
+  if (result.status !== 0 || result.error || !existsSync(output)) {
+    rmSync(directory, { recursive: true, force: true });
+    throw new Error("The Clay Job Object runner could not be built; refusing to launch Codex.");
+  }
+  cachedWindowsJobRunner = output;
+  process.once("exit", () => {
+    try { rmSync(directory, { recursive: true, force: true }); }
+    catch { /* best-effort removal after all children have exited */ }
+  });
+  return output;
+}
+
+function spawnCodexProcess(
+  command: string,
+  args: readonly string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+): ChildProcessWithoutNullStreams {
+  const wrapped = process.platform === "win32";
+  const executable = wrapped ? resolveWindowsExecutable(command, env, cwd) : command;
+  return spawn(wrapped ? windowsJobRunnerPath() : command,
+    wrapped ? [String(process.pid), executable, ...args] : [...args], {
+      cwd, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
+      detached: !wrapped,
+    });
+}
+
+export function resolveWindowsExecutable(
+  command: string,
+  env: NodeJS.ProcessEnv,
+  cwd = process.cwd(),
+): string {
+  if (process.platform !== "win32") return command;
+  const hasDirectory = isAbsolute(command) || command.includes("\\") || command.includes("/");
+  const pathEntries = hasDirectory ? [""] : (env.PATH ?? "").split(delimiter);
+  const suppliedExtension = extname(command).toLowerCase();
+  const extensions = suppliedExtension
+    ? [""]
+    : (env.PATHEXT ?? ".COM;.EXE").split(";")
+      .filter(extension => [".com", ".exe"].includes(extension.toLowerCase()));
+  for (const entry of pathEntries) {
+    const directory = entry.replace(/^"|"$/g, "");
+    const base = hasDirectory
+      ? (isAbsolute(command) ? command : resolve(cwd, command))
+      : (isAbsolute(directory)
+        ? join(directory, command)
+        : resolve(cwd, directory, command));
+    for (const extension of extensions) {
+      const candidate = extension ? `${base}${extension}` : base;
+      if (![".com", ".exe"].includes(extname(candidate).toLowerCase())) continue;
+      const absolute = isAbsolute(candidate) ? candidate : resolve(cwd, candidate);
+      if (existsSync(absolute)) return absolute;
+    }
+  }
+  throw new Error("Codex command must resolve to a native Windows executable.");
 }
 
 export function codexLoginStatus(
@@ -104,74 +193,19 @@ export async function waitForExit(
   });
 }
 
-export type CleanupResult = { completed: boolean; code: number | null };
-
-export async function runBoundedCleanup(
-  command: string,
-  args: readonly string[],
-  timeoutMs: number,
-  env: NodeJS.ProcessEnv = codexChildEnv(),
-): Promise<CleanupResult> {
-  return new Promise(resolve => {
-    const helper = spawn(command, [...args], {
-      windowsHide: true, stdio: ["ignore", "ignore", "ignore"], env,
-    });
-    let settled = false;
-    const finish = (result: CleanupResult): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(result);
-    };
-    helper.once("error", () => finish({ completed: false, code: null }));
-    helper.once("exit", code => finish({ completed: true, code }));
-    const timer = setTimeout(() => {
-      try { helper.kill("SIGKILL"); } catch { /* helper already stopped */ }
-      helper.unref();
-      finish({ completed: false, code: null });
-    }, timeoutMs);
-  });
-}
-
-export async function terminateProcessTree(child: ChildProcessWithoutNullStreams): Promise<void> {
+export async function terminateProcessTree(
+  child: ChildProcessWithoutNullStreams,
+): Promise<void> {
   if (child.pid === undefined) return;
   if (process.platform === "win32") {
-    const root = child.pid;
-    const cleanupEnv = windowsCleanupEnv();
-    const parentWasRunning = child.exitCode === null && child.signalCode === null;
-    if (parentWasRunning) {
-      const direct = await runBoundedCleanup(
-        "taskkill", ["/PID", String(root), "/T", "/F"], 1_500, cleanupEnv,
-      );
-      if (direct.completed && direct.code === 0 && await waitForExit(child, 1_000)) return;
+    if (child.exitCode === null && child.signalCode === null) {
+      try { child.kill("SIGKILL"); } catch { /* job runner already stopped */ }
     }
-    const script = [
-      `$root=${root}`,
-      "$ErrorActionPreference='Stop'",
-      "try{",
-      "$targets=New-Object 'System.Collections.Generic.HashSet[int]'",
-      "$frontier=@($root)",
-      "while($frontier.Count -gt 0){$next=@();foreach($parentId in $frontier){$children=@(Get-WmiObject Win32_Process -Filter \"ParentProcessId = $parentId\" -ErrorAction Stop);foreach($p in $children){if($targets.Add([int]$p.ProcessId)){$next+=[int]$p.ProcessId}}};$frontier=$next}",
-      "foreach($processId in $targets){Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue}",
-      "Stop-Process -Id $root -Force -ErrorAction SilentlyContinue",
-      "Start-Sleep -Milliseconds 50",
-      "foreach($processId in $targets){if(Get-Process -Id $processId -ErrorAction SilentlyContinue){exit 3}}",
-      "if(Get-Process -Id $root -ErrorAction SilentlyContinue){exit 4}",
-      "exit 0",
-      "}catch{exit 2}",
-    ].join(";");
-    const orphanSweep = await runBoundedCleanup(
-      "powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script],
-      10_000, cleanupEnv,
-    );
-    if (!orphanSweep.completed || orphanSweep.code !== 0)
-      throw new Error(`Codex process cleanup could not be verified `
-        + `(completed=${orphanSweep.completed}, code=${String(orphanSweep.code)}).`);
   } else {
     try { process.kill(-child.pid, "SIGKILL"); }
     catch { try { child.kill("SIGKILL"); } catch { /* already gone */ } }
   }
-  if (!await waitForExit(child, 1_000))
+  if (!await waitForExit(child, 2_000))
     throw new Error("Codex process cleanup could not be verified.");
 }
 
@@ -244,17 +278,16 @@ export class CodexAppServerModelClient {
     const launch = defaultCodexLaunch();
     const command = this.options.command ?? launch.command;
     const args = this.options.args;
-    const child = spawn(command, args, {
-      cwd: this.options.cwd,
-      env: codexChildEnv(this.options.env),
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
-      detached: process.platform !== "win32",
-    });
+    const child = spawnCodexProcess(
+      command, args, this.options.cwd, codexChildEnv(this.options.env),
+    );
     return this.drive(child, prompt);
   }
 
-  private async drive(child: ChildProcessWithoutNullStreams, prompt: string): Promise<string> {
+  private async drive(
+    child: ChildProcessWithoutNullStreams,
+    prompt: string,
+  ): Promise<string> {
     const timeoutMs = this.options.timeoutMs ?? 180_000;
     const pending = new Map<number | string, Pending>();
     const stderr: string[] = [];
@@ -420,36 +453,34 @@ export class CodexExecModelClient {
     const nonce = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const schemaPath = join(this.options.cwd, "clay-mutation-plan.schema.json");
     const outputPath = join(this.options.cwd, `clay-codex-output-${nonce}.json`);
-    await writeFile(schemaPath, JSON.stringify(strictOutputSchema), "utf8");
-    const args = [
-      ...prefix, "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules",
-      "--strict-config",
-      ...(this.options.disabledFeatures ?? CODEX_DISABLED_FEATURES)
-        .flatMap(feature => ["--disable", feature]),
-      "--sandbox", "read-only", "--skip-git-repo-check",
-      "--output-schema", schemaPath, "--output-last-message", outputPath,
-      "--cd", this.options.cwd,
-      ...(this.options.model ? ["--model", this.options.model] : []), "-",
-    ];
-    const child = spawn(command, args, {
-      cwd: this.options.cwd,
-      env: codexChildEnv(this.options.env),
-      stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
-      detached: process.platform !== "win32",
-    });
-    const stderr: string[] = [];
-    child.stderr.on("data", chunk => stderr.push(String(chunk).slice(0, 2000)));
-    const timeoutMs = this.options.timeoutMs ?? 600_000;
-    let timedOut = false;
+    let child: ChildProcessWithoutNullStreams | null = null;
     try {
+      await writeFile(schemaPath, JSON.stringify(strictOutputSchema), "utf8");
+      const args = [
+        ...prefix, "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules",
+        "--strict-config",
+        ...(this.options.disabledFeatures ?? CODEX_DISABLED_FEATURES)
+          .flatMap(feature => ["--disable", feature]),
+        "--sandbox", "read-only", "--skip-git-repo-check",
+        "--output-schema", schemaPath, "--output-last-message", outputPath,
+        "--cd", this.options.cwd,
+        ...(this.options.model ? ["--model", this.options.model] : []), "-",
+      ];
+      child = spawnCodexProcess(
+        command, args, this.options.cwd, codexChildEnv(this.options.env),
+      );
+      const stderr: string[] = [];
+      child.stderr.on("data", chunk => stderr.push(String(chunk).slice(0, 2000)));
+      const timeoutMs = this.options.timeoutMs ?? 600_000;
+      let timedOut = false;
       child.stdin.end(`${buildSystemPrompt()}\n\n${userPrompt}\n\n`
         + "Do not call tools. Return only the JSON object required by the output schema.");
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => {
           timedOut = true; reject(new Error("Codex exec timed out"));
         }, timeoutMs);
-        child.once("error", error => { clearTimeout(timer); reject(error); });
-        child.once("exit", code => {
+        child!.once("error", error => { clearTimeout(timer); reject(error); });
+        child!.once("exit", code => {
           clearTimeout(timer);
           if (code === 0) resolve();
           else {
@@ -468,11 +499,14 @@ export class CodexExecModelClient {
       if (!raw) throw new Error("Codex exec returned no final message");
       return raw;
     } finally {
-      await terminateProcessTree(child);
-      await Promise.all([
-        unlink(outputPath).catch(() => undefined),
-        unlink(schemaPath).catch(() => undefined),
-      ]);
+      try {
+        if (child) await terminateProcessTree(child);
+      } finally {
+        await Promise.all([
+          unlink(outputPath).catch(() => undefined),
+          unlink(schemaPath).catch(() => undefined),
+        ]);
+      }
     }
   }
 }
