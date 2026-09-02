@@ -6,6 +6,7 @@ if (!marker) process.exit(2);
 const child = spawn(process.execPath, ["-e", `setTimeout(() => require("node:fs").writeFileSync(${JSON.stringify(marker)}, "survived"), 500)`], {
   stdio: "ignore",
   windowsHide: true,
+  detached: process.platform === "win32",
 });
 child.unref();
 if (process.env.CLAY_CODEX_PARENT_EXITS) {

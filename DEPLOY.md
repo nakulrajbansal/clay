@@ -84,3 +84,8 @@ to the normal local validator and preview pipeline. Set `CODEX_MODEL` only when
 you need to override the model selected by the Codex CLI. The connector uses
 `codex exec --ephemeral --ignore-user-config` on every OS. App-server mode is
 deliberately rejected because it cannot ignore user MCP and tool configuration.
+
+Windows cleanup is verified on Windows 11 and Windows Server 2022. The
+connector fails closed on Windows Server 2025 when its noninteractive WMI
+provider cannot return process ancestry, because Clay will not delete request
+artifacts or report success while descendant cleanup is unverified.

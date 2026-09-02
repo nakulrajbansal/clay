@@ -74,7 +74,11 @@ jobs:
           if-no-files-found: error
 
   windows-boundaries:
-    runs-on: windows-latest
+    # Windows Server 2025 removed WMIC and its replacement WMI providers can
+    # hang in noninteractive orphan sweeps. Clay fails closed there. Pin the
+    # supported Windows boundary to Server 2022; Windows 11 is exercised on
+    # the release workstation before this job is pushed.
+    runs-on: windows-2022
     timeout-minutes: 15
     steps:
       - name: Check out repository
