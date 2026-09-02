@@ -1,4 +1,5 @@
 import { access, mkdtemp, readFile, readdir } from "node:fs/promises";
+import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,7 +7,8 @@ import { describe, expect, it } from "vitest";
 import type { S1Context } from "@clay/mutation";
 import {
   CODEX_DISABLED_FEATURES, CodexAppServerModelClient, CodexExecModelClient,
-  codexChildEnv, codexLoginStatus, codexSupportedFeatures,
+  codexChildEnv, codexLoginStatus, codexSupportedFeatures, runBoundedCleanup,
+  waitForExit,
 } from "../src/codex-app-server";
 
 const RAW_PLAN = JSON.stringify({
@@ -20,6 +22,26 @@ const context: S1Context = {
 };
 
 describe("Codex app-server model client", () => {
+  it("bounds cleanup helpers that never exit", async () => {
+    const started = Date.now();
+    expect(await runBoundedCleanup(process.execPath,
+      ["-e", "setInterval(() => undefined, 1000)"], 100))
+      .toEqual({ completed: false, code: null });
+    expect(Date.now() - started).toBeLessThan(2_000);
+  }, 3_000);
+
+  it("reports when a child is still running after the exit deadline", async () => {
+    const child = spawn(process.execPath,
+      ["-e", "setInterval(() => undefined, 1000)"],
+      { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+    try {
+      expect(await waitForExit(child, 100)).toBe(false);
+    } finally {
+      child.kill("SIGKILL");
+      expect(await waitForExit(child, 2_000)).toBe(true);
+    }
+  }, 3_000);
+
   it("uses a read-only ephemeral turn and extracts structured final output", async () => {
     const dir = await mkdtemp(join(tmpdir(), "clay-codex-test-"));
     const capture = join(dir, "messages.jsonl");

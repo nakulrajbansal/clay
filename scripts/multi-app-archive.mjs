@@ -18,6 +18,14 @@ const waitForPanels = async () => {
   await page.locator(".panel-frame").first().waitFor({ timeout: 25_000 });
 };
 const titles = async () => page.locator(".panel-title-text").allTextContents();
+const waitForTitleSet = async (expected, equal = true) => {
+  await page.waitForFunction(({ expectedTitles, requireEqual }) => {
+    const actual = [...document.querySelectorAll(".panel-title-text")]
+      .map(node => node.textContent ?? "");
+    const same = JSON.stringify(actual) === JSON.stringify(expectedTitles);
+    return actual.length > 0 && (requireEqual ? same : !same);
+  }, { expectedTitles: expected, requireEqual: equal }, { timeout: 25_000 });
+};
 const openSettings = async () => {
   const exportButton = page.getByRole("button", { name: "Export .clay backup" });
   if (!(await exportButton.isVisible().catch(() => false)))
@@ -40,8 +48,7 @@ check(backupPath !== null, "the source app exports a local backup");
 await page.getByRole("button", { name: /Sales CRM/ }).first().click();
 await page.getByRole("button", { name: "+ New app" }).click();
 await page.getByText("Bookkeeping", { exact: true }).click();
-await page.waitForTimeout(800);
-await waitForPanels();
+await waitForTitleSet(sourceTitles, false);
 const targetTitlesBefore = await titles();
 check(JSON.stringify(targetTitlesBefore) !== JSON.stringify(sourceTitles),
   "the second app starts with its own independent shape");
@@ -54,16 +61,17 @@ await replaceDialog.waitFor();
 const reloaded = page.waitForEvent("framenavigated");
 await replaceDialog.getByRole("button", { name: "Confirm" }).click();
 await reloaded;
-await waitForPanels();
+await waitForTitleSet(sourceTitles);
 check(JSON.stringify(await titles()) === JSON.stringify(sourceTitles),
   "import replaces the currently open app with the validated archive");
 check(await page.getByRole("button", { name: /Bookkeeping/ }).first().count() === 1,
   "archive replacement keeps the current app identity");
 
 await page.getByRole("button", { name: /Bookkeeping/ }).first().click();
+const sourceReloaded = page.waitForEvent("framenavigated");
 await page.getByRole("button", { name: "Sales CRM", exact: true }).click();
-await page.waitForTimeout(800);
-await waitForPanels();
+await sourceReloaded;
+await waitForTitleSet(sourceTitles);
 check(JSON.stringify(await titles()) === JSON.stringify(sourceTitles),
   "the source app remains intact after replacing its sibling");
 check(errors.length === 0, `zero page errors${errors.length ? `: ${errors.join(" | ")}` : ""}`);

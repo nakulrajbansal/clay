@@ -66,48 +66,93 @@ export function codexSupportedFeatures(
   return [...new Set(names)];
 }
 
-async function waitForExit(child: ChildProcessWithoutNullStreams, timeoutMs = 5_000): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  await Promise.race([
-    new Promise<void>(resolve => child.once("exit", () => resolve())),
-    new Promise<void>(resolve => setTimeout(resolve, timeoutMs)),
-  ]);
+export async function waitForExit(
+  child: ChildProcessWithoutNullStreams,
+  timeoutMs = 5_000,
+): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) return true;
+  return new Promise(resolve => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onExit = (): void => finish(true);
+    const finish = (exited: boolean): void => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      child.off("exit", onExit);
+      resolve(exited);
+    };
+    child.once("exit", onExit);
+    timer = setTimeout(() => finish(false), timeoutMs);
+    if (child.exitCode !== null || child.signalCode !== null) finish(true);
+  });
+}
+
+export type CleanupResult = { completed: boolean; code: number | null };
+
+export async function runBoundedCleanup(
+  command: string,
+  args: readonly string[],
+  timeoutMs: number,
+): Promise<CleanupResult> {
+  return new Promise(resolve => {
+    const helper = spawn(command, [...args], {
+      windowsHide: true, stdio: ["ignore", "ignore", "ignore"], env: codexChildEnv(),
+    });
+    let settled = false;
+    const finish = (result: CleanupResult): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    helper.once("error", () => finish({ completed: false, code: null }));
+    helper.once("exit", code => finish({ completed: true, code }));
+    const timer = setTimeout(() => {
+      try { helper.kill("SIGKILL"); } catch { /* helper already stopped */ }
+      helper.unref();
+      finish({ completed: false, code: null });
+    }, timeoutMs);
+  });
 }
 
 export async function terminateProcessTree(child: ChildProcessWithoutNullStreams): Promise<void> {
   if (child.pid === undefined) return;
   if (process.platform === "win32") {
     const root = child.pid;
-    const direct = spawn("taskkill", ["/PID", String(root), "/T", "/F"], {
-      windowsHide: true, stdio: ["ignore", "ignore", "ignore"], env: codexChildEnv(),
-    });
-    await new Promise<void>(resolve => {
-      direct.once("error", () => resolve());
-      direct.once("exit", () => resolve());
-    });
+    const parentWasRunning = child.exitCode === null && child.signalCode === null;
+    if (parentWasRunning) {
+      const direct = await runBoundedCleanup(
+        "taskkill", ["/PID", String(root), "/T", "/F"], 1_500,
+      );
+      if (direct.completed && direct.code === 0 && await waitForExit(child, 1_000)) return;
+    }
     const script = [
       `$root=${root}`,
-      "$all=@(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId)",
+      "$ErrorActionPreference='Stop'",
+      "try{",
       "$targets=New-Object 'System.Collections.Generic.HashSet[int]'",
       "$frontier=@($root)",
-      "while($frontier.Count -gt 0){$next=@();foreach($p in $all){if($frontier -contains [int]$p.ParentProcessId){if($targets.Add([int]$p.ProcessId)){$next+=[int]$p.ProcessId}}};$frontier=$next}",
+      "while($frontier.Count -gt 0){$next=@();foreach($parentId in $frontier){$children=@(Get-CimInstance Win32_Process -Filter \"ParentProcessId = $parentId\" -ErrorAction Stop);foreach($p in $children){if($targets.Add([int]$p.ProcessId)){$next+=[int]$p.ProcessId}}};$frontier=$next}",
       "foreach($processId in $targets){Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue}",
       "Stop-Process -Id $root -Force -ErrorAction SilentlyContinue",
+      "Start-Sleep -Milliseconds 50",
+      "foreach($processId in $targets){if(Get-Process -Id $processId -ErrorAction SilentlyContinue){exit 3}}",
+      "if(Get-Process -Id $root -ErrorAction SilentlyContinue){exit 4}",
+      "exit 0",
+      "}catch{exit 2}",
     ].join(";");
-    const orphanSweep = spawn(
-      "powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
-        windowsHide: true, stdio: ["ignore", "ignore", "ignore"], env: codexChildEnv(),
-      },
+    const orphanSweep = await runBoundedCleanup(
+      "powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], 2_500,
     );
-    await new Promise<void>(resolve => {
-      orphanSweep.once("error", () => resolve());
-      orphanSweep.once("exit", () => resolve());
-    });
+    if (!orphanSweep.completed || orphanSweep.code !== 0)
+      throw new Error("Codex process cleanup could not be verified.");
   } else {
     try { process.kill(-child.pid, "SIGKILL"); }
     catch { try { child.kill("SIGKILL"); } catch { /* already gone */ } }
   }
-  await waitForExit(child);
+  if (!await waitForExit(child, 1_000))
+    throw new Error("Codex process cleanup could not be verified.");
 }
 
 export function defaultCodexLaunch(): { command: string; prefix: string[] } {
