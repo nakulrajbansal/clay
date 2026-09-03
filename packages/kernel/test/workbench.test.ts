@@ -87,6 +87,29 @@ describe("daily workbench", () => {
     } finally { store.close(); }
   });
 
+  it("counts only changed records when a batch mixes updates with no-ops", async () => {
+    const store = await ClayStore.openMemory();
+    try {
+      commit(store, [{ op: "create_table", table: "tasks", columns: [
+        { name: "name", type: "text", required: true },
+        { name: "status", type: "enum", required: false, values: ["todo", "done"] },
+      ] }]);
+      const changed = store.insert("tasks", { name: "Change me", status: "todo" });
+      const unchanged = store.insert("tasks", { name: "Already done", status: "done" });
+      const receipt = store.applyBatch({ source: "user", summary: "Complete selected", mutations: [
+        { kind: "update", table: "tasks", id: String(changed.id), patch: { status: "done" } },
+        { kind: "update", table: "tasks", id: String(unchanged.id), patch: { status: "done" } },
+      ] });
+
+      expect(receipt.changed).toBe(1);
+      expect(store.undoBatch(receipt.id).undone).toBe(true);
+      expect(store.query({ from: "tasks" })).toMatchObject([
+        { name: "Change me", status: "todo" },
+        { name: "Already done", status: "done" },
+      ]);
+    } finally { store.close(); }
+  });
+
   it("refuses restore and batch undo that would create dangling links", async () => {
     const store = await ClayStore.openMemory();
     try {

@@ -53,4 +53,32 @@ describe("archive indexes", () => {
       expect(await hasItemsIndex(imported.store)).toBe(true);
     } finally { imported.store.close(); }
   });
+
+  it("installs a rewound archive while preserving inactive physical columns", async () => {
+    const source = await ClayStore.openMemory();
+    const createItems: ForwardOpT[] = [{ op: "create_table", table: "items", columns: [
+      { name: "name", type: "text", required: true },
+    ] }];
+    source.commit({ intent: "Items", summary: "Creates items.", migration: {
+      operations: createItems, inverse: deriveInverse(createItems, source.registrySnapshot()),
+    } });
+    const addNote: ForwardOpT[] = [{ op: "add_column", table: "items",
+      column: { name: "note", type: "text", required: false } }];
+    source.commit({ intent: "Notes", summary: "Adds item notes.", migration: {
+      operations: addNote, inverse: deriveInverse(addNote, source.registrySnapshot()),
+    } });
+    const row = source.insert("items", { name: "Pipe", note: "Retained future value" });
+    source.rollbackTo(1);
+
+    const imported = await ClayStore.importArchive(
+      await source.exportArchive("rewound-column"), async () => openMemoryDriver());
+    source.close();
+    try {
+      expect(imported.store.currentVersion()).toBe(1);
+      imported.store.rollForwardTo(2);
+      expect(imported.store.query({ from: "items", where: [
+        { field: "id", op: "eq", value: String(row.id) },
+      ] })[0]).toMatchObject({ name: "Pipe", note: "Retained future value" });
+    } finally { imported.store.close(); }
+  });
 });

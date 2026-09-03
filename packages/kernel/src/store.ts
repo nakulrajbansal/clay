@@ -2767,15 +2767,18 @@ export class ClayStore {
           this.assertRelationIntegrity();
           if (this.batchContext.pending.size !== 0)
             throw new ClayError("E_INTERNAL", "batch history was not finalized");
+          const changed = Number(this.driver.select(
+            `SELECT COUNT(*) AS count FROM "row_history" WHERE "batch_id" = ?`, [id],
+          )[0]?.count ?? 0);
           this.driver.exec(
             `INSERT INTO sys.operation_batches(
                id, at, source, summary, changed_count, created_json, undone_at)
              VALUES (?, ?, ?, ?, ?, ?, NULL)`,
-            [id, at, input.source, input.summary.trim(), input.mutations.length,
+            [id, at, input.source, input.summary.trim(), changed,
              JSON.stringify(created)]);
           return {
             id, at, source: input.source, summary: input.summary.trim(),
-            changed: input.mutations.length, created, undone: false,
+            changed, created, undone: false,
           };
         } finally { this.batchContext = previous; }
       });
@@ -3276,7 +3279,10 @@ export class ClayStore {
   private archiveCopyShape(): DatabaseCopyShape {
     const tables = [...this.reg.values()]
       .sort((left, right) => left.name.localeCompare(right.name))
-      .map(table => ({ name: table.name, sql: createTableSql(table) }));
+      .map(table => ({
+        name: table.name,
+        sql: createTableSql(table, { includeInactive: true }),
+      }));
     const indexes = this.driver.select(
       `SELECT name, tbl_name FROM main.sqlite_master
        WHERE type = 'index' AND sql IS NOT NULL

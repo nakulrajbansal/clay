@@ -476,6 +476,40 @@ describe("record-aware primitives", () => {
     ]);
     expect(gestureGrants).toBe(0);
   });
+
+  it("makes every default connected-record surface keyboard operable", () => {
+    const recordId = "018f0000-0000-7000-8000-000000000099";
+    const opened: { table: string; id: string }[] = [];
+    const renderWithRecordContext = (node: Parameters<typeof render>[0]): HTMLElement => {
+      const c = document.createElement("div");
+      render(node, c, { primaryTable: "projects",
+        openRecord: (table, id) => opened.push({ table, id }) });
+      return c;
+    };
+    const controls = [
+      renderWithRecordContext(h(Table, {
+        rows: [{ id: recordId, name: "Apollo" }], columns: [{ field: "name" }],
+      })).querySelector<HTMLElement>("tbody tr")!,
+      renderWithRecordContext(h(Cards, {
+        items: [{ id: recordId, title: "Apollo" }],
+      })).querySelector<HTMLElement>(".clay-card")!,
+      renderWithRecordContext(h("Calendar", {
+        month: "2026-07", items: [{ id: recordId, date: "2026-07-04", label: "Apollo" }],
+      })).querySelector<HTMLElement>(".clay-cal-chip")!,
+      renderWithRecordContext(h(Flow, {
+        stages: [{ key: "open", label: "Open" }],
+        items: [{ id: recordId, title: "Apollo", stage: "open" }],
+      })).querySelector<HTMLElement>(".clay-flow-item")!,
+    ];
+    for (const [index, control] of controls.entries()) {
+      expect(control.tabIndex).toBe(0);
+      expect(control.getAttribute("role")).toBe("button");
+      control.dispatchEvent(new KeyboardEvent("keydown", {
+        key: index % 2 === 0 ? "Enter" : " ", bubbles: true,
+      }));
+    }
+    expect(opened).toEqual(Array.from({ length: 4 }, () => ({ table: "projects", id: recordId })));
+  });
 });
 
 describe("Table sorting (interactivity)", () => {

@@ -29,6 +29,15 @@ function syncModalLayers(): void {
   });
 }
 
+function focusDialog(dialog: HTMLElement): void {
+  if (dialog.contains(document.activeElement)) return;
+  const items = [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE)]
+    .filter(item => !item.hasAttribute("disabled") && item.getClientRects().length > 0);
+  const target = items.find(item => item.hasAttribute("autofocus"))
+    ?? items[0] ?? dialog;
+  target.focus();
+}
+
 export function ModalDialog(props: {
   role?: "dialog" | "alertdialog";
   ariaLabel?: string;
@@ -62,12 +71,7 @@ export function ModalDialog(props: {
     if (app) { app.inert = true; app.setAttribute("aria-hidden", "true"); }
     const frame = requestAnimationFrame(() => {
       const dialog = dialogRef.current;
-      if (dialog?.contains(document.activeElement)) return;
-      const items = dialog ? [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE)]
-        .filter(item => !item.hasAttribute("disabled") && item.getClientRects().length > 0) : [];
-      const target = items.find(item => item.hasAttribute("autofocus"))
-        ?? items[0] ?? dialog;
-      target?.focus();
+      if (dialog && modalLayers.at(-1)?.dialog === dialog) focusDialog(dialog);
     });
     return () => {
       cancelAnimationFrame(frame);
@@ -84,7 +88,9 @@ export function ModalDialog(props: {
         else app.setAttribute("aria-hidden", priorHidden);
       }
       const target = props.returnFocusRef?.current ?? previousFocus.current;
-      target?.focus();
+      const top = modalLayers.at(-1);
+      if (top) focusDialog(top.dialog);
+      else target?.focus();
     };
   }, []);
 

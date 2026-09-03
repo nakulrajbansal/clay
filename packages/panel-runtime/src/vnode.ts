@@ -143,6 +143,20 @@ function makeDefaultRecordClick(ctx: Ctx, value: unknown): ((event: Event) => vo
   return (): void => ctx.openRecord?.(reference.table, reference.id);
 }
 
+function bindDefaultRecordOpen(target: HTMLElement, open: (event: Event) => void): void {
+  target.classList.add("clay-clickable");
+  target.setAttribute("title", "Open record");
+  target.setAttribute("role", "button");
+  target.setAttribute("tabindex", "0");
+  target.setAttribute("aria-label", "Open record");
+  target.addEventListener("click", open);
+  target.addEventListener("keydown", event => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    open(event);
+  });
+}
+
 function el(ctx: Ctx, tag: string, className?: string): HTMLElement {
   const node = ctx.doc.createElement(tag);
   Object.defineProperty(node, "addEventListener", {
@@ -246,11 +260,7 @@ function buildTable(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
           ctx.userAction(() => (onRowClick as (r: unknown) => void)(row), event));
       } else {
         const open = makeDefaultRecordClick(ctx, row);
-        if (open) {
-          tr.classList.add("clay-clickable");
-          tr.setAttribute("title", "Open record");
-          tr.addEventListener("click", open);
-        }
+        if (open) bindDefaultRecordOpen(tr, open);
       }
       for (const col of columns) {
         const td = el(ctx, "td");
@@ -1178,11 +1188,7 @@ function buildCard(ctx: Ctx, card: CardSpec, large: boolean,
       ctx.userAction(() => (onClick as (x: unknown) => void)(card), event));
   } else {
     const open = makeDefaultRecordClick(ctx, card);
-    if (open) {
-      c.classList.add("clay-clickable");
-      c.setAttribute("title", "Open record");
-      c.addEventListener("click", open);
-    }
+    if (open) bindDefaultRecordOpen(c, open);
   }
   return c;
 }
@@ -1344,10 +1350,7 @@ function buildFlow(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
           ctx.userAction(() => (onItemClick as (x: Item) => void)(it), event));
       } else {
         const open = makeDefaultRecordClick(ctx, it);
-        if (open) {
-          row.classList.add("clay-clickable");
-          row.addEventListener("click", open);
-        }
+        if (open) bindDefaultRecordOpen(row, open);
       }
       const main = el(ctx, "div", "clay-flow-item-main");
       const title = el(ctx, "div", "clay-flow-item-title");
@@ -1515,10 +1518,7 @@ function buildCalendar(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
             ctx.userAction(() => (onItemClick as (x: CItem) => void)(it), event));
         } else {
           const open = makeDefaultRecordClick(ctx, it);
-          if (open) {
-            chip.classList.add("clay-clickable");
-            chip.addEventListener("click", open);
-          }
+          if (open) bindDefaultRecordOpen(chip, open);
         }
         cell.appendChild(chip);
       }

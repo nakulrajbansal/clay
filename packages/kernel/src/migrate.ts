@@ -369,12 +369,15 @@ export function deriveInverse(operations: ForwardOpT[], registry: Registry): Inv
 
 // ---------- execution ----------
 
-export function createTableSql(t: RegTable): string {
+export function createTableSql(t: RegTable,
+  options: { includeInactive?: boolean } = {}): string {
   const cols = [
     `"id" TEXT PRIMARY KEY`, `"created_at" TEXT NOT NULL`,
     `"updated_at" TEXT NOT NULL`, `"deleted_at" TEXT`,
   ];
-  for (const c of physicalColumns(t))
+  const columns = options.includeInactive
+    ? t.columns.filter(column => !isVirtualColumn(column)) : physicalColumns(t);
+  for (const c of columns)
     cols.push(`${qid(c.name)} ${SQL_TYPE[c.type as PhysicalColumnKind]}`);
   return `CREATE TABLE ${qid(t.name)} (${cols.join(", ")})`;
 }
