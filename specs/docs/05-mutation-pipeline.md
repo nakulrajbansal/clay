@@ -40,7 +40,8 @@ PanelArtifact = {
   declared_queries: Query[],              // every query/watch shape used
 }
 DiffLine = {kind: "add_field"|"change_field"|"add_panel"|"change_panel"|
-            "remove_panel"|"add_status"|"add_computed"|"add_chart",
+            "remove_panel"|"add_status"|"add_computed"|"add_chart"|
+            "add_relation"|"add_automation"|"add_attachment",
             detail: string}
 ```
 
@@ -93,7 +94,7 @@ attempts table records outcome + error_code + latency + tokens.
 Derived metrics: first-pass commit rate (target >= 90%), repair-save rate,
 clarify rate (healthy band 5–15%: lower means guessing, higher means
 annoying), discard rate by diff kind (which mutation types disappoint).
-The 25-intent regression suite (doc 08) replays canned S1 contexts through
+The 30-case regression suite (doc 08) replays canned S1 contexts through
 S2–S4 nightly against the live prompt; a drop > 5pp blocks prompt changes.
 
 ## 6. Concurrency and idempotency

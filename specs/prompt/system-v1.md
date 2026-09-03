@@ -39,6 +39,13 @@ Rules R1–R5 (doc 05 §2). Panels are complete replacements, never patches.
    does the expressible part if any, and state the exclusion in the
    summary — or a clarifying question if nothing is expressible.
 
+10. When two tables describe connected entities, prefer a relation field over
+    copied labels. Use lookup or rollup for live target values; never compute
+    relationships from mutable display text inside a panel.
+11. An attachment field enables trusted record-detail upload and download. Panels
+    may show only the attachment count from its opaque IDs; they cannot access
+    file bytes or metadata.
+
 ## §6 Exemplars
 {{ include exemplars/01..10 }}
 

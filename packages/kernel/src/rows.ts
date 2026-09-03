@@ -29,21 +29,24 @@ export function uuidv7(now: number = Date.now()): string {
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})?)?$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export function coerceValue(table: string, col: RegColumn, v: unknown): SqlValue {
   const bad = (want: string): never => {
     throw new ClayError("E_VALIDATION",
       `'${table}.${col.name}' expects ${want}`, { got: typeof v });
   };
-  if (col.type === "computed")
-    throw new ClayError("E_TYPE", `'${table}.${col.name}' is computed and cannot be written`);
+  if (col.type === "computed" || col.type === "lookup" || col.type === "rollup")
+    throw new ClayError("E_TYPE", `'${table}.${col.name}' is derived and cannot be written`);
+  if (col.type === "attachment")
+    throw new ClayError("E_TYPE", `'${table}.${col.name}' attachments must use the file API`);
   if (v === null) {
     if (col.required) throw new ClayError("E_VALIDATION",
       `'${table}.${col.name}' is required`);
     return null;
   }
   switch (col.type) {
-    case "text":
+    case "text": case "rich_text":
       return typeof v === "string" ? v : bad("text");
     case "number": {
       const n = typeof v === "number" ? v
@@ -65,6 +68,15 @@ export function coerceValue(table: string, col: RegColumn, v: unknown): SqlValue
       return bad(`one of [${(col.values ?? []).join(", ")}]`);
     case "json":
       try { return JSON.stringify(v); } catch { return bad("a JSON value"); }
+    case "relation": {
+      const cardinality = col.relation?.cardinality;
+      if (cardinality === "one")
+        return typeof v === "string" && UUID.test(v) ? v : bad("one linked record id");
+      if (cardinality === "many" && Array.isArray(v) && v.length <= 100
+          && v.every(item => typeof item === "string" && UUID.test(item)))
+        return JSON.stringify([...new Set(v as string[])]);
+      return bad("up to 100 linked record ids");
+    }
   }
 }
 
@@ -89,7 +101,8 @@ export function validateInsert(t: RegTable, input: Record<string, unknown>): Row
     vals.push(coerceValue(t.name, col, v));
   }
   for (const col of t.columns) {
-    if (col.type === "computed" || col.hidden || col.inactive || !col.required) continue;
+    if (col.type === "computed" || col.type === "lookup" || col.type === "rollup"
+        || col.hidden || col.inactive || !col.required) continue;
     if (!cols.includes(col.name))
       throw new ClayError("E_VALIDATION", `'${t.name}.${col.name}' is required`);
   }

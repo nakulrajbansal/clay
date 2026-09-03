@@ -3,7 +3,7 @@
 // compose into layouts the named components can't express (a Gantt).
 import { describe, expect, it } from "vitest";
 import {
-  h, render, Box, Text, Bar, Scene, Stack, Board, Cards, Timeline, Badge, Button, Chart, Table, FilterBar,
+  h, render, Box, Text, Bar, Scene, Stack, Board, Cards, Flow, Timeline, Badge, Button, Chart, Table, FilterBar,
 } from "../src/index";
 
 function mount(vnode: Parameters<typeof render>[0]): HTMLElement {
@@ -419,6 +419,119 @@ describe("Chart redesign (ADR-023: grid, nice scale, donut, tooltips)", () => {
     const ticks = c.querySelectorAll(".clay-chart-xtick").length;
     expect(ticks).toBeGreaterThan(0);
     expect(ticks).toBeLessThanOrEqual(8);
+  });
+});
+
+describe("record-aware primitives", () => {
+  const id = "018f0000-0000-7000-8000-000000000001";
+
+  it("renders linked records by label instead of leaking ids", () => {
+    const c = mount(h(Table, {
+      rows: [{ customer: { id, table: "customers", label: "Acme" } }],
+      columns: [{ field: "customer", label: "Customer" }],
+    }));
+    expect(c.querySelector("tbody td")?.textContent).toBe("Acme");
+    expect(c.textContent).not.toContain(id);
+  });
+
+  it("formats attachment identifiers as counts rather than leaking them", () => {
+    const c = mount(h(Table, {
+      rows: [{ files: ["file_a", "file_b"] }],
+      columns: [{ field: "files", label: "Files", format: "files" }],
+    }));
+    expect(c.querySelector("tbody td")?.textContent).toBe("2 files");
+    expect(c.textContent).not.toContain("file_a");
+  });
+
+  it("opens table rows, cards, and calendar items through the trusted hook", () => {
+    const opened: { table: string; id: string }[] = [];
+    const openRecord = (table: string, recordId: string): void => {
+      opened.push({ table, id: recordId });
+    };
+    let gestureGrants = 0;
+    const renderWithRecordContext = (node: Parameters<typeof render>[0]): HTMLElement => {
+      const c = document.createElement("div");
+      render(node, c, { primaryTable: "projects", openRecord,
+        userAction: fn => { gestureGrants++; return fn(); } });
+      return c;
+    };
+    renderWithRecordContext(h(Table, {
+      rows: [{ id, name: "Apollo" }], columns: [{ field: "name" }],
+    })).querySelector("tbody tr")!.dispatchEvent(new window.Event("click", { bubbles: true }));
+    renderWithRecordContext(h(Cards, {
+      items: [{ id, title: "Apollo" }],
+    })).querySelector(".clay-card")!.dispatchEvent(new window.Event("click", { bubbles: true }));
+    renderWithRecordContext(h("Calendar", {
+      month: "2026-07", items: [{ id, date: "2026-07-04", label: "Apollo" }],
+    })).querySelector(".clay-cal-chip")!
+      .dispatchEvent(new window.Event("click", { bubbles: true }));
+    renderWithRecordContext(h(Flow, {
+      stages: [{ key: "open", label: "Open" }],
+      items: [{ id, title: "Apollo", stage: "open" }],
+    })).querySelector(".clay-flow-item")!
+      .dispatchEvent(new window.Event("click", { bubbles: true }));
+    expect(opened).toEqual([
+      { table: "projects", id }, { table: "projects", id },
+      { table: "projects", id }, { table: "projects", id },
+    ]);
+    expect(gestureGrants).toBe(0);
+  });
+
+  it("makes every default connected-record surface keyboard operable", () => {
+    const recordId = "018f0000-0000-7000-8000-000000000099";
+    const opened: { table: string; id: string }[] = [];
+    const renderWithRecordContext = (node: Parameters<typeof render>[0]): HTMLElement => {
+      const c = document.createElement("div");
+      render(node, c, { primaryTable: "projects",
+        openRecord: (table, id) => opened.push({ table, id }) });
+      return c;
+    };
+    const controls = [
+      renderWithRecordContext(h(Table, {
+        rows: [{ id: recordId, name: "Apollo" }], columns: [{ field: "name" }],
+      })).querySelector<HTMLElement>("tbody tr")!,
+      renderWithRecordContext(h(Cards, {
+        items: [{ id: recordId, title: "Apollo" }],
+      })).querySelector<HTMLElement>(".clay-card")!,
+      renderWithRecordContext(h("Calendar", {
+        month: "2026-07", items: [{ id: recordId, date: "2026-07-04", label: "Apollo" }],
+      })).querySelector<HTMLElement>(".clay-cal-chip")!,
+      renderWithRecordContext(h(Flow, {
+        stages: [{ key: "open", label: "Open" }],
+        items: [{ id: recordId, title: "Apollo", stage: "open" }],
+      })).querySelector<HTMLElement>(".clay-flow-item")!,
+    ];
+    for (const [index, control] of controls.entries()) {
+      expect(control.tabIndex).toBe(0);
+      expect(control.getAttribute("role")).toBe("button");
+      control.dispatchEvent(new KeyboardEvent("keydown", {
+        key: index % 2 === 0 ? "Enter" : " ", bubbles: true,
+      }));
+    }
+    expect(opened).toEqual(Array.from({ length: 4 }, () => ({ table: "projects", id: recordId })));
+  });
+
+  it("does not steal Enter or Space from nested Flow action buttons", () => {
+    const recordId = "018f0000-0000-7000-8000-000000000100";
+    const opened: string[] = [];
+    let advanced = 0;
+    const c = document.createElement("div");
+    render(h(Flow, {
+      stages: [{ key: "open", label: "Open" }, { key: "done", label: "Done" }],
+      items: [{ id: recordId, title: "Apollo", stage: "open" }],
+      onAdvance: () => { advanced++; },
+    }), c, { primaryTable: "projects", openRecord: (_table, id) => opened.push(id) });
+    const button = c.querySelector<HTMLButtonElement>(".clay-flow-advance")!;
+    for (const key of ["Enter", " "]) {
+      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      button.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+    }
+    expect(opened).toEqual([]);
+    button.click();
+    button.click();
+    expect(advanced).toBe(1);
+    expect(opened).toEqual([]);
   });
 });
 

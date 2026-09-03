@@ -3,14 +3,16 @@
 // plan would emit, with the kernel-derived inverse, on the same reversible
 // timeline. No model call, no new capability surface (commitLayout
 // precedent, ADR-022c).
-import { ClayStore, deriveInverse, type MigrationPlanT } from "@clay/kernel";
+import { ClayStore, deriveInverse, type MigrationPlanT, type RelationFieldSpec } from "@clay/kernel";
 
 const IDENT = /^[a-z][a-z0-9_]{0,40}$/;
 
 export type NewColumn = {
   name: string;
-  type: "text" | "number" | "integer" | "boolean" | "date" | "enum";
+  type: "text" | "number" | "integer" | "boolean" | "date" | "enum"
+    | "relation" | "rich_text" | "attachment";
   values?: string[];
+  relation?: RelationFieldSpec;
 };
 
 /** Normalize a human label into a column ident ("Due date" -> due_date). */
@@ -26,7 +28,11 @@ export function addColumnCommit(store: ClayStore, table: string, column: NewColu
   const ops: MigrationPlanT["operations"] = [{
     op: "add_column", table,
     column: { name, type: column.type, required: false,
-      ...(column.type === "enum" && column.values?.length ? { values: column.values } : {}) },
+      ...(column.name.trim() !== name ? { label: column.name.trim().slice(0, 60) } : {}),
+      ...(column.type === "enum" && column.values?.length ? { values: column.values } : {}),
+      ...(column.type === "relation" && column.relation
+        ? { relation: { ...column.relation,
+            unique_targets: column.relation.unique_targets ?? false } } : {}) },
   }];
   return store.commit({
     intent: `add a ${name} column to ${table}`,

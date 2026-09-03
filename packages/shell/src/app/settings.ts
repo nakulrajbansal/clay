@@ -26,7 +26,16 @@ export function getApiKey(): string | null { return read(KEY); }
 export function setApiKey(v: string | null): void { write(KEY, v && v.trim() ? v.trim() : null); }
 export function getBackendUrl(): string | null {
   const stored = read(BACKEND);
-  if (stored) return stored;
+  if (stored) {
+    try {
+      const normalized = normalizeBackendUrl(stored);
+      if (normalized !== stored) write(BACKEND, normalized);
+      return normalized;
+    } catch {
+      write(BACKEND, null);
+      write(SESSION, null);
+    }
+  }
   // Hosted deploys serve the shell and API from ONE origin: default to
   // the page's own origin so a fresh visitor can sign in with zero setup.
   // An explicit BYO key keeps direct mode; localhost/http keeps dev flows.
@@ -43,7 +52,7 @@ function backendOrigin(value: string | null): string | null {
 }
 
 export function setBackendUrl(v: string | null): void {
-  const next = v && v.trim() ? v.trim() : null;
+  const next = v && v.trim() ? normalizeBackendUrl(v) : null;
   const previousOrigin = backendOrigin(read(BACKEND));
   const nextOrigin = backendOrigin(next);
   if (previousOrigin !== nextOrigin) write(SESSION, null);

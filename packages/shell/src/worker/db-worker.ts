@@ -311,8 +311,65 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       mustStore().renamePanel(String(p.panelId), String(p.title));
       return mustStore().livePanels();
     }
+    case "addAttachment":
+      return mustStore().addAttachment({
+        table: String(p.table), rowId: String(p.rowId), field: String(p.field),
+        name: String(p.name), mime: String(p.mime ?? ""),
+        bytes: new Uint8Array(p.bytes as ArrayBuffer),
+      });
+    case "attachmentsForRecord":
+      return mustStore().attachmentsForRecord(
+        String(p.table), String(p.rowId), String(p.field));
+    case "readAttachment":
+      return mustStore().readAttachment(String(p.id));
+    case "removeAttachment":
+      mustStore().removeAttachment(
+        String(p.table), String(p.rowId), String(p.field), String(p.id)); return null;
+    case "attachmentStorage":
+      return mustStore().attachmentStorage();
+    case "purgeDeletedAttachments":
+      return mustStore().purgeDeletedAttachments();
+    case "listAutomations":
+      return mustStore().listAutomations();
+    case "upsertAutomation":
+      return mustStore().upsertAutomation(p.input as never);
+    case "deleteAutomation":
+      mustStore().deleteAutomation(String(p.id)); return null;
+    case "simulateAutomation":
+      return mustStore().simulateAutomation(String(p.id));
+    case "runAutomations":
+      return mustStore().runDueAutomations();
+    case "runAutomationNow":
+      return mustStore().runAutomationNow(String(p.id));
+    case "automationRuns":
+      return mustStore().automationRuns(
+        p.automationId === null || p.automationId === undefined ? undefined : String(p.automationId),
+        Number(p.limit ?? 100));
+    case "undoAutomationRun":
+      return mustStore().undoAutomationRun(String(p.id));
+    case "notifications":
+      return mustStore().listNotifications(Number(p.limit ?? 100));
+    case "markNotificationRead":
+      mustStore().markNotificationRead(String(p.id)); return null;
+    case "globalSearch":
+      return mustStore().globalSearch(String(p.term ?? ""), Number(p.limit ?? 20));
+    case "applyBatch":
+      return mustStore().applyBatch({
+        source: "user", summary: String(p.summary ?? ""), mutations: p.mutations as never,
+      });
+    case "operationBatches":
+      return mustStore().operationBatches(Number(p.limit ?? 50));
+    case "undoBatch":
+      return mustStore().undoBatch(String(p.id));
     case "rowHistory":
       return mustStore().rowHistory(String(p.table), String(p.id));
+    case "previewRelationConversion":
+      return mustStore().previewRelationConversion({
+        sourceTable: String(p.sourceTable), sourceField: String(p.sourceField),
+        targetTable: String(p.targetTable), displayField: String(p.displayField),
+      });
+    case "convertTextToRelation":
+      return mustStore().convertTextToRelation({ ...p, cardinality: "one" } as never);
     case "addColumn": {
       addColumnCommit(mustStore(), String(p.table), p.column as never);
       return [...mustStore().registrySnapshot().values()];
@@ -383,22 +440,7 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "importArchive": {
       dropPending();
       const bytes = new Uint8Array(p.bytes as ArrayBuffer);
-      // staging + integrity run BEFORE the live app is touched (doc 04 §7);
-      // openFresh only fires once the archive has passed.
-      const replacingAppId = currentAppId;
-      const openFresh = persistent
-        ? async (): Promise<DbDriver> => {
-            store?.close();
-            store = null;
-            await deleteAppStorage(replacingAppId ?? "default");
-            const opened = await openBrowserDriver(replacingAppId);
-            persistent = opened.persistent;
-            currentAppId = replacingAppId;
-            return opened.driver;
-          }
-        : undefined;
-      const result = await ClayStore.importArchive(bytes, openFresh);
-      if (!openFresh) { store?.close(); }
+      const result = await mustStore().replaceFromArchive(bytes);
       store = result.store;
       return { manifest: result.manifest, invalidPanels: result.invalidPanels };
     }
@@ -445,6 +487,7 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       }
       return {
         persistent, persisted, usageBytes, quotaBytes,
+        attachments: mustStore().attachmentStorage(),
         versions: mustStore().headVersion(),
         stats: mustStore().attemptStats(),
         modelConnection,
@@ -485,7 +528,14 @@ self.onmessage = (ev: MessageEvent): void => {
   void (async () => {
     try {
       const result = await handle(req, ev.ports);
-      (self as unknown as Worker).postMessage({ id: req.id, ok: true, result });
+      const transfer: Transferable[] = [];
+      if (result && typeof result === "object" && "bytes" in result) {
+        const bytes = (result as { bytes?: unknown }).bytes;
+        if (bytes instanceof ArrayBuffer) transfer.push(bytes);
+        else if (bytes instanceof Uint8Array && bytes.buffer instanceof ArrayBuffer)
+          transfer.push(bytes.buffer);
+      }
+      (self as unknown as Worker).postMessage({ id: req.id, ok: true, result }, transfer);
     } catch (e) {
       (self as unknown as Worker).postMessage({
         id: req.id, ok: false,

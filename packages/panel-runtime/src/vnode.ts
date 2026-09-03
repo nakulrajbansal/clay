@@ -94,6 +94,12 @@ export function resolveBadgeTone(value: unknown, map: Record<string, string>): s
 
 function formatCell(value: unknown, format: unknown): string {
   if (value === null || value === undefined) return "";
+  if (typeof value === "object" && !Array.isArray(value)
+      && typeof (value as { label?: unknown }).label === "string")
+    return String((value as { label: string }).label);
+  if (format === "files" && Array.isArray(value))
+    return `${value.length} file${value.length === 1 ? "" : "s"}`;
+  if (Array.isArray(value)) return value.map(item => formatCell(item, format)).join(", ");
   switch (format) {
     case "date": return String(value).slice(0, 10);
     case "currency":
@@ -118,7 +124,39 @@ type Ctx = {
   /** Trusted runtime hook. It grants bounded write authority immediately
    * before panel-authored callback code runs from a rendered control. */
   userAction<T>(fn: () => T, event?: Event): T;
+  primaryTable?: string;
+  openRecord?: (table: string, id: string) => void;
 };
+
+function recordReference(ctx: Ctx, value: unknown): { table: string; id: string } | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as { id?: unknown; recordId?: unknown; table?: unknown };
+  const id = typeof record.id === "string" ? record.id
+    : typeof record.recordId === "string" ? record.recordId : null;
+  const table = typeof record.table === "string" ? record.table : ctx.primaryTable;
+  return id && table ? { table, id } : null;
+}
+
+function makeDefaultRecordClick(ctx: Ctx, value: unknown): ((event: Event) => void) | null {
+  const reference = recordReference(ctx, value);
+  if (!reference || !ctx.openRecord) return null;
+  return (): void => ctx.openRecord?.(reference.table, reference.id);
+}
+
+function bindDefaultRecordOpen(target: HTMLElement, open: (event: Event) => void): void {
+  target.classList.add("clay-clickable");
+  target.setAttribute("title", "Open record");
+  target.setAttribute("role", "button");
+  target.setAttribute("tabindex", "0");
+  target.setAttribute("aria-label", "Open record");
+  target.addEventListener("click", open);
+  target.addEventListener("keydown", event => {
+    if (event.target !== event.currentTarget) return;
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    open(event);
+  });
+}
 
 function el(ctx: Ctx, tag: string, className?: string): HTMLElement {
   const node = ctx.doc.createElement(tag);
@@ -221,6 +259,9 @@ function buildTable(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
         tr.classList.add("clay-clickable");
         tr.addEventListener("click", (event) =>
           ctx.userAction(() => (onRowClick as (r: unknown) => void)(row), event));
+      } else {
+        const open = makeDefaultRecordClick(ctx, row);
+        if (open) bindDefaultRecordOpen(tr, open);
       }
       for (const col of columns) {
         const td = el(ctx, "td");
@@ -1113,6 +1154,7 @@ function buildScene(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
 
 // ---------- view components (kanban board, card grid) ----------
 type CardSpec = {
+  id?: unknown; recordId?: unknown; table?: unknown;
   title?: unknown; subtitle?: unknown; badge?: unknown; badgeTone?: unknown;
   fields?: { label?: unknown; value?: unknown }[];
 };
@@ -1122,14 +1164,14 @@ function buildCard(ctx: Ctx, card: CardSpec, large: boolean,
   const c = el(ctx, "div", large ? "clay-card clay-card-lg" : "clay-card");
   const head = el(ctx, "div", "clay-card-head");
   const title = el(ctx, "div", "clay-card-title");
-  title.textContent = String(card.title ?? "");
+  title.textContent = formatCell(card.title, undefined);
   head.appendChild(title);
   if (card.badge !== undefined && card.badge !== null)
     head.appendChild(buildBadge(ctx, card.badge, clampTone(card.badgeTone) ?? "gray"));
   c.appendChild(head);
   if (card.subtitle !== undefined && card.subtitle !== null) {
     const sub = el(ctx, "div", "clay-card-subtitle");
-    sub.textContent = String(card.subtitle);
+    sub.textContent = formatCell(card.subtitle, undefined);
     c.appendChild(sub);
   }
   for (const f of Array.isArray(card.fields) ? card.fields : []) {
@@ -1137,7 +1179,7 @@ function buildCard(ctx: Ctx, card: CardSpec, large: boolean,
     const l = el(ctx, "span", "clay-card-field-label");
     l.textContent = String(f.label ?? "");
     const v = el(ctx, "span", "clay-card-field-value");
-    v.textContent = String(f.value ?? "");
+    v.textContent = formatCell(f.value, undefined);
     row.append(l, v);
     c.appendChild(row);
   }
@@ -1145,6 +1187,9 @@ function buildCard(ctx: Ctx, card: CardSpec, large: boolean,
     c.classList.add("clay-clickable");
     c.addEventListener("click", (event) =>
       ctx.userAction(() => (onClick as (x: unknown) => void)(card), event));
+  } else {
+    const open = makeDefaultRecordClick(ctx, card);
+    if (open) bindDefaultRecordOpen(c, open);
   }
   return c;
 }
@@ -1304,6 +1349,9 @@ function buildFlow(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
         row.classList.add("clay-clickable");
         row.addEventListener("click", (event) =>
           ctx.userAction(() => (onItemClick as (x: Item) => void)(it), event));
+      } else {
+        const open = makeDefaultRecordClick(ctx, it);
+        if (open) bindDefaultRecordOpen(row, open);
       }
       const main = el(ctx, "div", "clay-flow-item-main");
       const title = el(ctx, "div", "clay-flow-item-title");
@@ -1397,7 +1445,10 @@ function buildFlow(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
 // simply don't render. Dates are ISO strings; keys are computed in LOCAL
 // time so a chip lands on the user's wall-clock day.
 function buildCalendar(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
-  type CItem = { date?: unknown; label?: unknown; tone?: unknown };
+  type CItem = {
+    id?: unknown; recordId?: unknown; table?: unknown;
+    date?: unknown; label?: unknown; tone?: unknown;
+  };
   const items = (Array.isArray(props.items) ? props.items : []) as CItem[];
   const onItemClick = props.onItemClick;
   const byDay = new Map<string, CItem[]>();
@@ -1466,6 +1517,9 @@ function buildCalendar(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
           chip.classList.add("clay-clickable");
           chip.addEventListener("click", (event) =>
             ctx.userAction(() => (onItemClick as (x: CItem) => void)(it), event));
+        } else {
+          const open = makeDefaultRecordClick(ctx, it);
+          if (open) bindDefaultRecordOpen(chip, open);
         }
         cell.appendChild(chip);
       }
@@ -1568,13 +1622,20 @@ function buildTimeline(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
 export function render(
   vnode: VChild,
   container: Element,
-  opts: { schema?: SchemaTable[]; userAction?: <T>(fn: () => T, event?: Event) => T } = {},
+  opts: {
+    schema?: SchemaTable[];
+    userAction?: <T>(fn: () => T, event?: Event) => T;
+    primaryTable?: string;
+    openRecord?: (table: string, id: string) => void;
+  } = {},
 ): void {
   const doc = container.ownerDocument;
   const built = build({
     doc,
     schema: opts.schema ?? [],
     userAction: opts.userAction ?? (<T>(fn: () => T): T => fn()),
+    primaryTable: opts.primaryTable,
+    openRecord: opts.openRecord,
   }, vnode);
   container.replaceChildren(...(built ? [built] : []));
 }

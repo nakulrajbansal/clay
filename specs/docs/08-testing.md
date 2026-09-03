@@ -41,7 +41,7 @@ This corpus is append-only; every future bypass found becomes a fixture.
 It also boots a declared-write panel that attempts an insert immediately:
 the write must fail until a fixed-runtime rendered action mints a grant.
 
-## 4. The 25-intent regression suite (the product's exam)
+## 4. The 30-case regression suite (the product's exam)
 
 Canned S1 contexts (3 archetype apps: grooming CRM, PMO tracker, reading
 log) x intents spanning: add field, enum status, computed column, chart,

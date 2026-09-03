@@ -11,7 +11,7 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "kind": { "type": "string", "enum": ["add_field", "change_field", "add_panel", "change_panel", "remove_panel", "add_status", "add_computed", "add_chart"] },
+          "kind": { "type": "string", "enum": ["add_field", "change_field", "add_panel", "change_panel", "remove_panel", "add_status", "add_computed", "add_chart", "add_relation", "add_automation", "add_attachment"] },
           "detail": { "type": "string" }
         },
         "required": ["kind", "detail"]

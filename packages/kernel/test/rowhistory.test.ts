@@ -63,6 +63,17 @@ describe("row_history (G6)", () => {
     store.close();
   });
 
+  it("an unchanged update creates no history or updated event", async () => {
+    const store = await seededStore();
+    const row = store.query({ from: "projects" })[0]!;
+    const before = store.rowHistoryCount();
+    const updated = store.update("projects", String(row.id), { owner: row.owner });
+    expect(updated.owner).toBe(row.owner);
+    expect(updated.updated_at).toBe(row.updated_at);
+    expect(store.rowHistoryCount()).toBe(before);
+    store.close();
+  });
+
   it("no history -> E_VALIDATION; reserved table name rejected by V5", async () => {
     const store = await seededStore();
     const id = String(store.query({ from: "projects" })[0]!.id);

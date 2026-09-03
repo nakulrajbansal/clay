@@ -11,7 +11,24 @@ export const Ident = z.string().regex(/^[a-z][a-z0-9_]{0,40}$/);
 export const PanelId = z.string().regex(/^[a-z][a-z0-9_]{2,40}$/);
 export const ColumnType = z.enum([
   "text","number","integer","boolean","date","enum","json","computed",
+  "relation","lookup","rollup","rich_text","attachment",
 ]);
+
+export const RelationSpec = z.object({
+  target_table: Ident,
+  cardinality: z.enum(["one", "many"]),
+  unique_targets: z.boolean().default(false),
+  display_field: Ident.optional(),
+}).strict();
+export const LookupSpec = z.object({
+  relation_field: Ident,
+  target_field: Ident,
+}).strict();
+export const RollupSpec = z.object({
+  relation_field: Ident,
+  target_field: Ident.optional(),
+  operation: z.enum(["count", "sum", "avg", "min", "max"]),
+}).strict();
 
 // JSON without `any` (G26). Scalars for values the migration ops carry.
 export type Json =
@@ -23,15 +40,35 @@ export const JsonScalar = z.union([z.string(), z.number(), z.boolean()]);
 
 export const ColumnSpec = z.object({
   name: Ident,
+  label: z.string().min(1).max(60).optional(),
   type: ColumnType,
   required: z.boolean().default(false),
   values: z.array(z.string().max(40)).max(24).optional(),   // enum only
   expr: z.string().max(500).optional(),                     // computed only
+  relation: RelationSpec.optional(),
+  lookup: LookupSpec.optional(),
+  rollup: RollupSpec.optional(),
   pk: z.boolean().optional(),
-}).refine(c => c.type !== "enum" || (c.values?.length ?? 0) > 0,
-  { message: "enum needs values" })
- .refine(c => c.type !== "computed" || !!c.expr,
-  { message: "computed needs expr" });
+}).strict().superRefine((c, ctx) => {
+  if (c.type === "enum" && (c.values?.length ?? 0) === 0)
+    ctx.addIssue({ code: "custom", message: "enum needs values" });
+  if (c.type !== "enum" && c.values !== undefined)
+    ctx.addIssue({ code: "custom", message: "values belong only to enum fields" });
+  if (c.type === "computed" && !c.expr)
+    ctx.addIssue({ code: "custom", message: "computed needs expr" });
+  if (c.type !== "computed" && c.expr !== undefined)
+    ctx.addIssue({ code: "custom", message: "expr belongs only to computed fields" });
+  if ((c.type === "relation") !== (c.relation !== undefined))
+    ctx.addIssue({ code: "custom", message: "relation metadata must match relation type" });
+  if ((c.type === "lookup") !== (c.lookup !== undefined))
+    ctx.addIssue({ code: "custom", message: "lookup metadata must match lookup type" });
+  if ((c.type === "rollup") !== (c.rollup !== undefined))
+    ctx.addIssue({ code: "custom", message: "rollup metadata must match rollup type" });
+  if (c.rollup && c.rollup.operation !== "count" && !c.rollup.target_field)
+    ctx.addIssue({ code: "custom", message: "non-count rollup needs target_field" });
+  if ((c.type === "lookup" || c.type === "rollup" || c.type === "attachment") && c.required)
+    ctx.addIssue({ code: "custom", message: `${c.type} fields cannot be required` });
+});
 
 // ---------- Query ----------
 export const CondOp = z.enum([
@@ -114,7 +151,8 @@ export const MigrationPlan = z.object({
 // ---------- MutationPlan ----------
 export const DiffKind = z.enum([
   "add_field","change_field","add_panel","change_panel","remove_panel",
-  "add_status","add_computed","add_chart",
+  "add_status","add_computed","add_chart","add_relation","add_automation",
+  "add_attachment",
 ]);
 export const PanelArtifact = z.object({
   panel_id: PanelId,
@@ -159,7 +197,7 @@ export const BridgeCall = z.object({
   seq: z.number().int().nonnegative(),
   // compute.* is in-iframe and sync (G20); events.off added per G26.
   call: z.enum(["db.query","db.watch","db.unwatch","db.insert","db.update",
-    "db.softDelete","ui.toast","ui.confirm","events.emit","events.on",
+    "db.softDelete","ui.toast","ui.confirm","ui.openRecord","events.emit","events.on",
     "events.off"]),
   args: z.array(JsonValue).max(4),         // per-call schemas applied next
 });
@@ -170,6 +208,13 @@ export const BridgeUserGesture = z.object({
   v: z.literal(1),
   kind: z.literal("user_gesture"),
 });
+export const BridgeOpenRecord = z.object({
+  v: z.literal(1),
+  kind: z.literal("open_record"),
+  table: Ident,
+  id: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i),
+});
+
 export const BridgeReply = z.object({
   v: z.literal(1), seq: z.number().int(),
   ok: z.boolean(),

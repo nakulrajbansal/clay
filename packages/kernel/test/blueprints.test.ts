@@ -71,6 +71,33 @@ describe("blueprint expansion (ADR-029)", () => {
     store.close();
   });
 
+  it("record-oriented views preserve stable ids for default detail navigation", async () => {
+    const store = await richStore();
+    for (const kind of ["board", "flow", "cards", "calendar"] as const) {
+      const code = expandBlueprint(SPECS[kind], store.registrySnapshot()).code;
+      expect(code, kind).toContain("id: r.id");
+    }
+    store.close();
+  });
+
+  it("default forms omit fields that require trusted connected or file controls", () => {
+    const registry = new Map([["jobs", { name: "jobs", columns: [
+      { name: "title", type: "text" as const, required: true },
+      { name: "customer", type: "relation" as const, required: false,
+        relation: { target_table: "customers", cardinality: "one" as const } },
+      { name: "customer_name", type: "lookup" as const, required: false,
+        lookup: { relation_field: "customer", target_field: "name" } },
+      { name: "files", type: "attachment" as const, required: false },
+      { name: "notes", type: "rich_text" as const, required: false },
+    ] }]]) as Parameters<typeof expandBlueprint>[1];
+    const code = expandBlueprint({ kind: "form", table: "jobs" }, registry).code;
+    expect(code).toContain('"title"');
+    expect(code).toContain('"notes"');
+    expect(code).not.toContain('"name":"customer"');
+    expect(code).not.toContain('"name":"customer_name"');
+    expect(code).not.toContain('"name":"files"');
+  });
+
   it("expansion errors are specific and human-fixable", async () => {
     const store = await richStore();
     const reg = store.registrySnapshot();

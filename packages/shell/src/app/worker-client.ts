@@ -1,7 +1,12 @@
 // Typed promise wrapper over the DB worker's command protocol.
 import type {
-  DebugEvent, FieldProvenance, HistoryEntry, LivePanel, PanelProvenance,
-  PrivateMetricEvent, PrivateMetricsSummary, RegTable, SemanticSchemaTraceV1, Suggestion,
+  AttachmentFile, AttachmentMetadata, AttachmentStorageSummary,
+  AutomationDefinition, AutomationDefinitionInput, AutomationRun, AutomationSimulation,
+  BatchMutation, BatchReceipt, ClayNotification, DebugEvent, FieldProvenance,
+  GlobalSearchResult,
+  HistoryEntry, LivePanel, PanelProvenance,
+  PrivateMetricEvent, PrivateMetricsSummary, RegTable, RelationConversionPreview,
+  RelationConversionRequest, RelationConversionResult, SemanticSchemaTraceV1, Suggestion,
 } from "@clay/kernel";
 import type { IntentOutcome } from "../worker/db-worker";
 
@@ -11,6 +16,7 @@ export type BootInfo = { persistent: boolean; seeded: boolean; shellId: string |
 export type StatusInfo = {
   persistent: boolean; persisted: boolean;
   usageBytes: number | null; quotaBytes: number | null;
+  attachments: AttachmentStorageSummary;
   versions: number;
   stats: { kept: number; discarded: number; failed: number; clarify: number };
   modelConnection: {
@@ -93,11 +99,81 @@ export class WorkerClient {
   renamePanel(panelId: string, title: string): Promise<LivePanel[]> {
     return this.call("renamePanel", { panelId, title });
   }
+  addAttachment(input: {
+    table: string; rowId: string; field: string; name: string; mime: string; bytes: ArrayBuffer;
+  }): Promise<AttachmentMetadata> {
+    return this.call("addAttachment", input, [input.bytes]);
+  }
+  attachmentsForRecord(table: string, rowId: string, field: string): Promise<AttachmentMetadata[]> {
+    return this.call("attachmentsForRecord", { table, rowId, field });
+  }
+  readAttachment(id: string): Promise<AttachmentFile> {
+    return this.call("readAttachment", { id });
+  }
+  removeAttachment(table: string, rowId: string, field: string, id: string): Promise<null> {
+    return this.call("removeAttachment", { table, rowId, field, id });
+  }
+  attachmentStorage(): Promise<AttachmentStorageSummary> {
+    return this.call("attachmentStorage", {});
+  }
+  purgeDeletedAttachments(): Promise<{ files: number; bytes: number }> {
+    return this.call("purgeDeletedAttachments", {});
+  }
+  listAutomations(): Promise<AutomationDefinition[]> {
+    return this.call("listAutomations", {});
+  }
+  upsertAutomation(input: AutomationDefinitionInput): Promise<AutomationDefinition> {
+    return this.call("upsertAutomation", { input });
+  }
+  deleteAutomation(id: string): Promise<null> {
+    return this.call("deleteAutomation", { id });
+  }
+  simulateAutomation(id: string): Promise<AutomationSimulation> {
+    return this.call("simulateAutomation", { id });
+  }
+  runAutomations(): Promise<AutomationRun[]> {
+    return this.call("runAutomations", {});
+  }
+  runAutomationNow(id: string): Promise<AutomationRun> {
+    return this.call("runAutomationNow", { id });
+  }
+  automationRuns(automationId?: string, limit = 100): Promise<AutomationRun[]> {
+    return this.call("automationRuns", { automationId: automationId ?? null, limit });
+  }
+  undoAutomationRun(id: string): Promise<AutomationRun> {
+    return this.call("undoAutomationRun", { id });
+  }
+  notifications(limit = 100): Promise<ClayNotification[]> {
+    return this.call("notifications", { limit });
+  }
+  markNotificationRead(id: string): Promise<null> {
+    return this.call("markNotificationRead", { id });
+  }
+  globalSearch(term: string, limit = 20): Promise<GlobalSearchResult[]> {
+    return this.call("globalSearch", { term, limit });
+  }
+  applyBatch(summary: string, mutations: BatchMutation[]): Promise<BatchReceipt> {
+    return this.call("applyBatch", { source: "user", summary, mutations });
+  }
+  operationBatches(limit = 50): Promise<BatchReceipt[]> {
+    return this.call("operationBatches", { limit });
+  }
+  undoBatch(id: string): Promise<BatchReceipt> {
+    return this.call("undoBatch", { id });
+  }
   rowHistory(table: string, id: string):
     Promise<{ at: string; values: Record<string, unknown> }[]> {
     return this.call("rowHistory", { table, id });
   }
-  addColumn(table: string, column: { name: string; type: string; values?: string[] }):
+  previewRelationConversion(input: RelationConversionRequest): Promise<RelationConversionPreview> {
+    return this.call("previewRelationConversion", input);
+  }
+  convertTextToRelation(
+    input: RelationConversionPreview & { cardinality: "one" },
+  ): Promise<RelationConversionResult> {
+    return this.call("convertTextToRelation", input);
+  }
+  addColumn(table: string, column: { name: string; type: string } & Record<string, unknown>):
     Promise<RegTable[]> {
     return this.call("addColumn", { table, column });
   }

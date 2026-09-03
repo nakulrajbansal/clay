@@ -6,6 +6,7 @@ export type ClayErrorCode =
   | "E_LIMIT"
   | "E_TYPE"
   | "E_EXPR"
+  | "E_CONFLICT"
   | "E_INTERNAL";
 
 export class ClayError extends Error {

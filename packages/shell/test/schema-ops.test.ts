@@ -43,6 +43,7 @@ describe("rowHistory (ADR-027)", () => {
     const store = await ClayStore.openMemory();
     seedStarterShell(store, "tracker");
     const id = String(store.query({ from: "items" })[0]!.id);
+    store.update("items", id, { status: "todo" });
     store.update("items", id, { status: "doing" });
     store.update("items", id, { status: "done" });
     const hist = store.rowHistory("items", id);

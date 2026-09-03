@@ -55,6 +55,28 @@ This work makes the moat concrete: permanent semantics, reversible change,
 visible trust, contextual projections, and a verified reshape corpus all meet
 at the same trusted transaction boundary.
 
+## User-value releases (SHIPPED 2026-09-02)
+
+1. **Connected Work.** First-class linked records use stable IDs; record detail
+   shows outgoing and incoming work; live lookup and rollup fields avoid copied
+   values; text-to-link conversion has a fingerprinted preview and retains its
+   source for exact rewind.
+2. **Daily Workbench.** Ctrl+K searches every table and quick-creates records.
+   The Data view adds multi-select bulk updates and archive, durable receipts and
+   conflict-safe undo, typed Today/Overdue queues, sorting, field visibility, and
+   revision-aware saved operational views.
+3. **Local Actions and Automations.** A safe builder supports record-created,
+   record-updated, match-edge, due-date, daily, weekly, and manual triggers. A
+   simulation precedes enablement; runs are idempotent and visible; reminders
+   stay local; data effects use atomic batches and can be undone when still current.
+4. **Files and Rich Records.** Rich notes render a safe Markdown subset. Common
+   documents and images live as verified local blobs, appear on record details,
+   participate in row restore, survive rewind and archive round-trip, and expose
+   bounded storage cleanup in Settings.
+
+All four preserve the same substrate. Panels receive no file API or automation
+execution authority, and neither feature invokes a model during daily use.
+
 ---
 
 ## Phase 0 — The malleable core (SHIPPED)
@@ -73,7 +95,7 @@ The MVP: the whole reshape loop working locally, data-safe, sandboxed.
 - Reach of the vocabulary: the 8 named components **plus composable
   primitives** (Box/Text/Bar/Scene, ADR-016) so panels tailor to novel
   requests — gantt, kanban, calendar, bespoke visuals.
-- Observer suggestions; settings/status; the 25-intent regression runner;
+- Observer suggestions; settings/status; the 30-case regression runner;
   PB1–PB4 property tests; pipeline diagnostics for tuning.
 - A one-click Windows launcher.
 
@@ -172,9 +194,8 @@ of its own, and some reopen "noes" the MVP closed on purpose.
 2. **Multi-user collaboration** on one app: the big one. Requires revisiting
    linear history (ADR-007) toward CRDT/branching, and a permission model.
    A v2 architecture question, not a feature toggle.
-3. **Automations**: "when a row's due date passes, mark it late" — a safe,
-   declarative rule vocabulary evaluated by the kernel (never generated
-   code with ambient authority).
+3. **Shared automation templates**: portable, reviewed rule definitions that
+   never widen the closed local trigger/action vocabulary.
 
 These stay on the horizon until Phases 1–3 prove the core with real users.
 
@@ -187,7 +208,7 @@ These stay on the horizon until Phases 1–3 prove the core with real users.
 | Multi-user | Phase 4 (needs a history/permission redesign) |
 | Branching history | Phase 4 (coupled to multi-user) |
 | Raw HTML panels | **Permanent no** (breaks P3; primitives are the answer) |
-| CSV import | Phase 3 as a kernel-mediated connector, not a panel path |
+| CSV/JSON import | **Shipped** through the trusted Data view |
 | External integrations | Phase 3, read-only + sandbox-preserving |
 | Mobile polish | Phase 3 |
 | i18n | Phase 3+ (post-traction) |
@@ -199,12 +220,8 @@ These stay on the horizon until Phases 1–3 prove the core with real users.
 
 ## Immediate next step
 
-Complete the real subscription-backed Local Codex acceptance run after the
-operator refreshes the machine's Codex login. Clay hosted, Anthropic BYO,
-OpenAI Responses, and Local Codex now share one validated MutationPlan,
-Change contract, preview, Keep or Discard, and repair protocol (ADR-038).
-
-After that acceptance run, the next product slice is **Counterfactual Lab**:
-compare two live app shapes on shadow data and keep either or neither. It must
-reuse the existing reversible transaction boundary rather than introducing a
-second change system.
+Run hands-on acceptance with real user data across the four value releases and
+measure time saved on recurring workflows. The next candidate should be selected
+from observed friction, with public intake forms, stronger import mapping, and
+careful read-only connectors as likely options. Counterfactual Lab and additional
+connector polish remain deferred behind direct user capability.

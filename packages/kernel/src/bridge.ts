@@ -5,7 +5,7 @@
 // access is checked against declared_queries (V4 runtime match, with
 // {$var:true} wildcards) and declared_writes (G22/ADR-014); rate limits and
 // strikes per doc 03/06.
-import { BridgeCall, BridgePanelError, BridgeUserGesture } from "@clay/schema";
+import { BridgeCall, BridgeOpenRecord, BridgePanelError, BridgeUserGesture } from "@clay/schema";
 import { ClayError } from "./errors";
 import type { AsyncStore, MessagePortLike } from "./asyncstore";
 import type { RegTable } from "./registry";
@@ -24,6 +24,8 @@ export type PanelManifest = {
 export type BridgeHooks = {
   onToast?: (panelId: string, msg: string, kind: string) => void;
   onConfirm?: (panelId: string, msg: string) => Promise<boolean>;
+  /** Trusted shell navigation only; grants no row data or mutation authority. */
+  onOpenRecord?: (panelId: string, table: string, id: string) => void;
   /** Observer feed: a panel emitted a cross-panel event (doc 02 §1). */
   onEvent?: (panelId: string, name: string, payload: unknown) => void;
   /** Called when a panel trips its boundary (strikes, doc 06 §3). */
@@ -34,6 +36,9 @@ export type BridgeHooks = {
 };
 
 export type BridgeLimits = {
+  maxMessageBytes: number;
+  maxMessageDepth: number;
+  maxMessageNodes: number;
   callsPerMin: number;
   maxWatches: number;
   emitsPerMin: number;
@@ -47,12 +52,60 @@ export type BridgeLimits = {
 };
 
 const DEFAULT_LIMITS: BridgeLimits = {
+  maxMessageBytes: 64 * 1024, maxMessageDepth: 20, maxMessageNodes: 10_000,
   callsPerMin: 60, maxWatches: 8, emitsPerMin: 20,
   maxEventPayload: 8192, confirmsPerMin: 5,
   gestureTtlMs: 5_000, writesPerGesture: 8,
   allowWrites: true,
   strikeLimit: 10, debounceMs: 50,
 };
+
+const RECORD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function bridgeMessageViolation(value: unknown, limits: BridgeLimits): string | null {
+  const stack: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
+  const seen = new WeakSet<object>();
+  let bytes = 0;
+  let nodes = 0;
+  const addString = (text: string): boolean => {
+    for (let index = 0; index < text.length; index++) {
+      const code = text.codePointAt(index)!;
+      if (code <= 0x7f) bytes += 1;
+      else if (code <= 0x7ff) bytes += 2;
+      else if (code <= 0xffff) bytes += 3;
+      else { bytes += 4; index++; }
+      if (bytes > limits.maxMessageBytes) return false;
+    }
+    return true;
+  };
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    if (current.depth > limits.maxMessageDepth) return "message nesting limit";
+    if (++nodes > limits.maxMessageNodes) return "message node limit";
+    if (typeof current.value === "string") {
+      bytes += 2;
+      if (!addString(current.value)) return "message byte limit";
+    } else if (typeof current.value === "number") bytes += 24;
+    else if (typeof current.value === "boolean") bytes += 5;
+    else if (current.value === null || current.value === undefined) bytes += 4;
+    else if (typeof current.value === "object") {
+      if (seen.has(current.value)) return "cyclic message";
+      seen.add(current.value);
+      bytes += 2;
+      if (Array.isArray(current.value)) {
+        for (const item of current.value)
+          stack.push({ value: item, depth: current.depth + 1 });
+      } else {
+        for (const [key, item] of Object.entries(current.value)) {
+          if (!addString(key)) return "message byte limit";
+          stack.push({ value: item, depth: current.depth + 1 });
+        }
+      }
+    } else return "unsupported message value";
+    if (bytes > limits.maxMessageBytes) return "message byte limit";
+  }
+  return null;
+}
 
 function safePanelFailure(code: string): { code: string; message: string } {
   const safeCode = /^[A-Z][A-Z0-9_]{0,39}$/.test(code) ? code : "E_PANEL";
@@ -139,7 +192,10 @@ export class Bridge {
     port.send({
       v: 1, kind: "boot",
       code: manifest.code, panelId: manifest.panelId, apiVersion: 1,
-      meta: { schema, appVersion: this.appVersion, placement: manifest.placement },
+      meta: {
+        schema, appVersion: this.appVersion, placement: manifest.placement,
+        declaredTables: [...new Set(manifest.declaredQueries.map(query => query.from))],
+      },
       tokens: this.tokens,
     });
   }
@@ -198,6 +254,15 @@ export class Bridge {
 
   private async handle(state: PanelState, raw: unknown): Promise<void> {
     if (state.tripped) return;
+    const budgetViolation = bridgeMessageViolation(raw, this.limits);
+    if (budgetViolation) {
+      this.strike(state, budgetViolation);
+      const seq = raw && typeof raw === "object"
+        ? (raw as { seq?: unknown }).seq : undefined;
+      if (Number.isSafeInteger(seq) && Number(seq) >= 0)
+        this.replyError(state, Number(seq), "E_LIMIT", "message exceeds the Bridge safety budget");
+      return;
+    }
     const gesture = BridgeUserGesture.safeParse(raw);
     if (gesture.success) {
       state.writeGrant = {
@@ -205,6 +270,16 @@ export class Bridge {
         remaining: this.limits.writesPerGesture,
       };
       return;   // trusted bootstrap signal: no reply or rate-limit charge
+    }
+    const navigation = BridgeOpenRecord.safeParse(raw);
+    if (navigation.success) {
+      const { table, id } = navigation.data;
+      if (!state.manifest.declaredQueries.some(query => query.from === table)) {
+        this.strike(state, "record table is outside declared queries");
+        return;
+      }
+      this.hooks.onOpenRecord?.(state.manifest.panelId, table, id);
+      return;
     }
     const panelError = BridgePanelError.safeParse(raw);
     if (panelError.success) {
@@ -320,12 +395,27 @@ export class Bridge {
           }
           return;
         }
+        case "ui.openRecord": {
+          const [table, id] = call.args;
+          if (typeof table !== "string" || typeof id !== "string" || !RECORD_ID.test(id))
+            throw new ClayError("E_VALIDATION", "bad record reference");
+          if (!state.manifest.declaredQueries.some(query => query.from === table))
+            throw new ClayError("E_VALIDATION", "record table is outside this panel's declared queries");
+          const grant = state.writeGrant;
+          if (!grant || grant.remaining <= 0 || now > grant.expiresAt)
+            throw new ClayError("E_VALIDATION", "record navigation requires a recent user action");
+          grant.remaining -= 1;
+          this.hooks.onOpenRecord?.(state.manifest.panelId, table, id);
+          this.reply(state, call.seq, null);
+          return;
+        }
         case "events.emit": {
           const [name, payload] = call.args;
           if (typeof name !== "string" || !/^[a-z][a-z0-9_]{0,40}$/.test(name))
             throw new ClayError("E_VALIDATION", "bad event name");
-          if (JSON.stringify(payload ?? null).length > this.limits.maxEventPayload)
-            throw new ClayError("E_LIMIT", "event payload over 8KB");
+          if (new TextEncoder().encode(JSON.stringify(payload ?? null)).byteLength
+              > this.limits.maxEventPayload)
+            throw new ClayError("E_LIMIT", "event payload exceeds the Bridge byte limit");
           Bridge.prune(state.emitTimes, now);
           if (state.emitTimes.length >= this.limits.emitsPerMin)
             throw new ClayError("E_LIMIT", "emit rate limit");

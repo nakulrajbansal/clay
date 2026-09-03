@@ -69,8 +69,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: clay-shape-map-proof
-          path: evidence/nextgen-*.png
+          name: clay-product-proof
+          path: evidence/*.png
           if-no-files-found: error
 
   windows-boundaries:

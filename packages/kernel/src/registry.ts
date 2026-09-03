@@ -11,14 +11,32 @@ import type {
 } from "./semantic";
 
 export type ColumnKind =
-  | "text" | "number" | "integer" | "boolean" | "date" | "enum" | "json" | "computed";
+  | "text" | "number" | "integer" | "boolean" | "date" | "enum" | "json" | "computed"
+  | "relation" | "lookup" | "rollup" | "rich_text" | "attachment";
+
+export type RelationFieldSpec = {
+  target_table: string;
+  cardinality: "one" | "many";
+  unique_targets?: boolean;
+  display_field?: string;
+};
+export type LookupFieldSpec = { relation_field: string; target_field: string };
+export type RollupFieldSpec = {
+  relation_field: string;
+  target_field?: string;
+  operation: "count" | "sum" | "avg" | "min" | "max";
+};
 
 export type RegColumn = {
   name: string;
+  label?: string;
   type: ColumnKind;
   required: boolean;
   values?: string[];   // enum only
   expr?: string;       // computed only
+  relation?: RelationFieldSpec;
+  lookup?: LookupFieldSpec;
+  rollup?: RollupFieldSpec;
   hidden?: boolean;    // hide_column sets this; data retained (I3)
   /** Kernel-only tombstone used by time travel. Physical values stay in
    * SQLite while the column is absent from the active app projection. */
@@ -74,16 +92,20 @@ export function resolveField(t: RegTable, name: string): ResolvedField {
   const c = findColumn(t, name);
   if (!c || c.hidden)
     throw new ClayError("E_COLUMN_UNKNOWN", `unknown column '${t.name}.${name}'`);
-  return c.type === "computed" ? { kind: "computed", column: c } : { kind: "physical", column: c };
+  return isVirtualColumn(c) ? { kind: "computed", column: c } : { kind: "physical", column: c };
+}
+
+export function isVirtualColumn(column: RegColumn): boolean {
+  return column.type === "computed" || column.type === "lookup" || column.type === "rollup";
 }
 
 export function physicalColumns(t: RegTable): RegColumn[] {
-  return t.columns.filter(c => c.type !== "computed" && !c.inactive);
+  return t.columns.filter(c => !isVirtualColumn(c) && !c.inactive);
 }
 
 export function columnTypeToExprType(k: ColumnKind): ExprType | null {
   switch (k) {
-    case "text": case "enum": return "text";
+    case "text": case "enum": case "rich_text": return "text";
     case "number": case "integer": return "number";
     case "boolean": return "bool";
     case "date": return "date";
@@ -140,6 +162,9 @@ function cloneStoredColumn(column: RegColumn): RegColumn {
   const cloned: RegColumn = {
     ...column,
     values: column.values ? [...column.values] : undefined,
+    relation: column.relation ? { ...column.relation } : undefined,
+    lookup: column.lookup ? { ...column.lookup } : undefined,
+    rollup: column.rollup ? { ...column.rollup } : undefined,
   };
   if (column.semantic) cloned.semantic = cloneFieldSemantic(column.semantic);
   return cloned;
@@ -150,6 +175,9 @@ function cloneProjectedColumn(column: RegColumn): RegColumn {
   return {
     ...projected,
     values: column.values ? [...column.values] : undefined,
+    relation: column.relation ? { ...column.relation } : undefined,
+    lookup: column.lookup ? { ...column.lookup } : undefined,
+    rollup: column.rollup ? { ...column.rollup } : undefined,
   };
 }
 

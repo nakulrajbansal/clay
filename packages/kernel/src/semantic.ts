@@ -60,7 +60,7 @@ export type ReferencesRelationshipV1 = RelationshipBaseV1 & {
   fromTableId: TableId;
   toTableId: TableId;
   viaFieldId: FieldId;
-  cardinality: "many_to_one" | "one_to_one";
+  cardinality: "many_to_one" | "one_to_one" | "one_to_many" | "many_to_many";
   integrity: "semantic_only";
   reviewed: true;
 };

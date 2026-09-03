@@ -10,7 +10,7 @@ keep running against a shim.
 
 All methods async unless noted. All errors are ClayError {code, message,
 detail?}; codes are stable strings (E_TABLE_UNKNOWN, E_COLUMN_UNKNOWN,
-E_VALIDATION, E_LIMIT, E_TYPE, E_EXPR, E_INTERNAL). Panels are expected to
+E_VALIDATION, E_LIMIT, E_TYPE, E_EXPR, E_CONFLICT, E_INTERNAL). Panels are expected to
 catch; uncaught errors trip the panel error boundary (doc 05 §7).
 
 ## 1. clay.db
@@ -20,6 +20,11 @@ Executes a compiled, parameterized read. Rows are plain JSON objects with
 registered columns only. Limits: default limit 500, hard cap 5000
 (E_LIMIT beyond). Panels may only query tables listed in their manifest's
 declared_queries (structural match, doc 06 §5).
+Relation fields project as `{id, table, label}` or arrays of those objects.
+Lookup and rollup fields are live virtual values. A `contains` condition and
+sorting on a relation use the visible label; `eq` continues to accept its stable
+stored ID. Attachment fields expose only opaque attachment IDs to queries. File
+bytes and attachment metadata are available only to trusted shell surfaces.
 
 ### watch(q: Query, cb): Unsubscribe   (sync return)
 query + subscription. cb fires with fresh rows after any committed write to
@@ -46,8 +51,9 @@ Missing id -> E_VALIDATION.
 Sets deleted_at. Queries exclude soft-deleted rows unless the Query sets
 includeDeleted: true (used by the Data view; panels may but rarely should).
 
-There is no hard delete, no raw SQL, no DDL, no multi-row update in v1.
-Bulk ops are a v1.1 candidate behind a kernel-side confirmation.
+There is no hard delete, raw SQL, DDL, or panel-accessible multi-row update.
+The trusted Data view has a separate atomic batch API with receipts and stale
+undo protection. It is intentionally absent from the sandbox Bridge.
 
 ### The Query type
 
@@ -90,12 +96,12 @@ h(tag, props, ...children)
 Allowed tags — layout: div, span, section, h1..h3, p, ul, li, hr.
 Kernel components (capitalized): Table, Chart, MetricCard, Badge, Form,
 Field, Button, Input, Select, DatePicker, Checkbox, Toggle, EmptyState,
-Stack, Grid, FilterBar.
+Stack, Grid, FilterBar, Board, Cards, Flow, Timeline, and Calendar.
 
 Selected component contracts:
 
 Table {columns: {field, label, format?, badge?}[], rows, onRowClick?,
-       sortable?} — format: "date"|"currency"|"number"|"text";
+       sortable?} — format: "date"|"currency"|"number"|"text"|"files";
        badge: {field, map: {value -> "green"|"amber"|"red"|"gray"}}.
 Chart {kind: "bar"|"line"|"pie"|"area", data: {x, y}[] | series[],
        xLabel?, yLabel?, height?} — kernel wraps the chart lib; panels
@@ -119,6 +125,13 @@ documented plain-JSON payload, or no argument for a simple click.
 ### toast(msg, kind?), confirm(msg): Promise<boolean>
 Rendered by the SHELL (outside the iframe) so panels cannot spoof system UI.
 confirm is rate-limited (1 concurrent, 5/min) to prevent dialog spam.
+
+### openRecord(table, id): Promise<void>
+Asks the trusted shell to open a record detail drawer. The Bridge accepts only a
+valid record ID and a table already named in that panel's declared queries. It
+returns no record data and grants no write authority. Table rows and canonical
+record cards, flows, and calendar items invoke this automatically when they
+carry an `id` and do not define a custom click handler.
 
 ## 3. clay.events
 

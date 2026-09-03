@@ -66,6 +66,10 @@ const panelBoundary = await exists(join(sourceRoot, "PanelCanvas.tsx"))
 const expectedLazyChunks = [
   panelBoundary,
   { label: "DataView", source: "src/app/DataView.tsx" },
+  { label: "RecordDetail", source: "src/app/RecordDetail.tsx" },
+  { label: "RelationConversionDialog", source: "src/app/RelationConversionDialog.tsx" },
+  { label: "CommandPalette", source: "src/app/CommandPalette.tsx" },
+  { label: "AutomationCenter", source: "src/app/AutomationCenter.tsx" },
   { label: "HistoryView", source: "src/app/HistoryView.tsx" },
   { label: "ShapeMapView", source: "src/app/ShapeMapView.tsx" },
   { label: "PrivateMetricsView", source: "src/app/PrivateMetricsView.tsx" },
@@ -102,11 +106,17 @@ async function checkAt(root, label, files, limits) {
   return measured;
 }
 
-const entryLimits = { raw: 745_000, gzip: 224_000 };
-const bootLimits = { raw: 855_000, gzip: 250_000 };
+// Connected records, global workbench, bounded automations, and local files
+// add trusted behavior mostly in lazy chunks and the DB worker. These limits
+// retain 2–5% headroom over the measured four-release production artifacts.
+const entryLimits = { raw: 770_000, gzip: 232_000 };
+const bootLimits = { raw: 875_000, gzip: 260_000 };
 const panelLimits = { raw: 135_000, gzip: 35_000 };
-const optionalLimits = { raw: 35_000, gzip: 12_000 };
-const totalShellLimits = { raw: 890_000, gzip: 265_000 };
+const optionalLimits = { raw: 45_000, gzip: 14_000 };
+const nestedLimits = new Map([
+  ["RecordDetail", { raw: 50_000, gzip: 16_000 }],
+]);
+const totalShellLimits = { raw: 980_000, gzip: 290_000 };
 
 await check("static entry closure", analysis.entryClosure.files, entryLimits);
 
@@ -125,7 +135,10 @@ await check(`${panelBoundary.label} lazy closure`, panelChunk.closure.files, pan
 
 for (const chunk of analysis.lazyChunks) {
   if (chunk === panelChunk) continue;
-  await check(`${chunk.label} lazy closure`, chunk.closure.files, optionalLimits);
+  await check(
+    `${chunk.label} lazy closure`, chunk.closure.files,
+    nestedLimits.get(chunk.label) ?? optionalLimits,
+  );
 }
 
 await check(
@@ -147,7 +160,7 @@ const databaseWorkerFile = oneAsset(/^db-worker-[^.]+\.js$/, "database worker");
 await check(
   "database worker",
   [databaseWorkerFile],
-  { raw: 680_000, gzip: 195_000 },
+  { raw: 765_000, gzip: 220_000 },
 );
 
 const sqliteSupportFiles = [
@@ -161,7 +174,7 @@ await check("SQLite WASM", [wasmFile], { raw: 900_000, gzip: 420_000 });
 const panelRuntimeFile = "panel-runtime.iife.js";
 const panelRuntimeMeasured = await checkAt(panelRuntimeRoot,
   "sandbox panel bootstrap", [panelRuntimeFile],
-  { raw: 80_000, gzip: 20_000 });
+  { raw: 82_000, gzip: 21_000 });
 
 const cssFiles = mergeFiles(
   ...Object.values(manifest).map(record => [
@@ -175,7 +188,7 @@ if (cssFiles.length === 0) {
 await check(
   "application styles",
   cssFiles,
-  { raw: 56_000, gzip: 11_250 },
+  { raw: 82_000, gzip: 17_000 },
 );
 
 const browserRuntimeMeasured = await measureFiles(distRoot,
@@ -185,6 +198,6 @@ printAndAssert("complete browser runtime payload", {
   files: [...browserRuntimeMeasured.files, ...panelRuntimeMeasured.files],
   raw: browserRuntimeMeasured.raw + panelRuntimeMeasured.raw,
   gzip: browserRuntimeMeasured.gzip + panelRuntimeMeasured.gzip,
-}, { raw: 2_900_000, gzip: 1_000_000 });
+}, { raw: 3_020_000, gzip: 1_035_000 });
 
 console.log("BUNDLE BUDGET GREEN");

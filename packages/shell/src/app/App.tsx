@@ -3,8 +3,10 @@
 // during S5 the proposed panels render in place with a dashed frame,
 // bound to a SECOND Bridge over the shadow store (preview-before-commit).
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Bridge, StoreRpcClient, deriveSafeDiffKind, portFromMessagePort,
+  type ClayNotification,
   type FieldProvenance, type HistoryEntry, type LivePanel, type PanelProvenance,
   type PrivateMetricEvent, type PrivateMetricsSummary, type RegTable,
   type SemanticSchemaTraceV1, type Suggestion,
@@ -38,6 +40,10 @@ import { ModalDialog } from "./ModalDialog";
 type Phase = "loading" | "onboarding" | "main" | "error";
 
 const DataView = lazy(() => import("./DataView").then(module => ({ default: module.DataView })));
+const CommandPalette = lazy(() => import("./CommandPalette")
+  .then(module => ({ default: module.CommandPalette })));
+const AutomationCenter = lazy(() => import("./AutomationCenter")
+  .then(module => ({ default: module.AutomationCenter })));
 const HistoryView = lazy(() => import("./HistoryView").then(module => ({ default: module.HistoryView })));
 const PanelFrame = lazy(() => import("./PanelFrame").then(module => ({ default: module.PanelFrame })));
 const ShapeMapView = lazy(() => import("./ShapeMapView").then(module => ({ default: module.ShapeMapView })));
@@ -123,12 +129,15 @@ function privateFaultKind(code: string): "runtime" | "strike_limit" | "render_ti
 function makeBridge(client: WorkerClient, target: "live" | "shadow",
   onToast: (msg: string, kind: string) => void,
   onFault: (panelId: string, fault: PanelFault) => void,
-  onConfirm: (msg: string) => Promise<boolean>): Bridge {
+  onConfirm: (msg: string) => Promise<boolean>,
+  onOpenRecord?: (table: string, id: string) => void): Bridge {
   const port = client.openStorePort(target);
   const store = new StoreRpcClient(portFromMessagePort(port));
   return new Bridge(store, {
     onToast: (_panel, msg, kind) => onToast(msg, kind),
     onConfirm: async (_panel, msg) => onConfirm(msg),
+    onOpenRecord: target === "live" && onOpenRecord
+      ? (_panel, table, id) => onOpenRecord(table, id) : undefined,
     onPanelError: (panelId, code, message) => onFault(panelId, { code, message }),
     onBoundary: (panelId, reason) =>
       onFault(panelId, { code: "E_STRIKES", message: reason }),
@@ -147,6 +156,7 @@ export function App(): React.JSX.Element {
   const proofLoopRecorded = useRef(false);
   const pendingRecovery = useRef<RecoveryMethod | null>(null);
   const surfaceReturnFocus = useRef<HTMLElement | null>(null);
+  const openRecordRef = useRef<(table: string, id: string) => void>(() => {});
   const restoreToRef = useRef<(version: number) => Promise<void>>(async () => {});
   const [phase, setPhase] = useState<Phase>("loading");
   const [apps, setApps] = useState<AppEntry[]>([]);
@@ -175,7 +185,11 @@ export function App(): React.JSX.Element {
   const [faults, setFaults] = useState<Record<string, PanelFault>>({});
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [showData, setShowData] = useState(false);
+  const [showCommandPalette, setShowCommandPalette] = useState(false);
+  const [showAutomations, setShowAutomations] = useState(false);
+  const [notifications, setNotifications] = useState<ClayNotification[]>([]);
   const [dataTable, setDataTable] = useState<string | null>(null);
+  const [dataRecord, setDataRecord] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [showShapeMap, setShowShapeMap] = useState(false);
   const [showPrivateMetrics, setShowPrivateMetrics] = useState(false);
@@ -187,6 +201,20 @@ export function App(): React.JSX.Element {
   const dataStoreRef = useRef<StoreRpcClient | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastId = useRef(0);
+
+  useEffect(() => {
+    const openSearch = (event: KeyboardEvent): void => {
+      const activeModal = document.querySelector<HTMLElement>('[aria-modal="true"]');
+      const paletteCanStack = !activeModal || activeModal.closest(".modal-backdrop") !== null;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "k"
+          && phase === "main" && paletteCanStack) {
+        event.preventDefault();
+        setShowCommandPalette(open => !open);
+      }
+    };
+    window.addEventListener("keydown", openSearch);
+    return () => window.removeEventListener("keydown", openSearch);
+  }, [phase]);
 
   const pushToast = useCallback((msg: string, kind: string,
     action?: { label: string; run: () => void }): void => {
@@ -216,6 +244,33 @@ export function App(): React.JSX.Element {
     if (!workerRef.current) throw new Error("worker not ready");
     return workerRef.current;
   };
+
+  useEffect(() => {
+    if (phase !== "main" || !workerRef.current) return;
+    let live = true;
+    let running = false;
+    const tick = async (): Promise<void> => {
+      if (running || !workerRef.current) return;
+      running = true;
+      try {
+        const [runs, inbox] = await Promise.all([
+          workerRef.current.runAutomations(), workerRef.current.notifications(),
+        ]);
+        if (!live) return;
+        setNotifications(inbox);
+        if (runs.some(run => run.changed > 0)) {
+          for (const table of registryTables) liveBridge?.notifyWrite(table.name);
+        }
+        const failed = runs.filter(run => run.status === "failed").length;
+        if (failed > 0) pushToast(`${failed} automation run${failed === 1 ? "" : "s"} failed safely`, "danger");
+      } catch (error) {
+        if (live) pushToast(`Automation check failed: ${error instanceof Error ? error.message : String(error)}`, "danger");
+      } finally { running = false; }
+    };
+    void tick();
+    const timer = window.setInterval(() => void tick(), 15_000);
+    return () => { live = false; window.clearInterval(timer); };
+  }, [phase, liveBridge, registryTables, pushToast]);
 
   // Styled in-app confirmation (native dialogs read as unfinished and
   // can't be themed). One dialog serves the shell AND sandboxed panels
@@ -340,8 +395,11 @@ export function App(): React.JSX.Element {
         }
         if (!getBackendUrl()) {
           const legacyB = await wc.getSetting<string>("backend_url");
-          if (legacyB) setBackendUrl(legacyB);
+          const legacyClay = await wc.getSetting<string>("clay_backend_url");
+          if (legacyB || legacyClay) setBackendUrl(legacyB ?? legacyClay!);
         }
+        await wc.deleteSetting("backend_url");
+        await wc.deleteSetting("clay_backend_url");
         const selectedProvider = getModelProvider();
         const access = getActiveModelAccess();
         setModelProviderState(selectedProvider);
@@ -364,7 +422,8 @@ export function App(): React.JSX.Element {
         }
         setApps(listApps());
         setCurrentId(currentApp()?.id ?? null);
-        setLiveBridge(makeBridge(wc, "live", pushToast, recordFault, askConfirm));
+        setLiveBridge(makeBridge(wc, "live", pushToast, recordFault, askConfirm,
+          (table, id) => openRecordRef.current(table, id)));
         const [bootPanels, bootHistory, bootTables, bootSuggestions, bootProvenance,
           bootSemanticTrace, bootFieldProvenance] = await Promise.all([
           wc.panels(), wc.history(), wc.registryTables(), wc.suggestions(), wc.panelProvenance(),
@@ -402,7 +461,8 @@ export function App(): React.JSX.Element {
       await client().seed(id);
       setApps(listApps());
       setCurrentId(currentApp()?.id ?? null);
-      setLiveBridge(makeBridge(client(), "live", pushToast, recordFault, askConfirm));
+      setLiveBridge(makeBridge(client(), "live", pushToast, recordFault, askConfirm,
+        (table, id) => openRecordRef.current(table, id)));
       await refreshPanels();
       setFeed([{ kind: "info", text: "Your app is ready. Describe any change to reshape it." }]);
       setBusy(false);
@@ -642,25 +702,32 @@ export function App(): React.JSX.Element {
 
   const rememberSurfaceReturnFocus = (): void => {
     const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    surfaceReturnFocus.current = active?.closest(".shape-map")
-      ? document.querySelector<HTMLElement>('button[aria-label="Open shape map"]')
-      : active;
+    const persistentTrigger = active?.closest(".shape-map")
+      ? 'button[aria-label="Open shape map"]'
+      : active?.closest(".command-palette")
+        ? 'button[aria-label="Search and act"]'
+        : active?.closest(".automation-center")
+          ? 'button[aria-label="Open automations"]' : null;
+    surfaceReturnFocus.current = persistentTrigger
+      ? document.querySelector<HTMLElement>(persistentTrigger) : active;
   };
   const restoreSurfaceFocus = (): void => {
     const target = surfaceReturnFocus.current;
     surfaceReturnFocus.current = null;
     target?.focus();
   };
-  const openData = (table?: string): void => {
+  const openData = (table?: string, recordId?: string): void => {
     rememberSurfaceReturnFocus();
     dataStoreRef.current ??= new StoreRpcClient(
       portFromMessagePort(client().openStorePort("live")));
     setDataTable(table ?? null);
+    setDataRecord(recordId ?? null);
     setShowData(true);
   };
+  openRecordRef.current = (table, id): void => openData(table, id);
   const closeData = (): void => {
     setShowData(false);
-    restoreSurfaceFocus();
+    setDataRecord(null);
   };
 
   const closePreview = (): void => {
@@ -1298,6 +1365,9 @@ export function App(): React.JSX.Element {
         onFork={() => void forkApp()}
         onRename={(id, name) => { renameApp(id, name); setApps(listApps()); }}
         onDelete={id => void deleteApp(id)}
+        onOpenSearch={() => setShowCommandPalette(true)}
+        onOpenAutomations={() => setShowAutomations(true)}
+        unreadNotifications={notifications.filter(notification => !notification.read).length}
         onOpenData={() => openData()}
         onOpenShapeMap={() => void openShapeMap()}
         railOpen={railOpen}
@@ -1389,6 +1459,40 @@ export function App(): React.JSX.Element {
         </Suspense>
         </LazySurfaceBoundary>
       ) : null}
+      {showAutomations && workerRef.current ? (
+        <LazySurfaceBoundary label="automations" modal>
+          <Suspense fallback={<SurfaceFallback label="automations" modal />}>
+            <AutomationCenter
+              worker={workerRef.current}
+              tables={registryTables}
+              notifications={notifications}
+              onNotifications={setNotifications}
+              onClose={() => setShowAutomations(false)}
+              onOpenRecord={(table, id) => openData(table, id)}
+              onWrite={table => liveBridge?.notifyWrite(table)}
+              onError={message => pushToast(message, "danger")}
+              onInfo={message => pushToast(message, "info")}
+              onConfirm={askConfirm}
+            />
+          </Suspense>
+        </LazySurfaceBoundary>
+      ) : null}
+      {showCommandPalette && workerRef.current ? (
+        <LazySurfaceBoundary label="search and act" modal>
+          <Suspense fallback={<SurfaceFallback label="search and act" modal />}>
+            <CommandPalette
+              worker={workerRef.current}
+              tables={registryTables}
+              onClose={() => setShowCommandPalette(false)}
+              onOpenRecord={(table, id) => openData(table, id)}
+              onOpenData={table => openData(table)}
+              onWrite={table => liveBridge?.notifyWrite(table)}
+              onError={message => pushToast(message, "danger")}
+              onInfo={message => pushToast(message, "info")}
+            />
+          </Suspense>
+        </LazySurfaceBoundary>
+      ) : null}
       {showData && dataStoreRef.current && workerRef.current ? (
         <LazySurfaceBoundary label="data" modal>
         <Suspense fallback={<SurfaceFallback label="data" modal />}>
@@ -1396,11 +1500,14 @@ export function App(): React.JSX.Element {
           worker={workerRef.current}
           store={dataStoreRef.current}
           initialTable={dataTable}
+          initialRecordId={dataRecord}
+          returnFocusRef={surfaceReturnFocus}
           onImport={file => void importFile(file)}
           onWrite={table => liveBridge?.notifyWrite(table)}
           onClose={closeData}
           onError={msg => pushToast(msg, "danger")}
           onInfo={msg => pushToast(msg, "info")}
+          onConfirm={askConfirm}
           onSchemaChange={() => void refreshPanels()}
           onRecovery={result => recordPrivateMetric({
             type: "recovery_finished", method: "row_restore", result,
@@ -1439,6 +1546,11 @@ export function App(): React.JSX.Element {
         onReset={() => void resetApp()}
         onExport={() => void exportArchive()}
         onImport={file => void importArchive(file)}
+        onPurgeAttachments={async () => {
+          const result = await client().purgeDeletedAttachments();
+          pushToast(result.files === 0 ? "No removed files are old enough to clean up"
+            : `Cleaned up ${result.files} file${result.files === 1 ? "" : "s"}`, "info");
+        }}
         onCopyDiagnostics={() => void copyDiagnostics()}
         onOpenPrivateMetrics={() => void openPrivateMetrics()}
       /> : null}
@@ -1476,9 +1588,10 @@ export function App(): React.JSX.Element {
         </LazySurfaceBoundary>
       ) : null}
       {confirmDialog}
-      <div className="toasts">
+      {createPortal(<div className="toasts" aria-live="polite" aria-atomic="true">
         {toasts.map(t => (
-          <div key={t.id} className={`toast toast-${t.kind}`}>
+          <div key={t.id} className={`toast toast-${t.kind}`}
+            role={t.kind === "danger" ? "alert" : "status"}>
             {t.msg}
             {t.action ? (
               <button
@@ -1488,7 +1601,7 @@ export function App(): React.JSX.Element {
             ) : null}
           </div>
         ))}
-      </div>
+      </div>, document.body)}
     </div>
   );
 }

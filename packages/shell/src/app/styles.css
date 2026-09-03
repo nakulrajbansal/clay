@@ -611,6 +611,16 @@ button.link.danger { color: var(--danger); }
 }
 .rail-input textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 
+.appbar-shortcut{margin-left:3px;border:1px solid var(--border);border-radius:5px;padding:1px 4px;background:var(--bg);color:var(--text-3);font:inherit;font-size:8.5px;font-weight:650}.appbar-notification-count{display:grid;place-items:center;min-width:17px;height:17px;padding:0 3px;border-radius:999px;background:var(--danger);color:white;font-size:9px;font-weight:800}
+
+/* Shared trusted modal geometry. Layer ordering and parent inertness are
+   coordinated by ModalDialog so nested surfaces expose one active dialog. */
+.modal-backdrop {
+  position: fixed; inset: 0; box-sizing: border-box; overflow: auto;
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+  background: rgba(20, 24, 22, .24);
+}
+
 /* data view (trusted shell surface) */
 .rail-header-links { display: flex; gap: 14px; }
 .dataview {
@@ -664,6 +674,7 @@ button.link.danger { color: var(--danger); }
   text-align: left; font-size: 11px; text-transform: uppercase;
   letter-spacing: .04em; color: var(--text-3); padding: 11px 8px 7px;
   border-bottom: 1px solid var(--border-strong); }
+.dataview-column-controls{display:flex;align-items:center;gap:3px}.dataview-sort-button,.dataview-rename-button{border:0;background:transparent;color:inherit;font:inherit;text-transform:inherit;letter-spacing:inherit;cursor:pointer;border-radius:5px}.dataview-sort-button{display:inline-flex;align-items:center;gap:3px;padding:3px 2px}.dataview-rename-button{padding:3px 5px;opacity:.55}.dataview-sort-button:hover,.dataview-sort-button:focus-visible,.dataview-rename-button:hover,.dataview-rename-button:focus-visible{background:var(--bg-hover);color:var(--text);outline:2px solid transparent}.dataview-grid td[tabindex="0"]:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .dataview-type { margin-left: 6px; font-size: 9.5px; text-transform: none;
   letter-spacing: 0; color: var(--text-2);
   border: 1px solid var(--border); border-radius: 5px; padding: 0 4px; }

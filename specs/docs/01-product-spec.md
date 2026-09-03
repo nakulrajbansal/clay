@@ -49,10 +49,19 @@ US-08 As a user, I occasionally receive one suggestion based on how I actually
 US-09 As a BYO-key user, I paste my Anthropic key and mutate without limits;
       the key never leaves my browser except to Anthropic.
 US-10 As a hosted free user, I get 20 mutations/month and a clear meter.
+US-11 As a user, I connect records across tables, inspect related work, and use
+      live lookups and rollups without duplicating text.
+US-12 As a user, I find any record with Ctrl+K and complete repetitive edits as
+      one previewable, undoable batch.
+US-13 As a user, I create a bounded local rule, simulate it, inspect run history,
+      receive reminders, and undo its data changes.
+US-14 As a user, I keep rich notes and attach common documents or images locally,
+      with those bytes included in my portable backup.
 
-Out of scope v1 (recorded so "no" is pre-decided): multi-user, mobile layout
-polish beyond readable, panel marketplace, external integrations/webhooks,
-imports from CSV (v1.1 candidate), custom raw HTML panels, branching history.
+Out of scope v1 (recorded so "no" is pre-decided): multi-user, panel
+marketplace, external integrations/webhooks, public hosted forms, custom raw
+HTML panels, and branching history. CSV and JSON import are shipped through the
+trusted Data view.
 
 ## 4. UX flows
 
@@ -89,16 +98,20 @@ never a popup. Accept enters the normal loop; dismiss records a tombstone
 ## 5. Screen inventory
 
 S1 Landing page (static): demo video, "verify in DevTools" section, shell picker CTA.
-S2 Main app: header (name, version chip, history, data, settings) / panel
+S2 Main app: header (name, version chip, global search, automations, history,
+   data, settings) / panel
    canvas (regions: top strip, main grid, side) / conversation rail
    (collapsible; collapsed by default after 7 days of use) / footer slider.
-S3 Data view: raw table browser per registered table — the escape hatch that
-   proves records are just records. Read + inline edit + soft delete.
+S3 Data view: table browser per registered table. Read, inline edit, record
+   detail, linked-record conversion, saved operational views, bulk actions,
+   CSV/JSON import, CSV export, soft delete, and undo.
 S4 History view: vertical list of commits (intent text, summary, timestamp),
    click to preview that version.
-S5 Settings: mode (hosted/BYO key), export/import .clay archive, storage
-   persistence status, account/quota (hosted).
+S5 Settings: model provider, export/import .clay archive, persistence and file
+   storage status, safe file cleanup, and account/quota (hosted).
 S6 Onboarding shell picker.
+S7 Automation Center: bounded rule builder, mandatory simulation before enable,
+   local reminder inbox, run history, manual run, disable, delete, and undo.
 
 ## 6. Voice and copy rules
 

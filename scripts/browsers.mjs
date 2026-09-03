@@ -26,11 +26,41 @@ for (const [name, engine] of Object.entries(engines)) {
           || request.postData()?.includes(sentinel)) leaked.push(url);
     });
     page.on("pageerror", (e) => errors.push(String(e.message).slice(0, 120)));
+    page.on("console", message => {
+      if (message.type() === "error") errors.push(message.text().slice(0, 120));
+    });
 
     await page.goto(url, { waitUntil: "domcontentloaded" });
     await page.getByText("Tracker", { exact: true }).click({ timeout: 15000 });
     await page.waitForTimeout(4500);
     check(await page.locator(".panel-frame").count() >= 3, "template boots with panels");
+
+    await page.getByRole("button", { name: "Open data" }).click();
+    const data = page.locator(".dataview");
+    await data.waitFor();
+    check(await page.locator(".dataview-backdrop").evaluate(element =>
+      getComputedStyle(element).position === "fixed"), "Data is a viewport modal");
+    const dataImport = data.getByLabel("Import CSV or JSON");
+    await dataImport.focus();
+    check(await dataImport.evaluate(element => document.activeElement === element
+        && element.getClientRects().length > 0), "Data import is keyboard-focusable");
+    const firstDetails = data.getByRole("button", { name: /Open .* record details/ }).first();
+    await firstDetails.click();
+    const details = page.locator(".record-detail");
+    await details.waitFor();
+    await page.waitForFunction(() =>
+      document.querySelector('.record-detail[role="dialog"][aria-modal="true"]') !== null
+      && document.querySelectorAll('[role="dialog"][aria-modal="true"]').length === 1);
+    check(await page.locator('[role="dialog"][aria-modal="true"]').count() === 1,
+      "nested record detail exposes one active modal");
+    await details.getByRole("button", { name: "Close record details" }).click();
+    await data.getByRole("button", { name: "Close Data" }).click();
+    await page.getByRole("button", { name: "Open automations" }).click();
+    const automations = page.getByRole("dialog", { name: "Automations" });
+    await automations.waitFor();
+    check(await automations.getByRole("button", { name: /New rule/ }).count() === 1,
+      "Automation Center opens with rule creation available");
+    await automations.getByRole("button", { name: "Close automations" }).click();
 
     // Persistence expectation is per-engine capability: with OPFS present,
     // silence; without it (Playwright's Windows WebKit port has NO
@@ -69,6 +99,19 @@ for (const [name, engine] of Object.entries(engines)) {
     if (hasOpfs) check(persisted, "row SURVIVES reload (OPFS persistence)");
     else check(!persisted && await page.locator(".panel-frame").count() >= 3,
       "no OPFS: session-only by design, app still boots after reload");
+    if (hasOpfs && persisted) {
+      await page.keyboard.press("Control+k");
+      const palette = page.getByRole("dialog", { name: "Search and act" });
+      await palette.getByRole("combobox", { name: "Search all records" }).fill(sentinel);
+      const activeResult = palette.locator('.command-results > button[tabindex="0"]')
+        .filter({ hasText: sentinel }).first();
+      await activeResult.waitFor();
+      check(await activeResult.isVisible(), "persisted record is the active global-search command");
+      await palette.getByRole("combobox", { name: "Search all records" }).press("Enter");
+      await page.locator(".record-detail").waitFor();
+      check((await page.locator(".record-detail").textContent()).includes(sentinel),
+        "global search opens the persisted record detail");
+    }
     check(errors.length === 0, errors.length === 0 ? "zero page errors" : "page errors: " + errors[0]);
     await ctx.close();
   } catch (e) {

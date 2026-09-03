@@ -145,7 +145,8 @@ const reshapeStage = fixedCodes({
 const safeDiff = fixedCodes({
   add_field: 1, change_field: 2, add_panel: 3, change_panel: 4,
   remove_panel: 5, add_status: 6, add_computed: 7, add_chart: 8,
-  mixed: 9, unknown: 10,
+  mixed: 9, unknown: 10, add_relation: 11, add_automation: 12,
+  add_attachment: 13,
 } as const satisfies Record<SafeDiffKind, number>);
 const previewDecision = fixedCodes({
   kept: 1, discarded: 2,
