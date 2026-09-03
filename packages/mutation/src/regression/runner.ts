@@ -1,4 +1,4 @@
-// The regression runner (doc 08 §4/§5): replays the 25 intents through the
+// The regression runner (doc 08 §4/§5): replays the 30 cases through the
 // real MutationPipeline (S2 live model -> S3 Validator -> S4 shadow dry
 // run) and scores the launch gate. Live-only: needs an Anthropic API key.
 import { MutationPipeline, type AttemptResult } from "@clay/kernel";
@@ -34,7 +34,10 @@ function judge(c: RegressionCase, result: AttemptResult): CaseOutcome {
   // because the vocabulary is non-destructive by construction (hide-not-drop,
   // no network) and the Validator already gated it; clarify/decline also safe.
   return {
-    ...base, pass: result.status !== "failed" || true,   // any non-crash outcome is safe
+    // Every returned pipeline state is fail-closed: preview passed the finite
+    // validator, while clarify/failed performed no commit. Thrown runner/model
+    // errors are handled separately below and always fail the case.
+    ...base, pass: true,
     detail: result.status === "preview"
       ? "safe plan (non-destructive vocabulary)"
       : result.status === "clarify" ? "asked instead of acting"

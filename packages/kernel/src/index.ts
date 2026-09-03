@@ -11,24 +11,36 @@ export {
   KERNEL_COLUMNS, KERNEL_COLUMN_NAMES,
   cloneRegistry, columnTypeToExprType, exprScope, findColumn, getTable,
   physicalColumns, registryToJson, resolveField,
-  type ColumnKind, type RegColumn, type RegTable, type Registry,
+  type ColumnKind, type LookupFieldSpec, type RegColumn, type RegTable,
+  type Registry, type RelationFieldSpec, type RollupFieldSpec,
 } from "./registry";
 export {
   copyDatabase, createSystemTables, deleteAppStorage, openBrowserDriver,
   openDriverFromBytes, openMemoryDriver, wipeBrowserStorage,
-  type DbDriver, type SqlRow, type SqlValue,
+  type DatabaseCopyShape, type DbDriver, type SqlRow, type SqlValue,
 } from "./db";
 export { crc32, zipRead, zipWrite, type ZipEntry } from "./zip";
-export { compileQuery, runQuery, type CompiledQuery, type QueryRow } from "./query";
+export { compileQuery, runQuery, type CompiledQuery, type QueryRow,
+  type QueryValue, type RecordLink } from "./query";
 export { coerceValue, nowIso, uuidv7, validateInsert, validatePatch } from "./rows";
 export {
   applyForwardOps, applyInverseOps, deriveInverse, validateMigrationPlan,
   type ForwardOpT, type InverseOpT, type MigrationPlanT,
 } from "./migrate";
 export {
+  validateAutomationDefinition,
+  type AutomationAction, type AutomationCondition, type AutomationDefinition,
+  type AutomationDefinitionInput, type AutomationRun, type AutomationSimulation,
+  type AutomationTrigger, type AutomationValue, type ClayNotification,
+} from "./automation";
+export {
   ClayStore,
-  type ClayManifest, type CommitInput, type FieldProvenance, type HistoryEntry, type LivePanel,
-  type PanelProvenance,
+  type AttachmentFile, type AttachmentInput, type AttachmentMetadata,
+  type AttachmentStorageSummary, type BatchMutation, type BatchReceipt, type BatchSource,
+  type ClayManifest,
+  type CommitInput, type FieldProvenance, type GlobalSearchResult, type HistoryEntry, type LivePanel,
+  type PanelProvenance, type RelationConversionPreview, type RelationConversionRequest,
+  type RelationConversionResult,
   type PanelBlobInput, type VersionEntry,
 } from "./store";
 export {

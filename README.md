@@ -60,6 +60,17 @@ exists from its creation and latest-change history. The app bar also offers
 **situational lenses** such as Morning review, Focus, and Update data. Lenses
 change only which views are visible; they never copy or alter records.
 
+Clay also includes four direct-work releases:
+
+- **Connected records:** linked fields, searchable record pickers, record details,
+  incoming related work, live lookups and rollups, and previewed text conversion.
+- **Daily Workbench:** Ctrl+K global search and quick create, multi-select changes,
+  conflict-safe batch undo, typed queues, and saved operational views.
+- **Local automations:** created, updated, match, due-date, schedule, and manual
+  triggers with simulation, local reminders, run history, and undo.
+- **Rich records:** safe rich notes plus local images and documents that are
+  verified, storage-bounded, and included in format-4 `.clay` backups.
+
 ## The shipped moat
 
 Clay's defensibility is a compounding system, not a model or a feature count:
@@ -84,8 +95,9 @@ Clay's defensibility is a compounding system, not a model or a feature count:
    has independent disable and erase controls; its state is excluded from
    archives, forks, diagnostics, model context, and network requests.
 
-Heavy trusted surfaces are loaded only when opened. PanelFrame, Data, History,
-Shape Map, and Private activity each have semantic bundle boundaries enforced
+Heavy trusted surfaces are loaded only when opened. PanelFrame, Data, global
+search, Automation Center, History, Shape Map, and Private activity each have
+semantic bundle boundaries enforced
 from Vite's manifest. Lens persistence and commands live behind a dedicated
 controller rather than adding more storage logic to the main app component.
 
@@ -103,7 +115,7 @@ pnpm test         # vitest suites (unit, property, integration)
 pnpm check:ordinary # full local typecheck, boundary tests, build, and bundle gate
 pnpm verify:product # Shape Map, change contract, lenses, metrics, providers
 pnpm verify:multi-app # app-local archive replacement and sibling isolation
-pnpm verify:browsers # Chromium, Firefox, and WebKit persistence/privacy
+pnpm verify:browsers # Chromium, Firefox, WebKit: operations, persistence, privacy
 ```
 
 Packages: `schema` (the Zod constitution), `kernel` (store, migrations,

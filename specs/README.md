@@ -44,7 +44,7 @@ one user-initiated change (migration + panels). "Kernel" = the trusted runtime.
 | schema/mutation-plan-api.json | Simplified schema for API structured output (G1/ADR-013) |
 | prompt/system-v1.md | System prompt assembly spec (sections + includes) |
 | exemplars/ | 3 archetype contexts + the 10 few-shot MutationPlan exemplars (P0.1) |
-| tests/regression-intents.md | The 25-intent suite + 5 clarify cases (P0.4) |
+| tests/regression-intents.md | The 30-case suite: 20 core, 5 clarify, 5 adversarial (P0.4) |
 | shells/starter-shells.json | The 3 first-run shells: registries, panel ids, seeds (G9) |
 | OPEN-QUESTIONS.md | Running log for spec gaps found during build |
 | docs/00-original-design-v1.md | The original single-doc design (historical) |

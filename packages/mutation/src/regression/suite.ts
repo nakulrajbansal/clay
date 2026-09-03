@@ -1,4 +1,4 @@
-// The 25-intent regression suite definition (doc 08 §4, mirrors
+// The 30-case regression suite definition (doc 08 §4, mirrors
 // specs/tests/regression-intents.md). Each case runs the full S2->S4
 // pipeline against a live model; the runner scores against the gate.
 import type { Archetype } from "./contexts";

@@ -54,6 +54,7 @@ export function ConversationRail(props: {
   onReset: () => void;
   onExport: () => void;
   onImport: (file: File) => void;
+  onPurgeAttachments: () => Promise<void>;
   suggestions: Suggestion[];
   onAcceptSuggestion: (s: Suggestion) => void;
   onDismissSuggestion: (s: Suggestion) => void;
@@ -182,6 +183,17 @@ export function ConversationRail(props: {
               </div>
               {status.persistent ? (
                 <div>Using {mb(status.usageBytes)} of {mb(status.quotaBytes)}</div>
+              ) : null}
+              <div>
+                Files: {status.attachments.activeFiles} · {mb(status.attachments.activeBytes)}
+                {status.attachments.deletedFiles > 0
+                  ? ` · ${status.attachments.deletedFiles} retained after removal` : ""}
+              </div>
+              {status.attachments.deletedFiles > 0 ? (
+                <button className="link" onClick={() => void props.onPurgeAttachments()
+                  .then(() => props.loadStatus()).then(setStatus)}>
+                  Clean up files removed over 30 days ago
+                </button>
               ) : null}
               <div>
                 {status.versions} change{status.versions === 1 ? "" : "s"} ·{" "}

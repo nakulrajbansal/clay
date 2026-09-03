@@ -61,6 +61,17 @@ describe("system prompt", () => {
     }
   });
 
+  it("teaches connected and rich field contracts without widening panel authority", () => {
+    for (const marker of [
+      "relation, lookup, rollup, rich_text, and attachment",
+      "Relation fields project as `{id, table, label}`",
+      "### openRecord(table, id): Promise<void>",
+      "copied labels",
+      "file bytes or metadata",
+    ]) expect(system).toContain(marker);
+    expect(system).not.toContain("clay.files");
+  });
+
   it("is deterministic (byte-stable for caching, G1/doc 07 §4)", () => {
     expect(buildSystemPrompt()).toBe(system);
   });

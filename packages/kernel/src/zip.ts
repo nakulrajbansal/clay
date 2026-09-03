@@ -84,39 +84,93 @@ export function zipWrite(entries: ZipEntry[]): Uint8Array {
 }
 
 export function zipRead(bytes: Uint8Array): ZipEntry[] {
+  if (bytes.byteLength < 22) throw new Error("not a zip archive (too small)");
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  // find EOCD scanning backwards (no comment in our archives, but be lenient)
   let eocd = -1;
-  for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 22 - 65_535); i--) {
-    if (view.getUint32(i, true) === EOCD_SIG) { eocd = i; break; }
+  for (let index = bytes.length - 22;
+    index >= Math.max(0, bytes.length - 22 - 65_535); index--) {
+    if (view.getUint32(index, true) === EOCD_SIG) { eocd = index; break; }
   }
   if (eocd < 0) throw new Error("not a zip archive (no end record)");
+  const disk = view.getUint16(eocd + 4, true);
+  const centralDisk = view.getUint16(eocd + 6, true);
+  const diskCount = view.getUint16(eocd + 8, true);
   const count = view.getUint16(eocd + 10, true);
-  let pos = view.getUint32(eocd + 16, true);
+  const cdSize = view.getUint32(eocd + 12, true);
+  const cdOffset = view.getUint32(eocd + 16, true);
+  const commentLength = view.getUint16(eocd + 20, true);
+  if (disk !== 0 || centralDisk !== 0 || diskCount !== count)
+    throw new Error("corrupt zip: multi-disk or entry count mismatch");
+  if (count > 32) throw new Error("corrupt zip: too many entries");
+  if (commentLength !== 0 || eocd + 22 !== bytes.length)
+    throw new Error("corrupt zip: unsupported trailing data or archive comment");
+  if (cdOffset > eocd || cdSize > eocd || cdOffset + cdSize !== eocd)
+    throw new Error("corrupt zip: invalid central directory bounds");
 
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   const entries: ZipEntry[] = [];
-  for (let i = 0; i < count; i++) {
-    if (view.getUint32(pos, true) !== CENTRAL_SIG)
-      throw new Error("corrupt zip: bad central directory");
+  const localRanges: Array<{ start: number; end: number }> = [];
+  let pos = cdOffset;
+  for (let index = 0; index < count; index++) {
+    if (pos + 46 > eocd || view.getUint32(pos, true) !== CENTRAL_SIG)
+      throw new Error("corrupt zip: bad or truncated central directory");
+    const flags = view.getUint16(pos + 8, true);
     const method = view.getUint16(pos + 10, true);
     const crc = view.getUint32(pos + 16, true);
-    const csize = view.getUint32(pos + 20, true);
-    const nameLen = view.getUint16(pos + 28, true);
-    const extraLen = view.getUint16(pos + 30, true);
-    const commentLen = view.getUint16(pos + 32, true);
+    const compressedSize = view.getUint32(pos + 20, true);
+    const size = view.getUint32(pos + 24, true);
+    const nameLength = view.getUint16(pos + 28, true);
+    const extraLength = view.getUint16(pos + 30, true);
+    const entryCommentLength = view.getUint16(pos + 32, true);
+    const startDisk = view.getUint16(pos + 34, true);
     const localOffset = view.getUint32(pos + 42, true);
-    const name = decoder.decode(bytes.subarray(pos + 46, pos + 46 + nameLen));
-    if (method !== 0)
-      throw new Error(`unsupported zip method ${method} for '${name}' (.clay uses STORE)`);
-    const lNameLen = view.getUint16(localOffset + 26, true);
-    const lExtraLen = view.getUint16(localOffset + 28, true);
-    const dataStart = localOffset + 30 + lNameLen + lExtraLen;
-    const data = bytes.slice(dataStart, dataStart + csize);
+    const centralEnd = pos + 46 + nameLength + extraLength + entryCommentLength;
+    if (centralEnd > eocd || flags !== 0 || method !== 0 || compressedSize !== size
+        || extraLength !== 0 || entryCommentLength !== 0 || startDisk !== 0)
+      throw new Error("corrupt zip: unsupported or incoherent central entry");
+    const centralNameBytes = bytes.subarray(pos + 46, pos + 46 + nameLength);
+    let name: string;
+    try { name = decoder.decode(centralNameBytes); }
+    catch { throw new Error("corrupt zip: entry name is not valid UTF-8"); }
+
+    if (localOffset + 30 > cdOffset || view.getUint32(localOffset, true) !== LOCAL_SIG)
+      throw new Error(`corrupt zip: bad local header for '${name}'`);
+    const localFlags = view.getUint16(localOffset + 6, true);
+    const localMethod = view.getUint16(localOffset + 8, true);
+    const localCrc = view.getUint32(localOffset + 14, true);
+    const localCompressedSize = view.getUint32(localOffset + 18, true);
+    const localSize = view.getUint32(localOffset + 22, true);
+    const localNameLength = view.getUint16(localOffset + 26, true);
+    const localExtraLength = view.getUint16(localOffset + 28, true);
+    const localNameStart = localOffset + 30;
+    const localNameEnd = localNameStart + localNameLength;
+    const dataStart = localNameEnd + localExtraLength;
+    const dataEnd = dataStart + compressedSize;
+    if (localFlags !== flags || localMethod !== method || localCrc !== crc
+        || localCompressedSize !== compressedSize || localSize !== size
+        || localNameLength !== nameLength || localExtraLength !== 0 || dataEnd > cdOffset)
+      throw new Error(`corrupt zip: incoherent local header for '${name}'`);
+    const localNameBytes = bytes.subarray(localNameStart, localNameEnd);
+    if (localNameBytes.length !== centralNameBytes.length
+        || localNameBytes.some((byte, offset) => byte !== centralNameBytes[offset]))
+      throw new Error(`corrupt zip: local name mismatch for '${name}'`);
+    const data = bytes.subarray(dataStart, dataEnd);
     if (crc32(data) !== crc)
       throw new Error(`corrupt zip: crc mismatch for '${name}'`);
     entries.push({ name, data });
-    pos += 46 + nameLen + extraLen + commentLen;
+    localRanges.push({ start: localOffset, end: dataEnd });
+    pos = centralEnd;
   }
+  if (pos !== cdOffset + cdSize)
+    throw new Error("corrupt zip: central directory size mismatch");
+  localRanges.sort((left, right) => left.start - right.start);
+  let localEnd = 0;
+  for (const range of localRanges) {
+    if (range.start !== localEnd)
+      throw new Error("corrupt zip: overlapping or unsupported local data");
+    localEnd = range.end;
+  }
+  if (localEnd !== cdOffset)
+    throw new Error("corrupt zip: unsupported data before central directory");
   return entries;
 }

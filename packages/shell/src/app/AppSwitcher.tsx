@@ -16,6 +16,9 @@ export function AppSwitcher(props: {
   onFork: () => void;
   onRename: (id: string, name: string) => void;
   onDelete: (id: string) => void;
+  onOpenSearch: () => void;
+  onOpenAutomations: () => void;
+  unreadNotifications: number;
   onOpenData: () => void;
   onOpenShapeMap: () => void;
   railOpen: boolean;
@@ -225,6 +228,30 @@ export function AppSwitcher(props: {
           </ModalDialog>
         ) : null}
       </div>
+      <button
+        className="appbar-action appbar-search-btn"
+        aria-label="Search and act"
+        title="Find any record or run a quick action (Ctrl+K)"
+        onClick={props.onOpenSearch}
+      >
+        <span className="appbar-action-icon" aria-hidden="true">⌕</span>
+        <span className="appbar-action-label">Search</span>
+        <kbd className="appbar-shortcut">Ctrl K</kbd>
+      </button>
+      <button
+        className="appbar-action appbar-automation-btn"
+        aria-label="Open automations"
+        title="Build rules, reminders, and repeatable actions"
+        onClick={props.onOpenAutomations}
+      >
+        <span className="appbar-action-icon" aria-hidden="true">↻</span>
+        <span className="appbar-action-label">Automate</span>
+        {props.unreadNotifications > 0 ? (
+          <span className="appbar-notification-count" aria-label={`${props.unreadNotifications} unread reminders`}>
+            {Math.min(99, props.unreadNotifications)}
+          </span>
+        ) : null}
+      </button>
       <button
         className="appbar-action appbar-data-btn"
         aria-label="Open data"

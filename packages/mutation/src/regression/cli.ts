@@ -7,7 +7,7 @@ async function main(): Promise<void> {
     console.error("Set ANTHROPIC_API_KEY to run the regression suite.");
     process.exit(2);
   }
-  console.log("Clay regression suite (25 intents, live model)\n");
+  console.log("Clay regression suite (30 cases, live model)\n");
   const report = await runRegressionSuite({
     onCase: o => console.log(
       `${o.pass ? "PASS" : "FAIL"}  ${o.id.padEnd(3)} [${o.expect}] ${o.detail}`),

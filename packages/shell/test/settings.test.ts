@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  CODEX_BACKEND_URL, getActiveModelAccess, getModelProvider, getSessionToken,
+  CODEX_BACKEND_URL, getActiveModelAccess, getBackendUrl, getModelProvider, getSessionToken,
   hasModelAccess,
   normalizeBackendUrl, setApiKey, setBackendUrl, setModelProvider,
   setSessionToken,
@@ -29,6 +29,12 @@ describe("model provider settings", () => {
     setModelProvider("openai");
     expect(getActiveModelAccess()).toEqual({ provider: "openai",
       apiKey: null, backendUrl: "http://127.0.0.1:8787" });
+  });
+
+  it("scrubs legacy backend URLs with query strings before use", () => {
+    localStorage.setItem("clay_backend_url", "https://models.example.com/clay?token=private");
+    expect(getBackendUrl()).toBeNull();
+    expect(localStorage.getItem("clay_backend_url")).toBeNull();
   });
 
   it("accepts secure or loopback Clay backends and rejects credential-bearing URLs", () => {

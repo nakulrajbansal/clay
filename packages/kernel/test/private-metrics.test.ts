@@ -127,7 +127,8 @@ describe("private metric code registry", () => {
       safeDiff: {
         add_field: 1, change_field: 2, add_panel: 3, change_panel: 4,
         remove_panel: 5, add_status: 6, add_computed: 7, add_chart: 8,
-        mixed: 9, unknown: 10,
+        mixed: 9, unknown: 10, add_relation: 11, add_automation: 12,
+        add_attachment: 13,
       },
       previewDecision: { kept: 1, discarded: 2 },
       trustSurface: { shape_map: 1, history: 2, trust_receipt: 3, storage_status: 4 },

@@ -91,6 +91,15 @@ describe("hostile corpus / STATIC (Validator rejects before execution)", () => {
         const x = EventTarget["proto" + "type"];
         clay.ui.render(h("p", {}, String(Boolean(x))));
       }`],
+    ["MessagePort prototype gesture forgery",
+      `export default function(clay){
+        MessagePort["proto" + "type"]["post" + "Message"] = function(msg){ return msg; };
+      }`],
+    ["concatenated constructor escape",
+      `export default function(clay){
+        const Fn = ({})["con" + "structor"]["con" + "structor"];
+        clay.ui.render(h("p", {}, String(Fn("return 7")())));
+      }`],
   ];
   for (const [name, code] of staticEscapes) {
     it(`rejects ${name}`, () => expect(rejects(code)).toBe(true));

@@ -1,6 +1,7 @@
 # 15 - Next-generation product strategy
 
-Status: active strategy. The first five moat slices are implemented; release
+Status: active strategy. The first five moat slices and four direct-value
+releases are implemented; release
 status is defined by the current executable gates and CI, not by this document.
 
 ## Executive verdict
@@ -104,7 +105,10 @@ state, source, and policy.
 
 ### Layer 2: One reversible change protocol
 
-Language changes, direct manipulation, local edits, view switches, future automations, and suggested adaptations must all produce the same previewable, reviewable, reversible mutation record.
+Language changes, direct manipulation, local edits, view switches, bounded
+automations, and suggested adaptations share inspectable and reversible trusted
+mutation paths. Automation data effects use atomic batch receipts rather than a
+second write system.
 
 **Why it is hard to copy:** competitors commonly bolt AI onto either generated code or a visual editor. Clay's transaction boundary spans data schema, panels, layout, and history by design.
 
@@ -231,11 +235,17 @@ First slice: compare current and proposed panel manifests side by side, with syn
 
 Moat contribution: time and alternatives become a usable canvas for non-technical users.
 
-### F. Declarative automations with simulation
+### F. Declarative automations with simulation - implemented
 
-Add a narrow, kernel-evaluated rule vocabulary such as when/if/set/notify/create. Never give generated code ambient authority. Every rule must simulate against recent data, show affected rows, and support rollback.
+Clay now has a narrow, kernel-evaluated rule vocabulary for created, updated,
+match-edge, due-date, schedule, and manual triggers with set, notify, and create
+actions. Generated code receives no automation authority. Rules save disabled,
+simulate against current data, show bounded impact, record every run, and reuse
+conflict-safe batch undo.
 
-First slice: "When a due date passes and status is open, mark it overdue" with a dry-run list and explicit activation.
+The first shipped slice includes due-date reminders, recurring record creation,
+related-record creation, local inbox notifications, run history, enable/disable,
+manual run, and undo.
 
 Moat contribution: combines automation power with Clay's preview and reversibility contract.
 

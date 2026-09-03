@@ -93,6 +93,7 @@ function bpTable(reg: Registry, spec: Spec): BlueprintResult {
         field, label: String(c.label ?? field.replace(/_/g, " ")) };
       if (c.format) entry.format = c.format;
       else if (rc.type === "date") entry.format = "date";
+      else if (rc.type === "attachment") entry.format = "files";
       if (rc.type === "enum" || c.badge)
         entry.badge = { field, map: badgeMap(t, field, c.badge) };
       return entry;
@@ -153,11 +154,14 @@ function bpForm(reg: Registry, spec: Spec): BlueprintResult {
     date: "date", boolean: "checkbox", enum: "select" };
   const fields = (Array.isArray(spec.fields) && spec.fields.length > 0
     ? spec.fields as FieldSpec[]
-    : t.columns.filter(c => !c.hidden && c.type !== "computed" && c.type !== "json")
+    : t.columns.filter(c => !c.hidden
+        && !["computed", "lookup", "rollup", "json", "relation", "attachment"].includes(c.type))
         .slice(0, 7).map(c => ({ name: c.name } as FieldSpec)))
     .map(f => {
       const name = col(t, f.name, "field");
       const rc = t.columns.find(x => x.name === name)!;
+      if (["computed", "lookup", "rollup", "json", "relation", "attachment"].includes(rc.type))
+        fail(`blueprint: form field '${name}' requires a trusted record control`);
       const entry: Record<string, unknown> = {
         name, label: String(f.label ?? name.replace(/_/g, " ")),
         kind: String(f.kind ?? KIND[rc.type] ?? "text") };
@@ -323,7 +327,7 @@ function bpCards(reg: Registry, spec: Spec): BlueprintResult {
   const body =
     `    clay.ui.render(rows.length === 0\n`
     + `      ? h(EmptyState, { label: ${J(`No ${t.name} yet`)} })\n`
-    + `      : h(Cards, { items: rows.map((r) => ({ title: r[${J(title)}]`
+    + `      : h(Cards, { items: rows.map((r) => ({ id: r.id, title: r[${J(title)}]`
     + (subtitle ? `, subtitle: r[${J(subtitle)}]` : "")
     + (badge ? `, badge: r[${J(badge)}]` : "") + ` })) }));`;
   return { code: watchRender(q, body), declared_queries: [q], declared_writes: [] };
@@ -357,7 +361,7 @@ function bpCalendar(reg: Registry, spec: Spec): BlueprintResult {
   const body =
     `    clay.ui.render(rows.length === 0\n`
     + `      ? h(EmptyState, { label: "Nothing dated yet" })\n`
-    + `      : h(Calendar, { items: rows.map((r) => ({ date: r[${J(date)}],\n`
+    + `      : h(Calendar, { items: rows.map((r) => ({ id: r.id, date: r[${J(date)}],\n`
     + `          label: r[${J(label)}] })) }));`;
   return { code: watchRender(q, body), declared_queries: [q], declared_writes: [] };
 }

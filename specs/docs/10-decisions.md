@@ -684,3 +684,81 @@ ADR-043 (2026-09-01) Lazy surfaces fail inside recoverable product boundaries
   also share one fail-closed configuration validator.
   CONSEQUENCE: transient asset failure keeps app chrome and recovery visible, and
   production cannot launch with dev auth or incomplete credentials.
+
+ADR-044 (2026-09-02) Connected records are stable references with live projections
+  CONTEXT: independent tables forced users to duplicate customer, project, and
+  task text. Renames could not safely update that copied meaning.
+  DECISION: add one and many relation fields that store row UUIDs, validate active
+  targets and optional uniqueness, and project trusted `{id, table, label}` links.
+  Lookup and rollup fields remain virtual and live. Text conversion requires a
+  version and data fingerprint, keeps the source physical column hidden, exposes a
+  typed relation under the original presentation label, and rewrites affected panel
+  fields through the existing reversible commit.
+  CONSEQUENCE: records connect without duplicated facts; target edits update every
+  projection; schema rewind, redo, archive, rename, and semantic IDs remain intact.
+
+ADR-045 (2026-09-02) Daily operations use trusted atomic receipts
+  CONTEXT: editing one record at a time and searching one table at a time made
+  routine work unnecessarily expensive. Giving generated panels a bulk-write API
+  would widen their authority.
+  DECISION: keep global search, quick create, multi-select actions, saved query
+  views, and bulk mutation in trusted shell surfaces. A batch contains at most 500
+  closed insert, update, archive, or restore mutations. The kernel prevalidates the
+  complete batch, commits once, stores before and after row snapshots, and returns
+  a durable receipt. Saved operational views bind table and field semantic IDs while
+  retaining names only as legacy presentation fallbacks. Undo compares the current
+  raw row with the after snapshot and
+  fails with E_CONFLICT after any later edit. Operational views use bounded,
+  revision-aware per-app settings and reference canonical tables and fields. The
+  trusted Workbench pages by stable ID in 500-row chunks and reports an explicit
+  20,000-row surface limit rather than silently omitting records. Search pages the
+  same stable IDs across every table, and any filter or saved-view scope change
+  clears bulk selection so hidden records cannot be mutated accidentally.
+  CONSEQUENCE: frequent work takes fewer actions without adding SQL, code, or
+  multi-row authority to the sandbox Bridge.
+
+ADR-046 (2026-09-02) Automations are local declarative workflows, never agents
+  CONTEXT: users need recurring work and reminders, but arbitrary code, hidden
+  model calls, ambient timers, or unrestricted network actions would violate the
+  product's safety and local-first contracts.
+  DECISION: persist a closed automation vocabulary with created, updated,
+  match-edge, due-date, daily, weekly, and manual triggers; at most eight typed
+  conditions; and at most five set-field, create-record, create-related, or local
+  notification actions. Values are literals or copies of declared source fields.
+  New and re-enabled rules save disabled, show a simulation against at most 100
+  records, then require explicit enablement. Event triggers persist the event-time
+  row snapshot; failed attempts retain the cursor and retry with inspectable attempt
+  keys. Simulation and execution share one exact 100-record maximum; a larger
+  scope fails before mutation. Trigger keys, event cursors, and
+  active-match state prevent duplicates. Schema commits and timeline moves that
+  would invalidate a stored rule fail atomically and leave both rule and schema
+  unchanged. Data
+  effects use ADR-045 batches; automation-origin events cannot recursively trigger
+  rules. The scheduler runs only while Clay is open. Runs and local notifications
+  are inspectable, and stale undo fails closed. Data effects, notifications,
+  successful receipts, and match ledgers share one transaction. Definition and
+  output byte ceilings prevent a bounded record count from amplifying unbounded
+  values.
+  CONSEQUENCE: Clay performs useful repeat work without executing user code,
+  contacting a model, exposing credentials, or pretending to be a background
+  cloud service.
+
+ADR-047 (2026-09-02) File bytes stay local, verified, bounded, and portable
+  CONTEXT: receipts, contracts, photos, and rich notes are necessary for real
+  operational records. Data URLs in rows would bloat queries and generated panels,
+  while external object storage would weaken ownership and offline use.
+  DECISION: add rich_text as plain portable text rendered through a safe Markdown
+  subset, and attachment fields as arrays of opaque IDs. A kernel-owned user.db
+  table named `__clay_attachments` stores sanitized metadata, SHA-256, and BLOB
+  bytes; its name is impossible under the user-table grammar. Only trusted shell
+  APIs can add, read, remove, or purge files. Limits are 10 MB per file, 20 per
+  field, 200 MB active, and 250 MB retained per app; executable and active-content
+  formats are rejected and common binary formats must match their signatures.
+  Removal retains bytes for 30 days and row restore reactivates them. Archive
+  format 4 includes file totals and verifies every digest, signature, size,
+  reference, and manifest count before import. Import also rejects unexpected
+  SQLite schema objects, validates every reachable migration and panel version,
+  reconstructs canonical DDL, verifies the selected version cursor, and installs
+  with transactional rollback plus read-back before commit.
+  CONSEQUENCE: rich records remain offline, reversible, and portable without
+  widening panel authority or hiding file custody behind a service.

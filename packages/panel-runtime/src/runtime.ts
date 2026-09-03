@@ -21,7 +21,7 @@ export type PortLike = {
 export type BootMessage = {
   v: 1; kind: "boot";
   code: string; panelId: string; apiVersion: 1;
-  meta: { schema: unknown; appVersion: number; placement: unknown };
+  meta: { schema: unknown; appVersion: number; placement: unknown; declaredTables?: string[] };
   tokens: Record<string, string>;
 };
 
@@ -196,6 +196,11 @@ export function bootPanelRuntime(opts: PanelRuntimeOptions): void {
           rendered = true;
           render(vnode, container, {
             schema: boot.meta.schema as SchemaTable[],
+            primaryTable: boot.meta.declaredTables?.length === 1
+              ? boot.meta.declaredTables[0] : undefined,
+            openRecord: (table, id): void => {
+              port.send({ v: 1, kind: "open_record", table, id });
+            },
             userAction: <T>(fn: () => T, event?: Event): T => {
               // This closure belongs to the fixed bootstrap, not generated code.
               // MessagePort ordering ensures the grant reaches the Bridge before
@@ -211,6 +216,8 @@ export function bootPanelRuntime(opts: PanelRuntimeOptions): void {
           call("ui.toast", kind === undefined ? [msg] : [msg, kind]).catch(reportError);
         },
         confirm: (msg: unknown): Promise<unknown> => call("ui.confirm", [msg]),
+        openRecord: (table: unknown, id: unknown): Promise<unknown> =>
+          call("ui.openRecord", [table, id]),
       },
       events: {
         emit: (name: unknown, payload: unknown): void => {

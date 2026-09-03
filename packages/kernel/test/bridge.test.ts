@@ -188,6 +188,43 @@ describe("write enforcement (ADR-014)", () => {
   });
 });
 
+describe("trusted record navigation", () => {
+  it("host-only default navigation never grants later write authority", async () => {
+    const opened: { table: string; id: string }[] = [];
+    const { c, store } = await setup({ declaredWrites: ["projects"] }, {}, {
+      onOpenRecord: (_panelId: string, table: string, id: string) => opened.push({ table, id }),
+    });
+    const id = String(store.query({ from: "projects", select: ["id"], limit: 1 })[0]!.id);
+    c.send({ v: 1, kind: "open_record", table: "projects", id } as never);
+    await sleep(1);
+    expect(opened).toEqual([{ table: "projects", id }]);
+    await expect(c.call("db.update", ["projects", id, { name: "forged" }]))
+      .rejects.toMatchObject({ code: "E_VALIDATION", message: expect.stringMatching(/user action/i) });
+    store.close();
+  });
+
+  it("opens only a valid record from a table the panel already declares", async () => {
+    const opened: { table: string; id: string }[] = [];
+    const { c, store } = await setup({}, { writesPerGesture: 1 }, {
+      onOpenRecord: (_panelId: string, table: string, id: string) => opened.push({ table, id }),
+    });
+    const id = String(store.query({ from: "projects", select: ["id"], limit: 1 })[0]!.id);
+    await expect(c.call("ui.openRecord", ["projects", id]))
+      .rejects.toMatchObject({ code: "E_VALIDATION", message: expect.stringMatching(/user action/i) });
+    c.send({ v: 1, kind: "user_gesture" });
+    await sleep(1);
+    await expect(c.call("ui.openRecord", ["projects", id])).resolves.toBeNull();
+    await expect(c.call("ui.openRecord", ["projects", id]))
+      .rejects.toMatchObject({ code: "E_VALIDATION" });
+    expect(opened).toEqual([{ table: "projects", id }]);
+    await expect(c.call("ui.openRecord", ["other", id]))
+      .rejects.toMatchObject({ code: "E_VALIDATION" });
+    await expect(c.call("ui.openRecord", ["projects", "not-an-id"]))
+      .rejects.toMatchObject({ code: "E_VALIDATION" });
+    store.close();
+  });
+});
+
 describe("limits and strikes", () => {
   it("watch cap trips E_LIMIT", async () => {
     const { c, store } = await setup({}, { maxWatches: 1 });
@@ -245,6 +282,21 @@ describe("limits and strikes", () => {
     store.close();
   });
 
+  it("rejects oversized and deeply nested messages before schema parsing", async () => {
+    const events: unknown[] = [];
+    const { c, store } = await setup({}, {}, {
+      onEvent: (_panel: string, _name: string, payload: unknown) => events.push(payload),
+    });
+    await expect(c.call("ui.toast", ["x".repeat(70_000)]))
+      .rejects.toMatchObject({ code: "E_LIMIT" });
+    let nested: unknown = "leaf";
+    for (let depth = 0; depth < 30; depth++) nested = { next: nested };
+    await expect(c.call("events.emit", ["deep_event", nested]))
+      .rejects.toMatchObject({ code: "E_LIMIT" });
+    expect(events).toEqual([]);
+    store.close();
+  });
+
   it("events: payload cap and name validation", async () => {
     const { c, store } = await setup({}, { maxEventPayload: 64 });
     await c.call("events.emit", ["board_filter", { owner: "Dev" }]);
@@ -253,6 +305,8 @@ describe("limits and strikes", () => {
     };
     expect(evt).toMatchObject({ name: "board_filter", payload: { owner: "Dev" } });
     await expect(c.call("events.emit", ["board_filter", { big: "x".repeat(200) }]))
+      .rejects.toMatchObject({ code: "E_LIMIT" });
+    await expect(c.call("events.emit", ["board_filter", { big: "🙂".repeat(20) }]))
       .rejects.toMatchObject({ code: "E_LIMIT" });
     await expect(c.call("events.emit", ["NOT_AN_IDENT", {}]))
       .rejects.toMatchObject({ code: "E_VALIDATION" });

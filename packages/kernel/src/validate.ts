@@ -34,7 +34,7 @@ const FORBIDDEN = new Set([
   "location", "history", "localStorage", "sessionStorage", "indexedDB",
   "ownerDocument", "defaultView", "currentTarget", "EventTarget",
   "caches", "cookie", "import", "eval", "Function", "setTimeout",
-  "setInterval", "postMessage", "Worker", "SharedArrayBuffer", "Atomics",
+  "setInterval", "postMessage", "MessagePort", "MessageChannel", "Worker", "SharedArrayBuffer", "Atomics",
   "WebAssembly", "Proxy", "Reflect", "constructor", "__proto__", "prototype",
 ]);
 
@@ -45,6 +45,28 @@ type AnyNode = acorn.Node & Record<string, unknown>;
 
 const isNode = (v: unknown): v is AnyNode =>
   typeof v === "object" && v !== null && typeof (v as AnyNode).type === "string";
+
+function staticString(node: AnyNode): string | null {
+  if (node.type === "Literal") {
+    const value = (node as unknown as { value: unknown }).value;
+    return typeof value === "string" ? value : null;
+  }
+  if (node.type === "BinaryExpression") {
+    const binary = node as unknown as { operator: string; left: AnyNode; right: AnyNode };
+    if (binary.operator !== "+") return null;
+    const left = staticString(binary.left);
+    const right = staticString(binary.right);
+    return left === null || right === null ? null : left + right;
+  }
+  if (node.type === "TemplateLiteral") {
+    const template = node as unknown as {
+      expressions: AnyNode[]; quasis: { value: { cooked?: string } }[];
+    };
+    return template.expressions.length === 0
+      ? (template.quasis[0]?.value.cooked ?? "") : null;
+  }
+  return null;
+}
 
 /** The marker for values V4 cannot resolve statically. */
 const DYNAMIC: unique symbol = Symbol("dynamic");
@@ -177,10 +199,10 @@ function checkPanelCode(panel: PanelT): ValidationIssue[] {
         if (m.computed && m.object.type === "Identifier"
             && (m.object as unknown as { name: string }).name === "clay")
           issue("V3", "computed access on clay (clay[x]) is forbidden");
-        if (m.computed && m.property.type === "Literal") {
-          const v = (m.property as unknown as { value: unknown }).value;
-          if (typeof v === "string" && FORBIDDEN.has(v))
-            issue("V3", `computed access to '${v}'`);
+        if (m.computed) {
+          const value = staticString(m.property);
+          if (value !== null && FORBIDDEN.has(value))
+            issue("V3", `computed access to '${value}'`);
         }
         break;
       }

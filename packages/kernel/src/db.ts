@@ -5,7 +5,7 @@
 import sqlite3InitModule, { type Database, type Sqlite3Static } from "@sqlite.org/sqlite-wasm";
 import { ClayError } from "./errors";
 
-export type SqlValue = string | number | null;
+export type SqlValue = string | number | Uint8Array | null;
 export type SqlRow = Record<string, SqlValue>;
 
 export interface DbDriver {
@@ -23,6 +23,8 @@ export interface DbDriver {
 export const SYSTEM_TABLES = [
   "tables_registry", "version_log", "panel_blobs", "panel_tombstones",
   "usage_events", "suggestions", "settings", "checkpoints", "attempts", "inactive_cells",
+  "operation_batches",
+  "automations", "automation_runs", "automation_matches", "record_events", "notifications",
 ] as const;
 
 let sqlite3Promise: Promise<Sqlite3Static> | null = null;
@@ -131,12 +133,19 @@ function deserializeInto(s: Sqlite3Static, db: Database, bytes: Uint8Array): voi
   db.checkRc(rc);
 }
 
+const SAFE_DB_IDENTIFIER = /^[a-z_][a-z0-9_]{0,63}$/;
+function dbIdentifier(name: string): string {
+  if (!SAFE_DB_IDENTIFIER.test(name))
+    throw new Error(`unsafe database identifier '${name}'`);
+  return `"${name}"`;
+}
+
 function copyRows(from: DbDriver, fromTable: string, to: DbDriver, toTable: string): void {
   for (const row of from.select(`SELECT * FROM ${fromTable}`)) {
     const cols = Object.keys(row);
     if (cols.length === 0) continue;
     to.exec(
-      `INSERT INTO ${toTable} (${cols.map(c => `"${c}"`).join(", ")})
+      `INSERT INTO ${toTable} (${cols.map(dbIdentifier).join(", ")})
        VALUES (${cols.map(() => "?").join(", ")})`,
       cols.map(c => row[c] ?? null));
   }
@@ -149,6 +158,7 @@ export async function openDriverFromBytes(
   const s = await sqlite3();
   const db = new s.oo1.DB(":memory:");
   deserializeInto(s, db, user);
+  db.exec("PRAGMA trusted_schema = OFF");
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("ATTACH ':memory:' AS sys");
   const driver = new SqliteWasmDriver(db);
@@ -156,6 +166,7 @@ export async function openDriverFromBytes(
 
   const temp = new s.oo1.DB(":memory:");
   deserializeInto(s, temp, system);
+  temp.exec("PRAGMA trusted_schema = OFF");
   const tempDriver = new SqliteWasmDriver(temp);
   for (const table of SYSTEM_TABLES) {
     const exists = tempDriver.select(
@@ -166,21 +177,67 @@ export async function openDriverFromBytes(
   return driver;
 }
 
-/** Copy everything (user schema + rows, system rows) into a fresh target —
- * the import swap for persistent (OPFS) targets. */
-export function copyDatabase(from: DbDriver, to: DbDriver): void {
-  const objects = from.select(
-    `SELECT type, name, sql FROM main.sqlite_master
-     WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
-     ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END`);
-  for (const o of objects) to.exec(String(o.sql));
-  for (const o of objects) {
-    if (o.type !== "table") continue;
-    copyRows(from, `main."${String(o.name)}"`, to, `main."${String(o.name)}"`);
-  }
-  to.exec(SYSTEM_SCHEMA_SQL);
-  for (const table of SYSTEM_TABLES)
-    copyRows(from, `sys.${table}`, to, `sys.${table}`);
+/** Canonical, already validated main-database shape used for archive installation. */
+export type DatabaseCopyShape = {
+  tables: Array<{ name: string; sql: string }>;
+  indexes: Array<{ name: string; table: string; column: string }>;
+};
+
+function createCanonicalMainInfrastructure(driver: DbDriver): void {
+  driver.exec(`CREATE TABLE "row_history"(
+    "id" TEXT PRIMARY KEY, "table" TEXT NOT NULL, "row_id" TEXT NOT NULL,
+    "at" TEXT NOT NULL, "before_json" TEXT NOT NULL,
+    "after_json" TEXT, "batch_id" TEXT, "change_kind" TEXT, "sequence" INTEGER)`);
+  driver.exec(`CREATE INDEX "idx_row_history_batch" ON "row_history"("batch_id")`);
+  driver.exec(`CREATE UNIQUE INDEX "idx_row_history_sequence" ON "row_history"("sequence")`);
+  driver.exec(`CREATE TABLE "__clay_attachments"(
+    "id" TEXT PRIMARY KEY, "name" TEXT NOT NULL, "mime" TEXT NOT NULL,
+    "size" INTEGER NOT NULL, "sha256" TEXT NOT NULL, "bytes" BLOB NOT NULL,
+    "created_at" TEXT NOT NULL, "deleted_at" TEXT)`);
+}
+
+/** Atomically replace a target with validated rows and trusted canonical DDL. */
+export function copyDatabase(
+  from: DbDriver, to: DbDriver, shape: DatabaseCopyShape, verify?: () => void,
+): void {
+  to.tx(() => {
+    const existing = to.select(
+      `SELECT type, name FROM main.sqlite_master
+       WHERE type IN ('trigger', 'view', 'table') AND name NOT LIKE 'sqlite_%'
+       ORDER BY CASE type WHEN 'trigger' THEN 0 WHEN 'view' THEN 1 ELSE 2 END`,
+    );
+    for (const object of existing) {
+      const type = String(object.type).toUpperCase();
+      if (type !== "TRIGGER" && type !== "VIEW" && type !== "TABLE")
+        throw new Error(`unsafe target object type '${type}'`);
+      to.exec(`DROP ${type} ${dbIdentifier(String(object.name))}`);
+    }
+
+    for (const table of shape.tables) {
+      dbIdentifier(table.name);
+      if (!/^CREATE\s+TABLE\b/i.test(table.sql)
+          || /^CREATE\s+VIRTUAL\s+TABLE\b/i.test(table.sql))
+        throw new Error(`unsafe canonical table definition '${table.name}'`);
+      to.exec(table.sql);
+    }
+    createCanonicalMainInfrastructure(to);
+    for (const table of shape.tables) {
+      const name = dbIdentifier(table.name);
+      copyRows(from, `main.${name}`, to, `main.${name}`);
+    }
+    copyRows(from, `main."row_history"`, to, `main."row_history"`);
+    copyRows(from, `main."__clay_attachments"`, to, `main."__clay_attachments"`);
+    for (const index of shape.indexes) {
+      to.exec(`CREATE INDEX ${dbIdentifier(index.name)} ON ${dbIdentifier(index.table)}(${dbIdentifier(index.column)})`);
+    }
+
+    to.exec(SYSTEM_SCHEMA_SQL);
+    for (const table of SYSTEM_TABLES) {
+      to.exec(`DELETE FROM sys.${dbIdentifier(table)}`);
+      copyRows(from, `sys.${dbIdentifier(table)}`, to, `sys.${dbIdentifier(table)}`);
+    }
+    verify?.();
+  });
 }
 
 /** In-memory user.db with an in-memory system.db attached as `sys`. */
@@ -351,6 +408,34 @@ CREATE TABLE IF NOT EXISTS sys.attempts(
 CREATE TABLE IF NOT EXISTS sys.inactive_cells(
   table_name TEXT NOT NULL, column_name TEXT NOT NULL, row_id TEXT NOT NULL,
   PRIMARY KEY(table_name, column_name, row_id));
+CREATE TABLE IF NOT EXISTS sys.operation_batches(
+  id TEXT PRIMARY KEY, at TEXT NOT NULL, source TEXT NOT NULL,
+  summary TEXT NOT NULL, changed_count INTEGER NOT NULL,
+  created_json TEXT NOT NULL, undone_at TEXT);
+CREATE TABLE IF NOT EXISTS sys.automations(
+  id TEXT PRIMARY KEY, definition_json TEXT NOT NULL,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_event_seq INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS sys.automation_runs(
+  id TEXT PRIMARY KEY, automation_id TEXT NOT NULL, at TEXT NOT NULL,
+  trigger_key TEXT NOT NULL, status TEXT NOT NULL,
+  matched_count INTEGER NOT NULL, changed_count INTEGER NOT NULL,
+  batch_id TEXT, error_code TEXT, undone_at TEXT,
+  UNIQUE(automation_id, trigger_key));
+CREATE TABLE IF NOT EXISTS sys.automation_matches(
+  automation_id TEXT NOT NULL, row_id TEXT NOT NULL,
+  PRIMARY KEY(automation_id, row_id));
+CREATE TABLE IF NOT EXISTS sys.record_events(
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, at TEXT NOT NULL,
+  table_name TEXT NOT NULL, row_id TEXT NOT NULL, kind TEXT NOT NULL,
+  changed_fields_json TEXT NOT NULL, origin TEXT NOT NULL, row_json TEXT);
+CREATE TABLE IF NOT EXISTS sys.notifications(
+  id TEXT PRIMARY KEY, at TEXT NOT NULL, automation_id TEXT NOT NULL,
+  run_id TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL,
+  table_name TEXT, row_id TEXT, read_at TEXT, dismissed_at TEXT);
+CREATE INDEX IF NOT EXISTS sys.idx_record_events_table_seq
+  ON record_events(table_name, seq);
+CREATE INDEX IF NOT EXISTS sys.idx_automation_runs_rule
+  ON automation_runs(automation_id, at);
 CREATE TABLE IF NOT EXISTS sys.private_metric_state(
   id INTEGER PRIMARY KEY CHECK(id = 1), schema_version INTEGER NOT NULL,
   collection_enabled INTEGER NOT NULL, first_ready_day INTEGER,

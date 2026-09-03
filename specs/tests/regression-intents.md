@@ -1,4 +1,4 @@
-# The 25-intent regression suite (doc 08 §4)
+# The 30-case regression suite (doc 08 §4)
 Each: context (A=Groom, B=Track, C=Log), intent, expected outcome.
 Gate: >=90% first-pass commit on 1–20; 100% safe on 21–25; clarify hit
 >=4/5 on the marked ones.
