@@ -510,6 +510,29 @@ describe("record-aware primitives", () => {
     }
     expect(opened).toEqual(Array.from({ length: 4 }, () => ({ table: "projects", id: recordId })));
   });
+
+  it("does not steal Enter or Space from nested Flow action buttons", () => {
+    const recordId = "018f0000-0000-7000-8000-000000000100";
+    const opened: string[] = [];
+    let advanced = 0;
+    const c = document.createElement("div");
+    render(h(Flow, {
+      stages: [{ key: "open", label: "Open" }, { key: "done", label: "Done" }],
+      items: [{ id: recordId, title: "Apollo", stage: "open" }],
+      onAdvance: () => { advanced++; },
+    }), c, { primaryTable: "projects", openRecord: (_table, id) => opened.push(id) });
+    const button = c.querySelector<HTMLButtonElement>(".clay-flow-advance")!;
+    for (const key of ["Enter", " "]) {
+      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      button.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+    }
+    expect(opened).toEqual([]);
+    button.click();
+    button.click();
+    expect(advanced).toBe(1);
+    expect(opened).toEqual([]);
+  });
 });
 
 describe("Table sorting (interactivity)", () => {

@@ -151,6 +151,7 @@ function bindDefaultRecordOpen(target: HTMLElement, open: (event: Event) => void
   target.setAttribute("aria-label", "Open record");
   target.addEventListener("click", open);
   target.addEventListener("keydown", event => {
+    if (event.target !== event.currentTarget) return;
     if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
     open(event);
