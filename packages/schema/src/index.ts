@@ -38,6 +38,132 @@ export const JsonValue: z.ZodType<Json> = z.lazy(() =>
            z.array(JsonValue), z.record(JsonValue)]));
 export const JsonScalar = z.union([z.string(), z.number(), z.boolean()]);
 
+// ---------- A/B target identity and Temporary eligibility (ADR-048) ----------
+const UINT64_MAX = 18_446_744_073_709_551_615n;
+function isUInt64Decimal(value: string): boolean {
+  if (!/^(?:0|[1-9][0-9]{0,19})$/.test(value)) return false;
+  try { return BigInt(value) <= UINT64_MAX; } catch { return false; }
+}
+
+export const UInt64Decimal = z.string().refine(isUInt64Decimal, "canonical uint64 decimal required");
+const lowerBase32Id = (prefix: string): z.ZodString =>
+  z.string().regex(new RegExp(`^${prefix}_[a-z2-7]{26}$`));
+export const AppInstanceId = lowerBase32Id("app");
+export const GenerationId = lowerBase32Id("gen");
+export const Sha256 = z.string().regex(/^sha256:[0-9a-f]{64}$/);
+
+export const TargetIdentityV1 = z.object({
+  appInstanceId: AppInstanceId,
+  activeGenerationId: GenerationId,
+  lineageEpoch: UInt64Decimal,
+  stateRevision: UInt64Decimal,
+  stateDigest: Sha256,
+}).strict();
+export type TargetIdentityV1 = z.infer<typeof TargetIdentityV1>;
+
+export const TemporaryUserChoice = z.literal("accepted_temporary_after_loss_boundary").nullable();
+export const TemporaryEligibilityV1 = z.object({
+  schema: z.literal(1),
+  catalogReadable: z.literal(true),
+  catalogAppCount: z.literal(0),
+  namespaceInventoryReadable: z.literal(true),
+  durableNamespaceCount: z.literal(0),
+  jobInventoryReadable: z.literal(true),
+  pendingOperationCount: z.literal(0),
+  capability: z.enum(["unsupported", "non_persistent"]),
+  userChoice: TemporaryUserChoice,
+}).strict();
+export type TemporaryEligibilityV1 = z.infer<typeof TemporaryEligibilityV1>;
+
+export const DeviceState = z.enum([
+  "checking", "temporary_choice_required", "temporary", "needs_protection",
+  "checkpointing", "protected_on_device", "locked_or_unknown",
+]);
+export type DeviceState = z.infer<typeof DeviceState>;
+export const DurableStoreCapability = z.enum([
+  "supported", "unsupported", "non_persistent", "unknown",
+]);
+export type DurableStoreCapability = z.infer<typeof DurableStoreCapability>;
+export const ExpectedStoreFailure = z.enum([
+  "restricted", "denied", "thrown", "locked", "corrupt", "quota", "attach", "unclassified",
+]);
+export type ExpectedStoreFailure = z.infer<typeof ExpectedStoreFailure>;
+export type TemporaryUserChoice = z.infer<typeof TemporaryUserChoice>;
+export const ProtectionReasonCode = z.enum([
+  "catalog_unavailable", "inventory_unavailable", "transaction_uncertified",
+  "store_unavailable", "expected_store_failure", "temporary_ineligible",
+  "temporary_choice_required", "persistence_unconfirmed", "checkpoint_missing",
+  "checkpoint_stale", "checkpoint_invalid", "generation_not_selected",
+]);
+export type ProtectionReasonCode = z.infer<typeof ProtectionReasonCode>;
+const NeedsProtectionReason = z.enum([
+  "persistence_unconfirmed", "checkpoint_missing",
+  "checkpoint_stale", "checkpoint_invalid", "generation_not_selected",
+]);
+const LockedOrUnknownReason = z.enum([
+  "catalog_unavailable", "inventory_unavailable", "store_unavailable",
+  "expected_store_failure", "temporary_ineligible", "transaction_uncertified",
+]);
+export const DeviceStateResultV1 = z.discriminatedUnion("state", [
+  z.object({ state: z.literal("checking"), reasonCode: z.null() }).strict(),
+  z.object({
+    state: z.literal("temporary_choice_required"),
+    reasonCode: z.literal("temporary_choice_required"),
+  }).strict(),
+  z.object({ state: z.literal("temporary"), reasonCode: z.null() }).strict(),
+  z.object({ state: z.literal("needs_protection"), reasonCode: NeedsProtectionReason }).strict(),
+  z.object({ state: z.literal("checkpointing"), reasonCode: z.null() }).strict(),
+  z.object({ state: z.literal("protected_on_device"), reasonCode: z.null() }).strict(),
+  z.object({ state: z.literal("locked_or_unknown"), reasonCode: LockedOrUnknownReason }).strict(),
+]);
+export type DeviceStateResultV1 = z.infer<typeof DeviceStateResultV1>;
+
+const InventoryCount = z.number().int().nonnegative().safe().nullable();
+export const CheckpointObservationV1 = z.discriminatedUnion("state", [
+  z.object({ state: z.literal("none"), target: z.null() }).strict(),
+  z.object({ state: z.literal("in_progress"), target: TargetIdentityV1 }).strict(),
+  z.object({ state: z.literal("valid"), target: TargetIdentityV1 }).strict(),
+  z.object({ state: z.literal("stale"), target: TargetIdentityV1.nullable() }).strict(),
+  z.object({ state: z.literal("invalid"), target: TargetIdentityV1.nullable() }).strict(),
+  z.object({ state: z.literal("generation_not_selected"), target: TargetIdentityV1.nullable() }).strict(),
+]);
+export type CheckpointObservationV1 = z.infer<typeof CheckpointObservationV1>;
+
+export const DeviceProtectionInputV1 = z.object({
+  checksComplete: z.boolean(),
+  expectedStoreFailure: ExpectedStoreFailure.nullable(),
+  catalogReadable: z.boolean(),
+  catalogAppCount: InventoryCount,
+  namespaceInventoryReadable: z.boolean(),
+  durableNamespaceCount: InventoryCount,
+  jobInventoryReadable: z.boolean(),
+  pendingOperationCount: InventoryCount,
+  capability: DurableStoreCapability,
+  userChoice: TemporaryUserChoice,
+  storeOpen: z.enum(["yes", "no", "unknown"]),
+  transactionCertified: z.boolean(),
+  persisted: z.enum(["yes", "no", "unknown"]),
+  target: TargetIdentityV1.nullable(),
+  checkpoint: CheckpointObservationV1,
+}).strict().superRefine((value, ctx) => {
+  const inventories = [
+    ["catalog", value.catalogReadable, value.catalogAppCount],
+    ["namespace", value.namespaceInventoryReadable, value.durableNamespaceCount],
+    ["job", value.jobInventoryReadable, value.pendingOperationCount],
+  ] as const;
+  for (const [name, readable, count] of inventories) {
+    if (readable !== (count !== null))
+      ctx.addIssue({ code: "custom", message: `${name} readability/count mismatch` });
+  }
+  if (value.target !== null && value.catalogReadable && value.namespaceInventoryReadable
+      && ((value.catalogAppCount ?? 0) < 1 || (value.durableNamespaceCount ?? 0) < 1))
+    ctx.addIssue({ code: "custom", message: "selected target requires catalog app and namespace" });
+  if (value.target === null && value.checkpoint.target !== null)
+    ctx.addIssue({ code: "custom", message: "checkpoint target requires selected target" });
+});
+export type DeviceProtectionInputV1 = z.infer<typeof DeviceProtectionInputV1>;
+
+
 export const ColumnSpec = z.object({
   name: Ident,
   label: z.string().min(1).max(60).optional(),

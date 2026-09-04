@@ -218,7 +218,7 @@ Let one app have named, reversible operating modes such as Morning review, Clien
 
 Clay provides app-local built-in lenses plus user-saved named lenses. Saved
 lenses persist visible panel incarnations and bounded layout; they survive
-reload, can be deleted, and return safely to All views. Applying a
+reload, can be deleted, and return safely to Workspace. Applying a
 lens changes only a shell projection and never copies records or creates a
 shape version.
 

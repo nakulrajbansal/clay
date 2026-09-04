@@ -37,7 +37,7 @@ afterEach(() => {
 });
 
 describe("useLensController stale reconciliation", () => {
-  it("resets an exhausted saved lens to All views after canonical storage loads", async () => {
+  it("resets an exhausted saved lens to Workspace after canonical storage loads", async () => {
     localStorage.setItem("clay_lens_app", savedId);
     const notices: string[] = [];
     const latest: { current: ReturnType<typeof useLensController> | null } = { current: null };

@@ -65,7 +65,24 @@ round-trip -> byte-level DB equality.
 Seed 50k rows / 20 panels fixture; assert budgets from doc 02 §8 in CI on a
 throttled profile (4x CPU slowdown) so numbers reflect median hardware.
 
-## 7. Launch criteria (all must hold)
+## 7. A/B authority and protection gates
+
+Schema and kernel tests exhaustively cover canonical uint64/ID/digest grammar,
+strict target tuples, exact Temporary eligibility, and total device-state
+precedence. Every unreadable, denied, unknown, corrupt, quota, attach, and
+unclassified vector must fail closed. Tests vary each target member independently;
+a checkpoint or handle from another generation/revision/digest never authorizes
+current success.
+
+A release-bound physical-transaction harness kills the worker/process at every
+named boundary, reopens from a fresh process, and checks the complete app/catalog
+fingerprint. It must prove all-before or all-after for the exact runtime/VFS and
+journal settings, or prove the selected colocation/recovery journal reconciles
+before any read/write port opens. Missing, stale, or failing certification keeps
+affected operations disabled or read-only/export-only. UI tests cannot substitute
+for storage evidence.
+
+## 8. Launch criteria (all must hold)
 
 L1 regression gate green 5 consecutive nights;
 L2 hostile-panel corpus green;

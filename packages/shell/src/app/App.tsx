@@ -36,6 +36,7 @@ import { buildTrustReceipt } from "./change-contract";
 import { useLensController } from "./useLensController";
 import { LazySurfaceBoundary } from "./LazySurfaceBoundary";
 import { ModalDialog } from "./ModalDialog";
+import { useWorkspaceMode, type WorkspaceMode } from "./workspace-mode";
 
 type Phase = "loading" | "onboarding" | "main" | "error";
 
@@ -161,6 +162,7 @@ export function App(): React.JSX.Element {
   const [phase, setPhase] = useState<Phase>("loading");
   const [apps, setApps] = useState<AppEntry[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
+  const [workspaceMode, setWorkspaceMode] = useWorkspaceMode(currentId);
   const [bootError, setBootError] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{ region: Region; index: number; col: number | null } | null>(null);
@@ -198,6 +200,15 @@ export function App(): React.JSX.Element {
     try { return localStorage.getItem("clay_reshape_open") !== "false"; }
     catch { return true; }
   });
+  const chooseWorkspaceMode = (mode: WorkspaceMode): void => {
+    setWorkspaceMode(mode);
+    if (mode !== "work") return;
+    setRailOpen(false);
+    setShowAutomations(false);
+    setShowData(false);
+    setShowShapeMap(false);
+    setShowPrivateMetrics(false);
+  };
   const dataStoreRef = useRef<StoreRpcClient | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastId = useRef(0);
@@ -1281,7 +1292,7 @@ export function App(): React.JSX.Element {
   };
 
   const region = (name: "top" | "main" | "side"): React.JSX.Element[] => {
-    const canArrange = canDrag && lensId === "all";
+    const canArrange = canDrag && lensId === "all" && workspaceMode === "customize";
     const els = visibleDisplay
       .filter(d => d.panel.placement.region === name)
       .map(d => {
@@ -1313,7 +1324,8 @@ export function App(): React.JSX.Element {
           >
           <PanelFrame
             panel={d.panel}
-            provenance={!d.isPreview && !scrub ? provenanceById.get(d.panel.panel_id) : undefined}
+            provenance={workspaceMode === "customize" && !d.isPreview && !scrub
+              ? provenanceById.get(d.panel.panel_id) : undefined}
             bridge={bridge}
             themeCss={themeCss}
             preview={d.isPreview}
@@ -1331,14 +1343,17 @@ export function App(): React.JSX.Element {
               ? (w): void => void setSize(d.panel.panel_id, { w }) : undefined}
             onSetHeight={canArrange && !d.isPreview
               ? (h): void => void setSize(d.panel.panel_id, { h }) : undefined}
-            onViewAs={canDrag && !d.isPreview && d.panel.declared_queries.length > 0
+            onViewAs={workspaceMode === "customize" && canDrag && !d.isPreview
+              && d.panel.declared_queries.length > 0
               ? (view): void => viewAs(d.panel, view) : undefined}
-            onEditData={!d.isPreview ? (table): void => openData(table) : undefined}
-            onRename={canDrag && !d.isPreview
+            onEditData={workspaceMode === "customize" && !d.isPreview
+              ? (table): void => openData(table) : undefined}
+            onRename={workspaceMode === "customize" && canDrag && !d.isPreview
               ? (title): void => void renamePanelLocal(d.panel.panel_id, title) : undefined}
-            onRemove={canDrag && !d.isPreview
+            onRemove={workspaceMode === "customize" && canDrag && !d.isPreview
               ? (): void => void removePanelLocal(d.panel.panel_id) : undefined}
-            onAskAbout={!d.isPreview ? (): void => askAboutPanel(d.panel) : undefined}
+            onAskAbout={workspaceMode === "customize" && !d.isPreview
+              ? (): void => askAboutPanel(d.panel) : undefined}
           />
           </Suspense>
         );
@@ -1383,6 +1398,8 @@ export function App(): React.JSX.Element {
         onSelectLens={selectLens}
         onSaveLens={saveCurrentLens}
         onDeleteLens={removeSavedLens}
+        workspaceMode={workspaceMode}
+        onWorkspaceModeChange={chooseWorkspaceMode}
       />
       {!persistent ? (
         <div className="banner">
@@ -1410,6 +1427,15 @@ export function App(): React.JSX.Element {
         />
         {display.length === 0 && !preview && !scrub ? (
           <div className="empty-canvas">
+            {workspaceMode === "work" ? <>
+              <div className="empty-canvas-spark" aria-hidden="true">✓</div>
+              <h2>Your workspace is ready</h2>
+              <p>Use Search to find or update work. Switch to Customize when you want to
+                add views, import data, or reshape the workspace.</p>
+              <button className="empty-chip" onClick={() => chooseWorkspaceMode("customize")}>
+                Customize workspace
+              </button>
+            </> : <>
             <div className="empty-canvas-spark">✦</div>
             <h2>What do you want to build?</h2>
             <p>Describe it in plain words, or <strong>upload a spreadsheet</strong> and
@@ -1434,6 +1460,7 @@ export function App(): React.JSX.Element {
               ))}
             </div>
             {busy ? <p className="empty-canvas-busy">Building…</p> : null}
+            </>}
           </div>
         ) : (
           <>
@@ -1516,7 +1543,7 @@ export function App(): React.JSX.Element {
         </Suspense>
         </LazySurfaceBoundary>
       ) : null}
-      {railOpen ? <ConversationRail
+      {workspaceMode === "customize" && railOpen ? <ConversationRail
         feed={feed}
         preview={preview}
         busy={busy || scrub !== null}

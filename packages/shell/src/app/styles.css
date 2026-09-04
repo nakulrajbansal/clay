@@ -103,6 +103,12 @@ button.link.danger { color: var(--danger); }
   background: var(--accent); box-shadow: inset 0 1px 0 rgba(255,255,255,.3),
   0 3px 8px color-mix(in srgb, var(--accent) 20%, transparent); transform: rotate(-5deg); }
 .appbar-switch { position: relative; }
+.appbar-mode { display: inline-flex; align-items: center; gap: 2px; padding: 3px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--bg-soft); }
+.appbar-mode-button { min-height: 28px; border: 0; border-radius: 7px; padding: 4px 10px;
+  background: transparent; color: var(--text-2); font: 650 12px/1 var(--font); }
+.appbar-mode-button.active { background: var(--panel); color: var(--accent-text); }
+.appbar-mode-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .appbar-current { display: flex; align-items: center; gap: 7px;
   border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--panel);
   padding: 6px 12px; font: inherit; font-weight: 600; cursor: pointer; transition: border-color .12s; }

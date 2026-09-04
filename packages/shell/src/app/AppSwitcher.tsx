@@ -7,6 +7,7 @@ import type { AppEntry } from "./apps";
 import type { Theme } from "./themes";
 import { isSavedLensId, type LensId, type SituationalLens } from "./lenses";
 import { ModalDialog } from "./ModalDialog";
+import type { WorkspaceMode } from "./workspace-mode";
 
 export function AppSwitcher(props: {
   apps: AppEntry[];
@@ -34,6 +35,8 @@ export function AppSwitcher(props: {
   onSelectLens: (id: LensId) => void;
   onSaveLens: (name: string) => Promise<void>;
   onDeleteLens: (id: LensId) => Promise<void>;
+  workspaceMode: WorkspaceMode;
+  onWorkspaceModeChange: (mode: WorkspaceMode) => void;
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -133,10 +136,20 @@ export function AppSwitcher(props: {
           </>
         ) : null}
       </div>
+      <div className="appbar-mode" role="group" aria-label="Workspace mode">
+        {(["work", "customize"] as const).map(mode => (
+          <button key={mode}
+            className={`appbar-mode-button${props.workspaceMode === mode ? " active" : ""}`}
+            aria-pressed={props.workspaceMode === mode}
+            onClick={() => props.onWorkspaceModeChange(mode)}>
+            {mode === "work" ? "Work" : "Customize"}
+          </button>
+        ))}
+      </div>
 
       <span className={`appbar-trust${props.persistent ? "" : " appbar-trust-warn"}`}>
         <span className="appbar-trust-dot" aria-hidden="true" />
-        {props.persistent ? "On this device" : "Session only"} · v{props.version}
+        {props.persistent ? "Stored on this device" : "Temporary session"} · v{props.version}
       </span>
       <div className="appbar-lens">
         <button
@@ -174,7 +187,7 @@ export function AppSwitcher(props: {
                     <em>{lens.capturedCount === undefined
                       ? lens.panelIds.length : `${lens.panelIds.length}/${lens.capturedCount}`}</em>
                   </button>
-                  {isSavedLensId(lens.id) ? (
+                  {props.workspaceMode === "customize" && isSavedLensId(lens.id) ? (
                     confirmDeleteLens === lens.id ? (
                       <div className="appbar-lens-delete-confirm" role="group"
                         aria-label={`Confirm delete lens ${lens.name}`}
@@ -198,7 +211,7 @@ export function AppSwitcher(props: {
                   ) : null}
                 </div>
               ))}
-              {savingLens ? (
+              {props.workspaceMode === "customize" ? (savingLens ? (
                 <div className="appbar-lens-save">
                   <input autoFocus value={lensDraft} maxLength={40}
                     aria-label="Saved lens name" placeholder="Lens name"
@@ -224,7 +237,7 @@ export function AppSwitcher(props: {
                   onClick={() => setSavingLens(true)}>
                   + Save current view
                 </button>
-              )}
+              )) : null}
           </ModalDialog>
         ) : null}
       </div>
@@ -238,6 +251,7 @@ export function AppSwitcher(props: {
         <span className="appbar-action-label">Search</span>
         <kbd className="appbar-shortcut">Ctrl K</kbd>
       </button>
+      {props.workspaceMode === "customize" ? <>
       <button
         className="appbar-action appbar-automation-btn"
         aria-label="Open automations"
@@ -308,6 +322,7 @@ export function AppSwitcher(props: {
       >
         <span aria-hidden="true">{props.railOpen ? "◧" : "◨"}</span>
       </button>
+      </> : null}
     </header>
   );
 }

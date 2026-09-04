@@ -155,11 +155,21 @@ metadata backfill where needed; malformed or partially guarded archives fail clo
 
 ## 9. Storage lifecycle
 
-navigator.storage.persist() requested at first commit; status surfaced in
-Settings. Usage estimate shown. usage_events ring-buffer trimmed at 50k.
-shadow.db deleted after every pipeline run. If OPFS unavailable (old
-browser), boot falls back to in-memory + prominent "your data will not
-persist" banner + export nag — supported but hostile on purpose.
+The device catalog and every authorizing proof use the canonical target tuple
+`(appInstanceId, activeGenerationId, lineageEpoch, stateRevision, stateDigest)`.
+Release-local names such as archive or protection revision are aliases only and
+must not become independent counters. IDs and uint64 decimal counters use the
+closed ADR-048 grammars and never derive current authority from imported values.
+
+`navigator.storage.persist()` is requested through the protected-first-write
+flow; status is evidence-derived and surfaced in Settings. Usage estimate shown.
+`usage_events` ring-buffer trimmed at 50k. `shadow.db` is deleted after every
+pipeline run. Unsupported or non-persistent storage may offer Temporary only
+after readable authoritative inventories prove exactly zero apps, zero durable
+namespaces, and zero pending operations, the loss boundary is displayed, and the
+user explicitly chooses it. The same proof without choice creates no app/store.
+Denied, thrown, locked, corrupt, quota, attach, unreadable, or unknown outcomes
+open locked/read-only recovery and never seed a memory replacement.
 Attachments are capped at 10 MB each, 20 per field, 200 MB active bytes, and
 250 MB total retained bytes per app. Removed bytes are retained for 30 days so row restore remains useful, then
 the trusted cleanup action may purge only old and currently unreferenced blobs.

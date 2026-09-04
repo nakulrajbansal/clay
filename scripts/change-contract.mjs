@@ -248,7 +248,7 @@ deleteLensConfirm = page.getByRole("group", { name: "Confirm delete lens Review 
 await deleteLensConfirm.getByRole("button", { name: "Delete", exact: true }).click();
 await page.waitForTimeout(100);
 check(await page.locator(".panel-frame").count() === allPanelCount,
-  "deleting the active saved lens returns to All views");
+  "deleting the active saved lens returns to Workspace");
 
 for (let index = 1; index <= 24; index++) {
   const trigger = page.getByRole("button", { name: /Choose situational lens/ });

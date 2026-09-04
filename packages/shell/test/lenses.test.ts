@@ -60,6 +60,12 @@ describe("situational lenses", () => {
     ]);
   });
 
+  it("names the stable all lens Workspace in ordinary language", () => {
+    expect(buildSituationalLenses(panels).find(lens => lens.id === "all")).toMatchObject({
+      name: "Workspace", description: "Your complete workspace",
+    });
+  });
+
   it("filters panels without copying or reordering them", () => {
     expect(applyLens(panels, "review").map(item => item.panel_id))
       .toEqual(["pulse", "work"]);

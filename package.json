@@ -18,7 +18,8 @@
     "verify:providers": "node scripts/provider-connections.mjs evidence",
     "verify:lazy-boundaries": "node scripts/lazy-boundaries.mjs evidence",
     "verify:operations": "node scripts/connected-operations.mjs evidence",
-    "verify:product": "pnpm verify:shape-map && pnpm verify:change-contract && pnpm verify:providers && pnpm verify:lazy-boundaries && pnpm verify:operations",
+    "verify:workspace-mode": "node scripts/workspace-mode.mjs evidence/workspace-mode",
+    "verify:product": "pnpm verify:shape-map && pnpm verify:change-contract && pnpm verify:providers && pnpm verify:lazy-boundaries && pnpm verify:operations && pnpm verify:workspace-mode",
     "verify:browsers": "node scripts/browsers.mjs",
     "verify:multi-app": "node scripts/multi-app-archive.mjs",
     "regression": "pnpm --filter @clay/mutation regression"

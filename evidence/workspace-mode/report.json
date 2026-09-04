@@ -1,0 +1,41 @@
+{
+  "url": "http://127.0.0.1:4174",
+  "buildEntry": "assets/index-Bg-qP3mT.js",
+  "failures": [],
+  "consoleErrors": [],
+  "externalRequests": [],
+  "axeViolations": 0,
+  "layouts": {
+    "work": {
+      "viewportWidth": 1440,
+      "documentScrollWidth": 1440,
+      "headerScrollWidth": 1440,
+      "headerClientWidth": 1440,
+      "modeInsideHeader": true
+    },
+    "customize": {
+      "viewportWidth": 1440,
+      "documentScrollWidth": 1440,
+      "headerScrollWidth": 1440,
+      "headerClientWidth": 1440,
+      "modeInsideHeader": true
+    },
+    "workCompact": {
+      "viewportWidth": 720,
+      "documentScrollWidth": 720,
+      "headerScrollWidth": 720,
+      "headerClientWidth": 720,
+      "modeInsideHeader": true
+    }
+  },
+  "screenshots": [
+    "evidence/workspace-mode/work.png",
+    "evidence/workspace-mode/customize.png",
+    "evidence/workspace-mode/work-compact.png"
+  ],
+  "screenshotSha256": {
+    "evidence/workspace-mode/work.png": "97e102d1c4d1ceaf66f5d2ded33a58203890801a955cce2e7a593112fac570f3",
+    "evidence/workspace-mode/customize.png": "08c4fd884b81ed19c548b4949a95ad2ae0db93274b8d6b10c5b0dc2c291e94b3",
+    "evidence/workspace-mode/work-compact.png": "ec1320e781294d5095fb3f91fdb9b70577e11959f8462e0ccb150f193deb0c19"
+  }
+}

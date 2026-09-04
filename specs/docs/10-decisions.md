@@ -762,3 +762,33 @@ ADR-047 (2026-09-02) File bytes stay local, verified, bounded, and portable
   with transactional rollback plus read-back before commit.
   CONSEQUENCE: rich records remain offline, reversible, and portable without
   widening panel authority or hiding file custody behind a service.
+
+ADR-048 (2026-09-04) Exact target identity and protection state are worker-owned and fail closed
+  CONTEXT: the shell currently treats `localStorage` as the app registry and
+  collapses any OPFS open failure into a writable memory database. A/B require
+  truthful protection, non-reusable identity, and no overwrite when durable state
+  is unreadable or ambiguous.
+  DECISION: add closed shared schemas for the complete target tuple
+  `(appInstanceId, activeGenerationId, lineageEpoch, stateRevision,
+  stateDigest)`, durable catalog snapshots, storage-open outcomes,
+  Temporary eligibility, and device protection state. UInt64 values are canonical
+  decimal strings in `0..18446744073709551615`; app/generation IDs use their
+  prefix plus exactly 26 lowercase RFC 4648 base32 characters `[a-z2-7]`; state
+  digests are `sha256:` plus 64 lowercase hex characters. The DB worker is the only
+  authority for catalog selection and identity; `localStorage` becomes a
+  discardable presentation cache. Expected, denied, unreadable, locked, corrupt,
+  quota, attach, and unclassified storage failures yield `locked_or_unknown` and
+  cannot create or seed a memory replacement. `temporary` requires readable
+  authoritative inventories proving exactly zero apps, zero durable namespaces,
+  and zero pending operations, explicit unsupported or non-persistent capability,
+  the displayed loss boundary, and recorded user choice. The same proof without
+  choice yields `temporary_choice_required` and creates no app/store. Device
+  protection requires evidence matching the catalog-selected complete target.
+  Cross-database operations may claim physical atomicity only after a release-bound
+  crash/reopen certificate passes for the exact SQLite-WASM/OPFS topology, or a
+  separately selected colocation/recovery-journal fallback passes. Until then,
+  affected mutation routes remain disabled or read-only/export-only.
+  CONSEQUENCE: initial work adds schemas, pure derivation, and tests only. The
+  worker does not publish a protection state until catalog authority and
+  write-route enforcement land together. Later slices add catalog migration,
+  write fencing, checkpoints, backup, and recovery under the same closed contracts.
