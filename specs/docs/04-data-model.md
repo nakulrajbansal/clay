@@ -235,13 +235,56 @@ abandonment finalizes the row and leaves a permanent gap. Both tables are an all
 none census exclusion and do not change canonical app state. They remain non-exported
 and non-writable in production until format 5 and the guarded catalog coordinator land.
 
-The catalog selected-target CAS validates the current lease and write epoch, exact
-catalog generation, complete expected target, selected app/generation/lineage, revision
-high-water, and monotonic revision/digest change. It updates the app head and catalog
-generation in one transaction, rereads both, and returns a strict publication. The
-immutable generation descriptor remains the sealed initial target while the app entry
-advances within that generation. This primitive remains non-production until catalog
-reservation and target commit execute under one guard.
+Each catalog app entry retains an immutable journal-genesis generation, lineage,
+protection revision, and digest. Validation starts at that explicit tuple rather than
+the earliest surviving generation, requires every revision through high-water, and
+rejects erased history, unreferenced retained identities, reused catalog-generation
+events, or a finalization generation other than the immediate successor of reservation.
+`catalog_generation_events` is a contiguous one-row-per-generation log from 1 through
+`catalog_root.catalog_generation`. An app-seed event pins the complete app, generation,
+lineage, revision, digest schema, and state digest, so a coherent app-row and descriptor
+rewrite cannot re-anchor history. App seeding, lease issuance, reservation, ordinary
+finalization, and expired-owner takeover each write their typed event in the same CAS
+transaction. Root rollback, a missing event, a reused generation, a mismatched seed target,
+or an event without its corresponding app, lease, or reservation fails catalog open.
+
+Catalog revision reservations bind the authority incarnation, reserving catalog
+generation, original write epoch/lease/release, complete expected target, operation,
+request digest, revision, and canonical reservation time. Commit or abandonment records
+the distinct finalizing epoch/lease/release, successor catalog generation, canonical
+time, and, for commit, the exact published generation, lineage, and state digest.
+Reservation time must fall within its reserving lease; finalization time must fall
+within its finalizing lease and cannot precede reservation. Instants use exact UTC
+millisecond ISO text. Ordinary finalization uses the exact reserving lease. Takeover may
+use only the next write epoch after the prior lease expired, and only to abandon. Until a
+complete lineage-reservation journal lands, commits cannot change generation or lineage.
+Any finalization under that successor epoch must be recorded as `recovery_takeover`;
+ordinary commit or abandonment events must use the original reserving epoch.
+
+One same-driver coordinator reserves target and catalog journals in one physical
+transaction, then commits canonical data, Merkle state, target header/journal, catalog
+head/journal, and catalog generation in another. A trusted worker clock, not request
+timestamps, authorizes every write, with the final fence revalidated before mutation code
+runs. Transaction depth and guard ownership live only in a module-private WeakMap for a
+factory-registered physical driver. An opaque owner-bound capability opens internal
+savepoints, while an engine `sqlite3_set_authorizer` reserves transaction and savepoint
+opcodes for that private control path. Every exposed SQL call requires primitive text and a
+cloned array of supported bind values before inspection or forwarding. Public transaction
+control, options-object SQL, malformed binds, and raw writes remain denied before and during
+authority. Autocommit is checked before authorization and after release. Forwarding
+wrappers cannot forge that identity, and a raw or second-wrapper outer transaction cannot
+return a receipt that later rolls back. Exact current committed replay is read-only and may
+return its persisted receipt after lease expiry only when the caller supplies the catalog
+generation and fence and both mirrored journals authenticate the same immutable request.
+Every caller-controlled commit field is captured once before validation; the parsed
+operation ID, rather than a reread property, drives lookup, reservation, finalization,
+publication, abandonment, and transaction-local readback from both journals. Change and
+field arrays are copied by trusted indexed traversal into fixed-shape records; caller-owned
+iteration methods are never invoked. Target-only
+committed evidence is insufficient. An expired reserved owner is fenced by
+one recovery transaction that advances the write epoch, mints a new lease, and abandons
+both mirrored rows while preserving the gap. These primitives remain non-production
+until worker boot and every write route use this boundary.
 
 `navigator.storage.persist()` is requested through the protected-first-write
 flow; status is evidence-derived and surfaced in Settings. Usage estimate shown.

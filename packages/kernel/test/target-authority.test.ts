@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TargetAuthorityHeaderV1, TargetEvidenceV1 } from "@clay/schema";
+import { TargetAuthorityHeaderV1, TargetEvidenceV1 } from "@clay/schema/catalog";
 import type { DbDriver } from "../src/index";
 import { enumerateCanonicalStateV1 } from "../src/canonical-state";
 import { StateMerkleIndex } from "../src/state-merkle-index";

@@ -836,26 +836,50 @@ ADR-049 (2026-09-04) Catalog schema 1 proceeds; raw SQLite-pair target digests a
   reservation is a separate durable, operation-idempotent commit that advances only
   high-water and may leave an abandoned permanent gap. It does not advance current
   state or authorize a writer.
-  Canonical no-ops return current evidence without mutation or reservation. The
-  kernel tracer may reserve then commit one meaningful target change only when data,
-  Merkle publication, target current revision, journal finalization, and full-census
-  read-back share one guarded transaction; failure rolls that transaction back and
-  separately abandons the durable reservation. A committed row retains its exact state
-  digest, original expected revision/digest, and canonical fingerprint of a private
+  Canonical no-ops return current evidence without mutation or reservation. A meaningful
+  tracer reserves matching target and catalog rows in one physical transaction, then
+  commits data, Merkle publication, target current revision, both journal rows, catalog
+  head/generation, and full-census read-back in another. Failure rolls the commit back
+  and abandons the same consumed revision in both journals. A committed row retains its
+  exact state digest, original expected revision/digest, and canonical fingerprint of a private
   cloned change set. Matching operation-id retry of the current commit returns original
   evidence without replaying mutation or allocating another revision; historical replay
   fails closed until an authenticated current-anchored journal chain exists, and
   mismatched reuse fails closed. The coordinator invokes the canonical
   census itself with its trusted registry and checks root plus leaf count, rather than
-  accepting a caller-supplied digest attestation. Thenable mutation callbacks fail before
-  Merkle publication and their synchronous writes roll back. This coordinator remains
-  non-exported and cannot authorize production until catalog CAS, lease/fence, worker
-  serialization, every write route, and archive format 5 join the same boundary.
-  A selected-target catalog CAS may land as a non-exported primitive: it validates the
-  current lease, expected target, catalog generation, generation/lineage, and revision
-  high-water, then publishes app head plus catalog generation atomically with read-back.
-  It does not authorize production until target reservation/commit and catalog
-  reservation/publication share the same guarded boundaries.
+  accepting a caller-supplied digest attestation. It captures every caller-controlled
+  commit field once and verifies the single parsed operation ID in both persisted journals
+  before returning success. Trusted indexed traversal reconstructs change fields into
+  private fixed-shape records without invoking caller-owned array methods. Object and
+  callable-function thenable
+  mutation callbacks fail before Merkle publication and their synchronous writes roll back.
+  The coordinator opens the
+  catalog only through its own guarded driver. Guard ownership and transaction depth are
+  held only in a module-private WeakMap for a factory-registered physical driver. An opaque
+  owner-bound capability and `sqlite3_set_authorizer` reserve savepoint/transaction opcodes
+  for private control. Primitive SQL and cloned supported bind arrays are validated before
+  forwarding; options objects, malformed binds, appended trigger transaction control, raw
+  writes, a second guard, and authorization inside an existing transaction are rejected.
+  Autocommit is verified before authority and after release. Forwarding wrappers cannot
+  forge identity. A trusted injected worker clock, not caller journal
+  timestamps, checks the final lease before mutation code is invoked.
+  Catalog app rows retain an immutable genesis tuple. A contiguous
+  `catalog_generation_events` journal records every root-generation advance and binds it
+  to app seed, lease, reservation, finalization, or takeover evidence. The app-seed event
+  pins the complete immutable genesis target, preventing a coherent descriptor re-anchor.
+  Finalization uses
+  the exact reserving fence or one expired-owner successor epoch, and lineage changes are
+  denied until their own complete journal exists. A successor-epoch finalization must be
+  `recovery_takeover`; ordinary commit and abandonment must remain on the reserving epoch.
+  Exact committed replay is read-only but still requires catalog generation/fence and
+  matching evidence in both journals; target-only committed evidence fails closed.
+  After an expired reserved owner,
+  one same-driver recovery transaction advances epoch/generation, creates a new lease,
+  and abandons both mirrored rows; the next revision remains usable while the gap stays
+  permanent. This coordinator remains non-exported and cannot authorize production
+  until worker serialization, every write route, and archive format 5 join the boundary.
+  Authority-only runtime schemas live at `@clay/schema/catalog`; the boot-reachable main
+  schema entry does not initialize unexported catalog/coordinator contracts.
   Target evidence is mandatory in a new archive format. Existing format 4 remains
   importable legacy input but cannot itself certify a target. A live driver rejects
   every SQL write outside one synchronous coordinator transaction. Independent

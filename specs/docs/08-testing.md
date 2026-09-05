@@ -115,27 +115,56 @@ Target-authority tests prove exact two-table schema read-back, strict header/hig
 invariants, Merkle-derived non-self-referential evidence, census-root stability,
 idempotent response-loss reservation, monotonic high-water, abandoned gaps, and no
 current-revision advancement before a data commit.
-Catalog publication tests prove lease and epoch validation, expected target and catalog
-generation CAS, immutable sealed-generation/current-head separation, strict read-back,
-and stale replay with no state change.
+Catalog tests prove strict mirrored reservation, commit, abandonment, immutable journal
+genesis, lease-contained lifecycle times, globally unique ordered catalog events,
+expected target and request binding, sealed-generation/current-head separation, exact
+read-back, stale reuse rejection, and read-only committed response replay.
+They also reject root-generation ABA rollback, missing or orphan generation events,
+foreign and older finalizing leases, non-UTC lifecycle times, and generation activation
+before a complete lineage journal exists.
 The guarded coordinator tracer authenticates expected target and Merkle prestate,
 returns a zero-write no-op without invoking mutation or creating a reservation,
 durably reserves before a meaningful write, and commits data, Merkle leaves/root,
-target current revision, journal finalization, and full-census read-back in one guarded
-transaction. Injected mutation failure rolls all target state back and commits the
-reservation as an abandoned permanent gap. Committed rows retain the exact state
+target current revision, catalog head, both journal finalizations, catalog generation,
+and full-census read-back in one guarded transaction. The catalog is opened only from
+the coordinator's guarded driver; authority classes are absent from the public kernel API,
+and no catalog object can enter through the commit input. Injected failure rolls all current
+state back and abandons the same revision
+in both journals. Committed rows retain the exact state
 digest plus original expected revision/digest and canonical fingerprint of a private
 cloned change set. A matching response-loss retry of the current committed operation
 returns its original evidence without mutation or another reservation; historical
 replay fails closed until a current-anchored journal chain exists. Reuse with another
 target or change set fails closed.
+Omitting catalog generation/fence from a committed retry fails before evidence is returned;
+target-only journal evidence cannot satisfy response-loss reconciliation.
 The coordinator invokes the trusted canonical census itself and compares root plus leaf
 count; callers cannot attest with an arbitrary digest callback, and callback mutation of
-caller-owned
-change arrays cannot alter the reserved request. Thenable mutation callbacks are rejected
-before Merkle publication and their synchronous writes roll back. Commands without a
-trusted registry and all production paths lacking catalog/fence integration remain
-rejected.
+caller-owned change arrays cannot alter the reserved request. A changing input accessor is
+read once; both persisted rows must retain that single parsed operation ID before success.
+Overridden outer and field-array iteration methods are not invoked during capture; mutation
+of their original elements after fingerprinting still rolls back against the private copy.
+Object and callable-function thenable mutation callbacks are rejected before Merkle
+publication and their synchronous writes roll back. Physical
+driver tests prove raw-driver, forwarding-wrapper, and second-wrapper transactions cannot
+bypass the one guard or return success inside a later rollback. Public `BEGIN`, `SAVEPOINT`,
+`COMMIT`, `ROLLBACK`, `ROLLBACK TO`, and `RELEASE` are rejected; private physical depth and
+autocommit checks bracket every receipt. Runtime probes also pass sqlite-wasm options
+objects, malformed bind containers, and trigger DDL followed by rollback/savepoint
+replacement; primitive input validation plus the engine authorizer rejects each before a
+receipt can escape. A freshly sampled trusted worker clock
+authorizes reserve, commit, retry, and abandonment; the final fence is checked before the
+mutation callback and caller journal timestamps are not accepted.
+
+Crash recovery tests leave both journals reserved, advance beyond lease expiry, then
+prove one same-driver transaction revokes the old owner, advances write epoch and
+catalog generation, mints a new lease, abandons both rows on the same permanent gap,
+and permits revision 2 to commit. Catalog corruption tests also rewrite the app row,
+generation descriptor, and retained IDs coherently while leaving the original seed event;
+the full immutable seed target still rejects the re-anchor. Commands without a trusted
+registry and all production paths lacking catalog/fence integration remain rejected.
+Recovery corruption also relabels a takeover as ordinary abandonment and appends a
+separate lease event; the bidirectional event contract rejects that incomplete account.
 No-op matrices, new archive target evidence, real OPFS, every production writer and
 Store RPC port, concurrent CAS, reservation gaps, broader performance fixtures, and
 named crash hooks remain required before writes are enabled.

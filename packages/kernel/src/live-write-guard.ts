@@ -1,15 +1,14 @@
-import type { DbDriver, SqlRow, SqlValue } from "./db";
+import {
+  claimPhysicalDriverAuthority,
+  isReadOnlyStatement,
+  isThenable,
+  type DbDriver,
+  type PhysicalDriverAuthority,
+  type SqlRow,
+  type SqlValue,
+} from "./db";
 import { ClayError } from "./errors";
 
-function isThenable(value: unknown): value is PromiseLike<unknown> {
-  return typeof value === "object" && value !== null
-    && "then" in value && typeof (value as { then?: unknown }).then === "function";
-}
-
-function isReadOnlySelect(sql: string): boolean {
-  const statement = sql.trim();
-  return /^SELECT\b/i.test(statement) && !statement.includes(";");
-}
 
 /**
  * Denies every live SQL exec unless a trusted coordinator opens one synchronous
@@ -18,51 +17,59 @@ function isReadOnlySelect(sql: string): boolean {
  * authority.
  */
 export class LiveWriteGuard implements DbDriver {
-  private authorized = false;
+  #authorized = false;
+  readonly #owner = Symbol("clay.live-write-guard");
+  readonly #inner: DbDriver;
+  readonly #authority: PhysicalDriverAuthority;
 
-  constructor(private readonly inner: DbDriver) {}
+  constructor(inner: DbDriver) {
+    this.#inner = inner;
+    this.#authority = claimPhysicalDriverAuthority(inner, this.#owner);
+  }
 
   exec(sql: string, params?: SqlValue[]): void {
-    if (!this.authorized)
+    if (!this.#authorized)
       throw new ClayError("E_STALE_WRITE_EPOCH", "live write authority is not current");
-    this.inner.exec(sql, params);
+    this.#authority.exec(sql, params);
   }
 
   select(sql: string, params?: SqlValue[]): SqlRow[] {
-    if (!this.authorized && !isReadOnlySelect(sql))
+    if (!this.#authorized && !isReadOnlyStatement(sql))
       throw new ClayError("E_STALE_WRITE_EPOCH", "live read channel cannot execute mutation SQL");
-    return this.inner.select(sql, params);
+    return this.#authorized
+      ? this.#authority.select(sql, params)
+      : this.#inner.select(sql, params);
   }
 
   tx<T>(fn: () => T): T {
-    return this.inner.tx(fn);
+    return this.#authorized ? this.#authority.tx(fn) : this.#authority.readTx(fn);
   }
 
   runAuthorized<T>(fn: () => T): T {
-    if (this.authorized)
+    if (this.#authorized)
       throw new ClayError("E_STALE_WRITE_EPOCH", "nested live write authority is not allowed");
-    return this.inner.tx(() => {
-      this.authorized = true;
+    return this.#authority.runAuthorized(() => {
+      this.#authorized = true;
       try {
         const result = fn();
         if (isThenable(result))
           throw new ClayError("E_STALE_WRITE_EPOCH", "live write authority must be synchronous");
         return result;
       } finally {
-        this.authorized = false;
+        this.#authorized = false;
       }
     });
   }
 
   close(): void {
-    this.inner.close();
+    this.#inner.close();
   }
 
   snapshot(): Promise<DbDriver> {
-    return this.inner.snapshot();
+    return this.#inner.snapshot();
   }
 
   exportDatabases(): Promise<{ user: Uint8Array; system: Uint8Array }> {
-    return this.inner.exportDatabases();
+    return this.#inner.exportDatabases();
   }
 }

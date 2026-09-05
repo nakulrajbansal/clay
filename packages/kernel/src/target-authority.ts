@@ -2,15 +2,14 @@ import {
   GenerationId,
   OperationId,
   Sha256,
-  TargetAuthorityHeaderV1,
-  TargetEvidenceV1,
   UInt64Decimal,
 } from "@clay/schema";
+import { TargetAuthorityHeaderV1, TargetEvidenceV1 } from "@clay/schema/catalog";
 import type {
   TargetAuthorityHeaderV1 as TargetAuthorityHeader,
   TargetEvidenceV1 as TargetEvidence,
-} from "@clay/schema";
-import type { DbDriver } from "./db";
+} from "@clay/schema/catalog";
+import { isThenable, type DbDriver } from "./db";
 import { enumerateCanonicalStateV1 } from "./canonical-state";
 import { ClayError } from "./errors";
 import type { Registry } from "./registry";
@@ -137,11 +136,6 @@ function canonicalInstant(value: unknown): string {
   if (typeof value !== "string" || Number.isNaN(Date.parse(value))
       || new Date(value).toISOString() !== value) throw invalid("reservation time is invalid");
   return value;
-}
-
-function isThenable(value: unknown): value is PromiseLike<unknown> {
-  return typeof value === "object" && value !== null
-    && "then" in value && typeof (value as { then?: unknown }).then === "function";
 }
 
 function readReservations(
