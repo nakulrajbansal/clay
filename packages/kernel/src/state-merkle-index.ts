@@ -258,6 +258,48 @@ export class StateMerkleIndex {
     }
   }
 
+  wouldChange(changes: StateMerkleChange[]): boolean {
+    if (!exactSchema(this.driver) || !Array.isArray(changes)) throw invalid();
+    const seen = new Set<string>();
+    const prepared: Array<{ key: string; bucket: number; sha256: string | null }> = [];
+    for (const change of changes) {
+      if (seen.has(change.key)) throw invalid("duplicate state change key");
+      seen.add(change.key);
+      try {
+        prepared.push({
+          key: change.key,
+          bucket: stateLeafBucketV1(change.key),
+          sha256: change.fields === null ? null : stateLeafHashV1(change.key, change.fields),
+        });
+      } catch {
+        throw invalid("malformed state digest change");
+      }
+    }
+    const requestedBuckets = [...new Set(prepared.map(change => change.bucket))]
+      .sort((a, b) => a - b);
+    try {
+      return this.driver.tx(() => {
+        verifiedPrestate(this.driver, requestedBuckets);
+        for (const change of prepared) {
+          const rows = this.driver.select(
+            `SELECT leaf_key, bucket, leaf_sha256 FROM sys.state_digest_leaves
+             WHERE leaf_key = ?`,
+            [change.key],
+          );
+          if (rows.length > 1) throw invalid();
+          const prior = rows.length === 1 ? leafFromRow(rows[0]!) : null;
+          if (prior && (prior.key !== change.key || prior.bucket !== change.bucket))
+            throw invalid();
+          if ((prior?.sha256 ?? null) !== change.sha256) return true;
+        }
+        return false;
+      });
+    } catch (error) {
+      if (error instanceof ClayError && error.code === "E_STATE_DIGEST_INVALID") throw error;
+      throw invalid("target state digest preflight failed");
+    }
+  }
+
   apply(changes: StateMerkleChange[]): StateMerkleApplyResult {
     if (!exactSchema(this.driver) || !Array.isArray(changes)) throw invalid();
     const seen = new Set<string>();

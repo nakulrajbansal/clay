@@ -97,7 +97,8 @@ bounded synchronous SHA-256 implementation checked against an independent Node
 crypto oracle. Raw SQLite-pair hashing is explicitly rejected by review and spike
 evidence. Merkle tests cover independent leaf/bucket/root golden vectors, raw-byte
 ordering across locales, exact 1,024-bucket persistence, no-op zero-write behavior,
-authenticated root-vector/count/touched-bucket prestate, omitted leaf DML rollback,
+read-only meaningful-change preflight, authenticated root-vector/count/touched-bucket
+prestate, omitted leaf DML rollback,
 lost-bucket rollback, corruption denial, and a one-leaf update at 5,000 leaves under
 the existing 300 ms kernel scale budget. Canonical census tests independently count
 every covered SQLite row; bind semantic row/field identities, 20 table schemas, four

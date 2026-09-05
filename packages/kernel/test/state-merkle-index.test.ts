@@ -67,6 +67,31 @@ describe("target-owned state Merkle index", () => {
     }
   });
 
+  it("preflights canonical changes without writing", async () => {
+    const driver = await openMemoryDriver();
+    try {
+      StateMerkleIndex.createSchema(driver);
+      const fields = rowFields("Before");
+      const index = StateMerkleIndex.initialize(driver, [
+        { key: "row/tbl_abc/rec_123", fields },
+      ]);
+      const before = Number(driver.select("SELECT total_changes() AS n")[0]!.n);
+      expect(index.wouldChange([
+        { key: "row/tbl_abc/rec_123", fields },
+        { key: "row/tbl_abc/missing", fields: null },
+      ])).toBe(false);
+      expect(index.wouldChange([
+        { key: "row/tbl_abc/rec_123", fields: rowFields("After") },
+      ])).toBe(true);
+      expect(index.wouldChange([
+        { key: "row/tbl_abc/rec_123", fields: null },
+      ])).toBe(true);
+      expect(Number(driver.select("SELECT total_changes() AS n")[0]!.n)).toBe(before);
+    } finally {
+      driver.close();
+    }
+  });
+
   it("rejects duplicate change keys before writing", async () => {
     const driver = await openMemoryDriver();
     try {
