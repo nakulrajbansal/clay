@@ -3,7 +3,9 @@ import { WorkerClient } from "../src/app/worker-client";
 
 type Posted = { id: number; op: string; payload: Record<string, unknown> };
 
-function harness(): { client: WorkerClient; posted: Posted[]; transfers: Transferable[][] } {
+function harness(reply?: (message: Posted) => unknown): {
+  client: WorkerClient; posted: Posted[]; transfers: Transferable[][];
+} {
   const posted: Posted[] = [];
   const transfers: Transferable[][] = [];
   const worker = {
@@ -12,13 +14,30 @@ function harness(): { client: WorkerClient; posted: Posted[]; transfers: Transfe
       posted.push(message);
       transfers.push(transfer ?? []);
       queueMicrotask(() => this.onmessage?.({
-        data: { id: message.id, ok: true, result: null },
+        data: { id: message.id, ok: true, result: reply?.(message) ?? null },
       }));
     },
     terminate(): void {},
   };
   return { client: new WorkerClient(worker as unknown as Worker), posted, transfers };
 }
+
+describe("WorkerClient boot boundary", () => {
+  it("returns validated neutral boot information and sends only an app hint", async () => {
+    const bootInfo = { persistent: true, seeded: true, shellId: "tracker" } as const;
+    const { client, posted } = harness(message => message.op === "boot" ? bootInfo : null);
+    const result = await client.boot("default");
+    expect(result).toEqual(bootInfo);
+    expect(posted[0]).toEqual({ id: 1, op: "boot", payload: { appId: "default" } });
+  });
+
+  it("rejects malformed neutral boot information", async () => {
+    const { client } = harness(message => message.op === "boot" ? {
+      persistent: "yes", seeded: true, shellId: "tracker", detail: "secret",
+    } : null);
+    await expect(client.boot("default")).rejects.toThrow("invalid boot response");
+  });
+});
 
 describe("WorkerClient files and automation boundaries", () => {
   it("transfers file bytes and exposes only bounded workflow commands", async () => {

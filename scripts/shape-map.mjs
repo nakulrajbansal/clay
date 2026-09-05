@@ -4,8 +4,9 @@
 import { chromium } from "playwright";
 import AxeBuilder from "@axe-core/playwright";
 import { mkdir } from "node:fs/promises";
+import { productGateUrl } from "./product-gate-url.mjs";
 
-const url = process.env.URL || "http://127.0.0.1:4173";
+const url = productGateUrl();
 const outDir = process.argv[2] || "evidence";
 await mkdir(outDir, { recursive: true });
 
@@ -39,6 +40,8 @@ if (shellBlocking.length > 0) {
 }
 check(shellBlocking.length === 0,
   `trusted shell has no serious or critical axe violations${shellBlocking.length ? `: ${shellBlocking.map(v => v.id).join(", ")}` : ""}`);
+await page.getByRole("button", { name: "Customize", exact: true }).click();
+await page.locator(".appbar-mode-button.active", { hasText: "Customize" }).waitFor();
 
 for (const themeName of ["Indigo", "Violet", "Emerald", "Sky", "Rose", "Amber",
   "Graphite", "Midnight", "Ocean", "Plum", "Kiln"]) {
@@ -129,6 +132,7 @@ await dialog.waitFor();
 await dialog.getByRole("button", { name: "Open the full timeline" }).click();
 const historyDialog = page.getByRole("dialog", { name: "App history" });
 await historyDialog.waitFor();
+await page.waitForFunction(() => document.querySelector(".historyview")?.contains(document.activeElement));
 check(await historyDialog.evaluate(element => element.contains(document.activeElement)),
   "Shape Map hands focus to the opened History surface");
 await page.keyboard.press("Escape");
@@ -165,8 +169,26 @@ await page.screenshot({ path: `${outDir}/nextgen-shape-map-compact.png`, fullPag
 await page.setViewportSize({ width: 390, height: 844 });
 check(await dialog.evaluate(el => el.getBoundingClientRect().width <= 390),
   "shape map fits a phone viewport");
+const phoneOverflow = await page.evaluate(() => [...document.querySelectorAll("body *")]
+  .map(element => ({ element, rect: element.getBoundingClientRect() }))
+  .filter(item => item.rect.left < -1 || item.rect.right > window.innerWidth + 1)
+  .slice(0, 16).map(item => ({
+    tag: item.element.tagName, className: item.element.getAttribute("class"),
+    label: item.element.getAttribute("aria-label"), left: item.rect.left, right: item.rect.right,
+  })));
 check(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
-  "trusted shell and modal cause no phone horizontal overflow");
+  `trusted shell and modal cause no phone horizontal overflow${phoneOverflow.length ? `: ${JSON.stringify(phoneOverflow)}` : ""}`);
+await page.evaluate(() => document.documentElement.style.setProperty(
+  "--font", '"Arial Black", Arial, sans-serif',
+));
+const wideFontOverflow = await page.evaluate(() => ({
+  viewport: window.innerWidth,
+  page: document.documentElement.scrollWidth,
+  railRight: document.querySelector(".appbar-rail-toggle")?.getBoundingClientRect().right,
+}));
+check(wideFontOverflow.page <= wideFontOverflow.viewport,
+  `phone header tolerates wide fallback font metrics: ${JSON.stringify(wideFontOverflow)}`);
+await page.evaluate(() => document.documentElement.style.removeProperty("--font"));
 await page.screenshot({ path: `${outDir}/nextgen-shape-map-phone.png`, fullPage: true });
 
 check(errors.length === 0, `zero page errors${errors.length ? `: ${errors.join(" | ")}` : ""}`);

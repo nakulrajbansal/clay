@@ -1,8 +1,9 @@
 import { chromium } from "playwright";
 import AxeBuilder from "@axe-core/playwright";
 import { mkdir } from "node:fs/promises";
+import { productGateUrl } from "./product-gate-url.mjs";
 
-const url = process.env.URL || "http://127.0.0.1:4173";
+const url = productGateUrl();
 const outDir = process.argv[2] || "evidence";
 await mkdir(outDir, { recursive: true });
 const apiPlan = JSON.stringify({
@@ -54,6 +55,8 @@ const check = (condition, label) => {
 await page.goto(url, { waitUntil: "domcontentloaded" });
 await page.getByText("Sales CRM", { exact: true }).click({ timeout: 15_000 });
 await page.locator(".panel-frame").first().waitFor({ timeout: 20_000 });
+await page.getByRole("button", { name: "Customize", exact: true }).click();
+await page.locator(".appbar-mode-button.active", { hasText: "Customize" }).waitFor();
 const settings = page.locator(".rail-settings");
 await settings.waitFor();
 check(await settings.locator(".model-provider-option").count() === 4,

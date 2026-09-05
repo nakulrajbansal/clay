@@ -34,6 +34,8 @@ for (const [name, engine] of Object.entries(engines)) {
     await page.getByText("Tracker", { exact: true }).click({ timeout: 15000 });
     await page.waitForTimeout(4500);
     check(await page.locator(".panel-frame").count() >= 3, "template boots with panels");
+    await page.getByRole("button", { name: "Customize", exact: true }).click();
+    await page.locator(".appbar-mode-button.active", { hasText: "Customize" }).waitFor();
 
     await page.getByRole("button", { name: "Open data" }).click();
     const data = page.locator(".dataview");

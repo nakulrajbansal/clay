@@ -1,0 +1,2569 @@
+{
+  "schema": 1,
+  "verdict": "CORE_MECHANISM_VALIDATED",
+  "releaseCertificate": false,
+  "question": "Do three attached SQLite-WASM SAH-pool databases recover atomically after worker termination between SQL statements?",
+  "rounds": 20,
+  "failpoints": [
+    "after_begin",
+    "after_schema_create",
+    "after_schema_insert",
+    "after_main",
+    "after_system",
+    "after_catalog",
+    "before_commit",
+    "after_commit",
+    "normal"
+  ],
+  "metadata": {
+    "browser": "149.0.7827.55",
+    "sqliteSourceId": "2026-04-09 11:41:38 4525003a53a7fc63ca75c59b22c79608659ca12f0131f52c18637f829977f20b",
+    "journalMode": [
+      "delete",
+      "delete",
+      "delete"
+    ],
+    "vfs": "clay-cert-sahpool",
+    "databases": 3
+  },
+  "sourceSha256": {
+    "runner": "ce2c079d775345682a1a05d766e30d6015173bb7ef7149148d0b1b25c2f0e792",
+    "controller": "4fde0f972035df1ccd50a6268d4e498c126515138adf81024a8be49cceb54da6",
+    "worker": "f51d02bb16bdfee77d8c58dd9c8871f2c8ba199ccfc90d96026b788e10f6b74e",
+    "lockfile": "cc82f58b5c64ee5fa839f8fb1483ac5b3df4b5d5d4e5b31a998f419c3d4c3a3e",
+    "sqliteWasm": "02d7e48164395fa68f81c6ec33e9da5461be397dc57602ac0cd89b4bbba1d312"
+  },
+  "limitations": [
+    "Chromium only; every release-supported durable runtime still needs this matrix.",
+    "Termination is between SQL statements, not an operating-system power loss during native COMMIT.",
+    "DDL, row, metadata, and catalog surrogates are covered; production cursors, receipts, and selected pointers still need registered semantic hooks and concurrency oracles."
+  ],
+  "passed": 180,
+  "total": 180,
+  "expectedTotal": 180,
+  "coverageComplete": true,
+  "failures": [],
+  "consoleErrors": [],
+  "cases": [
+    {
+      "round": 0,
+      "failpoint": "after_begin",
+      "expected": "old-0-after_begin",
+      "observed": [
+        "old-0-after_begin",
+        "old-0-after_begin",
+        "old-0-after_begin"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 0,
+      "failpoint": "after_schema_create",
+      "expected": "old-0-after_schema_create",
+      "observed": [
+        "old-0-after_schema_create",
+        "old-0-after_schema_create",
+        "old-0-after_schema_create"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 0,
+      "failpoint": "after_schema_insert",
+      "expected": "old-0-after_schema_insert",
+      "observed": [
+        "old-0-after_schema_insert",
+        "old-0-after_schema_insert",
+        "old-0-after_schema_insert"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 0,
+      "failpoint": "after_main",
+      "expected": "old-0-after_main",
+      "observed": [
+        "old-0-after_main",
+        "old-0-after_main",
+        "old-0-after_main"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 0,
+      "failpoint": "after_system",
+      "expected": "old-0-after_system",
+      "observed": [
+        "old-0-after_system",
+        "old-0-after_system",
+        "old-0-after_system"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 0,
+      "failpoint": "after_catalog",
+      "expected": "old-0-after_catalog",
+      "observed": [
+        "old-0-after_catalog",
+        "old-0-after_catalog",
+        "old-0-after_catalog"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 0,
+      "failpoint": "before_commit",
+      "expected": "old-0-before_commit",
+      "observed": [
+        "old-0-before_commit",
+        "old-0-before_commit",
+        "old-0-before_commit"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 0,
+      "failpoint": "after_commit",
+      "expected": "new-0-after_commit",
+      "observed": [
+        "new-0-after_commit",
+        "new-0-after_commit",
+        "new-0-after_commit"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-0-after_commit",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 0,
+      "failpoint": "normal",
+      "expected": "new-0-normal",
+      "observed": [
+        "new-0-normal",
+        "new-0-normal",
+        "new-0-normal"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-0-normal",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 1,
+      "failpoint": "after_begin",
+      "expected": "old-1-after_begin",
+      "observed": [
+        "old-1-after_begin",
+        "old-1-after_begin",
+        "old-1-after_begin"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 1,
+      "failpoint": "after_schema_create",
+      "expected": "old-1-after_schema_create",
+      "observed": [
+        "old-1-after_schema_create",
+        "old-1-after_schema_create",
+        "old-1-after_schema_create"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 1,
+      "failpoint": "after_schema_insert",
+      "expected": "old-1-after_schema_insert",
+      "observed": [
+        "old-1-after_schema_insert",
+        "old-1-after_schema_insert",
+        "old-1-after_schema_insert"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 1,
+      "failpoint": "after_main",
+      "expected": "old-1-after_main",
+      "observed": [
+        "old-1-after_main",
+        "old-1-after_main",
+        "old-1-after_main"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 1,
+      "failpoint": "after_system",
+      "expected": "old-1-after_system",
+      "observed": [
+        "old-1-after_system",
+        "old-1-after_system",
+        "old-1-after_system"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 1,
+      "failpoint": "after_catalog",
+      "expected": "old-1-after_catalog",
+      "observed": [
+        "old-1-after_catalog",
+        "old-1-after_catalog",
+        "old-1-after_catalog"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 1,
+      "failpoint": "before_commit",
+      "expected": "old-1-before_commit",
+      "observed": [
+        "old-1-before_commit",
+        "old-1-before_commit",
+        "old-1-before_commit"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 1,
+      "failpoint": "after_commit",
+      "expected": "new-1-after_commit",
+      "observed": [
+        "new-1-after_commit",
+        "new-1-after_commit",
+        "new-1-after_commit"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-1-after_commit",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 1,
+      "failpoint": "normal",
+      "expected": "new-1-normal",
+      "observed": [
+        "new-1-normal",
+        "new-1-normal",
+        "new-1-normal"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-1-normal",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 2,
+      "failpoint": "after_begin",
+      "expected": "old-2-after_begin",
+      "observed": [
+        "old-2-after_begin",
+        "old-2-after_begin",
+        "old-2-after_begin"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 2,
+      "failpoint": "after_schema_create",
+      "expected": "old-2-after_schema_create",
+      "observed": [
+        "old-2-after_schema_create",
+        "old-2-after_schema_create",
+        "old-2-after_schema_create"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 2,
+      "failpoint": "after_schema_insert",
+      "expected": "old-2-after_schema_insert",
+      "observed": [
+        "old-2-after_schema_insert",
+        "old-2-after_schema_insert",
+        "old-2-after_schema_insert"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 2,
+      "failpoint": "after_main",
+      "expected": "old-2-after_main",
+      "observed": [
+        "old-2-after_main",
+        "old-2-after_main",
+        "old-2-after_main"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 2,
+      "failpoint": "after_system",
+      "expected": "old-2-after_system",
+      "observed": [
+        "old-2-after_system",
+        "old-2-after_system",
+        "old-2-after_system"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 2,
+      "failpoint": "after_catalog",
+      "expected": "old-2-after_catalog",
+      "observed": [
+        "old-2-after_catalog",
+        "old-2-after_catalog",
+        "old-2-after_catalog"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 2,
+      "failpoint": "before_commit",
+      "expected": "old-2-before_commit",
+      "observed": [
+        "old-2-before_commit",
+        "old-2-before_commit",
+        "old-2-before_commit"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 2,
+      "failpoint": "after_commit",
+      "expected": "new-2-after_commit",
+      "observed": [
+        "new-2-after_commit",
+        "new-2-after_commit",
+        "new-2-after_commit"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-2-after_commit",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 2,
+      "failpoint": "normal",
+      "expected": "new-2-normal",
+      "observed": [
+        "new-2-normal",
+        "new-2-normal",
+        "new-2-normal"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-2-normal",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 3,
+      "failpoint": "after_begin",
+      "expected": "old-3-after_begin",
+      "observed": [
+        "old-3-after_begin",
+        "old-3-after_begin",
+        "old-3-after_begin"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 3,
+      "failpoint": "after_schema_create",
+      "expected": "old-3-after_schema_create",
+      "observed": [
+        "old-3-after_schema_create",
+        "old-3-after_schema_create",
+        "old-3-after_schema_create"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 3,
+      "failpoint": "after_schema_insert",
+      "expected": "old-3-after_schema_insert",
+      "observed": [
+        "old-3-after_schema_insert",
+        "old-3-after_schema_insert",
+        "old-3-after_schema_insert"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 3,
+      "failpoint": "after_main",
+      "expected": "old-3-after_main",
+      "observed": [
+        "old-3-after_main",
+        "old-3-after_main",
+        "old-3-after_main"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 3,
+      "failpoint": "after_system",
+      "expected": "old-3-after_system",
+      "observed": [
+        "old-3-after_system",
+        "old-3-after_system",
+        "old-3-after_system"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 3,
+      "failpoint": "after_catalog",
+      "expected": "old-3-after_catalog",
+      "observed": [
+        "old-3-after_catalog",
+        "old-3-after_catalog",
+        "old-3-after_catalog"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 3,
+      "failpoint": "before_commit",
+      "expected": "old-3-before_commit",
+      "observed": [
+        "old-3-before_commit",
+        "old-3-before_commit",
+        "old-3-before_commit"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 3,
+      "failpoint": "after_commit",
+      "expected": "new-3-after_commit",
+      "observed": [
+        "new-3-after_commit",
+        "new-3-after_commit",
+        "new-3-after_commit"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-3-after_commit",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 3,
+      "failpoint": "normal",
+      "expected": "new-3-normal",
+      "observed": [
+        "new-3-normal",
+        "new-3-normal",
+        "new-3-normal"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-3-normal",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 4,
+      "failpoint": "after_begin",
+      "expected": "old-4-after_begin",
+      "observed": [
+        "old-4-after_begin",
+        "old-4-after_begin",
+        "old-4-after_begin"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 4,
+      "failpoint": "after_schema_create",
+      "expected": "old-4-after_schema_create",
+      "observed": [
+        "old-4-after_schema_create",
+        "old-4-after_schema_create",
+        "old-4-after_schema_create"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 4,
+      "failpoint": "after_schema_insert",
+      "expected": "old-4-after_schema_insert",
+      "observed": [
+        "old-4-after_schema_insert",
+        "old-4-after_schema_insert",
+        "old-4-after_schema_insert"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 4,
+      "failpoint": "after_main",
+      "expected": "old-4-after_main",
+      "observed": [
+        "old-4-after_main",
+        "old-4-after_main",
+        "old-4-after_main"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 4,
+      "failpoint": "after_system",
+      "expected": "old-4-after_system",
+      "observed": [
+        "old-4-after_system",
+        "old-4-after_system",
+        "old-4-after_system"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 4,
+      "failpoint": "after_catalog",
+      "expected": "old-4-after_catalog",
+      "observed": [
+        "old-4-after_catalog",
+        "old-4-after_catalog",
+        "old-4-after_catalog"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 4,
+      "failpoint": "before_commit",
+      "expected": "old-4-before_commit",
+      "observed": [
+        "old-4-before_commit",
+        "old-4-before_commit",
+        "old-4-before_commit"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 4,
+      "failpoint": "after_commit",
+      "expected": "new-4-after_commit",
+      "observed": [
+        "new-4-after_commit",
+        "new-4-after_commit",
+        "new-4-after_commit"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-4-after_commit",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 4,
+      "failpoint": "normal",
+      "expected": "new-4-normal",
+      "observed": [
+        "new-4-normal",
+        "new-4-normal",
+        "new-4-normal"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-4-normal",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 5,
+      "failpoint": "after_begin",
+      "expected": "old-5-after_begin",
+      "observed": [
+        "old-5-after_begin",
+        "old-5-after_begin",
+        "old-5-after_begin"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 5,
+      "failpoint": "after_schema_create",
+      "expected": "old-5-after_schema_create",
+      "observed": [
+        "old-5-after_schema_create",
+        "old-5-after_schema_create",
+        "old-5-after_schema_create"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 5,
+      "failpoint": "after_schema_insert",
+      "expected": "old-5-after_schema_insert",
+      "observed": [
+        "old-5-after_schema_insert",
+        "old-5-after_schema_insert",
+        "old-5-after_schema_insert"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 5,
+      "failpoint": "after_main",
+      "expected": "old-5-after_main",
+      "observed": [
+        "old-5-after_main",
+        "old-5-after_main",
+        "old-5-after_main"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 5,
+      "failpoint": "after_system",
+      "expected": "old-5-after_system",
+      "observed": [
+        "old-5-after_system",
+        "old-5-after_system",
+        "old-5-after_system"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 5,
+      "failpoint": "after_catalog",
+      "expected": "old-5-after_catalog",
+      "observed": [
+        "old-5-after_catalog",
+        "old-5-after_catalog",
+        "old-5-after_catalog"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 5,
+      "failpoint": "before_commit",
+      "expected": "old-5-before_commit",
+      "observed": [
+        "old-5-before_commit",
+        "old-5-before_commit",
+        "old-5-before_commit"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 5,
+      "failpoint": "after_commit",
+      "expected": "new-5-after_commit",
+      "observed": [
+        "new-5-after_commit",
+        "new-5-after_commit",
+        "new-5-after_commit"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-5-after_commit",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 5,
+      "failpoint": "normal",
+      "expected": "new-5-normal",
+      "observed": [
+        "new-5-normal",
+        "new-5-normal",
+        "new-5-normal"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-5-normal",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 6,
+      "failpoint": "after_begin",
+      "expected": "old-6-after_begin",
+      "observed": [
+        "old-6-after_begin",
+        "old-6-after_begin",
+        "old-6-after_begin"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 6,
+      "failpoint": "after_schema_create",
+      "expected": "old-6-after_schema_create",
+      "observed": [
+        "old-6-after_schema_create",
+        "old-6-after_schema_create",
+        "old-6-after_schema_create"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 6,
+      "failpoint": "after_schema_insert",
+      "expected": "old-6-after_schema_insert",
+      "observed": [
+        "old-6-after_schema_insert",
+        "old-6-after_schema_insert",
+        "old-6-after_schema_insert"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 6,
+      "failpoint": "after_main",
+      "expected": "old-6-after_main",
+      "observed": [
+        "old-6-after_main",
+        "old-6-after_main",
+        "old-6-after_main"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 6,
+      "failpoint": "after_system",
+      "expected": "old-6-after_system",
+      "observed": [
+        "old-6-after_system",
+        "old-6-after_system",
+        "old-6-after_system"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 6,
+      "failpoint": "after_catalog",
+      "expected": "old-6-after_catalog",
+      "observed": [
+        "old-6-after_catalog",
+        "old-6-after_catalog",
+        "old-6-after_catalog"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 6,
+      "failpoint": "before_commit",
+      "expected": "old-6-before_commit",
+      "observed": [
+        "old-6-before_commit",
+        "old-6-before_commit",
+        "old-6-before_commit"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 6,
+      "failpoint": "after_commit",
+      "expected": "new-6-after_commit",
+      "observed": [
+        "new-6-after_commit",
+        "new-6-after_commit",
+        "new-6-after_commit"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-6-after_commit",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 6,
+      "failpoint": "normal",
+      "expected": "new-6-normal",
+      "observed": [
+        "new-6-normal",
+        "new-6-normal",
+        "new-6-normal"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-6-normal",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 7,
+      "failpoint": "after_begin",
+      "expected": "old-7-after_begin",
+      "observed": [
+        "old-7-after_begin",
+        "old-7-after_begin",
+        "old-7-after_begin"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 7,
+      "failpoint": "after_schema_create",
+      "expected": "old-7-after_schema_create",
+      "observed": [
+        "old-7-after_schema_create",
+        "old-7-after_schema_create",
+        "old-7-after_schema_create"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 7,
+      "failpoint": "after_schema_insert",
+      "expected": "old-7-after_schema_insert",
+      "observed": [
+        "old-7-after_schema_insert",
+        "old-7-after_schema_insert",
+        "old-7-after_schema_insert"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 7,
+      "failpoint": "after_main",
+      "expected": "old-7-after_main",
+      "observed": [
+        "old-7-after_main",
+        "old-7-after_main",
+        "old-7-after_main"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 7,
+      "failpoint": "after_system",
+      "expected": "old-7-after_system",
+      "observed": [
+        "old-7-after_system",
+        "old-7-after_system",
+        "old-7-after_system"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 7,
+      "failpoint": "after_catalog",
+      "expected": "old-7-after_catalog",
+      "observed": [
+        "old-7-after_catalog",
+        "old-7-after_catalog",
+        "old-7-after_catalog"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 7,
+      "failpoint": "before_commit",
+      "expected": "old-7-before_commit",
+      "observed": [
+        "old-7-before_commit",
+        "old-7-before_commit",
+        "old-7-before_commit"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 7,
+      "failpoint": "after_commit",
+      "expected": "new-7-after_commit",
+      "observed": [
+        "new-7-after_commit",
+        "new-7-after_commit",
+        "new-7-after_commit"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-7-after_commit",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 7,
+      "failpoint": "normal",
+      "expected": "new-7-normal",
+      "observed": [
+        "new-7-normal",
+        "new-7-normal",
+        "new-7-normal"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-7-normal",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 8,
+      "failpoint": "after_begin",
+      "expected": "old-8-after_begin",
+      "observed": [
+        "old-8-after_begin",
+        "old-8-after_begin",
+        "old-8-after_begin"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 8,
+      "failpoint": "after_schema_create",
+      "expected": "old-8-after_schema_create",
+      "observed": [
+        "old-8-after_schema_create",
+        "old-8-after_schema_create",
+        "old-8-after_schema_create"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 8,
+      "failpoint": "after_schema_insert",
+      "expected": "old-8-after_schema_insert",
+      "observed": [
+        "old-8-after_schema_insert",
+        "old-8-after_schema_insert",
+        "old-8-after_schema_insert"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 8,
+      "failpoint": "after_main",
+      "expected": "old-8-after_main",
+      "observed": [
+        "old-8-after_main",
+        "old-8-after_main",
+        "old-8-after_main"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 8,
+      "failpoint": "after_system",
+      "expected": "old-8-after_system",
+      "observed": [
+        "old-8-after_system",
+        "old-8-after_system",
+        "old-8-after_system"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 8,
+      "failpoint": "after_catalog",
+      "expected": "old-8-after_catalog",
+      "observed": [
+        "old-8-after_catalog",
+        "old-8-after_catalog",
+        "old-8-after_catalog"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 8,
+      "failpoint": "before_commit",
+      "expected": "old-8-before_commit",
+      "observed": [
+        "old-8-before_commit",
+        "old-8-before_commit",
+        "old-8-before_commit"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 8,
+      "failpoint": "after_commit",
+      "expected": "new-8-after_commit",
+      "observed": [
+        "new-8-after_commit",
+        "new-8-after_commit",
+        "new-8-after_commit"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-8-after_commit",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 8,
+      "failpoint": "normal",
+      "expected": "new-8-normal",
+      "observed": [
+        "new-8-normal",
+        "new-8-normal",
+        "new-8-normal"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-8-normal",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 9,
+      "failpoint": "after_begin",
+      "expected": "old-9-after_begin",
+      "observed": [
+        "old-9-after_begin",
+        "old-9-after_begin",
+        "old-9-after_begin"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 9,
+      "failpoint": "after_schema_create",
+      "expected": "old-9-after_schema_create",
+      "observed": [
+        "old-9-after_schema_create",
+        "old-9-after_schema_create",
+        "old-9-after_schema_create"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 9,
+      "failpoint": "after_schema_insert",
+      "expected": "old-9-after_schema_insert",
+      "observed": [
+        "old-9-after_schema_insert",
+        "old-9-after_schema_insert",
+        "old-9-after_schema_insert"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 9,
+      "failpoint": "after_main",
+      "expected": "old-9-after_main",
+      "observed": [
+        "old-9-after_main",
+        "old-9-after_main",
+        "old-9-after_main"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 9,
+      "failpoint": "after_system",
+      "expected": "old-9-after_system",
+      "observed": [
+        "old-9-after_system",
+        "old-9-after_system",
+        "old-9-after_system"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 9,
+      "failpoint": "after_catalog",
+      "expected": "old-9-after_catalog",
+      "observed": [
+        "old-9-after_catalog",
+        "old-9-after_catalog",
+        "old-9-after_catalog"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 9,
+      "failpoint": "before_commit",
+      "expected": "old-9-before_commit",
+      "observed": [
+        "old-9-before_commit",
+        "old-9-before_commit",
+        "old-9-before_commit"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 9,
+      "failpoint": "after_commit",
+      "expected": "new-9-after_commit",
+      "observed": [
+        "new-9-after_commit",
+        "new-9-after_commit",
+        "new-9-after_commit"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-9-after_commit",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 9,
+      "failpoint": "normal",
+      "expected": "new-9-normal",
+      "observed": [
+        "new-9-normal",
+        "new-9-normal",
+        "new-9-normal"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-9-normal",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 10,
+      "failpoint": "after_begin",
+      "expected": "old-10-after_begin",
+      "observed": [
+        "old-10-after_begin",
+        "old-10-after_begin",
+        "old-10-after_begin"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 10,
+      "failpoint": "after_schema_create",
+      "expected": "old-10-after_schema_create",
+      "observed": [
+        "old-10-after_schema_create",
+        "old-10-after_schema_create",
+        "old-10-after_schema_create"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 10,
+      "failpoint": "after_schema_insert",
+      "expected": "old-10-after_schema_insert",
+      "observed": [
+        "old-10-after_schema_insert",
+        "old-10-after_schema_insert",
+        "old-10-after_schema_insert"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 10,
+      "failpoint": "after_main",
+      "expected": "old-10-after_main",
+      "observed": [
+        "old-10-after_main",
+        "old-10-after_main",
+        "old-10-after_main"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 10,
+      "failpoint": "after_system",
+      "expected": "old-10-after_system",
+      "observed": [
+        "old-10-after_system",
+        "old-10-after_system",
+        "old-10-after_system"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 10,
+      "failpoint": "after_catalog",
+      "expected": "old-10-after_catalog",
+      "observed": [
+        "old-10-after_catalog",
+        "old-10-after_catalog",
+        "old-10-after_catalog"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 10,
+      "failpoint": "before_commit",
+      "expected": "old-10-before_commit",
+      "observed": [
+        "old-10-before_commit",
+        "old-10-before_commit",
+        "old-10-before_commit"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 10,
+      "failpoint": "after_commit",
+      "expected": "new-10-after_commit",
+      "observed": [
+        "new-10-after_commit",
+        "new-10-after_commit",
+        "new-10-after_commit"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-10-after_commit",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 10,
+      "failpoint": "normal",
+      "expected": "new-10-normal",
+      "observed": [
+        "new-10-normal",
+        "new-10-normal",
+        "new-10-normal"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-10-normal",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 11,
+      "failpoint": "after_begin",
+      "expected": "old-11-after_begin",
+      "observed": [
+        "old-11-after_begin",
+        "old-11-after_begin",
+        "old-11-after_begin"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 11,
+      "failpoint": "after_schema_create",
+      "expected": "old-11-after_schema_create",
+      "observed": [
+        "old-11-after_schema_create",
+        "old-11-after_schema_create",
+        "old-11-after_schema_create"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 11,
+      "failpoint": "after_schema_insert",
+      "expected": "old-11-after_schema_insert",
+      "observed": [
+        "old-11-after_schema_insert",
+        "old-11-after_schema_insert",
+        "old-11-after_schema_insert"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 11,
+      "failpoint": "after_main",
+      "expected": "old-11-after_main",
+      "observed": [
+        "old-11-after_main",
+        "old-11-after_main",
+        "old-11-after_main"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 11,
+      "failpoint": "after_system",
+      "expected": "old-11-after_system",
+      "observed": [
+        "old-11-after_system",
+        "old-11-after_system",
+        "old-11-after_system"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 11,
+      "failpoint": "after_catalog",
+      "expected": "old-11-after_catalog",
+      "observed": [
+        "old-11-after_catalog",
+        "old-11-after_catalog",
+        "old-11-after_catalog"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 11,
+      "failpoint": "before_commit",
+      "expected": "old-11-before_commit",
+      "observed": [
+        "old-11-before_commit",
+        "old-11-before_commit",
+        "old-11-before_commit"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 11,
+      "failpoint": "after_commit",
+      "expected": "new-11-after_commit",
+      "observed": [
+        "new-11-after_commit",
+        "new-11-after_commit",
+        "new-11-after_commit"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-11-after_commit",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 11,
+      "failpoint": "normal",
+      "expected": "new-11-normal",
+      "observed": [
+        "new-11-normal",
+        "new-11-normal",
+        "new-11-normal"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-11-normal",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 12,
+      "failpoint": "after_begin",
+      "expected": "old-12-after_begin",
+      "observed": [
+        "old-12-after_begin",
+        "old-12-after_begin",
+        "old-12-after_begin"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 12,
+      "failpoint": "after_schema_create",
+      "expected": "old-12-after_schema_create",
+      "observed": [
+        "old-12-after_schema_create",
+        "old-12-after_schema_create",
+        "old-12-after_schema_create"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 12,
+      "failpoint": "after_schema_insert",
+      "expected": "old-12-after_schema_insert",
+      "observed": [
+        "old-12-after_schema_insert",
+        "old-12-after_schema_insert",
+        "old-12-after_schema_insert"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 12,
+      "failpoint": "after_main",
+      "expected": "old-12-after_main",
+      "observed": [
+        "old-12-after_main",
+        "old-12-after_main",
+        "old-12-after_main"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 12,
+      "failpoint": "after_system",
+      "expected": "old-12-after_system",
+      "observed": [
+        "old-12-after_system",
+        "old-12-after_system",
+        "old-12-after_system"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 12,
+      "failpoint": "after_catalog",
+      "expected": "old-12-after_catalog",
+      "observed": [
+        "old-12-after_catalog",
+        "old-12-after_catalog",
+        "old-12-after_catalog"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 12,
+      "failpoint": "before_commit",
+      "expected": "old-12-before_commit",
+      "observed": [
+        "old-12-before_commit",
+        "old-12-before_commit",
+        "old-12-before_commit"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 12,
+      "failpoint": "after_commit",
+      "expected": "new-12-after_commit",
+      "observed": [
+        "new-12-after_commit",
+        "new-12-after_commit",
+        "new-12-after_commit"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-12-after_commit",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 12,
+      "failpoint": "normal",
+      "expected": "new-12-normal",
+      "observed": [
+        "new-12-normal",
+        "new-12-normal",
+        "new-12-normal"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-12-normal",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 13,
+      "failpoint": "after_begin",
+      "expected": "old-13-after_begin",
+      "observed": [
+        "old-13-after_begin",
+        "old-13-after_begin",
+        "old-13-after_begin"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 13,
+      "failpoint": "after_schema_create",
+      "expected": "old-13-after_schema_create",
+      "observed": [
+        "old-13-after_schema_create",
+        "old-13-after_schema_create",
+        "old-13-after_schema_create"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 13,
+      "failpoint": "after_schema_insert",
+      "expected": "old-13-after_schema_insert",
+      "observed": [
+        "old-13-after_schema_insert",
+        "old-13-after_schema_insert",
+        "old-13-after_schema_insert"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 13,
+      "failpoint": "after_main",
+      "expected": "old-13-after_main",
+      "observed": [
+        "old-13-after_main",
+        "old-13-after_main",
+        "old-13-after_main"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 13,
+      "failpoint": "after_system",
+      "expected": "old-13-after_system",
+      "observed": [
+        "old-13-after_system",
+        "old-13-after_system",
+        "old-13-after_system"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 13,
+      "failpoint": "after_catalog",
+      "expected": "old-13-after_catalog",
+      "observed": [
+        "old-13-after_catalog",
+        "old-13-after_catalog",
+        "old-13-after_catalog"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 13,
+      "failpoint": "before_commit",
+      "expected": "old-13-before_commit",
+      "observed": [
+        "old-13-before_commit",
+        "old-13-before_commit",
+        "old-13-before_commit"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 13,
+      "failpoint": "after_commit",
+      "expected": "new-13-after_commit",
+      "observed": [
+        "new-13-after_commit",
+        "new-13-after_commit",
+        "new-13-after_commit"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-13-after_commit",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 13,
+      "failpoint": "normal",
+      "expected": "new-13-normal",
+      "observed": [
+        "new-13-normal",
+        "new-13-normal",
+        "new-13-normal"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-13-normal",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 14,
+      "failpoint": "after_begin",
+      "expected": "old-14-after_begin",
+      "observed": [
+        "old-14-after_begin",
+        "old-14-after_begin",
+        "old-14-after_begin"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 14,
+      "failpoint": "after_schema_create",
+      "expected": "old-14-after_schema_create",
+      "observed": [
+        "old-14-after_schema_create",
+        "old-14-after_schema_create",
+        "old-14-after_schema_create"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 14,
+      "failpoint": "after_schema_insert",
+      "expected": "old-14-after_schema_insert",
+      "observed": [
+        "old-14-after_schema_insert",
+        "old-14-after_schema_insert",
+        "old-14-after_schema_insert"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 14,
+      "failpoint": "after_main",
+      "expected": "old-14-after_main",
+      "observed": [
+        "old-14-after_main",
+        "old-14-after_main",
+        "old-14-after_main"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 14,
+      "failpoint": "after_system",
+      "expected": "old-14-after_system",
+      "observed": [
+        "old-14-after_system",
+        "old-14-after_system",
+        "old-14-after_system"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 14,
+      "failpoint": "after_catalog",
+      "expected": "old-14-after_catalog",
+      "observed": [
+        "old-14-after_catalog",
+        "old-14-after_catalog",
+        "old-14-after_catalog"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 14,
+      "failpoint": "before_commit",
+      "expected": "old-14-before_commit",
+      "observed": [
+        "old-14-before_commit",
+        "old-14-before_commit",
+        "old-14-before_commit"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 14,
+      "failpoint": "after_commit",
+      "expected": "new-14-after_commit",
+      "observed": [
+        "new-14-after_commit",
+        "new-14-after_commit",
+        "new-14-after_commit"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-14-after_commit",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 14,
+      "failpoint": "normal",
+      "expected": "new-14-normal",
+      "observed": [
+        "new-14-normal",
+        "new-14-normal",
+        "new-14-normal"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-14-normal",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 15,
+      "failpoint": "after_begin",
+      "expected": "old-15-after_begin",
+      "observed": [
+        "old-15-after_begin",
+        "old-15-after_begin",
+        "old-15-after_begin"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 15,
+      "failpoint": "after_schema_create",
+      "expected": "old-15-after_schema_create",
+      "observed": [
+        "old-15-after_schema_create",
+        "old-15-after_schema_create",
+        "old-15-after_schema_create"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 15,
+      "failpoint": "after_schema_insert",
+      "expected": "old-15-after_schema_insert",
+      "observed": [
+        "old-15-after_schema_insert",
+        "old-15-after_schema_insert",
+        "old-15-after_schema_insert"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 15,
+      "failpoint": "after_main",
+      "expected": "old-15-after_main",
+      "observed": [
+        "old-15-after_main",
+        "old-15-after_main",
+        "old-15-after_main"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 15,
+      "failpoint": "after_system",
+      "expected": "old-15-after_system",
+      "observed": [
+        "old-15-after_system",
+        "old-15-after_system",
+        "old-15-after_system"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 15,
+      "failpoint": "after_catalog",
+      "expected": "old-15-after_catalog",
+      "observed": [
+        "old-15-after_catalog",
+        "old-15-after_catalog",
+        "old-15-after_catalog"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 15,
+      "failpoint": "before_commit",
+      "expected": "old-15-before_commit",
+      "observed": [
+        "old-15-before_commit",
+        "old-15-before_commit",
+        "old-15-before_commit"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 15,
+      "failpoint": "after_commit",
+      "expected": "new-15-after_commit",
+      "observed": [
+        "new-15-after_commit",
+        "new-15-after_commit",
+        "new-15-after_commit"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-15-after_commit",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 15,
+      "failpoint": "normal",
+      "expected": "new-15-normal",
+      "observed": [
+        "new-15-normal",
+        "new-15-normal",
+        "new-15-normal"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-15-normal",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 16,
+      "failpoint": "after_begin",
+      "expected": "old-16-after_begin",
+      "observed": [
+        "old-16-after_begin",
+        "old-16-after_begin",
+        "old-16-after_begin"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 16,
+      "failpoint": "after_schema_create",
+      "expected": "old-16-after_schema_create",
+      "observed": [
+        "old-16-after_schema_create",
+        "old-16-after_schema_create",
+        "old-16-after_schema_create"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 16,
+      "failpoint": "after_schema_insert",
+      "expected": "old-16-after_schema_insert",
+      "observed": [
+        "old-16-after_schema_insert",
+        "old-16-after_schema_insert",
+        "old-16-after_schema_insert"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 16,
+      "failpoint": "after_main",
+      "expected": "old-16-after_main",
+      "observed": [
+        "old-16-after_main",
+        "old-16-after_main",
+        "old-16-after_main"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 16,
+      "failpoint": "after_system",
+      "expected": "old-16-after_system",
+      "observed": [
+        "old-16-after_system",
+        "old-16-after_system",
+        "old-16-after_system"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 16,
+      "failpoint": "after_catalog",
+      "expected": "old-16-after_catalog",
+      "observed": [
+        "old-16-after_catalog",
+        "old-16-after_catalog",
+        "old-16-after_catalog"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 16,
+      "failpoint": "before_commit",
+      "expected": "old-16-before_commit",
+      "observed": [
+        "old-16-before_commit",
+        "old-16-before_commit",
+        "old-16-before_commit"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 16,
+      "failpoint": "after_commit",
+      "expected": "new-16-after_commit",
+      "observed": [
+        "new-16-after_commit",
+        "new-16-after_commit",
+        "new-16-after_commit"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-16-after_commit",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 16,
+      "failpoint": "normal",
+      "expected": "new-16-normal",
+      "observed": [
+        "new-16-normal",
+        "new-16-normal",
+        "new-16-normal"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-16-normal",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 17,
+      "failpoint": "after_begin",
+      "expected": "old-17-after_begin",
+      "observed": [
+        "old-17-after_begin",
+        "old-17-after_begin",
+        "old-17-after_begin"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 17,
+      "failpoint": "after_schema_create",
+      "expected": "old-17-after_schema_create",
+      "observed": [
+        "old-17-after_schema_create",
+        "old-17-after_schema_create",
+        "old-17-after_schema_create"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 17,
+      "failpoint": "after_schema_insert",
+      "expected": "old-17-after_schema_insert",
+      "observed": [
+        "old-17-after_schema_insert",
+        "old-17-after_schema_insert",
+        "old-17-after_schema_insert"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 17,
+      "failpoint": "after_main",
+      "expected": "old-17-after_main",
+      "observed": [
+        "old-17-after_main",
+        "old-17-after_main",
+        "old-17-after_main"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 17,
+      "failpoint": "after_system",
+      "expected": "old-17-after_system",
+      "observed": [
+        "old-17-after_system",
+        "old-17-after_system",
+        "old-17-after_system"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 17,
+      "failpoint": "after_catalog",
+      "expected": "old-17-after_catalog",
+      "observed": [
+        "old-17-after_catalog",
+        "old-17-after_catalog",
+        "old-17-after_catalog"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 17,
+      "failpoint": "before_commit",
+      "expected": "old-17-before_commit",
+      "observed": [
+        "old-17-before_commit",
+        "old-17-before_commit",
+        "old-17-before_commit"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 17,
+      "failpoint": "after_commit",
+      "expected": "new-17-after_commit",
+      "observed": [
+        "new-17-after_commit",
+        "new-17-after_commit",
+        "new-17-after_commit"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-17-after_commit",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 17,
+      "failpoint": "normal",
+      "expected": "new-17-normal",
+      "observed": [
+        "new-17-normal",
+        "new-17-normal",
+        "new-17-normal"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-17-normal",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 18,
+      "failpoint": "after_begin",
+      "expected": "old-18-after_begin",
+      "observed": [
+        "old-18-after_begin",
+        "old-18-after_begin",
+        "old-18-after_begin"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 18,
+      "failpoint": "after_schema_create",
+      "expected": "old-18-after_schema_create",
+      "observed": [
+        "old-18-after_schema_create",
+        "old-18-after_schema_create",
+        "old-18-after_schema_create"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 18,
+      "failpoint": "after_schema_insert",
+      "expected": "old-18-after_schema_insert",
+      "observed": [
+        "old-18-after_schema_insert",
+        "old-18-after_schema_insert",
+        "old-18-after_schema_insert"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 18,
+      "failpoint": "after_main",
+      "expected": "old-18-after_main",
+      "observed": [
+        "old-18-after_main",
+        "old-18-after_main",
+        "old-18-after_main"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 18,
+      "failpoint": "after_system",
+      "expected": "old-18-after_system",
+      "observed": [
+        "old-18-after_system",
+        "old-18-after_system",
+        "old-18-after_system"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 18,
+      "failpoint": "after_catalog",
+      "expected": "old-18-after_catalog",
+      "observed": [
+        "old-18-after_catalog",
+        "old-18-after_catalog",
+        "old-18-after_catalog"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 18,
+      "failpoint": "before_commit",
+      "expected": "old-18-before_commit",
+      "observed": [
+        "old-18-before_commit",
+        "old-18-before_commit",
+        "old-18-before_commit"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 18,
+      "failpoint": "after_commit",
+      "expected": "new-18-after_commit",
+      "observed": [
+        "new-18-after_commit",
+        "new-18-after_commit",
+        "new-18-after_commit"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-18-after_commit",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 18,
+      "failpoint": "normal",
+      "expected": "new-18-normal",
+      "observed": [
+        "new-18-normal",
+        "new-18-normal",
+        "new-18-normal"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-18-normal",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 19,
+      "failpoint": "after_begin",
+      "expected": "old-19-after_begin",
+      "observed": [
+        "old-19-after_begin",
+        "old-19-after_begin",
+        "old-19-after_begin"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 19,
+      "failpoint": "after_schema_create",
+      "expected": "old-19-after_schema_create",
+      "observed": [
+        "old-19-after_schema_create",
+        "old-19-after_schema_create",
+        "old-19-after_schema_create"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 19,
+      "failpoint": "after_schema_insert",
+      "expected": "old-19-after_schema_insert",
+      "observed": [
+        "old-19-after_schema_insert",
+        "old-19-after_schema_insert",
+        "old-19-after_schema_insert"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 19,
+      "failpoint": "after_main",
+      "expected": "old-19-after_main",
+      "observed": [
+        "old-19-after_main",
+        "old-19-after_main",
+        "old-19-after_main"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 19,
+      "failpoint": "after_system",
+      "expected": "old-19-after_system",
+      "observed": [
+        "old-19-after_system",
+        "old-19-after_system",
+        "old-19-after_system"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 19,
+      "failpoint": "after_catalog",
+      "expected": "old-19-after_catalog",
+      "observed": [
+        "old-19-after_catalog",
+        "old-19-after_catalog",
+        "old-19-after_catalog"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 19,
+      "failpoint": "before_commit",
+      "expected": "old-19-before_commit",
+      "observed": [
+        "old-19-before_commit",
+        "old-19-before_commit",
+        "old-19-before_commit"
+      ],
+      "shapeExists": 0,
+      "shapeValue": null,
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 19,
+      "failpoint": "after_commit",
+      "expected": "new-19-after_commit",
+      "observed": [
+        "new-19-after_commit",
+        "new-19-after_commit",
+        "new-19-after_commit"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-19-after_commit",
+      "atomic": true,
+      "integral": true
+    },
+    {
+      "round": 19,
+      "failpoint": "normal",
+      "expected": "new-19-normal",
+      "observed": [
+        "new-19-normal",
+        "new-19-normal",
+        "new-19-normal"
+      ],
+      "shapeExists": 1,
+      "shapeValue": "new-19-normal",
+      "atomic": true,
+      "integral": true
+    }
+  ]
+}

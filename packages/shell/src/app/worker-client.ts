@@ -12,7 +12,25 @@ import type { IntentOutcome } from "../worker/db-worker";
 
 export type TraceEntry = { at: string; intent: string; events: DebugEvent[] };
 
-export type BootInfo = { persistent: boolean; seeded: boolean; shellId: string | null };
+export type BootInfo = {
+  persistent: boolean; seeded: boolean; shellId: string | null;
+};
+
+function parseBootInfo(value: unknown): BootInfo {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw new Error("invalid boot response");
+  const raw = value as Record<string, unknown>;
+  const allowed = new Set(["persistent", "seeded", "shellId"]);
+  if (Object.keys(raw).some(key => !allowed.has(key))
+      || typeof raw.persistent !== "boolean" || typeof raw.seeded !== "boolean"
+      || (raw.shellId !== null && typeof raw.shellId !== "string"))
+    throw new Error("invalid boot response");
+  return {
+    persistent: raw.persistent,
+    seeded: raw.seeded,
+    shellId: raw.shellId,
+  };
+}
 export type StatusInfo = {
   persistent: boolean; persisted: boolean;
   usageBytes: number | null; quotaBytes: number | null;
@@ -54,7 +72,9 @@ export class WorkerClient {
    * reload so the next worker can acquire the pool without contention. */
   terminate(): void { try { this.worker.terminate(); } catch { /* already gone */ } }
 
-  boot(appId?: string): Promise<BootInfo> { return this.call("boot", { appId }); }
+  async boot(appId?: string): Promise<BootInfo> {
+    return parseBootInfo(await this.call<unknown>("boot", { appId }));
+  }
   setModelAccess(access: {
     provider: "clay" | "openai" | "anthropic" | "codex";
     apiKey: string | null; backendUrl: string | null;

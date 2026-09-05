@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./catalog": "./src/catalog.ts",
     "./mutation-plan-api.json": "./mutation-plan-api.json"
   },
   "scripts": {

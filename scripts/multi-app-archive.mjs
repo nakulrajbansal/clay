@@ -41,6 +41,11 @@ const waitForTitleSet = async expected => {
   }
 };
 const openSettings = async () => {
+  const customize = page.getByRole("button", { name: "Customize", exact: true });
+  if (await customize.getAttribute("aria-pressed") !== "true") {
+    await customize.click();
+    await page.locator(".appbar-mode-button.active", { hasText: "Customize" }).waitFor();
+  }
   const exportButton = page.getByRole("button", { name: "Export .clay backup" });
   if (!(await exportButton.isVisible().catch(() => false)))
     await page.getByRole("button", { name: /settings/i }).click();

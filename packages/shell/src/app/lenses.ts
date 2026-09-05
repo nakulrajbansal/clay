@@ -483,8 +483,8 @@ export function buildSituationalLenses(
   const builtIns: SituationalLens[] = [
     {
       id: "all",
-      name: "All views",
-      description: "The complete app shape",
+      name: "Workspace",
+      description: "Your complete workspace",
       panelIds: ids(() => true),
     },
     {

@@ -60,13 +60,38 @@ subscribed panels.
 
 ## 4. State model
 
-Three state stores, deliberately separate:
-- Persistent app state: SQLite (user.db + system.db). Source of truth.
+Four state stores, deliberately separate:
+- Device app authority: a DB-worker-owned durable catalog records app identities,
+  selected immutable generation, lineage/revision/digest high-water marks, write
+  epoch, and pending lifecycle jobs. Shell `localStorage` may cache a projection
+  but cannot prove existence, choose a target, allocate identity, or authorize a
+  write.
+- Persistent per-app state: SQLite (user.db + system.db). Source of truth for
+  records, shape, history, and app-owned metadata. Every authorizing handle binds
+  the catalog-selected `(appInstanceId, activeGenerationId, lineageEpoch,
+  stateRevision, stateDigest)` tuple.
 - Shell UI state: React state (panel layout cache, open dialogs, slider pos).
-  Reconstructible from SQLite at any time; never authoritative.
+  Reconstructible from worker authority and SQLite at any time; never authoritative.
 - Panel-local state: inside each iframe (form inputs, chart hover). Ephemeral
   by design; a panel reload must be lossless for user DATA (which is in the DB),
   only losing transient interaction state.
+
+Storage open and protection state follow ADR-048. An unreadable/ambiguous expected
+store fails closed; it never becomes a writable memory replacement. Cross-database
+atomicity remains unclaimed until the exact production topology or selected
+recovery fallback passes release-bound crash/reopen certification.
+
+Catalog schema 1 and target digest schema 1 follow ADR-049. Catalog open and fresh
+initialization are separate APIs. The live SQLite driver is deny-by-default for SQL
+writes; one internal synchronous coordinator must validate authority incarnation,
+write epoch, lease, selected complete target, and operation identity before opening
+the outer transaction. Long-lived Store RPC ports receive no ambient exception.
+Target digest schema 1 is a target-owned, 1,024-bucket canonical logical Merkle map.
+It hashes stable logical keys and type-tagged values, commits attachment content
+digests rather than retained bytes, and excludes its own metadata plus device-local
+telemetry. Ordinary writes update only affected leaves and buckets; boot, checkpoint,
+import, and restore perform full rebuild audits. Shadows remain independent and never
+attach the live catalog.
 
 ## 5. Sequence: a mutation end to end
 

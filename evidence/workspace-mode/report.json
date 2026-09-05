@@ -1,0 +1,55 @@
+{
+  "url": "http://127.0.0.1:4173",
+  "finalUrl": "http://127.0.0.1:4173/",
+  "buildEntry": "assets/index-C5Ksovr7.js",
+  "expectedBuildEntry": "assets/index-C5Ksovr7.js",
+  "buildDigest": "sha256:3f91b726f4f240d17e58dcf23669c2a6ba24dc6f0478c9b85302876a087dd8b6",
+  "expectedBuildDigest": "sha256:3f91b726f4f240d17e58dcf23669c2a6ba24dc6f0478c9b85302876a087dd8b6",
+  "assetCount": 19,
+  "failures": [],
+  "consoleErrors": [],
+  "externalRequests": [],
+  "axeViolations": 0,
+  "layouts": {
+    "work": {
+      "viewportWidth": 1440,
+      "documentScrollWidth": 1440,
+      "headerScrollWidth": 1440,
+      "headerClientWidth": 1440,
+      "modeInsideHeader": true
+    },
+    "customize": {
+      "viewportWidth": 1440,
+      "documentScrollWidth": 1440,
+      "headerScrollWidth": 1440,
+      "headerClientWidth": 1440,
+      "modeInsideHeader": true
+    },
+    "customizePhone": {
+      "viewportWidth": 390,
+      "documentScrollWidth": 390,
+      "headerScrollWidth": 390,
+      "headerClientWidth": 390,
+      "modeInsideHeader": true
+    },
+    "workCompact": {
+      "viewportWidth": 720,
+      "documentScrollWidth": 720,
+      "headerScrollWidth": 720,
+      "headerClientWidth": 720,
+      "modeInsideHeader": true
+    }
+  },
+  "screenshots": [
+    "evidence/workspace-mode/work.png",
+    "evidence/workspace-mode/customize.png",
+    "evidence/workspace-mode/customize-phone.png",
+    "evidence/workspace-mode/work-compact.png"
+  ],
+  "screenshotSha256": {
+    "evidence/workspace-mode/work.png": "00eca26b34f00d5ace05e4811ff416c45e896c018c6b15fefafa7b2cc940bf2a",
+    "evidence/workspace-mode/customize.png": "5792d46074d3b1b9381d6c0c84320885d511a08a5ef132d63fa4b3c8241fb180",
+    "evidence/workspace-mode/customize-phone.png": "42bc84b6f9e8461bd37d0f8a1e9949bad9106cc8231a6a2d56d84136cc6c9860",
+    "evidence/workspace-mode/work-compact.png": "20db3e56dd481b7f6276eaae58593ccf39adca8c396cc48bd80a461475ab7f2b"
+  }
+}

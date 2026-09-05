@@ -5,7 +5,7 @@
 import sqlite3InitModule, { type Database, type Sqlite3Static } from "@sqlite.org/sqlite-wasm";
 import { ClayError } from "./errors";
 
-export type SqlValue = string | number | Uint8Array | null;
+export type SqlValue = string | number | bigint | Uint8Array | null;
 export type SqlRow = Record<string, SqlValue>;
 
 export interface DbDriver {
@@ -18,6 +18,38 @@ export interface DbDriver {
   snapshot(): Promise<DbDriver>;
   /** Serialized bytes of both databases (doc 04 §7 export). */
   exportDatabases(): Promise<{ user: Uint8Array; system: Uint8Array }>;
+}
+
+type DriverAuthorityState = {
+  transactionDepth: number;
+  transactionControlDepth: number;
+  guardOwner: symbol | null;
+  authorizedOwner: symbol | null;
+};
+
+type PhysicalDriverControl = {
+  state: DriverAuthorityState;
+  isAutocommit: () => boolean;
+  exec: (sql: string, params?: SqlValue[]) => void;
+  select: (sql: string, params?: SqlValue[]) => SqlRow[];
+  tx: <T>(fn: () => T) => T;
+};
+
+export interface PhysicalDriverAuthority {
+  runAuthorized<T>(fn: () => T): T;
+  exec(sql: string, params?: SqlValue[]): void;
+  select(sql: string, params?: SqlValue[]): SqlRow[];
+  tx<T>(fn: () => T): T;
+  readTx<T>(fn: () => T): T;
+}
+
+const PHYSICAL_DRIVER_CONTROLS = new WeakMap<object, PhysicalDriverControl>();
+
+export function isThenable(value: unknown): value is PromiseLike<unknown> {
+  const runtimeType = typeof value;
+  return value !== null && (runtimeType === "object" || runtimeType === "function")
+    && "then" in (value as object)
+    && typeof (value as { then?: unknown }).then === "function";
 }
 
 export const SYSTEM_TABLES = [
@@ -33,61 +65,283 @@ function sqlite3(): Promise<Sqlite3Static> {
   return sqlite3Promise;
 }
 
-class SqliteWasmDriver implements DbDriver {
-  private depth = 0;
-  constructor(private readonly db: Database) {}
+type NormalizedSqlCall = { sql: string; params?: SqlValue[] };
+
+function normalizeSqlCall(sql: unknown, params: unknown): NormalizedSqlCall {
+  if (typeof sql !== "string")
+    throw staleAuthority("SQL text must be a primitive string");
+  if (params === undefined) return { sql };
+  let values: unknown[];
+  try {
+    if (!Array.isArray(params))
+      throw staleAuthority("SQL bind parameters must be an array");
+    values = Array.from(params);
+  } catch (error) {
+    if (error instanceof ClayError) throw error;
+    throw staleAuthority("SQL bind parameters must be a readable array");
+  }
+  const normalized = values.map(value => {
+    if (value === null || typeof value === "string" || typeof value === "bigint")
+      return value;
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (value instanceof Uint8Array) return new Uint8Array(value);
+    throw staleAuthority("SQL bind parameter has an unsupported runtime type");
+  });
+  return { sql, params: normalized };
+}
+
+export function isReadOnlyStatement(sql: unknown): boolean {
+  if (typeof sql !== "string") return false;
+  const statement = sql.trim();
+  if (/^SELECT\b/i.test(statement) && !statement.includes(";")) return true;
+  return /^PRAGMA\s+(?:main|sys|catalog)\.(?:table_info|table_xinfo|index_info|index_list)\s*\([^;]*\)\s*$/i
+    .test(statement);
+}
+
+function isTransactionControlStatement(sql: string): boolean {
+  const statement = sql
+    .replace(/--.*$/gm, " ")
+    .replace(/\/\*[\s\S]*?\*\//g, " ");
+  return /(?:^|;)\s*(?:BEGIN|SAVEPOINT|COMMIT|ROLLBACK|RELEASE)\b/i.test(statement)
+    || /^\s*END\b/i.test(statement);
+}
+
+function staleAuthority(message: string): ClayError {
+  return new ClayError("E_STALE_WRITE_EPOCH", message);
+}
+
+class PhysicalDriverAuthorityImpl implements PhysicalDriverAuthority {
+  readonly #control: PhysicalDriverControl;
+  readonly #owner: symbol;
+
+  constructor(control: PhysicalDriverControl, owner: symbol) {
+    this.#control = control;
+    this.#owner = owner;
+  }
+
+  private assertOwner(): void {
+    if (this.#control.state.guardOwner !== this.#owner)
+      throw staleAuthority("live driver write authority is not current");
+  }
+
+  private assertActive(): void {
+    this.assertOwner();
+    if (this.#control.state.authorizedOwner !== this.#owner)
+      throw staleAuthority("live driver write authority is not active");
+  }
+
+  runAuthorized<T>(fn: () => T): T {
+    this.assertOwner();
+    const state = this.#control.state;
+    if (state.authorizedOwner !== null || state.transactionDepth !== 0
+        || !this.#control.isAutocommit())
+      throw staleAuthority("nested or ambient live write authority is not allowed");
+    state.authorizedOwner = this.#owner;
+    try {
+      const result = this.#control.tx(fn);
+      if (state.transactionDepth !== 0 || !this.#control.isAutocommit())
+        throw new ClayError("E_INTERNAL", "live write transaction did not reach physical commit");
+      return result;
+    } finally {
+      state.authorizedOwner = null;
+    }
+  }
 
   exec(sql: string, params?: SqlValue[]): void {
-    try {
-      if (params && params.length > 0) this.db.exec({ sql, bind: params });
-      else this.db.exec(sql);
-    } catch (e) {
-      throw new ClayError("E_INTERNAL", `sql failed: ${String(e)}`, { sql });
-    }
+    this.assertActive();
+    const call = normalizeSqlCall(sql, params);
+    if (isTransactionControlStatement(call.sql))
+      throw staleAuthority("transaction control is reserved for the physical driver");
+    this.#control.exec(call.sql, call.params);
   }
 
   select(sql: string, params?: SqlValue[]): SqlRow[] {
-    try {
-      const rows = params && params.length > 0
-        ? this.db.selectObjects(sql, params)
-        : this.db.selectObjects(sql);
-      return rows as unknown as SqlRow[];
-    } catch (e) {
-      throw new ClayError("E_INTERNAL", `sql failed: ${String(e)}`, { sql });
-    }
+    this.assertActive();
+    const call = normalizeSqlCall(sql, params);
+    if (!isReadOnlyStatement(call.sql))
+      throw staleAuthority("live read channel cannot execute mutation SQL");
+    return this.#control.select(call.sql, call.params);
   }
 
   tx<T>(fn: () => T): T {
-    const name = `clay_sp_${this.depth++}`;
-    this.exec(`SAVEPOINT ${name}`);
+    this.assertActive();
+    return this.#control.tx(fn);
+  }
+
+  readTx<T>(fn: () => T): T {
+    this.assertOwner();
+    const state = this.#control.state;
+    if (state.authorizedOwner !== null || state.transactionDepth !== 0
+        || !this.#control.isAutocommit())
+      throw staleAuthority("ambient live transaction is not allowed");
+    const result = this.#control.tx(fn);
+    if (state.transactionDepth !== 0 || !this.#control.isAutocommit())
+      throw new ClayError("E_INTERNAL", "live read transaction did not close physically");
+    return result;
+  }
+}
+
+export function claimPhysicalDriverAuthority(
+  driver: DbDriver,
+  owner: symbol,
+): PhysicalDriverAuthority {
+  const control = PHYSICAL_DRIVER_CONTROLS.get(driver);
+  if (!control || control.state.guardOwner !== null
+      || control.state.transactionDepth !== 0 || !control.isAutocommit())
+    throw staleAuthority("live driver cannot grant write authority");
+  control.state.guardOwner = owner;
+  return new PhysicalDriverAuthorityImpl(control, owner);
+}
+
+type AuthorizerCapi = {
+  sqlite3_set_authorizer(
+    db: unknown,
+    callback: (context: unknown, actionCode: number) => number,
+    context: number,
+  ): number;
+  sqlite3_randomness<T extends Uint8Array>(target: T): T;
+  SQLITE_TRANSACTION: number;
+  SQLITE_SAVEPOINT: number;
+  SQLITE_DENY: number;
+  SQLITE_OK: number;
+};
+
+class SqliteWasmDriver implements DbDriver {
+  readonly #db: Database;
+  readonly #sqlite: Sqlite3Static;
+  readonly #savepointPrefix: string;
+
+  constructor(db: Database, sqlite: Sqlite3Static) {
+    this.#db = db;
+    this.#sqlite = sqlite;
+    const capi = sqlite.capi as unknown as AuthorizerCapi;
+    const entropy = capi.sqlite3_randomness(new Uint8Array(16));
+    this.#savepointPrefix = `clay_sp_${Array.from(entropy, byte =>
+      byte.toString(16).padStart(2, "0")).join("")}`;
+    const state: DriverAuthorityState = {
+      transactionDepth: 0,
+      transactionControlDepth: 0,
+      guardOwner: null,
+      authorizedOwner: null,
+    };
+    const rc = capi.sqlite3_set_authorizer(this.#db, (_context, actionCode) => {
+      const isTransactionControl = actionCode === capi.SQLITE_TRANSACTION
+        || actionCode === capi.SQLITE_SAVEPOINT;
+      return isTransactionControl && state.transactionControlDepth === 0
+        ? capi.SQLITE_DENY
+        : capi.SQLITE_OK;
+    }, 0);
+    this.#db.checkRc(rc);
+    PHYSICAL_DRIVER_CONTROLS.set(this, {
+      state,
+      isAutocommit: () => this.#isAutocommit(),
+      exec: (sql, params) => this.#execute(sql, params),
+      select: (sql, params) => this.#query(sql, params),
+      tx: fn => this.#internalTx(fn),
+    });
+  }
+
+  #isAutocommit(): boolean {
+    const capi = this.#sqlite.capi as unknown as {
+      sqlite3_get_autocommit(db: unknown): number;
+    };
+    return capi.sqlite3_get_autocommit(this.#db.pointer) !== 0;
+  }
+
+  #execute(sql: string, params?: SqlValue[]): void {
     try {
-      const result = fn();
-      this.exec(`RELEASE ${name}`);
-      return result;
-    } catch (e) {
-      this.exec(`ROLLBACK TO ${name}`);
-      this.exec(`RELEASE ${name}`);
-      throw e;
-    } finally {
-      this.depth--;
+      if (params && params.length > 0) this.#db.exec({ sql, bind: params });
+      else this.#db.exec(sql);
+    } catch (error) {
+      throw new ClayError("E_INTERNAL", `sql failed: ${String(error)}`, { sql });
     }
   }
 
+  #query(sql: string, params?: SqlValue[]): SqlRow[] {
+    try {
+      const rows = params && params.length > 0
+        ? this.#db.selectObjects(sql, params)
+        : this.#db.selectObjects(sql);
+      return rows as unknown as SqlRow[];
+    } catch (error) {
+      throw new ClayError("E_INTERNAL", `sql failed: ${String(error)}`, { sql });
+    }
+  }
+
+  #control(sql: string): void {
+    const state = PHYSICAL_DRIVER_CONTROLS.get(this)!.state;
+    state.transactionControlDepth++;
+    try {
+      this.#db.exec(sql);
+    } catch (error) {
+      throw new ClayError("E_INTERNAL", `transaction control failed: ${String(error)}`, { sql });
+    } finally {
+      state.transactionControlDepth--;
+    }
+  }
+
+  #internalTx<T>(fn: () => T): T {
+    const authority = PHYSICAL_DRIVER_CONTROLS.get(this)!.state;
+    if (authority.transactionDepth === 0 && !this.#isAutocommit())
+      throw staleAuthority("physical SQLite transaction is already open");
+    const name = `${this.#savepointPrefix}_${authority.transactionDepth}`;
+    this.#control(`SAVEPOINT ${name}`);
+    authority.transactionDepth++;
+    try {
+      const result = fn();
+      this.#control(`RELEASE ${name}`);
+      return result;
+    } catch (error) {
+      try {
+        this.#control(`ROLLBACK TO ${name}`);
+        this.#control(`RELEASE ${name}`);
+      } catch (controlError) {
+        throw new ClayError("E_INTERNAL", "transaction rollback failed", {
+          originalError: String(error), controlError: String(controlError),
+        });
+      }
+      throw error;
+    } finally {
+      authority.transactionDepth--;
+    }
+  }
+
+  exec(sql: string, params?: SqlValue[]): void {
+    const authority = PHYSICAL_DRIVER_CONTROLS.get(this)!.state;
+    const call = normalizeSqlCall(sql, params);
+    if (authority.guardOwner !== null || isTransactionControlStatement(call.sql))
+      throw staleAuthority("raw write or transaction control is not authorized");
+    this.#execute(call.sql, call.params);
+  }
+
+  select(sql: string, params?: SqlValue[]): SqlRow[] {
+    const call = normalizeSqlCall(sql, params);
+    if (!isReadOnlyStatement(call.sql))
+      throw staleAuthority("raw read channel cannot execute mutation SQL");
+    return this.#query(call.sql, call.params);
+  }
+
+  tx<T>(fn: () => T): T {
+    if (PHYSICAL_DRIVER_CONTROLS.get(this)!.state.guardOwner !== null)
+      throw staleAuthority("raw transaction cannot bypass live write authority");
+    return this.#internalTx(fn);
+  }
+
   close(): void {
-    this.db.close();
+    this.#db.close();
   }
 
   async snapshot(): Promise<DbDriver> {
-    const s = await sqlite3();
+    const s = this.#sqlite;
     // user.db: byte-exact serialization of the main schema
-    const bytes = exportMain(s, this.db);
+    const bytes = exportMain(s, this.#db);
     const copy = new s.oo1.DB(":memory:");
     deserializeInto(s, copy, bytes);
     copy.exec("PRAGMA foreign_keys = ON");
     copy.exec("ATTACH ':memory:' AS sys");
 
     // system.db: fixed table set, row-copied
-    const target = new SqliteWasmDriver(copy);
+    const target = new SqliteWasmDriver(copy, s);
     target.exec(SYSTEM_SCHEMA_SQL);
     for (const table of SYSTEM_TABLES) {
       copyRows(this, `sys.${table}`, target, `sys.${table}`);
@@ -96,11 +350,11 @@ class SqliteWasmDriver implements DbDriver {
   }
 
   async exportDatabases(): Promise<{ user: Uint8Array; system: Uint8Array }> {
-    const s = await sqlite3();
-    const user = exportMain(s, this.db);
+    const s = this.#sqlite;
+    const user = exportMain(s, this.#db);
     // system.db: standalone file with UNPREFIXED tables (doc 04 §7 layout)
     const temp = new s.oo1.DB(":memory:");
-    const tempDriver = new SqliteWasmDriver(temp);
+    const tempDriver = new SqliteWasmDriver(temp, s);
     tempDriver.exec(systemSchemaSql(""));
     for (const table of SYSTEM_TABLES)
       copyRows(this, `sys.${table}`, tempDriver, `"${table}"`);
@@ -161,13 +415,13 @@ export async function openDriverFromBytes(
   db.exec("PRAGMA trusted_schema = OFF");
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("ATTACH ':memory:' AS sys");
-  const driver = new SqliteWasmDriver(db);
+  const driver = new SqliteWasmDriver(db, s);
   driver.exec(SYSTEM_SCHEMA_SQL);
 
   const temp = new s.oo1.DB(":memory:");
   deserializeInto(s, temp, system);
   temp.exec("PRAGMA trusted_schema = OFF");
-  const tempDriver = new SqliteWasmDriver(temp);
+  const tempDriver = new SqliteWasmDriver(temp, s);
   for (const table of SYSTEM_TABLES) {
     const exists = tempDriver.select(
       `SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, [table]);
@@ -246,7 +500,7 @@ export async function openMemoryDriver(): Promise<DbDriver> {
   const db = new s.oo1.DB(":memory:");
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("ATTACH ':memory:' AS sys");
-  return new SqliteWasmDriver(db);
+  return new SqliteWasmDriver(db, s);
 }
 
 /**
@@ -279,7 +533,7 @@ async function ensureHeadroom(pool: PoolUtil): Promise<void> {
   } catch { /* best effort; the open below will surface a real failure */ }
 }
 
-async function openOnPool(pool: PoolUtil, appId?: string): Promise<DbDriver> {
+async function openOnPool(s: Sqlite3Static, pool: PoolUtil, appId?: string): Promise<DbDriver> {
   await ensureHeadroom(pool);
   const files = appFiles(appId);
   const db = new pool.OpfsSAHPoolDb(files.user);
@@ -292,7 +546,7 @@ async function openOnPool(pool: PoolUtil, appId?: string): Promise<DbDriver> {
     try { db.close(); } catch { /* already closed */ }
     throw e;
   }
-  return new SqliteWasmDriver(db);
+  return new SqliteWasmDriver(db, s);
 }
 
 /** Per-app OPFS filenames (G4 multi-app). The legacy single-app files
@@ -329,7 +583,7 @@ export async function openBrowserDriver(
   // worker must not re-install the singleton VFS).
   if (activePool) {
     try {
-      return { driver: await openOnPool(activePool, appId), persistent: true };
+      return { driver: await openOnPool(s, activePool, appId), persistent: true };
     } catch { /* fall through to (re)install */ }
   }
   if (!opfsSupported()) {
@@ -346,7 +600,7 @@ export async function openBrowserDriver(
     try {
       const pool = await withPool.installOpfsSAHPoolVfs({ initialCapacity: 24 });
       activePool = pool;
-      return { driver: await openOnPool(pool, appId), persistent: true };
+      return { driver: await openOnPool(s, pool, appId), persistent: true };
     } catch (e) {
       lastErr = e;
       if (attempt < 4) await sleep(250 * (attempt + 1));   // 250,500,750,1000ms

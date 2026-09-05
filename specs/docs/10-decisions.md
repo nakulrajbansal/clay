@@ -762,3 +762,134 @@ ADR-047 (2026-09-02) File bytes stay local, verified, bounded, and portable
   with transactional rollback plus read-back before commit.
   CONSEQUENCE: rich records remain offline, reversible, and portable without
   widening panel authority or hiding file custody behind a service.
+
+ADR-048 (2026-09-04) Exact target identity and protection state are worker-owned and fail closed
+  CONTEXT: the shell currently treats `localStorage` as the app registry and
+  collapses any OPFS open failure into a writable memory database. A/B require
+  truthful protection, non-reusable identity, and no overwrite when durable state
+  is unreadable or ambiguous.
+  DECISION: add closed shared schemas for the complete target tuple
+  `(appInstanceId, activeGenerationId, lineageEpoch, stateRevision,
+  stateDigest)`, durable catalog snapshots, storage-open outcomes,
+  Temporary eligibility, and device protection state. UInt64 values are canonical
+  decimal strings in `0..18446744073709551615`; app/generation IDs use their
+  prefix plus exactly 26 lowercase RFC 4648 base32 characters `[a-z2-7]`; state
+  digests are `sha256:` plus 64 lowercase hex characters. The DB worker is the only
+  authority for catalog selection and identity; `localStorage` becomes a
+  discardable presentation cache. Expected, denied, unreadable, locked, corrupt,
+  quota, attach, and unclassified storage failures yield `locked_or_unknown` and
+  cannot create or seed a memory replacement. `temporary` requires readable
+  authoritative inventories proving exactly zero apps, zero durable namespaces,
+  and zero pending operations, explicit unsupported or non-persistent capability,
+  the displayed loss boundary, and recorded user choice. The same proof without
+  choice yields `temporary_choice_required` and creates no app/store. Device
+  protection requires evidence matching the catalog-selected complete target.
+  Cross-database operations may claim physical atomicity only after a release-bound
+  crash/reopen certificate passes for the exact SQLite-WASM/OPFS topology, or a
+  separately selected colocation/recovery-journal fallback passes. Until then,
+  affected mutation routes remain disabled or read-only/export-only.
+  CONSEQUENCE: initial work adds schemas, pure derivation, and tests only. The
+  worker does not publish a protection state until catalog authority and
+  write-route enforcement land together. Later slices add catalog migration,
+  write fencing, checkpoints, backup, and recovery under the same closed contracts.
+  CORE EVIDENCE (2026-09-04): `pnpm verify:transaction-core` passed 180/180
+  Chromium 149 kill/reopen cases with SQLite source
+  `4525003a53a7fc63ca75c59b22c79608659ca12f0131f52c18637f829977f20b`,
+  three SAH-pool databases, `delete` journal mode, and failpoints after BEGIN,
+  DDL create/insert, main data, system metadata, catalog data, before COMMIT,
+  after returned COMMIT, and normal completion. This validates the core attached
+  mechanism for continued implementation only. It does not unlock a release
+  writer until semantic participants, concurrency, supported runtimes, and the
+  native commit/durability boundary satisfy the full certificate.
+
+ADR-049 (2026-09-04) Catalog schema 1 proceeds; raw SQLite-pair target digests are rejected
+  CONTEXT: ADR-048 requires a worker-owned catalog, target-bound writes, and a
+  digest that identifies canonical state without making ordinary writes depend on
+  retained attachment volume. The exact SQLite build exposes neither `sha3` nor
+  `sha3_query`. Chromium measurements over 10.75 MiB required 10.3 ms to export,
+  49.5 ms for WebCrypto, and 141.3 ms for synchronous SHA-256. Independent probes
+  showed equal logical state can have different serialized SQLite bytes after
+  reconstruction or physical maintenance. Zeroing a digest stored inside the
+  database also failed self-reference reproduction.
+  DECISION: select catalog schema 1 with a singleton authority root, retained ID
+  registry, live/tombstoned app rows, immutable generation descriptors, leases,
+  pending jobs, and non-reusable lineage/revision reservation journals. Opening an
+  absent or partial catalog never initializes or repairs it. Initialization is a
+  separate operation allowed only after authoritative zero-inventory proof.
+  Reject exact database-pair bytes and commit-chain-only hashes as target digest
+  schema 1. Schema 1 will be a target-owned canonical logical Merkle map. Stable
+  logical leaf keys and type-tagged values commit every archive-visible record and
+  schema object. Attachment leaves commit validated content SHA-256, size, type,
+  name, lifecycle, and references without rehashing retained bytes on unrelated
+  writes. The map uses 1,024 deterministic buckets with the byte framing fixed in
+  the data model; ordinary writes recompute only
+  changed leaves, affected bucket roots, and the fixed bucket-root vector. Digest
+  tables, target headers, and explicitly device-local telemetry are excluded from
+  their own root. Full rebuild audit is mandatory at boot, checkpoint, import, and
+  restore boundaries. Catalog app publication remains blocked until format 5 and the
+  production commit coordinator consume the canonical census and checked root.
+  The canonical census and persisted-root comparison are required prerequisites and
+  have their own fail-closed kernel tests; they do not by themselves publish or grant
+  write authority. Target authority metadata is target-owned but excluded from its
+  own logical root. Its strict header stores current/high-water counters and digest
+  schema only; evidence combines it with an independently audited Merkle root. A
+  reservation is a separate durable, operation-idempotent commit that advances only
+  high-water and may leave an abandoned permanent gap. It does not advance current
+  state or authorize a writer.
+  Canonical no-ops return current evidence without mutation or reservation. A meaningful
+  tracer reserves matching target and catalog rows in one physical transaction, then
+  commits data, Merkle publication, target current revision, both journal rows, catalog
+  head/generation, and full-census read-back in another. Failure rolls the commit back
+  and abandons the same consumed revision in both journals. A committed row retains its
+  exact state digest, original expected revision/digest, and canonical fingerprint of a private
+  cloned change set. Matching operation-id retry of the current commit returns original
+  evidence without replaying mutation or allocating another revision; historical replay
+  fails closed until an authenticated current-anchored journal chain exists, and
+  mismatched reuse fails closed. The coordinator invokes the canonical
+  census itself with its trusted registry and checks root plus leaf count, rather than
+  accepting a caller-supplied digest attestation. It captures every caller-controlled
+  commit field once and verifies the single parsed operation ID in both persisted journals
+  before returning success. Trusted indexed traversal reconstructs change fields into
+  private fixed-shape records without invoking caller-owned array methods. Object and
+  callable-function thenable
+  mutation callbacks fail before Merkle publication and their synchronous writes roll back.
+  The coordinator opens the
+  catalog only through its own guarded driver. Guard ownership and transaction depth are
+  held only in a module-private WeakMap for a factory-registered physical driver. An opaque
+  owner-bound capability and `sqlite3_set_authorizer` reserve savepoint/transaction opcodes
+  for private control. Primitive SQL and cloned supported bind arrays are validated before
+  forwarding; options objects, malformed binds, appended trigger transaction control, raw
+  writes, a second guard, and authorization inside an existing transaction are rejected.
+  Autocommit is verified before authority and after release. Forwarding wrappers cannot
+  forge identity. A trusted injected worker clock, not caller journal
+  timestamps, checks the final lease before mutation code is invoked.
+  Catalog app rows retain an immutable genesis tuple. A contiguous
+  `catalog_generation_events` journal records every root-generation advance and binds it
+  to app seed, lease, reservation, finalization, or takeover evidence. The app-seed event
+  pins the complete immutable genesis target, preventing a coherent descriptor re-anchor.
+  Finalization uses
+  the exact reserving fence or one expired-owner successor epoch, and lineage changes are
+  denied until their own complete journal exists. A successor-epoch finalization must be
+  `recovery_takeover`; ordinary commit and abandonment must remain on the reserving epoch.
+  Exact committed replay is read-only but still requires catalog generation/fence and
+  matching evidence in both journals; target-only committed evidence fails closed.
+  After an expired reserved owner,
+  one same-driver recovery transaction advances epoch/generation, creates a new lease,
+  and abandons both mirrored rows; the next revision remains usable while the gap stays
+  permanent. This coordinator remains non-exported and cannot authorize production
+  until worker serialization, every write route, and archive format 5 join the boundary.
+  Authority-only runtime schemas live at `@clay/schema/catalog`; the boot-reachable main
+  schema entry does not initialize unexported catalog/coordinator contracts.
+  Target evidence is mandatory in a new archive format. Existing format 4 remains
+  importable legacy input but cannot itself certify a target. A live driver rejects
+  every SQL write outside one synchronous coordinator transaction. Independent
+  previews remain writable because they cannot alter live state or catalog authority.
+  Async WebCrypto may not hold authority until one non-reentrant executor is proven
+  to serialize worker commands, every Store RPC port, lifecycle work, and internal
+  jobs with crash-safe teardown.
+  CONSEQUENCE: strict catalog, inventory, lease, and ambient-write-denial primitives
+  may land, but target publication, legacy migration, protection publication, and
+  every production writer remain unchanged and uncertified until the Merkle format,
+  real-OPFS catalog-first integration, complete route fencing, reservation semantics,
+  concurrency, archive-format gate, performance matrix, and release-bound crash/reopen
+  evidence pass.

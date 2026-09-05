@@ -5,8 +5,9 @@
 import { chromium } from "playwright";
 import AxeBuilder from "@axe-core/playwright";
 import { mkdir } from "node:fs/promises";
+import { productGateUrl } from "./product-gate-url.mjs";
 
-const url = process.env.URL || "http://127.0.0.1:4173";
+const url = productGateUrl();
 const outDir = process.argv[2] || "evidence";
 await mkdir(outDir, { recursive: true });
 
@@ -79,6 +80,8 @@ const check = (condition, label) => {
 await page.goto(url, { waitUntil: "domcontentloaded" });
 await page.getByText("Sales CRM", { exact: true }).click({ timeout: 15_000 });
 await page.locator(".panel-frame").first().waitFor({ timeout: 20_000 });
+await page.getByRole("button", { name: "Customize", exact: true }).click();
+await page.locator(".appbar-mode-button.active", { hasText: "Customize" }).waitFor();
 await page.getByPlaceholder("Describe a change", { exact: false })
   .fill("Add a calm pipeline pulse view");
 await page.getByRole("button", { name: "Reshape", exact: true }).click();
@@ -248,7 +251,7 @@ deleteLensConfirm = page.getByRole("group", { name: "Confirm delete lens Review 
 await deleteLensConfirm.getByRole("button", { name: "Delete", exact: true }).click();
 await page.waitForTimeout(100);
 check(await page.locator(".panel-frame").count() === allPanelCount,
-  "deleting the active saved lens returns to All views");
+  "deleting the active saved lens returns to Workspace");
 
 for (let index = 1; index <= 24; index++) {
   const trigger = page.getByRole("button", { name: /Choose situational lens/ });

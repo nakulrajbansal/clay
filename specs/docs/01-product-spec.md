@@ -98,10 +98,12 @@ never a popup. Accept enters the normal loop; dismiss records a tombstone
 ## 5. Screen inventory
 
 S1 Landing page (static): demo video, "verify in DevTools" section, shell picker CTA.
-S2 Main app: header (name, version chip, global search, automations, history,
-   data, settings) / panel
-   canvas (regions: top strip, main grid, side) / conversation rail
-   (collapsible; collapsed by default after 7 days of use) / footer slider.
+S2 Main app: Work is the default per-app presentation mode. Its header keeps the
+   app switcher, Workspace lenses, global search, protection status, history,
+   and the record/panel canvas. Customize explicitly reveals automation building,
+   structural data tools, shape map, appearance, panel construction controls, and
+   the conversation rail. Changing mode never changes canonical records, schema,
+   panels, history, or app selection.
 S3 Data view: table browser per registered table. Read, inline edit, record
    detail, linked-record conversion, saved operational views, bulk actions,
    CSV/JSON import, CSV export, soft delete, and undo.

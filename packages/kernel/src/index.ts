@@ -4,6 +4,12 @@ export { BLUEPRINT_KINDS, expandBlueprint, parseBlueprintDirective,
   type BlueprintResult } from "./blueprints";
 export { ClayError, type ClayErrorCode } from "./errors";
 export {
+  deriveDeviceState, DeviceProtectionInputV1, DeviceStateResultV1, targetIdentityEquals,
+  type CheckpointObservation, type DeviceProtectionInput, type DeviceState,
+  type DeviceStateResult, type DurableStoreCapability, type ExpectedStoreFailure,
+  type ProtectionReasonCode, type TemporaryUserChoice,
+} from "./protection";
+export {
   compileExpr, evalExpr, parseExpr, typecheckExpr, exprFields,
   type ExprAst, type ExprScope, type ExprType, type ExprValue,
 } from "./expr";
