@@ -89,6 +89,21 @@ catalog surrogates. It remains non-release evidence until the same registry adds
 production semantic hook/oracle coverage, concurrency, every supported durable
 runtime, and the native commit/durability boundary.
 
+ADR-049 adds focused schema/kernel gates for strict catalog snapshots, immutable
+generation binding, monotonic expiring leases, stale epochs, explicit fresh
+initialization, exact schema/constraint denial, cross-table identity validation,
+durable namespace inventory, ambient SQL denial, async authority denial, and a
+bounded synchronous SHA-256 implementation checked against an independent Node
+crypto oracle. Raw SQLite-pair hashing is explicitly rejected by review and spike
+evidence. Merkle tests cover independent leaf/bucket/root golden vectors, raw-byte
+ordering across locales, exact 1,024-bucket persistence, no-op zero-write behavior,
+authenticated root-vector/count/touched-bucket prestate, omitted leaf DML rollback,
+lost-bucket rollback, corruption denial, and a one-leaf update at 5,000 leaves under
+the existing 300 ms kernel scale budget. Full target enumeration/rebuild equivalence,
+attachment-byte independence, no-op matrices, new archive target evidence, real
+OPFS, every production writer and Store RPC port, concurrent CAS, reservation gaps,
+performance fixtures, and named crash hooks remain required before writes are enabled.
+
 ## 8. Launch criteria (all must hold)
 
 L1 regression gate green 5 consecutive nights;

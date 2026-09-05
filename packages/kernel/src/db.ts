@@ -35,7 +35,7 @@ function sqlite3(): Promise<Sqlite3Static> {
 
 class SqliteWasmDriver implements DbDriver {
   private depth = 0;
-  constructor(private readonly db: Database) {}
+  constructor(private readonly db: Database, private readonly sqlite: Sqlite3Static) {}
 
   exec(sql: string, params?: SqlValue[]): void {
     try {
@@ -78,7 +78,7 @@ class SqliteWasmDriver implements DbDriver {
   }
 
   async snapshot(): Promise<DbDriver> {
-    const s = await sqlite3();
+    const s = this.sqlite;
     // user.db: byte-exact serialization of the main schema
     const bytes = exportMain(s, this.db);
     const copy = new s.oo1.DB(":memory:");
@@ -87,7 +87,7 @@ class SqliteWasmDriver implements DbDriver {
     copy.exec("ATTACH ':memory:' AS sys");
 
     // system.db: fixed table set, row-copied
-    const target = new SqliteWasmDriver(copy);
+    const target = new SqliteWasmDriver(copy, s);
     target.exec(SYSTEM_SCHEMA_SQL);
     for (const table of SYSTEM_TABLES) {
       copyRows(this, `sys.${table}`, target, `sys.${table}`);
@@ -96,11 +96,11 @@ class SqliteWasmDriver implements DbDriver {
   }
 
   async exportDatabases(): Promise<{ user: Uint8Array; system: Uint8Array }> {
-    const s = await sqlite3();
+    const s = this.sqlite;
     const user = exportMain(s, this.db);
     // system.db: standalone file with UNPREFIXED tables (doc 04 §7 layout)
     const temp = new s.oo1.DB(":memory:");
-    const tempDriver = new SqliteWasmDriver(temp);
+    const tempDriver = new SqliteWasmDriver(temp, s);
     tempDriver.exec(systemSchemaSql(""));
     for (const table of SYSTEM_TABLES)
       copyRows(this, `sys.${table}`, tempDriver, `"${table}"`);
@@ -161,13 +161,13 @@ export async function openDriverFromBytes(
   db.exec("PRAGMA trusted_schema = OFF");
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("ATTACH ':memory:' AS sys");
-  const driver = new SqliteWasmDriver(db);
+  const driver = new SqliteWasmDriver(db, s);
   driver.exec(SYSTEM_SCHEMA_SQL);
 
   const temp = new s.oo1.DB(":memory:");
   deserializeInto(s, temp, system);
   temp.exec("PRAGMA trusted_schema = OFF");
-  const tempDriver = new SqliteWasmDriver(temp);
+  const tempDriver = new SqliteWasmDriver(temp, s);
   for (const table of SYSTEM_TABLES) {
     const exists = tempDriver.select(
       `SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, [table]);
@@ -246,7 +246,7 @@ export async function openMemoryDriver(): Promise<DbDriver> {
   const db = new s.oo1.DB(":memory:");
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("ATTACH ':memory:' AS sys");
-  return new SqliteWasmDriver(db);
+  return new SqliteWasmDriver(db, s);
 }
 
 /**
@@ -279,7 +279,7 @@ async function ensureHeadroom(pool: PoolUtil): Promise<void> {
   } catch { /* best effort; the open below will surface a real failure */ }
 }
 
-async function openOnPool(pool: PoolUtil, appId?: string): Promise<DbDriver> {
+async function openOnPool(s: Sqlite3Static, pool: PoolUtil, appId?: string): Promise<DbDriver> {
   await ensureHeadroom(pool);
   const files = appFiles(appId);
   const db = new pool.OpfsSAHPoolDb(files.user);
@@ -292,7 +292,7 @@ async function openOnPool(pool: PoolUtil, appId?: string): Promise<DbDriver> {
     try { db.close(); } catch { /* already closed */ }
     throw e;
   }
-  return new SqliteWasmDriver(db);
+  return new SqliteWasmDriver(db, s);
 }
 
 /** Per-app OPFS filenames (G4 multi-app). The legacy single-app files
@@ -329,7 +329,7 @@ export async function openBrowserDriver(
   // worker must not re-install the singleton VFS).
   if (activePool) {
     try {
-      return { driver: await openOnPool(activePool, appId), persistent: true };
+      return { driver: await openOnPool(s, activePool, appId), persistent: true };
     } catch { /* fall through to (re)install */ }
   }
   if (!opfsSupported()) {
@@ -346,7 +346,7 @@ export async function openBrowserDriver(
     try {
       const pool = await withPool.installOpfsSAHPoolVfs({ initialCapacity: 24 });
       activePool = pool;
-      return { driver: await openOnPool(pool, appId), persistent: true };
+      return { driver: await openOnPool(s, pool, appId), persistent: true };
     } catch (e) {
       lastErr = e;
       if (attempt < 4) await sleep(250 * (attempt + 1));   // 250,500,750,1000ms

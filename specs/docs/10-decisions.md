@@ -801,3 +801,43 @@ ADR-048 (2026-09-04) Exact target identity and protection state are worker-owned
   mechanism for continued implementation only. It does not unlock a release
   writer until semantic participants, concurrency, supported runtimes, and the
   native commit/durability boundary satisfy the full certificate.
+
+ADR-049 (2026-09-04) Catalog schema 1 proceeds; raw SQLite-pair target digests are rejected
+  CONTEXT: ADR-048 requires a worker-owned catalog, target-bound writes, and a
+  digest that identifies canonical state without making ordinary writes depend on
+  retained attachment volume. The exact SQLite build exposes neither `sha3` nor
+  `sha3_query`. Chromium measurements over 10.75 MiB required 10.3 ms to export,
+  49.5 ms for WebCrypto, and 141.3 ms for synchronous SHA-256. Independent probes
+  showed equal logical state can have different serialized SQLite bytes after
+  reconstruction or physical maintenance. Zeroing a digest stored inside the
+  database also failed self-reference reproduction.
+  DECISION: select catalog schema 1 with a singleton authority root, retained ID
+  registry, live/tombstoned app rows, immutable generation descriptors, leases,
+  pending jobs, and non-reusable lineage/revision reservation journals. Opening an
+  absent or partial catalog never initializes or repairs it. Initialization is a
+  separate operation allowed only after authoritative zero-inventory proof.
+  Reject exact database-pair bytes and commit-chain-only hashes as target digest
+  schema 1. Schema 1 will be a target-owned canonical logical Merkle map. Stable
+  logical leaf keys and type-tagged values commit every archive-visible record and
+  schema object. Attachment leaves commit validated content SHA-256, size, type,
+  name, lifecycle, and references without rehashing retained bytes on unrelated
+  writes. The map uses 1,024 deterministic buckets with the byte framing fixed in
+  the data model; ordinary writes recompute only
+  changed leaves, affected bucket roots, and the fixed bucket-root vector. Digest
+  tables, target headers, and explicitly device-local telemetry are excluded from
+  their own root. Full rebuild audit is mandatory at boot, checkpoint, import, and
+  restore boundaries. Catalog app publication remains blocked until the canonical
+  target enumerator and rebuild comparison land on top of the checked golden vectors.
+  Target evidence is mandatory in a new archive format. Existing format 4 remains
+  importable legacy input but cannot itself certify a target. A live driver rejects
+  every SQL write outside one synchronous coordinator transaction. Independent
+  previews remain writable because they cannot alter live state or catalog authority.
+  Async WebCrypto may not hold authority until one non-reentrant executor is proven
+  to serialize worker commands, every Store RPC port, lifecycle work, and internal
+  jobs with crash-safe teardown.
+  CONSEQUENCE: strict catalog, inventory, lease, and ambient-write-denial primitives
+  may land, but target publication, legacy migration, protection publication, and
+  every production writer remain unchanged and uncertified until the Merkle format,
+  real-OPFS catalog-first integration, complete route fencing, reservation semantics,
+  concurrency, archive-format gate, performance matrix, and release-bound crash/reopen
+  evidence pass.

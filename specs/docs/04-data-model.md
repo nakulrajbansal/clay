@@ -161,6 +161,44 @@ Release-local names such as archive or protection revision are aliases only and
 must not become independent counters. IDs and uint64 decimal counters use the
 closed ADR-048 grammars and never derive current authority from imported values.
 
+Catalog schema 1 is device authority outside `.clay` archives. It contains one
+authority root, retained opaque IDs, app rows, immutable generation descriptors,
+origin leases, pending lifecycle jobs, and non-reusable lineage/revision
+reservations. A partial table set is invalid and is never auto-repaired. Live app
+snapshots expose only non-tombstoned entries, while retained identities prevent
+reuse within the authority incarnation.
+
+Digest schema 1 uses target-owned logical leaf and bucket tables in `system.db`.
+There are exactly 1,024 deterministic buckets. Leaf keys bind stable entity or schema
+identity; leaf payloads use canonical type-tagged framing. Attachment leaves include
+validated content SHA-256 and metadata but not retained bytes. Digest tables, target
+headers, and device-local telemetry are excluded from their own root. Catalog rows
+and the new target-aware archive format store the resulting `stateSha256`. Format 4
+archives remain legacy inputs and cannot certify a target. Exact table layouts and
+golden vectors land with the Merkle tracer before any migration or writer is enabled.
+
+Merkle framing v1 uses ASCII domain bytes and big-endian lengths. A leaf hashes
+`"clay.state.leaf.v1" || U32(keyBytes) || keyBytes || U32(fieldCount)` followed by
+fields sorted by raw UTF-8 bytes. Each field is `U32(nameBytes) || nameBytes || tag ||
+U64(payloadBytes) || payload`. Tags are 0 null, 1 canonical int64 decimal where
+zero is exactly `0` and `-0` is invalid,
+2 finite IEEE-754 binary64 with negative zero normalized to zero, 3 UTF-8 text, and
+4 attachment/content reference. Tag 4 payload is the raw 32-byte SHA-256 followed by
+U64 content length; raw attachment bytes are not a leaf value.
+
+Bucket assignment uses the first ten bits of
+`SHA-256("clay.state.bucket-key.v1" || U32(keyBytes) || keyBytes)`. A bucket root
+hashes `"clay.state.bucket.v1" || U16(bucket) || U32(leafCount)` and each leaf sorted
+by key as `U32(keyBytes) || keyBytes || rawLeafSha256`. The state root hashes
+`"clay.state.root.v1" || U16(1024)` and all 1,024 `U16(bucket) || rawBucketSha256`
+pairs in numeric order. The empty root is
+`sha256:578c0424ddaed67d6f0c081a40e3c95bd0c7db2a7a9002fd565c74622c26079d`.
+The checked mixed-type leaf vector is
+`sha256:0a08665ca489f226d5f132d126e42f8785afedcf9b6057720a5e7cc3192bd5a9`.
+Target-owned `state_digest_leaves`, `state_digest_buckets`, and `state_digest_root`
+tables are explicitly created and validated by the target-aware format; they are not
+silently added to the current format-4 archive allowlist.
+
 `navigator.storage.persist()` is requested through the protected-first-write
 flow; status is evidence-derived and surfaced in Settings. Usage estimate shown.
 `usage_events` ring-buffer trimmed at 50k. `shadow.db` is deleted after every

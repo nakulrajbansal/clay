@@ -81,6 +81,18 @@ store fails closed; it never becomes a writable memory replacement. Cross-databa
 atomicity remains unclaimed until the exact production topology or selected
 recovery fallback passes release-bound crash/reopen certification.
 
+Catalog schema 1 and target digest schema 1 follow ADR-049. Catalog open and fresh
+initialization are separate APIs. The live SQLite driver is deny-by-default for SQL
+writes; one internal synchronous coordinator must validate authority incarnation,
+write epoch, lease, selected complete target, and operation identity before opening
+the outer transaction. Long-lived Store RPC ports receive no ambient exception.
+Target digest schema 1 is a target-owned, 1,024-bucket canonical logical Merkle map.
+It hashes stable logical keys and type-tagged values, commits attachment content
+digests rather than retained bytes, and excludes its own metadata plus device-local
+telemetry. Ordinary writes update only affected leaves and buckets; boot, checkpoint,
+import, and restore perform full rebuild audits. Shadows remain independent and never
+attach the live catalog.
+
 ## 5. Sequence: a mutation end to end
 
 ```

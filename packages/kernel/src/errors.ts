@@ -7,6 +7,11 @@ export type ClayErrorCode =
   | "E_TYPE"
   | "E_EXPR"
   | "E_CONFLICT"
+  | "E_CATALOG_UNAVAILABLE"
+  | "E_CATALOG_CONFLICT"
+  | "E_STATE_DIGEST_INVALID"
+  | "E_STALE_WRITE_EPOCH"
+  | "E_GENERATION_NOT_SELECTED"
   | "E_INTERNAL";
 
 export class ClayError extends Error {

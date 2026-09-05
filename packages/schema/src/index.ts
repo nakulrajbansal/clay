@@ -50,6 +50,11 @@ const lowerBase32Id = (prefix: string): z.ZodString =>
   z.string().regex(new RegExp(`^${prefix}_[a-z2-7]{26}$`));
 export const AppInstanceId = lowerBase32Id("app");
 export const GenerationId = lowerBase32Id("gen");
+export const AuthorityIncarnationId = lowerBase32Id("auth");
+export const NamespaceId = lowerBase32Id("ns");
+export const LeaseId = lowerBase32Id("lease");
+export const OperationId = lowerBase32Id("op");
+export const ReleaseId = lowerBase32Id("rel");
 export const Sha256 = z.string().regex(/^sha256:[0-9a-f]{64}$/);
 
 export const TargetIdentityV1 = z.object({
@@ -60,6 +65,102 @@ export const TargetIdentityV1 = z.object({
   stateDigest: Sha256,
 }).strict();
 export type TargetIdentityV1 = z.infer<typeof TargetIdentityV1>;
+
+export const TargetEvidenceV1 = z.object({
+  appInstanceId: AppInstanceId,
+  activeGenerationId: GenerationId,
+  lineageEpoch: UInt64Decimal,
+  protectionRevision: UInt64Decimal,
+  digestSchema: z.literal(1),
+  stateSha256: Sha256,
+}).strict();
+export type TargetEvidenceV1 = z.infer<typeof TargetEvidenceV1>;
+
+const CanonicalInstant = z.string().datetime({ offset: true });
+const ProvenanceId = z.string().min(1).max(256)
+  .refine(value => value === value.trim(), "canonical provenance identity required");
+export const ImmutableAppGenerationV1 = z.object({
+  schema: z.literal(1),
+  generationId: GenerationId,
+  target: TargetEvidenceV1,
+  namespaceId: NamespaceId,
+  sourceArchiveSha256: Sha256.nullable(),
+  sourceProvenanceId: ProvenanceId.nullable(),
+  sealedAt: CanonicalInstant,
+  readBackAt: CanonicalInstant,
+}).strict().superRefine((value, ctx) => {
+  if (value.generationId !== value.target.activeGenerationId)
+    ctx.addIssue({ code: "custom", message: "generation descriptor does not match target" });
+});
+export type ImmutableAppGenerationV1 = z.infer<typeof ImmutableAppGenerationV1>;
+
+export const WriteFenceV1 = z.object({
+  authorityIncarnationId: AuthorityIncarnationId,
+  writeEpoch: UInt64Decimal,
+  leaseId: LeaseId,
+  releaseId: ReleaseId,
+}).strict();
+export type WriteFenceV1 = z.infer<typeof WriteFenceV1>;
+
+const CatalogDisplayName = z.string().min(1).max(40)
+  .refine(value => value === value.trim(), "canonical display name required");
+export const AppCatalogEntryV1 = z.object({
+  appInstanceId: AppInstanceId,
+  displayName: CatalogDisplayName,
+  activeGenerationId: GenerationId,
+  currentLineageEpoch: UInt64Decimal,
+  lineageEpochHighWater: UInt64Decimal,
+  currentProtectionRevision: UInt64Decimal,
+  revisionHighWater: UInt64Decimal,
+  digestSchema: z.literal(1),
+  stateSha256: Sha256,
+  tombstoned: z.literal(false),
+}).strict().superRefine((value, ctx) => {
+  if (BigInt(value.currentLineageEpoch) > BigInt(value.lineageEpochHighWater))
+    ctx.addIssue({ code: "custom", message: "lineage epoch exceeds high-water mark" });
+  if (BigInt(value.currentProtectionRevision) > BigInt(value.revisionHighWater))
+    ctx.addIssue({ code: "custom", message: "protection revision exceeds high-water mark" });
+});
+export type AppCatalogEntryV1 = z.infer<typeof AppCatalogEntryV1>;
+
+export const AppCatalogSnapshotV1 = z.object({
+  schema: z.literal(1),
+  authorityIncarnationId: AuthorityIncarnationId,
+  catalogGeneration: UInt64Decimal,
+  selectedAppInstanceId: AppInstanceId.nullable(),
+  entries: z.array(AppCatalogEntryV1),
+  writeEpoch: UInt64Decimal,
+}).strict().superRefine((value, ctx) => {
+  const appIds = new Set<string>();
+  const generationIds = new Set<string>();
+  for (const entry of value.entries) {
+    if (appIds.has(entry.appInstanceId))
+      ctx.addIssue({ code: "custom", message: "duplicate app instance identity" });
+    if (generationIds.has(entry.activeGenerationId))
+      ctx.addIssue({ code: "custom", message: "duplicate active generation identity" });
+    appIds.add(entry.appInstanceId);
+    generationIds.add(entry.activeGenerationId);
+  }
+  if (value.selectedAppInstanceId !== null && !appIds.has(value.selectedAppInstanceId))
+    ctx.addIssue({ code: "custom", message: "selected app is not a live catalog entry" });
+});
+export type AppCatalogSnapshotV1 = z.infer<typeof AppCatalogSnapshotV1>;
+
+export const CatalogCasPublicationV1 = z.object({
+  schema: z.literal(1),
+  authorityIncarnationId: AuthorityIncarnationId,
+  catalogGeneration: UInt64Decimal,
+  selectedAppInstanceId: AppInstanceId.nullable(),
+  publishedTarget: TargetEvidenceV1,
+}).strict().superRefine((value, context) => {
+  if (value.selectedAppInstanceId !== value.publishedTarget.appInstanceId)
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["selectedAppInstanceId"],
+      message: "selected app must match the published target",
+    });
+});
+export type CatalogCasPublicationV1 = z.infer<typeof CatalogCasPublicationV1>;
 
 export const TemporaryUserChoice = z.literal("accepted_temporary_after_loss_boundary").nullable();
 export const TemporaryEligibilityV1 = z.object({
