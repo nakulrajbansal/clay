@@ -1,6 +1,7 @@
 import {
   GenerationId,
   OperationId,
+  Sha256,
   TargetAuthorityHeaderV1,
   TargetEvidenceV1,
   UInt64Decimal,
@@ -10,8 +11,10 @@ import type {
   TargetEvidenceV1 as TargetEvidence,
 } from "@clay/schema";
 import type { DbDriver } from "./db";
+import { enumerateCanonicalStateV1 } from "./canonical-state";
 import { ClayError } from "./errors";
-import { StateMerkleIndex } from "./state-merkle-index";
+import type { Registry } from "./registry";
+import { StateMerkleIndex, type StateMerkleChange } from "./state-merkle-index";
 
 const HEADER_TABLE = "target_authority_header";
 const RESERVATION_TABLE = "target_revision_reservations";
@@ -31,9 +34,13 @@ const DDL = [
   `CREATE TABLE sys.target_revision_reservations(
   revision TEXT PRIMARY KEY,
   operation_id TEXT NOT NULL UNIQUE,
+  expected_protection_revision TEXT NOT NULL,
+  expected_state_sha256 TEXT NOT NULL,
+  request_sha256 TEXT NOT NULL,
   active_generation_id TEXT NOT NULL,
   lineage_epoch TEXT NOT NULL,
   state TEXT NOT NULL CHECK(state IN ('reserved','committed','abandoned')),
+  state_sha256 TEXT,
   reserved_at TEXT NOT NULL,
   finalized_at TEXT
 )`,
@@ -100,12 +107,25 @@ function readHeader(driver: DbDriver): TargetAuthorityHeader {
   }
 }
 
+function sameEvidence(left: TargetEvidence, right: TargetEvidence): boolean {
+  return left.appInstanceId === right.appInstanceId
+    && left.activeGenerationId === right.activeGenerationId
+    && left.lineageEpoch === right.lineageEpoch
+    && left.protectionRevision === right.protectionRevision
+    && left.digestSchema === right.digestSchema
+    && left.stateSha256 === right.stateSha256;
+}
+
 export type ProtectionRevisionReservation = {
   operationId: string;
   revision: string;
+  expectedProtectionRevision: string;
+  expectedStateSha256: string;
+  requestSha256: string;
   state: "reserved" | "committed" | "abandoned";
   reservedAt: string;
   finalizedAt: string | null;
+  stateSha256: string | null;
 };
 export type ProtectionRevisionReservationResult = Pick<
   ProtectionRevisionReservation, "revision" | "state"
@@ -119,6 +139,11 @@ function canonicalInstant(value: unknown): string {
   return value;
 }
 
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return typeof value === "object" && value !== null
+    && "then" in value && typeof (value as { then?: unknown }).then === "function";
+}
+
 function readReservations(
   driver: DbDriver,
   header: TargetAuthorityHeader,
@@ -127,23 +152,34 @@ function readReservations(
   const reservations = rows.map(row => {
     const revision = UInt64Decimal.parse(row.revision);
     const operationId = OperationId.parse(row.operation_id);
+    const expectedProtectionRevision = UInt64Decimal.parse(row.expected_protection_revision);
+    const expectedStateSha256 = Sha256.parse(row.expected_state_sha256);
+    const requestSha256 = Sha256.parse(row.request_sha256);
     const generationId = GenerationId.parse(row.active_generation_id);
     const lineageEpoch = UInt64Decimal.parse(row.lineage_epoch);
     const state = row.state;
-    if (revision === "0" || generationId !== header.activeGenerationId
+    if (revision === "0" || BigInt(expectedProtectionRevision) >= BigInt(revision)
+        || generationId !== header.activeGenerationId
         || lineageEpoch !== header.lineageEpoch
         || (state !== "reserved" && state !== "committed" && state !== "abandoned"))
       throw invalid("revision reservation is invalid");
     const reservedAt = canonicalInstant(row.reserved_at);
     const finalizedAt = row.finalized_at === null ? null : canonicalInstant(row.finalized_at);
-    if ((state === "reserved") !== (finalizedAt === null))
+    const stateSha256 = row.state_sha256 === null ? null : Sha256.parse(row.state_sha256);
+    if ((state === "reserved" && (finalizedAt !== null || stateSha256 !== null))
+        || (state === "committed" && (finalizedAt === null || stateSha256 === null))
+        || (state === "abandoned" && (finalizedAt === null || stateSha256 !== null)))
       throw invalid("revision reservation finalization is invalid");
     return {
       operationId,
       revision,
+      expectedProtectionRevision,
+      expectedStateSha256,
+      requestSha256,
       state: state as ProtectionRevisionReservation["state"],
       reservedAt,
       finalizedAt,
+      stateSha256,
     };
   }).sort((left, right) => BigInt(left.revision) < BigInt(right.revision) ? -1 : 1);
   const highWater = BigInt(header.protectionRevisionHighWater);
@@ -235,19 +271,68 @@ export class TargetAuthorityStore {
     });
   }
 
+  committedEvidence(
+    operationIdInput: string,
+    expectedTargetInput: TargetEvidence,
+    requestSha256Input: string,
+  ): TargetEvidence | null {
+    const operation = OperationId.safeParse(operationIdInput);
+    const expected = TargetEvidenceV1.safeParse(expectedTargetInput);
+    const requestSha256 = Sha256.safeParse(requestSha256Input);
+    if (!operation.success || !expected.success || !requestSha256.success
+        || !exactSchema(this.driver)) throw invalid();
+    return this.driver.tx(() => {
+      const header = readHeader(this.driver);
+      const reservation = readReservations(this.driver, header)
+        .find(candidate => candidate.operationId === operation.data);
+      if (!reservation) return null;
+      if (reservation.expectedProtectionRevision !== expected.data.protectionRevision
+          || reservation.expectedStateSha256 !== expected.data.stateSha256
+          || reservation.requestSha256 !== requestSha256.data)
+        throw invalid("operation id is bound to another target commit");
+      if (reservation.state !== "committed") return null;
+      if (reservation.revision !== header.protectionRevision)
+        throw invalid("historical committed evidence is not independently auditable");
+      if (reservation.stateSha256 !== StateMerkleIndex.open(this.driver).audit().stateSha256)
+        throw invalid("committed reservation digest does not match target state");
+      return TargetEvidenceV1.parse({
+        appInstanceId: header.appInstanceId,
+        activeGenerationId: header.activeGenerationId,
+        lineageEpoch: header.lineageEpoch,
+        protectionRevision: reservation.revision,
+        digestSchema: header.digestSchema,
+        stateSha256: reservation.stateSha256,
+      });
+    });
+  }
+
   reserveProtectionRevision(
     operationIdInput: string,
     reservedAtInput: string,
+    expectedTargetInput: TargetEvidence,
+    requestSha256Input: string,
   ): ProtectionRevisionReservationResult {
     const operation = OperationId.safeParse(operationIdInput);
-    if (!operation.success || !exactSchema(this.driver)) throw invalid();
+    const expected = TargetEvidenceV1.safeParse(expectedTargetInput);
+    const requestSha256 = Sha256.safeParse(requestSha256Input);
+    if (!operation.success || !expected.success || !requestSha256.success
+        || !exactSchema(this.driver)) throw invalid();
     const reservedAt = canonicalInstant(reservedAtInput);
     try {
       return this.driver.tx(() => {
         const header = readHeader(this.driver);
+        const current = this.evidence();
+        if (!sameEvidence(current, expected.data))
+          throw new ClayError("E_GENERATION_NOT_SELECTED", "reservation target is not current");
         const existing = readReservations(this.driver, header)
           .find(reservation => reservation.operationId === operation.data);
-        if (existing) return { revision: existing.revision, state: existing.state };
+        if (existing) {
+          if (existing.expectedProtectionRevision !== expected.data.protectionRevision
+              || existing.expectedStateSha256 !== expected.data.stateSha256
+              || existing.requestSha256 !== requestSha256.data)
+            throw invalid("operation id is bound to another target commit");
+          return { revision: existing.revision, state: existing.state };
+        }
         const highWater = BigInt(header.protectionRevisionHighWater);
         if (highWater === UINT64_MAX) throw invalid("protection revision is exhausted");
         const revision = String(highWater + 1n);
@@ -258,9 +343,13 @@ export class TargetAuthorityStore {
         );
         this.driver.exec(
           `INSERT INTO sys.${RESERVATION_TABLE}(
-             revision,operation_id,active_generation_id,lineage_epoch,state,reserved_at,finalized_at)
-           VALUES (?,?,?,?,'reserved',?,NULL)`,
-          [revision, operation.data, header.activeGenerationId, header.lineageEpoch, reservedAt],
+             revision,operation_id,expected_protection_revision,expected_state_sha256,
+             request_sha256,active_generation_id,lineage_epoch,state,state_sha256,
+             reserved_at,finalized_at)
+           VALUES (?,?,?,?,?,?,?,'reserved',NULL,?,NULL)`,
+          [revision, operation.data, expected.data.protectionRevision,
+            expected.data.stateSha256, requestSha256.data, header.activeGenerationId,
+            header.lineageEpoch, reservedAt],
         );
         const updatedHeader = readHeader(this.driver);
         const reservation = readReservations(this.driver, updatedHeader)
@@ -310,11 +399,81 @@ export class TargetAuthorityStore {
     }
   }
 
+  commitReservedProtectionRevision(input: {
+    operationId: string;
+    expectedTarget: TargetEvidence;
+    finalizedAt: string;
+    changes: StateMerkleChange[];
+    requestSha256: string;
+    mutate: () => unknown;
+    registry: Registry;
+  }): TargetEvidence {
+    const operation = OperationId.safeParse(input.operationId);
+    const expected = TargetEvidenceV1.safeParse(input.expectedTarget);
+    const requestSha256 = Sha256.safeParse(input.requestSha256);
+    if (!operation.success || !expected.success || !requestSha256.success
+        || !Array.isArray(input.changes)
+        || typeof input.mutate !== "function" || !(input.registry instanceof Map)
+        || !exactSchema(this.driver)) throw invalid();
+    const finalizedAt = canonicalInstant(input.finalizedAt);
+    try {
+      return this.driver.tx(() => {
+        const before = this.evidence();
+        if (!sameEvidence(before, expected.data))
+          throw new ClayError("E_GENERATION_NOT_SELECTED", "expected target is not current");
+        const header = readHeader(this.driver);
+        const reservation = readReservations(this.driver, header)
+          .find(candidate => candidate.operationId === operation.data);
+        if (!reservation || reservation.state !== "reserved"
+            || reservation.expectedProtectionRevision !== expected.data.protectionRevision
+            || reservation.expectedStateSha256 !== expected.data.stateSha256
+            || reservation.requestSha256 !== requestSha256.data
+            || finalizedAt < reservation.reservedAt)
+          throw invalid("revision reservation is not committable");
+        const mutationResult = input.mutate();
+        if (isThenable(mutationResult)) throw invalid("target mutation must be synchronous");
+        const state = StateMerkleIndex.open(this.driver).apply(input.changes);
+        const canonical = enumerateCanonicalStateV1(this.driver, input.registry);
+        const persisted = StateMerkleIndex.open(this.driver).audit();
+        if (!state.changed || canonical.stateSha256 !== state.stateSha256
+            || canonical.leaves.length !== persisted.leafCount
+            || persisted.stateSha256 !== state.stateSha256)
+          throw invalid("canonical state does not match Merkle publication");
+        this.driver.exec(
+          `UPDATE sys.${HEADER_TABLE} SET protection_revision = ?
+           WHERE singleton = 1 AND protection_revision = ?`,
+          [reservation.revision, header.protectionRevision],
+        );
+        this.driver.exec(
+          `UPDATE sys.${RESERVATION_TABLE}
+           SET state = 'committed', state_sha256 = ?, finalized_at = ?
+           WHERE operation_id = ? AND state = 'reserved'`,
+          [state.stateSha256, finalizedAt, operation.data],
+        );
+        const after = this.evidence();
+        if (after.protectionRevision !== reservation.revision
+            || after.stateSha256 !== state.stateSha256)
+          throw invalid("target commit failed read-back");
+        return after;
+      });
+    } catch (error) {
+      if (error instanceof ClayError) throw error;
+      throw invalid("target commit failed");
+    }
+  }
+
   evidence(): TargetEvidence {
     return this.driver.tx(() => {
       const header = readHeader(this.driver);
-      readReservations(this.driver, header);
+      const reservations = readReservations(this.driver, header);
       const state = StateMerkleIndex.open(this.driver).audit();
+      if (header.protectionRevision !== "0") {
+        const current = reservations.find(reservation =>
+          reservation.state === "committed"
+          && reservation.revision === header.protectionRevision);
+        if (!current || current.stateSha256 !== state.stateSha256)
+          throw invalid("current reservation digest does not match target state");
+      }
       return TargetEvidenceV1.parse({
         appInstanceId: header.appInstanceId,
         activeGenerationId: header.activeGenerationId,

@@ -19,6 +19,14 @@ const header = {
   digestSchema: 1 as const,
 };
 
+const REQUEST_SHA = `sha256:${"a".repeat(64)}`;
+
+function reserve(target: TargetAuthorityStore, operationId: string, reservedAt: string) {
+  return target.reserveProtectionRevision(
+    operationId, reservedAt, target.evidence(), REQUEST_SHA,
+  );
+}
+
 describe("target-owned authority metadata", () => {
   it("initializes one strict header and derives evidence from the persisted Merkle root", async () => {
     const clay = await seededStore();
@@ -56,21 +64,26 @@ describe("target-owned authority metadata", () => {
       StateMerkleIndex.initialize(driver, census.leaves.map(entry => entry.seed));
       TargetAuthorityStore.createSchema(driver);
       const target = TargetAuthorityStore.initialize(driver, header);
+      const expectedTarget = target.evidence();
       const operation = id("op", "c");
-      expect(target.reserveProtectionRevision(operation, "2026-09-05T00:00:00.000Z"))
+      expect(reserve(target, operation, "2026-09-05T00:00:00.000Z"))
         .toEqual({ revision: "1", state: "reserved" });
-      expect(target.reserveProtectionRevision(operation, "2026-09-05T00:01:00.000Z"))
+      expect(reserve(target, operation, "2026-09-05T00:01:00.000Z"))
         .toEqual({ revision: "1", state: "reserved" });
-      expect(target.reserveProtectionRevision(id("op", "d"), "2026-09-05T00:02:00.000Z"))
+      expect(reserve(target, id("op", "d"), "2026-09-05T00:02:00.000Z"))
         .toEqual({ revision: "2", state: "reserved" });
       expect(target.header()).toMatchObject({
         protectionRevision: "0", protectionRevisionHighWater: "2",
       });
       expect(target.reservations()).toEqual([
         { operationId: operation, revision: "1", state: "reserved",
-          reservedAt: "2026-09-05T00:00:00.000Z", finalizedAt: null },
+          expectedProtectionRevision: "0", expectedStateSha256: expectedTarget.stateSha256,
+          requestSha256: REQUEST_SHA, reservedAt: "2026-09-05T00:00:00.000Z",
+          finalizedAt: null, stateSha256: null },
         { operationId: id("op", "d"), revision: "2", state: "reserved",
-          reservedAt: "2026-09-05T00:02:00.000Z", finalizedAt: null },
+          expectedProtectionRevision: "0", expectedStateSha256: expectedTarget.stateSha256,
+          requestSha256: REQUEST_SHA, reservedAt: "2026-09-05T00:02:00.000Z",
+          finalizedAt: null, stateSha256: null },
       ]);
       expect(enumerateCanonicalStateV1(driver, clay.validationRegistrySnapshot()).stateSha256)
         .toBe(census.stateSha256);
@@ -89,10 +102,10 @@ describe("target-owned authority metadata", () => {
       TargetAuthorityStore.createSchema(driver);
       const target = TargetAuthorityStore.initialize(driver, header);
       const operation = id("op", "e");
-      target.reserveProtectionRevision(operation, "2026-09-05T00:00:00.000Z");
+      reserve(target, operation, "2026-09-05T00:00:00.000Z");
       expect(target.abandonProtectionRevision(operation, "2026-09-05T00:01:00.000Z"))
         .toEqual({ revision: "1", state: "abandoned" });
-      expect(target.reserveProtectionRevision(id("op", "f"), "2026-09-05T00:02:00.000Z"))
+      expect(reserve(target, id("op", "f"), "2026-09-05T00:02:00.000Z"))
         .toEqual({ revision: "2", state: "reserved" });
       expect(target.header()).toMatchObject({
         protectionRevision: "0", protectionRevisionHighWater: "2",
@@ -117,7 +130,7 @@ describe("target-owned authority metadata", () => {
       StateMerkleIndex.initialize(driver, census.leaves.map(entry => entry.seed));
       TargetAuthorityStore.createSchema(driver);
       const target = TargetAuthorityStore.initialize(driver, header);
-      target.reserveProtectionRevision(id("op", "g"), "2026-09-05T00:00:00.000Z");
+      reserve(target, id("op", "g"), "2026-09-05T00:00:00.000Z");
       driver.exec(
         "UPDATE sys.target_revision_reservations SET active_generation_id = ?",
         [id("gen", "z")],
@@ -137,7 +150,7 @@ describe("target-owned authority metadata", () => {
       StateMerkleIndex.initialize(driver, census.leaves.map(entry => entry.seed));
       TargetAuthorityStore.createSchema(driver);
       const target = TargetAuthorityStore.initialize(driver, header);
-      target.reserveProtectionRevision(id("op", "h"), "2026-09-05T00:00:00.000Z");
+      reserve(target, id("op", "h"), "2026-09-05T00:00:00.000Z");
       driver.exec(
         `UPDATE sys.target_revision_reservations
          SET state = 'committed', finalized_at = '2026-09-05T00:01:00.000Z'`,
@@ -157,10 +170,58 @@ describe("target-owned authority metadata", () => {
       StateMerkleIndex.initialize(driver, census.leaves.map(entry => entry.seed));
       TargetAuthorityStore.createSchema(driver);
       const target = TargetAuthorityStore.initialize(driver, header);
-      target.reserveProtectionRevision(id("op", "j"), "2026-09-05T00:00:00.000Z");
-      target.reserveProtectionRevision(id("op", "k"), "2026-09-05T00:01:00.000Z");
+      reserve(target, id("op", "j"), "2026-09-05T00:00:00.000Z");
+      reserve(target, id("op", "k"), "2026-09-05T00:01:00.000Z");
       driver.exec("DELETE FROM sys.target_revision_reservations WHERE revision = '1'");
       expect(() => target.evidence()).toThrow();
+    } finally {
+      clay.close();
+    }
+  });
+
+  it("rejects unauditable historical committed replay after current advances", async () => {
+    const clay = await seededStore();
+    const driver = (clay as unknown as { driver: DbDriver }).driver;
+    try {
+      const census = enumerateCanonicalStateV1(driver, clay.validationRegistrySnapshot());
+      StateMerkleIndex.createSchema(driver);
+      StateMerkleIndex.initialize(driver, census.leaves.map(entry => entry.seed));
+      TargetAuthorityStore.createSchema(driver);
+      const target = TargetAuthorityStore.initialize(driver, header);
+      const operation1 = id("op", "m");
+      const operation2 = id("op", "n");
+      const request1 = `sha256:${"b".repeat(64)}`;
+      const request2 = `sha256:${"c".repeat(64)}`;
+      const expected0 = target.evidence();
+      target.reserveProtectionRevision(
+        operation1, "2026-09-05T00:00:00.000Z", expected0, request1,
+      );
+      driver.tx(() => {
+        driver.exec("UPDATE sys.target_authority_header SET protection_revision = '1'");
+        driver.exec(
+          `UPDATE sys.target_revision_reservations
+           SET state = 'committed', state_sha256 = ?, finalized_at = ? WHERE revision = '1'`,
+          [expected0.stateSha256, "2026-09-05T00:01:00.000Z"],
+        );
+      });
+      const expected1 = target.evidence();
+      target.reserveProtectionRevision(
+        operation2, "2026-09-05T00:02:00.000Z", expected1, request2,
+      );
+      driver.tx(() => {
+        driver.exec("UPDATE sys.target_authority_header SET protection_revision = '2'");
+        driver.exec(
+          `UPDATE sys.target_revision_reservations
+           SET state = 'committed', state_sha256 = ?, finalized_at = ? WHERE revision = '2'`,
+          [expected1.stateSha256, "2026-09-05T00:03:00.000Z"],
+        );
+      });
+      expect(target.evidence().protectionRevision).toBe("2");
+      driver.exec(
+        "UPDATE sys.target_revision_reservations SET state_sha256 = ? WHERE revision = '1'",
+        [`sha256:${"f".repeat(64)}`],
+      );
+      expect(() => target.committedEvidence(operation1, expected0, request1)).toThrow();
     } finally {
       clay.close();
     }

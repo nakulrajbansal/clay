@@ -836,10 +836,22 @@ ADR-049 (2026-09-04) Catalog schema 1 proceeds; raw SQLite-pair target digests a
   reservation is a separate durable, operation-idempotent commit that advances only
   high-water and may leave an abandoned permanent gap. It does not advance current
   state or authorize a writer.
-  A read-only Merkle preflight is the only coordinator path enabled at this stage.
-  Canonical no-ops return current evidence without mutation or reservation; every
-  meaningful change is rejected until target, catalog, and data publication share one
-  guarded production transaction.
+  Canonical no-ops return current evidence without mutation or reservation. The
+  kernel tracer may reserve then commit one meaningful target change only when data,
+  Merkle publication, target current revision, journal finalization, and full-census
+  read-back share one guarded transaction; failure rolls that transaction back and
+  separately abandons the durable reservation. A committed row retains its exact state
+  digest, original expected revision/digest, and canonical fingerprint of a private
+  cloned change set. Matching operation-id retry of the current commit returns original
+  evidence without replaying mutation or allocating another revision; historical replay
+  fails closed until an authenticated current-anchored journal chain exists, and
+  mismatched reuse fails closed. The coordinator invokes the canonical
+  census itself with its trusted registry and checks root plus leaf count, rather than
+  accepting a caller-supplied digest attestation. Thenable mutation callbacks fail before
+  Merkle publication and their synchronous writes roll back. This coordinator remains
+  non-exported and cannot authorize production until catalog CAS, lease/fence, worker
+  serialization,
+  every write route, and archive format 5 join the same boundary.
   Target evidence is mandatory in a new archive format. Existing format 4 remains
   importable legacy input but cannot itself certify a target. A live driver rejects
   every SQL write outside one synchronous coordinator transaction. Independent
