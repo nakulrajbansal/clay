@@ -792,3 +792,12 @@ ADR-048 (2026-09-04) Exact target identity and protection state are worker-owned
   worker does not publish a protection state until catalog authority and
   write-route enforcement land together. Later slices add catalog migration,
   write fencing, checkpoints, backup, and recovery under the same closed contracts.
+  CORE EVIDENCE (2026-09-04): `pnpm verify:transaction-core` passed 180/180
+  Chromium 149 kill/reopen cases with SQLite source
+  `4525003a53a7fc63ca75c59b22c79608659ca12f0131f52c18637f829977f20b`,
+  three SAH-pool databases, `delete` journal mode, and failpoints after BEGIN,
+  DDL create/insert, main data, system metadata, catalog data, before COMMIT,
+  after returned COMMIT, and normal completion. This validates the core attached
+  mechanism for continued implementation only. It does not unlock a release
+  writer until semantic participants, concurrency, supported runtimes, and the
+  native commit/durability boundary satisfy the full certificate.

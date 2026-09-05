@@ -82,6 +82,13 @@ before any read/write port opens. Missing, stale, or failing certification keeps
 affected operations disabled or read-only/export-only. UI tests cannot substitute
 for storage evidence.
 
+`pnpm verify:transaction-core` is the prerequisite mechanism gate. Its first
+stress result covered 180 Chromium/SQLite-WASM/SAH-pool kill/reopen cases across
+three attached databases with transactional DDL, row, system metadata, and
+catalog surrogates. It remains non-release evidence until the same registry adds
+production semantic hook/oracle coverage, concurrency, every supported durable
+runtime, and the native commit/durability boundary.
+
 ## 8. Launch criteria (all must hold)
 
 L1 regression gate green 5 consecutive nights;

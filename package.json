@@ -19,6 +19,7 @@
     "verify:lazy-boundaries": "node scripts/lazy-boundaries.mjs evidence",
     "verify:operations": "node scripts/connected-operations.mjs evidence",
     "verify:workspace-mode": "node scripts/workspace-mode.mjs evidence/workspace-mode",
+    "verify:transaction-core": "node scripts/transaction-certificate/run.mjs",
     "verify:product": "pnpm verify:shape-map && pnpm verify:change-contract && pnpm verify:providers && pnpm verify:lazy-boundaries && pnpm verify:operations && pnpm verify:workspace-mode",
     "verify:browsers": "node scripts/browsers.mjs",
     "verify:multi-app": "node scripts/multi-app-archive.mjs",
