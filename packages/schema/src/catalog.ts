@@ -220,6 +220,163 @@ export const CatalogRevisionReservationV1 = z.object({
 });
 export type CatalogRevisionReservationV1 = z.infer<typeof CatalogRevisionReservationV1>;
 
+const ArchiveFileBytes = z.number().int().nonnegative().safe().max(384 * 1024 * 1024);
+const ArchiveCount = z.number().int().nonnegative().safe();
+const ArchiveAttachmentsV1 = z.object({
+  count: ArchiveCount,
+  bytes: ArchiveCount,
+}).strict();
+const ArchiveFileDigestV1 = z.object({
+  bytes: ArchiveFileBytes,
+  sha256: Sha256,
+}).strict();
+
+export const ArchiveManifestV5 = z.object({
+  format: z.literal(5),
+  app: z.string().min(1).max(120),
+  exported_at: CanonicalInstant,
+  tables: ArchiveCount.max(1_000),
+  versions: ArchiveCount.max(100_000),
+  attachments: ArchiveAttachmentsV1,
+  files: z.object({
+    userDb: ArchiveFileDigestV1,
+    systemDb: ArchiveFileDigestV1,
+    authority: ArchiveFileDigestV1,
+  }).strict(),
+}).strict();
+export type ArchiveManifestV5 = z.infer<typeof ArchiveManifestV5>;
+
+export const MAX_ARCHIVE_AUTHORITY_HISTORY_ENTRIES = 50_000;
+export const MAX_ARCHIVE_AUTHORITY_TOTAL_ENTRIES = 100_000;
+
+export const ArchiveTargetRevisionV1 = z.object({
+  schema: z.literal(1),
+  operationId: OperationId,
+  revision: UInt64Decimal,
+  expectedProtectionRevision: UInt64Decimal,
+  expectedStateSha256: Sha256,
+  requestSha256: Sha256,
+  state: z.enum(["reserved", "committed", "abandoned"]),
+  reservedAt: CanonicalInstant,
+  finalizedAt: CanonicalInstant.nullable(),
+  stateSha256: Sha256.nullable(),
+}).strict().superRefine((value, context) => {
+  if (value.revision === "0"
+      || BigInt(value.expectedProtectionRevision) >= BigInt(value.revision))
+    context.addIssue({ code: "custom", message: "target revision must advance its predecessor" });
+  if ((value.state === "reserved" && (value.finalizedAt !== null || value.stateSha256 !== null))
+      || (value.state === "committed" && (value.finalizedAt === null || value.stateSha256 === null))
+      || (value.state === "abandoned" && (value.finalizedAt === null || value.stateSha256 !== null)))
+    context.addIssue({ code: "custom", message: "target revision finalization is invalid" });
+  if (value.finalizedAt !== null && value.finalizedAt < value.reservedAt)
+    context.addIssue({ code: "custom", message: "target revision finalization precedes reservation" });
+});
+export type ArchiveTargetRevisionV1 = z.infer<typeof ArchiveTargetRevisionV1>;
+
+export const ArchiveCatalogLeaseV1 = z.object({
+  schema: z.literal(1),
+  leaseId: LeaseId,
+  authorityIncarnationId: AuthorityIncarnationId,
+  writeEpoch: UInt64Decimal,
+  releaseId: ReleaseId,
+  issuedAtMs: UInt64Decimal,
+  expiresAtMs: UInt64Decimal,
+  revoked: z.boolean(),
+}).strict().superRefine((value, context) => {
+  const issued = BigInt(value.issuedAtMs);
+  const expires = BigInt(value.expiresAtMs);
+  if (expires <= issued || expires - issued > 300_000n
+      || expires > BigInt(Number.MAX_SAFE_INTEGER))
+    context.addIssue({ code: "custom", message: "archive catalog lease interval is invalid" });
+});
+export type ArchiveCatalogLeaseV1 = z.infer<typeof ArchiveCatalogLeaseV1>;
+
+export const ArchiveGenerationEvidenceV1 = z.object({
+  schema: z.literal(1),
+  operationId: OperationId,
+  descriptor: ImmutableAppGenerationV1,
+}).strict();
+export type ArchiveGenerationEvidenceV1 = z.infer<typeof ArchiveGenerationEvidenceV1>;
+
+const ArchiveAuthorityBindingV1 = z.object({
+  format: z.literal(5),
+  app: z.string().min(1).max(120),
+  exportedAt: CanonicalInstant,
+  tables: ArchiveCount.max(1_000),
+  versions: ArchiveCount.max(100_000),
+  attachments: ArchiveAttachmentsV1,
+  userDb: ArchiveFileDigestV1,
+  systemDb: ArchiveFileDigestV1,
+}).strict();
+
+export const ArchiveAuthorityEvidenceV1 = z.object({
+  schema: z.literal(1),
+  binding: ArchiveAuthorityBindingV1,
+  target: TargetEvidenceV1,
+  merkle: z.object({
+    schema: z.literal(1),
+    stateSha256: Sha256,
+    leafCount: ArchiveCount,
+  }).strict(),
+  targetAuthority: z.object({
+    schema: z.literal(1),
+    header: TargetAuthorityHeaderV1,
+    revisions: z.array(ArchiveTargetRevisionV1)
+      .max(MAX_ARCHIVE_AUTHORITY_HISTORY_ENTRIES),
+  }).strict(),
+  catalogAuthority: z.object({
+    schema: z.literal(1),
+    authorityIncarnationId: AuthorityIncarnationId,
+    catalogGeneration: UInt64Decimal,
+    writeEpoch: UInt64Decimal,
+    selectedAppInstanceId: AppInstanceId,
+    entry: AppCatalogEntryV1,
+    generations: z.array(ArchiveGenerationEvidenceV1)
+      .max(MAX_ARCHIVE_AUTHORITY_HISTORY_ENTRIES),
+    leases: z.array(ArchiveCatalogLeaseV1)
+      .max(MAX_ARCHIVE_AUTHORITY_HISTORY_ENTRIES),
+    revisionReservations: z.array(CatalogRevisionReservationV1)
+      .max(MAX_ARCHIVE_AUTHORITY_HISTORY_ENTRIES),
+    generationEvents: z.array(CatalogGenerationEventV1)
+      .max(MAX_ARCHIVE_AUTHORITY_HISTORY_ENTRIES),
+  }).strict(),
+}).strict().superRefine((value, context) => {
+  const authorityEntries = value.targetAuthority.revisions.length
+    + value.catalogAuthority.generations.length
+    + value.catalogAuthority.leases.length
+    + value.catalogAuthority.revisionReservations.length
+    + value.catalogAuthority.generationEvents.length;
+  if (authorityEntries > MAX_ARCHIVE_AUTHORITY_TOTAL_ENTRIES)
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "archive authority history exceeds the total entry limit",
+    });
+  const target = value.target;
+  const header = value.targetAuthority.header;
+  const catalog = value.catalogAuthority;
+  const entry = catalog.entry;
+  if (value.merkle.stateSha256 !== target.stateSha256)
+    context.addIssue({ code: "custom", message: "Merkle root does not match the canonical target" });
+  if (header.appInstanceId !== target.appInstanceId
+      || header.activeGenerationId !== target.activeGenerationId
+      || header.lineageEpoch !== target.lineageEpoch
+      || header.protectionRevision !== target.protectionRevision
+      || header.digestSchema !== target.digestSchema)
+    context.addIssue({ code: "custom", message: "target authority header does not match the canonical target" });
+  if (catalog.selectedAppInstanceId !== target.appInstanceId
+      || entry.appInstanceId !== target.appInstanceId
+      || entry.activeGenerationId !== target.activeGenerationId
+      || entry.currentLineageEpoch !== target.lineageEpoch
+      || entry.currentProtectionRevision !== target.protectionRevision
+      || entry.digestSchema !== target.digestSchema
+      || entry.stateSha256 !== target.stateSha256)
+    context.addIssue({ code: "custom", message: "catalog selection does not match the canonical target" });
+  if (entry.lineageEpochHighWater !== header.lineageEpochHighWater
+      || entry.revisionHighWater !== header.protectionRevisionHighWater)
+    context.addIssue({ code: "custom", message: "catalog and target high-water marks disagree" });
+});
+export type ArchiveAuthorityEvidenceV1 = z.infer<typeof ArchiveAuthorityEvidenceV1>;
+
 export const CatalogReservationRecoveryV1 = z.object({
   schema: z.literal(1),
   catalogGeneration: UInt64Decimal,
