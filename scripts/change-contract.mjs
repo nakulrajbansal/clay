@@ -79,6 +79,8 @@ const check = (condition, label) => {
 await page.goto(url, { waitUntil: "domcontentloaded" });
 await page.getByText("Sales CRM", { exact: true }).click({ timeout: 15_000 });
 await page.locator(".panel-frame").first().waitFor({ timeout: 20_000 });
+await page.getByRole("button", { name: "Customize", exact: true }).click();
+await page.locator(".appbar-mode-button.active", { hasText: "Customize" }).waitFor();
 await page.getByPlaceholder("Describe a change", { exact: false })
   .fill("Add a calm pipeline pulse view");
 await page.getByRole("button", { name: "Reshape", exact: true }).click();

@@ -86,6 +86,27 @@ check(layouts.customize.modeInsideHeader, "Customize mode control is clipped by 
 check(layouts.customize.headerScrollWidth <= layouts.customize.headerClientWidth, "Customize header overflows");
 await page.screenshot({ path: `${outDir}/customize.png`, fullPage: true });
 
+await page.setViewportSize({ width: 390, height: 844 });
+layouts.customizePhone = await measureLayout();
+for (const label of ["Open automations", "Open data", "Open shape map", "Choose color scheme"]) {
+  const control = page.getByRole("button", { name: label, exact: true });
+  check(await control.isVisible(), `${label} is unreachable in phone Customize`);
+  await control.focus();
+  check(await control.evaluate(element => element === document.activeElement),
+    `${label} is not keyboard-focusable in phone Customize`);
+}
+const phoneReshape = page.locator('button[aria-label$="reshape"]');
+check(await phoneReshape.isVisible(), "reshape toggle is unreachable in phone Customize");
+await phoneReshape.focus();
+check(await phoneReshape.evaluate(element => element === document.activeElement),
+  "reshape toggle is not keyboard-focusable in phone Customize");
+check(layouts.customizePhone.headerScrollWidth <= layouts.customizePhone.headerClientWidth,
+  "phone Customize header overflows");
+check(layouts.customizePhone.documentScrollWidth <= layouts.customizePhone.viewportWidth,
+  "phone Customize has horizontal page overflow");
+await page.screenshot({ path: `${outDir}/customize-phone.png`, fullPage: true });
+await page.setViewportSize({ width: 1440, height: 1000 });
+
 await page.reload({ waitUntil: "domcontentloaded" });
 await waitSelected("Customize");
 check(await present("Open automations"), "Customize preference did not survive reload");
@@ -119,7 +140,8 @@ const buildEntry = await page.evaluate(async () => {
   const manifest = await (await fetch("/.vite/manifest.json")).json();
   return manifest["index.html"].file;
 });
-const screenshots = [`${outDir}/work.png`, `${outDir}/customize.png`, `${outDir}/work-compact.png`];
+const screenshots = [`${outDir}/work.png`, `${outDir}/customize.png`, `${outDir}/customize-phone.png`,
+  `${outDir}/work-compact.png`];
 const screenshotSha256 = Object.fromEntries(await Promise.all(screenshots.map(async file => [
   file, createHash("sha256").update(await readFile(file)).digest("hex"),
 ])));

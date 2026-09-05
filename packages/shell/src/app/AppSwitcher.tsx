@@ -73,7 +73,7 @@ export function AppSwitcher(props: {
   };
 
   return (
-    <header className="appbar">
+    <header className="appbar" data-workspace-mode={props.workspaceMode}>
       <span className="appbar-brand"><span className="appbar-mark" aria-hidden="true" />Clay</span>
       <div className="appbar-switch">
         <button className="appbar-current" onClick={() => setOpen(o => !o)}>
@@ -139,7 +139,7 @@ export function AppSwitcher(props: {
       <div className="appbar-mode" role="group" aria-label="Workspace mode">
         {(["work", "customize"] as const).map(mode => (
           <button key={mode}
-            className={`appbar-mode-button${props.workspaceMode === mode ? " active" : ""}`}
+            className={`appbar-action appbar-mode-button${props.workspaceMode === mode ? " active" : ""}`}
             aria-pressed={props.workspaceMode === mode}
             onClick={() => props.onWorkspaceModeChange(mode)}>
             {mode === "work" ? "Work" : "Customize"}

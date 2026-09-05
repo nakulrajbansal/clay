@@ -103,12 +103,8 @@ button.link.danger { color: var(--danger); }
   background: var(--accent); box-shadow: inset 0 1px 0 rgba(255,255,255,.3),
   0 3px 8px color-mix(in srgb, var(--accent) 20%, transparent); transform: rotate(-5deg); }
 .appbar-switch { position: relative; }
-.appbar-mode { display: inline-flex; align-items: center; gap: 2px; padding: 3px;
-  border: 1px solid var(--border); border-radius: 10px; background: var(--bg-soft); }
-.appbar-mode-button { min-height: 28px; border: 0; border-radius: 7px; padding: 4px 10px;
-  background: transparent; color: var(--text-2); font: 650 12px/1 var(--font); }
+.appbar-mode { display: flex; gap: 2px; }
 .appbar-mode-button.active { background: var(--panel); color: var(--accent-text); }
-.appbar-mode-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .appbar-current { display: flex; align-items: center; gap: 7px;
   border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--panel);
   padding: 6px 12px; font: inherit; font-weight: 600; cursor: pointer; transition: border-color .12s; }
@@ -953,7 +949,7 @@ button.shape-field[aria-expanded="true"] { color: var(--accent-text); border-col
   .shape-column { min-width: 0; overflow: visible; border-right: 0; border-bottom: 1px solid var(--border); }
   .shape-map-footer { display: none; }
   .appbar-action { padding-inline: 8px; }
-  .appbar-action:not(.appbar-shape-btn) { font-size: 0; gap: 0; }
+  .appbar-action:not(.appbar-shape-btn):not(.appbar-mode-button) { font-size: 0; gap: 0; }
   .appbar-action:not(.appbar-shape-btn) .appbar-action-icon { font-size: 14px; }
 }
 @media (max-width: 720px) {
@@ -964,7 +960,6 @@ button.shape-field[aria-expanded="true"] { color: var(--accent-text); border-col
   .appbar-brand { font-size: 0; gap: 0; }
   .appbar-mark { width: 28px; height: 28px; }
   .appbar-current { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .appbar-theme { display: none; }
   .appbar-shape-btn { font-size: 0; gap: 0; }
   .appbar-shape-btn .appbar-action-icon { font-size: 14px; }
   .rail { width: min(100vw, 390px); }
@@ -983,11 +978,16 @@ button.shape-field[aria-expanded="true"] { color: var(--accent-text); border-col
   .shape-trust-item, .shape-column { padding: 15px 17px; }
 }
 @media (max-width: 480px) {
-  .appbar { gap: 3px; }
-  .appbar-current { max-width: 96px; padding-inline: 8px; }
+  .appbar { gap: 2px; }
+  .appbar[data-workspace-mode="customize"] :is(.appbar-brand,.appbar-search-btn) { display: none; }
+  .appbar-current { max-width: 52px; padding-inline: 8px; }
   .appbar-action, .appbar-theme-btn, .appbar-rail-toggle {
     width: 34px; min-width: 34px; justify-content: center; padding-inline: 0;
   }
+  .appbar-mode-button { width: auto; min-width: auto; padding-inline: 3px; font-size: 12px; }
+  .timeslider { min-width: 0; gap: 6px; padding-inline: 9px; }
+  .timeslider input[type="range"], .timeslider-info { min-width: 0; }
+  .timeslider-summary { display: none; }
   .appbar-lens-menu { position: fixed; top: 54px; left: 8px; right: 8px; width: auto; }
   .shape-map-backdrop { padding: 6px; }
   .shape-map { max-width: 100%; border-radius: 14px; }

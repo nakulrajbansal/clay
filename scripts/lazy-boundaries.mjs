@@ -49,6 +49,8 @@ await bootWithFailure(
   "ShapeMapView",
   async page => {
     await page.locator(".panel-frame").first().waitFor({ timeout: 20_000 });
+    await page.getByRole("button", { name: "Customize", exact: true }).click();
+    await page.locator(".appbar-mode-button.active", { hasText: "Customize" }).waitFor();
     await page.getByRole("button", { name: "Open shape map" }).click();
   },
   "shape map",

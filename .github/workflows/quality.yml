@@ -48,8 +48,9 @@ jobs:
       - name: Install browsers for product gates
         run: pnpm exec playwright install --with-deps chromium firefox webkit
 
-      - name: Run product, responsive, and accessibility gates
+      - name: Run product, responsive, accessibility, and transaction gates
         run: |
+          pnpm verify:transaction-core
           pnpm --filter @clay/shell exec vite preview --host 127.0.0.1 --port 4173 --strictPort > preview.log 2>&1 &
           preview_pid=$!
           trap 'kill "$preview_pid" 2>/dev/null || true' EXIT
