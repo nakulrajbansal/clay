@@ -110,6 +110,10 @@ boundaries, lone-surrogate and invalid raw UTF-8 rejection, structured-schema
 equivalence with closed DEFAULT/COLLATE/DESC rejection, every system identity policy with a real
 row, and user-index authorization, repoint rejection, rename/reindex,
 rewind/roll-forward/truncation/future/archive lifecycles.
+Target-authority tests prove exact two-table schema read-back, strict header/high-water
+invariants, Merkle-derived non-self-referential evidence, census-root stability,
+idempotent response-loss reservation, monotonic high-water, abandoned gaps, and no
+current-revision advancement before a data commit.
 No-op matrices, new archive target evidence, real OPFS, every production writer and
 Store RPC port, concurrent CAS, reservation gaps, broader performance fixtures, and
 named crash hooks remain required before writes are enabled.

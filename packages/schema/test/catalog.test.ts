@@ -3,6 +3,7 @@ import {
   AppCatalogSnapshotV1,
   CatalogCasPublicationV1,
   ImmutableAppGenerationV1,
+  TargetAuthorityHeaderV1,
   TargetEvidenceV1,
   WriteFenceV1,
 } from "../src/index";
@@ -45,7 +46,30 @@ const targetEvidence = {
   stateSha256: entry.stateSha256,
 };
 
-describe("authoritative catalog boundary schemas", () => {
+describe("authoritative app catalog and write-fence schemas", () => {
+  it("binds target-owned current values beneath non-reusable high-water marks", () => {
+    const header = {
+      schema: 1 as const,
+      appInstanceId: id("app", "a"),
+      activeGenerationId: id("gen", "b"),
+      lineageEpoch: "4",
+      lineageEpochHighWater: "6",
+      protectionRevision: "9",
+      protectionRevisionHighWater: "12",
+      digestSchema: 1 as const,
+    };
+    expect(TargetAuthorityHeaderV1.parse(header)).toEqual(header);
+    expect(TargetAuthorityHeaderV1.safeParse({
+      ...header, lineageEpoch: "7",
+    }).success).toBe(false);
+    expect(TargetAuthorityHeaderV1.safeParse({
+      ...header, protectionRevision: "13",
+    }).success).toBe(false);
+    expect(TargetAuthorityHeaderV1.safeParse({
+      ...header, stateSha256: `sha256:${"1".repeat(64)}`,
+    }).success).toBe(false);
+  });
+
   it("accepts only a strict current catalog snapshot and write fence", () => {
     expect(AppCatalogSnapshotV1.parse(snapshot)).toEqual(snapshot);
     expect(WriteFenceV1.parse(fence)).toEqual(fence);

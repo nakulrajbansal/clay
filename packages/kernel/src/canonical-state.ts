@@ -32,6 +32,9 @@ const EXCLUDED_SYSTEM_TABLES = ["private_metric_state", "private_metric_daily"] 
 const MERKLE_SYSTEM_TABLES = [
   "state_digest_leaves", "state_digest_buckets", "state_digest_root",
 ] as const;
+const TARGET_AUTHORITY_SYSTEM_TABLES = [
+  "target_authority_header", "target_revision_reservations",
+] as const;
 const STORAGE_TYPE: Record<RegColumn["type"], string | null> = {
   text: "TEXT", number: "REAL", integer: "INTEGER", boolean: "INTEGER",
   date: "TEXT", enum: "TEXT", json: "TEXT", computed: null,
@@ -388,6 +391,11 @@ function validateSystemObjectInventory(driver: DbDriver): void {
     throw invalid("system object inventory is ambiguous");
   if (merkleCount === MERKLE_SYSTEM_TABLES.length)
     for (const table of MERKLE_SYSTEM_TABLES) required.add(table);
+  const authorityCount = TARGET_AUTHORITY_SYSTEM_TABLES.filter(table => actual.has(table)).length;
+  if (authorityCount !== 0 && authorityCount !== TARGET_AUTHORITY_SYSTEM_TABLES.length)
+    throw invalid("system object inventory is ambiguous");
+  if (authorityCount === TARGET_AUTHORITY_SYSTEM_TABLES.length)
+    for (const table of TARGET_AUTHORITY_SYSTEM_TABLES) required.add(table);
   if (actual.size !== required.size || [...actual].some(table => !required.has(table)))
     throw invalid("system object inventory is ambiguous");
 }

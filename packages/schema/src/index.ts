@@ -76,6 +76,23 @@ export const TargetEvidenceV1 = z.object({
 }).strict();
 export type TargetEvidenceV1 = z.infer<typeof TargetEvidenceV1>;
 
+export const TargetAuthorityHeaderV1 = z.object({
+  schema: z.literal(1),
+  appInstanceId: AppInstanceId,
+  activeGenerationId: GenerationId,
+  lineageEpoch: UInt64Decimal,
+  lineageEpochHighWater: UInt64Decimal,
+  protectionRevision: UInt64Decimal,
+  protectionRevisionHighWater: UInt64Decimal,
+  digestSchema: z.literal(1),
+}).strict().superRefine((header, ctx) => {
+  if (BigInt(header.lineageEpoch) > BigInt(header.lineageEpochHighWater))
+    ctx.addIssue({ code: "custom", message: "lineage epoch exceeds its high-water mark" });
+  if (BigInt(header.protectionRevision) > BigInt(header.protectionRevisionHighWater))
+    ctx.addIssue({ code: "custom", message: "protection revision exceeds its high-water mark" });
+});
+export type TargetAuthorityHeaderV1 = z.infer<typeof TargetAuthorityHeaderV1>;
+
 const CanonicalInstant = z.string().datetime({ offset: true });
 const ProvenanceId = z.string().min(1).max(256)
   .refine(value => value === value.trim(), "canonical provenance identity required");

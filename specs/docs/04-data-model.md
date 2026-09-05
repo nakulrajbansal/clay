@@ -223,6 +223,18 @@ the three Merkle tables are explicit exclusions; unknown tables, indexes, trigge
 views, partial Merkle state, malformed values, or divergent persisted roots fail
 closed.
 
+Target authority schema 1 adds archive-format-5-only `sys.target_authority_header`
+and `sys.target_revision_reservations`. The singleton header stores app instance,
+active generation, current/high-water lineage epoch, current/high-water protection
+revision, and digest schema, but never stores the state digest it authenticates.
+The digest is read from the separately audited Merkle root. Reservation rows bind a
+nonzero revision to one operation, active generation, lineage epoch, canonical
+reservation time, and closed `reserved|committed|abandoned` state. Reserve advances
+high-water without advancing current; response-loss retry returns the original value;
+abandonment finalizes the row and leaves a permanent gap. Both tables are an all-or-
+none census exclusion and do not change canonical app state. They remain non-exported
+and non-writable in production until format 5 and the guarded catalog coordinator land.
+
 `navigator.storage.persist()` is requested through the protected-first-write
 flow; status is evidence-derived and surfaced in Settings. Usage estimate shown.
 `usage_events` ring-buffer trimmed at 50k. `shadow.db` is deleted after every

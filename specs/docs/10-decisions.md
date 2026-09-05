@@ -830,8 +830,14 @@ ADR-049 (2026-09-04) Catalog schema 1 proceeds; raw SQLite-pair target digests a
   production commit coordinator consume the canonical census and checked root.
   The canonical census and persisted-root comparison are required prerequisites and
   have their own fail-closed kernel tests; they do not by themselves publish or grant
-  write authority. Target evidence is mandatory in a new archive format. Existing
-  format 4 remains importable legacy input but cannot itself certify a target. A live driver rejects
+  write authority. Target authority metadata is target-owned but excluded from its
+  own logical root. Its strict header stores current/high-water counters and digest
+  schema only; evidence combines it with an independently audited Merkle root. A
+  reservation is a separate durable, operation-idempotent commit that advances only
+  high-water and may leave an abandoned permanent gap. It does not advance current
+  state or authorize a writer.
+  Target evidence is mandatory in a new archive format. Existing format 4 remains
+  importable legacy input but cannot itself certify a target. A live driver rejects
   every SQL write outside one synchronous coordinator transaction. Independent
   previews remain writable because they cannot alter live state or catalog authority.
   Async WebCrypto may not hold authority until one non-reentrant executor is proven
