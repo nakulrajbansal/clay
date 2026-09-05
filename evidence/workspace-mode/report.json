@@ -1,6 +1,6 @@
 {
   "url": "http://127.0.0.1:4174",
-  "buildEntry": "assets/index-Bfq-Jpmr.js",
+  "buildEntry": "assets/index-C5Ksovr7.js",
   "failures": [],
   "consoleErrors": [],
   "externalRequests": [],
@@ -42,9 +42,9 @@
     "evidence/workspace-mode/work-compact.png"
   ],
   "screenshotSha256": {
-    "evidence/workspace-mode/work.png": "a5bb562986ec932fd14aca2d0d6065765c50dff4d259d8aa8d0e3c1d4ec7a5af",
-    "evidence/workspace-mode/customize.png": "1039f1ff0a2466121121b88787b2962273741ba65bd388c191240801232dea87",
-    "evidence/workspace-mode/customize-phone.png": "9deaf62f5ddc21fd9f29dec3936ea47c54e88281a488a9b00cff4679cf13970c",
-    "evidence/workspace-mode/work-compact.png": "077924efe16aa8b76e9ce5236908830c1f3350203d9cb0f9c8291d7ef53c287a"
+    "evidence/workspace-mode/work.png": "59dacbd79cea30a73a0480f19a79716e3b6f269ac864475f57f683fbf3a1d20c",
+    "evidence/workspace-mode/customize.png": "8705ec4448fa9a977c2fce5479ffa77cbb5822df43df46b56f515b1bcffcd9be",
+    "evidence/workspace-mode/customize-phone.png": "8cad858c74bf1c1c6042f7a2e65fd4abbd3fd5d6dbed6b0f453293a6c4e16996",
+    "evidence/workspace-mode/work-compact.png": "20db3e56dd481b7f6276eaae58593ccf39adca8c396cc48bd80a461475ab7f2b"
   }
 }

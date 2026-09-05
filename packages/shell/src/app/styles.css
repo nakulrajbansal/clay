@@ -956,7 +956,7 @@ button.shape-field[aria-expanded="true"] { color: var(--accent-text); border-col
   .onboarding { padding: 44px 18px 72px; }
   .onboarding-cards { grid-template-columns: 1fr; }
   .shell-card { min-height: 0; }
-  .appbar { padding-inline: 9px; gap: 6px; }
+  .appbar { padding-inline: 6px; gap: 6px; }
   .appbar-brand { font-size: 0; gap: 0; }
   .appbar-mark { width: 28px; height: 28px; }
   .appbar-current { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -978,13 +978,13 @@ button.shape-field[aria-expanded="true"] { color: var(--accent-text); border-col
   .shape-trust-item, .shape-column { padding: 15px 17px; }
 }
 @media (max-width: 480px) {
-  .appbar { gap: 2px; }
+  .appbar { gap: 1px; }
   .appbar[data-workspace-mode="customize"] :is(.appbar-brand,.appbar-search-btn) { display: none; }
-  .appbar-current { max-width: 52px; padding-inline: 8px; }
+  .appbar-current { max-width: 44px; padding-inline: 8px; }
   .appbar-action, .appbar-theme-btn, .appbar-rail-toggle {
     width: 34px; min-width: 34px; justify-content: center; padding-inline: 0;
   }
-  .appbar-mode-button { width: auto; min-width: auto; padding-inline: 3px; font-size: 12px; }
+  .appbar-mode-button { width: auto; min-width: auto; padding-inline: 2px; font-size: 12px; }
   .timeslider { min-width: 0; gap: 6px; padding-inline: 9px; }
   .timeslider input[type="range"], .timeslider-info { min-width: 0; }
   .timeslider-summary { display: none; }

@@ -177,6 +177,17 @@ const phoneOverflow = await page.evaluate(() => [...document.querySelectorAll("b
   })));
 check(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
   `trusted shell and modal cause no phone horizontal overflow${phoneOverflow.length ? `: ${JSON.stringify(phoneOverflow)}` : ""}`);
+await page.evaluate(() => document.documentElement.style.setProperty(
+  "--font", '"Arial Black", Arial, sans-serif',
+));
+const wideFontOverflow = await page.evaluate(() => ({
+  viewport: window.innerWidth,
+  page: document.documentElement.scrollWidth,
+  railRight: document.querySelector(".appbar-rail-toggle")?.getBoundingClientRect().right,
+}));
+check(wideFontOverflow.page <= wideFontOverflow.viewport,
+  `phone header tolerates wide fallback font metrics: ${JSON.stringify(wideFontOverflow)}`);
+await page.evaluate(() => document.documentElement.style.removeProperty("--font"));
 await page.screenshot({ path: `${outDir}/nextgen-shape-map-phone.png`, fullPage: true });
 
 check(errors.length === 0, `zero page errors${errors.length ? `: ${errors.join(" | ")}` : ""}`);
