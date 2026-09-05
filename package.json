@@ -8,7 +8,7 @@
     "codex": "pnpm --filter @clay/backend codex",
     "typecheck": "pnpm --workspace-concurrency=1 -r typecheck",
     "test": "pnpm -r test",
-    "test:ordinary": "pnpm --filter @clay/backend test --maxWorkers=1 --minWorkers=1 && pnpm --filter @clay/schema test --maxWorkers=1 --minWorkers=1 && pnpm --filter @clay/kernel test --maxWorkers=1 --minWorkers=1 && pnpm --filter @clay/mutation test --maxWorkers=1 --minWorkers=1 && pnpm --filter @clay/panel-runtime test --maxWorkers=1 --minWorkers=1 && pnpm --filter @clay/shell test --maxWorkers=1 --minWorkers=1 && node --test scripts/bundle-budget.test.mjs",
+    "test:ordinary": "pnpm --filter @clay/backend test --maxWorkers=1 --minWorkers=1 && pnpm --filter @clay/schema test --maxWorkers=1 --minWorkers=1 && pnpm --filter @clay/kernel test --maxWorkers=1 --minWorkers=1 && pnpm --filter @clay/mutation test --maxWorkers=1 --minWorkers=1 && pnpm --filter @clay/panel-runtime test --maxWorkers=1 --minWorkers=1 && pnpm --filter @clay/shell test --maxWorkers=1 --minWorkers=1 && node --test scripts/bundle-budget.test.mjs scripts/product-gate-config.test.mjs",
     "build": "pnpm --filter @clay/shell build",
     "budget": "node scripts/bundle-budget.mjs",
     "check": "pnpm typecheck && pnpm test && pnpm build && pnpm budget",

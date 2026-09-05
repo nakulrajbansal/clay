@@ -1,7 +1,8 @@
 import { chromium } from "playwright";
 import { mkdir } from "node:fs/promises";
+import { productGateUrl } from "./product-gate-url.mjs";
 
-const url = process.env.URL || "http://127.0.0.1:4173";
+const url = productGateUrl();
 const outDir = process.argv[2] || "evidence";
 await mkdir(outDir, { recursive: true });
 const browser = await chromium.launch();
