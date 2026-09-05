@@ -5,7 +5,7 @@
 import sqlite3InitModule, { type Database, type Sqlite3Static } from "@sqlite.org/sqlite-wasm";
 import { ClayError } from "./errors";
 
-export type SqlValue = string | number | Uint8Array | null;
+export type SqlValue = string | number | bigint | Uint8Array | null;
 export type SqlRow = Record<string, SqlValue>;
 
 export interface DbDriver {

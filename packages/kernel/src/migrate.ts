@@ -403,6 +403,8 @@ function execBackfill(driver: DbDriver, reg: Registry,
       const scopeRow: Record<string, ExprValue> = {};
       for (const d of deps) {
         const value = row[d];
+        if (typeof value === "bigint")
+          fail("expression input exceeds the safe integer domain");
         scopeRow[d] = value instanceof Uint8Array ? null
           : boolDeps.has(d) && value !== null ? value === 1 : (value ?? null);
       }

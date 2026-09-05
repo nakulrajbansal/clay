@@ -56,6 +56,7 @@ describe("canonical logical state Merkle protocol v1", () => {
     [[{ name: "x", kind: "integer", value: "-0" }], "negative zero integer"],
     [[{ name: "x", kind: "integer", value: "9223372036854775808" }], "integer overflow"],
     [[{ name: "x", kind: "real", value: Number.NaN }], "non-finite real"],
+    [[{ name: "x", kind: "text", value: "\ud800" }], "unpaired surrogate text"],
     [[{ name: "x", kind: "content", sha256: "sha256:no", bytes: "1" }], "malformed content hash"],
     [[{ name: "x", kind: "content", sha256: `sha256:${"11".repeat(32)}`, bytes: "01" }], "noncanonical byte count"],
     [[{ name: "x", kind: "bytes", value: new Uint8Array([1]) }], "raw attachment bytes"],

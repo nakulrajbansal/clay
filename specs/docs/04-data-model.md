@@ -185,6 +185,10 @@ zero is exactly `0` and `-0` is invalid,
 2 finite IEEE-754 binary64 with negative zero normalized to zero, 3 UTF-8 text, and
 4 attachment/content reference. Tag 4 payload is the raw 32-byte SHA-256 followed by
 U64 content length; raw attachment bytes are not a leaf value.
+INTEGER census values preserve the complete signed-int64 domain returned by
+SQLite-WASM as either safe numbers or BigInts; unsafe JavaScript numbers are rejected.
+TEXT census values must round-trip through fatal UTF-8 decoding of the raw SQLite
+bytes, and JavaScript text with an unpaired surrogate is invalid.
 
 Bucket assignment uses the first ten bits of
 `SHA-256("clay.state.bucket-key.v1" || U32(keyBytes) || keyBytes)`. A bucket root
@@ -198,6 +202,26 @@ The checked mixed-type leaf vector is
 Target-owned `state_digest_leaves`, `state_digest_buckets`, and `state_digest_root`
 tables are explicitly created and validated by the target-aware format; they are not
 silently added to the current format-4 archive allowlist.
+Canonical rebuild enumerates one row leaf for every physical row in registered main
+tables, `row_history`, attachments, and all 16 archive-copied system tables. It also
+commits `sqlite_sequence`, 20 table-schema leaves, the four kernel index definitions,
+and every supported user index keyed by semantic table and field identity. Record and
+field keys use semantic IDs plus canonical text or int64 components rather than
+mutable presentation names. Attachment content is
+rehash-validated during the full census, then represented by digest and length.
+Table schemas are framed from ordered `pragma_table_xinfo` fields, including exact
+default-expression bytes, rather than globally normalized SQL text. User indexes are
+authorized by `add_index` semantic operation coordinates. Active indexes enter the
+root; validated future indexes retained for roll-forward do not. Physical metadata
+must match the authorized tableId/fieldId, operation coordinate, current table/field,
+and non-partial index shape. This binding survives rename, rewind, roll-forward,
+truncation, duplicate reindex after rename, and archive reconstruction. Main tables
+use a closed generated grammar; trusted system table leaves additionally bind exact
+fatal-decoded DDL bytes so behavior constraints cannot collide.
+Legacy credential-bearing settings fail the census. The two private-metric tables and
+the three Merkle tables are explicit exclusions; unknown tables, indexes, triggers,
+views, partial Merkle state, malformed values, or divergent persisted roots fail
+closed.
 
 `navigator.storage.persist()` is requested through the protected-first-write
 flow; status is evidence-derived and surfaced in Settings. Usage estimate shown.

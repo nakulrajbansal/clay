@@ -4,6 +4,8 @@
 // rollback applies inverses; roll-forward (pre-truncation) re-applies
 // forward ops; truncation is the only destructive-ish operation (ADR-007).
 import { ClayError } from "./errors";
+import { LEGACY_CREDENTIAL_SETTING_KEYS } from "./credential-policy";
+import { userIndexAuthorities } from "./index-authority";
 import {
   copyDatabase, createSystemTables, openDriverFromBytes, openMemoryDriver,
   type DatabaseCopyShape, type DbDriver, type SqlRow, type SqlValue,
@@ -385,7 +387,10 @@ function rawArchiveSchemaIssues(driver: DbDriver, format: number): string[] {
     }
   }
   const allowedTables = new Set([...registered, "row_history", "__clay_attachments"]);
-  const allowedIndexes = new Map<string, { table: string; column: string; unique: number }>([
+  const allowedIndexes = new Map<string, {
+    table?: string; column?: string; unique: number; tableId?: string; fieldId?: string;
+    active?: boolean;
+  }>([
     ["idx_row_history_batch", { table: "row_history", column: "batch_id", unique: 0 }],
     ["idx_row_history_sequence", { table: "row_history", column: "sequence", unique: 1 }],
   ]);
@@ -404,15 +409,27 @@ function rawArchiveSchemaIssues(driver: DbDriver, format: number): string[] {
   )[0]?.version ?? 0);
   if (currentVersion > headVersion)
     issues.push(`current_version ${currentVersion} exceeds head version ${headVersion}`);
-  for (const row of driver.select(
-    `SELECT migration_json FROM sys.version_log ORDER BY version`,
-  )) {
+  if (format >= 4) {
     try {
-      for (const operation of JSON.parse(String(row.migration_json ?? "[]")) as MigrationPlanT["operations"])
-        if (operation.op === "add_index")
-          allowedIndexes.set(`idx_${operation.table}_${operation.column}`,
-            { table: operation.table, column: operation.column, unique: 0 });
-    } catch { issues.push("invalid migration history while validating indexes"); }
+      for (const [name, binding] of userIndexAuthorities(driver, specs))
+        allowedIndexes.set(name, {
+          unique: 0, tableId: binding.tableId, fieldId: binding.fieldId,
+          active: binding.active,
+        });
+    } catch {
+      issues.push("invalid semantic migration history while validating indexes");
+    }
+  } else {
+    for (const row of driver.select(
+      `SELECT migration_json FROM sys.version_log ORDER BY version`,
+    )) {
+      try {
+        for (const operation of JSON.parse(String(row.migration_json ?? "[]")) as MigrationPlanT["operations"])
+          if (operation.op === "add_index")
+            allowedIndexes.set(`idx_${operation.table}_${operation.column}`,
+              { table: operation.table, column: operation.column, unique: 0 });
+      } catch { issues.push("invalid migration history while validating indexes"); }
+    }
   }
   for (const row of driver.select(
     `SELECT type, name, tbl_name, sql FROM main.sqlite_master
@@ -437,13 +454,30 @@ function rawArchiveSchemaIssues(driver: DbDriver, format: number): string[] {
       else {
         const table = String(row.tbl_name);
         const columns = driver.select(`PRAGMA main.index_info(${qid(name)})`);
-        const metadata = driver.select(`PRAGMA main.index_list(${qid(expected.table)})`)
-          .find(candidate => String(candidate.name) === name);
-        const canonicalSql = expected.unique === 1
-          ? /^CREATE\s+UNIQUE\s+INDEX\b/i.test(sql)
-          : /^CREATE\s+INDEX\b/i.test(sql) && !/\bUNIQUE\b/i.test(sql);
-        if (table !== expected.table || columns.length !== 1
-            || String(columns[0]?.name ?? "") !== expected.column
+        const columnName = columns[0]?.name;
+        let identityMatches = false;
+        let expectedColumn = expected.column;
+        if (expected.table !== undefined) {
+          identityMatches = table === expected.table && columnName === expected.column;
+        } else if (USER_IDENTIFIER.test(table) && typeof columnName === "string") {
+          const spec = specs.get(table);
+          const column = spec?.columns.find(candidate =>
+            candidate.name === columnName && !isVirtualColumn(candidate));
+          identityMatches = spec?.semantic?.tableId === expected.tableId
+            && column?.semantic?.fieldId === expected.fieldId;
+          expectedColumn = column?.name;
+        }
+        const metadata = USER_IDENTIFIER.test(table) || table === "row_history"
+          ? driver.select(`PRAGMA main.index_list(${qid(table)})`)
+            .find(candidate => String(candidate.name) === name)
+          : undefined;
+        const canonicalSql = expected.table === undefined
+          ? typeof expectedColumn === "string"
+            && sql === `CREATE INDEX "${name}" ON "${table}"("${expectedColumn}")`
+          : expected.unique === 1
+            ? /^CREATE\s+UNIQUE\s+INDEX\b/i.test(sql)
+            : /^CREATE\s+INDEX\b/i.test(sql) && !/\bUNIQUE\b/i.test(sql);
+        if (!identityMatches || columns.length !== 1
             || Number(metadata?.unique ?? -1) !== expected.unique
             || Number(metadata?.partial ?? -1) !== 0
             || String(metadata?.origin ?? "") !== "c" || !canonicalSql)
@@ -456,8 +490,9 @@ function rawArchiveSchemaIssues(driver: DbDriver, format: number): string[] {
   if (format >= 4) {
     for (const name of ["row_history", "__clay_attachments"])
       if (!seenTables.has(name)) issues.push(`missing internal table '${name}'`);
-    for (const name of ["idx_row_history_batch", "idx_row_history_sequence"])
-      if (!seenIndexes.has(name)) issues.push(`missing internal index '${name}'`);
+    for (const [name, descriptor] of allowedIndexes)
+      if ((descriptor.table !== undefined || descriptor.active) && !seenIndexes.has(name))
+        issues.push(`missing active index '${name}'`);
   }
   return issues;
 }
@@ -1193,12 +1228,8 @@ export class ClayStore {
   }
 
   scrubLegacyCredentialSettings(): void {
-    const keys = [
-      "byo_api_key", "anthropic_api_key", "openai_api_key", "api_key", "clay_session",
-      "backend_url", "clay_backend_url",
-    ];
     this.driver.tx(() => {
-      for (const key of keys) this.deleteSetting(key);
+      for (const key of LEGACY_CREDENTIAL_SETTING_KEYS) this.deleteSetting(key);
     });
   }
 

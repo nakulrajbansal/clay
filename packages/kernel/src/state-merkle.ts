@@ -10,6 +10,7 @@ export type StateLeafFieldV1 =
 export type StateLeafV1 = { key: string; sha256: string };
 
 const encoder = new TextEncoder();
+const decoder = new TextDecoder("utf-8", { fatal: true });
 const LEAF_DOMAIN = encoder.encode("clay.state.leaf.v1");
 const BUCKET_KEY_DOMAIN = encoder.encode("clay.state.bucket-key.v1");
 const BUCKET_DOMAIN = encoder.encode("clay.state.bucket.v1");
@@ -65,6 +66,12 @@ function hashParts(parts: Uint8Array[]): string {
   return `sha256:${sha256HexSync(concat(parts))}`;
 }
 
+function canonicalTextBytes(value: string): Uint8Array {
+  const bytes = encoder.encode(value);
+  if (decoder.decode(bytes) !== value) throw new Error("invalid canonical text");
+  return bytes;
+}
+
 function digestBytes(value: string): Uint8Array {
   const match = SHA256.exec(value);
   if (!match) throw new Error("invalid SHA-256");
@@ -107,7 +114,7 @@ function fieldPayload(field: StateLeafFieldV1): { tag: number; bytes: Uint8Array
     case "text":
       exactKeys(field, ["name", "kind", "value"]);
       if (typeof field.value !== "string") throw new Error("invalid canonical text");
-      return { tag: 3, bytes: encoder.encode(field.value) };
+      return { tag: 3, bytes: canonicalTextBytes(field.value) };
     case "content": {
       exactKeys(field, ["name", "kind", "sha256", "bytes"]);
       if (typeof field.bytes !== "string" || !UINT64.test(field.bytes))

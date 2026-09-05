@@ -99,10 +99,20 @@ evidence. Merkle tests cover independent leaf/bucket/root golden vectors, raw-by
 ordering across locales, exact 1,024-bucket persistence, no-op zero-write behavior,
 authenticated root-vector/count/touched-bucket prestate, omitted leaf DML rollback,
 lost-bucket rollback, corruption denial, and a one-leaf update at 5,000 leaves under
-the existing 300 ms kernel scale budget. Full target enumeration/rebuild equivalence,
-attachment-byte independence, no-op matrices, new archive target evidence, real
-OPFS, every production writer and Store RPC port, concurrent CAS, reservation gaps,
-performance fixtures, and named crash hooks remain required before writes are enabled.
+the existing 300 ms kernel scale budget. Canonical census tests independently count
+every covered SQLite row; bind semantic row/field identities, 20 table schemas, four
+kernel indexes, supported user indexes, and `sqlite_sequence`; validate attachment
+bytes; reject credential settings and unknown objects; prove telemetry/Merkle
+exclusions; and compare full
+rebuild output with the persisted Merkle root before and after direct divergence.
+Additional adversarial gates cover SQLite-WASM int64 min/max and safe-number
+boundaries, lone-surrogate and invalid raw UTF-8 rejection, structured-schema
+equivalence with closed DEFAULT/COLLATE/DESC rejection, every system identity policy with a real
+row, and user-index authorization, repoint rejection, rename/reindex,
+rewind/roll-forward/truncation/future/archive lifecycles.
+No-op matrices, new archive target evidence, real OPFS, every production writer and
+Store RPC port, concurrent CAS, reservation gaps, broader performance fixtures, and
+named crash hooks remain required before writes are enabled.
 
 ## 8. Launch criteria (all must hold)
 
