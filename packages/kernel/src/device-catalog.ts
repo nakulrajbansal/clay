@@ -275,6 +275,21 @@ export type RecoverExpiredSelectedReservationInput = {
   ttlMs: number;
 };
 
+export type SelectedTargetStorage = {
+  target: TargetEvidence;
+  namespaceId: string;
+  storageKey: string;
+};
+
+export type SeedSelectedTargetInput = {
+  target: TargetEvidence;
+  namespaceId: string;
+  storageKey: string;
+  displayName: string;
+  operationId: string;
+  at: string;
+};
+
 function mapCatalogGenerationEvent(row: SqlRow): CatalogGenerationEvent {
   const target = row.target_generation_id === null
       && row.target_lineage_epoch === null && row.target_protection_revision === null
@@ -867,6 +882,42 @@ export class DeviceCatalog {
     return readValidatedCatalog(this.driver);
   }
 
+  selectedTargetStorage(): SelectedTargetStorage {
+    return this.driver.tx(() => {
+      const snapshot = readValidatedCatalog(this.driver);
+      if (snapshot.selectedAppInstanceId === null)
+        throw new ClayError("E_GENERATION_NOT_SELECTED", "catalog has no selected app generation");
+      const entry = snapshot.entries.find(
+        candidate => candidate.appInstanceId === snapshot.selectedAppInstanceId,
+      );
+      if (!entry || entry.tombstoned)
+        throw new ClayError("E_GENERATION_NOT_SELECTED", "selected catalog app is unavailable");
+      const rows = this.driver.select(
+        `SELECT namespace_id, storage_key FROM catalog.generations
+         WHERE generation_id = ? AND app_instance_id = ?`,
+        [entry.activeGenerationId, entry.appInstanceId],
+      );
+      if (rows.length !== 1 || typeof rows[0]?.namespace_id !== "string"
+          || typeof rows[0].storage_key !== "string")
+        throw new ClayError("E_CATALOG_UNAVAILABLE", "selected catalog storage is unavailable");
+      const namespaceId = NamespaceId.safeParse(rows[0].namespace_id);
+      if (!namespaceId.success || !validStorageKey(rows[0].storage_key))
+        throw new ClayError("E_CATALOG_UNAVAILABLE", "selected catalog storage is invalid");
+      return {
+        target: {
+          appInstanceId: entry.appInstanceId,
+          activeGenerationId: entry.activeGenerationId,
+          lineageEpoch: entry.currentLineageEpoch,
+          protectionRevision: entry.currentProtectionRevision,
+          digestSchema: entry.digestSchema,
+          stateSha256: entry.stateSha256,
+        },
+        namespaceId: namespaceId.data,
+        storageKey: rows[0].storage_key,
+      };
+    });
+  }
+
   revisionReservations(): CatalogRevisionReservation[] {
     readValidatedCatalog(this.driver);
     return readRevisionReservations(this.driver);
@@ -887,6 +938,101 @@ export class DeviceCatalog {
       return id;
     }
     throw new ClayError("E_CATALOG_UNAVAILABLE", `could not mint a unique ${kind} identity`);
+  }
+
+  seedSelectedTarget(input: SeedSelectedTargetInput): TargetEvidence {
+    const target = TargetEvidenceV1.safeParse(input.target);
+    const namespaceId = NamespaceId.safeParse(input.namespaceId);
+    const operationId = OperationId.safeParse(input.operationId);
+    if (!target.success || !namespaceId.success || !operationId.success
+        || !validStorageKey(input.storageKey)
+        || typeof input.displayName !== "string" || input.displayName.trim() !== input.displayName
+        || input.displayName.length < 1 || input.displayName.length > 40
+        || typeof input.at !== "string" || Number.isNaN(Date.parse(input.at))
+        || new Date(input.at).toISOString() !== input.at
+        || target.data.protectionRevision !== "0" || target.data.lineageEpoch !== "0")
+      throw new ClayError("E_CATALOG_CONFLICT", "catalog app seed input is invalid");
+    try {
+      return this.driver.tx(() => {
+        const before = readValidatedCatalog(this.driver);
+        if (before.catalogGeneration !== "0" || before.selectedAppInstanceId !== null
+            || before.entries.length !== 0 || before.writeEpoch !== "0"
+            || readRevisionReservations(this.driver).length !== 0)
+          throw new ClayError("E_CATALOG_CONFLICT", "catalog is not an empty authority");
+        const retained = [
+          [target.data.appInstanceId, "app"],
+          [target.data.activeGenerationId, "generation"],
+          [namespaceId.data, "namespace"],
+          [operationId.data, "operation"],
+        ] as const;
+        for (const [value] of retained) {
+          if (this.driver.select(
+            "SELECT id_value FROM catalog.id_registry WHERE id_value = ?", [value],
+          ).length !== 0)
+            throw new ClayError("E_CATALOG_CONFLICT", "catalog seed identity was already retained");
+        }
+        for (const [value, kind] of retained) this.driver.exec(
+          "INSERT INTO catalog.id_registry(id_value,id_kind,retained_at) VALUES (?,?,?)",
+          [value, kind, input.at],
+        );
+        this.driver.exec(
+          `INSERT INTO catalog.generations(
+             generation_id,app_instance_id,namespace_id,storage_key,operation_id,
+             lineage_epoch,first_revision,digest_schema,state_sha256,
+             source_archive_sha256,source_provenance_id,sealed_at,read_back_at
+           ) VALUES (?,?,?,?,?,?,?,?,?,NULL,NULL,?,?)`,
+          [target.data.activeGenerationId, target.data.appInstanceId, namespaceId.data,
+            input.storageKey, operationId.data, target.data.lineageEpoch,
+            target.data.protectionRevision, target.data.digestSchema, target.data.stateSha256,
+            input.at, input.at],
+        );
+        this.driver.exec(
+          `INSERT INTO catalog.app_entries(
+             app_instance_id,display_name,active_generation_id,
+             journal_genesis_generation_id,journal_genesis_lineage_epoch,
+             journal_genesis_protection_revision,journal_genesis_state_sha256,
+             current_lineage_epoch,lineage_epoch_high_water,current_protection_revision,
+             revision_high_water,digest_schema,state_sha256,tombstoned
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
+          [target.data.appInstanceId, input.displayName, target.data.activeGenerationId,
+            target.data.activeGenerationId, target.data.lineageEpoch,
+            target.data.protectionRevision, target.data.stateSha256,
+            target.data.lineageEpoch, target.data.lineageEpoch,
+            target.data.protectionRevision, target.data.protectionRevision,
+            target.data.digestSchema, target.data.stateSha256],
+        );
+        insertCatalogGenerationEvent(this.driver, {
+          schema: 1,
+          catalogGeneration: "1",
+          eventKind: "app_seed",
+          appInstanceId: target.data.appInstanceId,
+          operationId: operationId.data,
+          writeEpoch: "0",
+          at: input.at,
+          target: target.data,
+        });
+        this.driver.exec(
+          `UPDATE catalog.catalog_root
+           SET catalog_generation = '1', selected_app_instance_id = ?
+           WHERE singleton = 1 AND catalog_generation = '0'
+             AND selected_app_instance_id IS NULL AND write_epoch = '0'`,
+          [target.data.appInstanceId],
+        );
+        const after = readValidatedCatalog(this.driver);
+        const entry = after.entries[0];
+        if (after.catalogGeneration !== "1"
+            || after.selectedAppInstanceId !== target.data.appInstanceId
+            || after.entries.length !== 1 || !entry
+            || entry.activeGenerationId !== target.data.activeGenerationId
+            || entry.stateSha256 !== target.data.stateSha256)
+          throw new ClayError("E_CATALOG_CONFLICT", "catalog app seed failed read-back");
+        return target.data;
+      });
+    } catch (error) {
+      if (error instanceof ClayError && ["E_CATALOG_CONFLICT", "E_CATALOG_UNAVAILABLE"]
+        .includes(error.code)) throw error;
+      throw new ClayError("E_CATALOG_UNAVAILABLE", "catalog app seed failed");
+    }
   }
 
   recoverExpiredSelectedReservation(
