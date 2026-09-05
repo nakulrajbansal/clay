@@ -836,6 +836,10 @@ ADR-049 (2026-09-04) Catalog schema 1 proceeds; raw SQLite-pair target digests a
   reservation is a separate durable, operation-idempotent commit that advances only
   high-water and may leave an abandoned permanent gap. It does not advance current
   state or authorize a writer.
+  A read-only Merkle preflight is the only coordinator path enabled at this stage.
+  Canonical no-ops return current evidence without mutation or reservation; every
+  meaningful change is rejected until target, catalog, and data publication share one
+  guarded production transaction.
   Target evidence is mandatory in a new archive format. Existing format 4 remains
   importable legacy input but cannot itself certify a target. A live driver rejects
   every SQL write outside one synchronous coordinator transaction. Independent

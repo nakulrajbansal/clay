@@ -115,6 +115,9 @@ Target-authority tests prove exact two-table schema read-back, strict header/hig
 invariants, Merkle-derived non-self-referential evidence, census-root stability,
 idempotent response-loss reservation, monotonic high-water, abandoned gaps, and no
 current-revision advancement before a data commit.
+The guarded coordinator tracer authenticates expected target and Merkle prestate,
+returns a zero-write no-op without invoking mutation or creating a reservation, and
+explicitly rejects every meaningful change until guarded publication lands.
 No-op matrices, new archive target evidence, real OPFS, every production writer and
 Store RPC port, concurrent CAS, reservation gaps, broader performance fixtures, and
 named crash hooks remain required before writes are enabled.
