@@ -3,17 +3,21 @@ import {
   AppCatalogEntryV1,
   AppInstanceId,
   AuthorityIncarnationId,
+  CatalogCasPublicationV1,
   ImmutableAppGenerationV1,
   GenerationId,
   LeaseId,
   NamespaceId,
   OperationId,
   ReleaseId,
+  TargetEvidenceV1,
   UInt64Decimal,
   WriteFenceV1,
 } from "@clay/schema";
 import type {
   AppCatalogSnapshotV1 as AppCatalogSnapshot,
+  CatalogCasPublicationV1 as CatalogCasPublication,
+  TargetEvidenceV1 as TargetEvidence,
   WriteFenceV1 as WriteFence,
 } from "@clay/schema";
 import type { DbDriver, SqlRow } from "./db";
@@ -169,6 +173,23 @@ export type AcquireWriteLeaseInput = {
   nowMs: number;
   ttlMs: number;
 };
+
+export type PublishSelectedTargetInput = {
+  expectedCatalogGeneration: string;
+  expectedTarget: TargetEvidence;
+  publishedTarget: TargetEvidence;
+  fence: WriteFence;
+  nowMs: number;
+};
+
+function sameTarget(left: TargetEvidence, right: TargetEvidence): boolean {
+  return left.appInstanceId === right.appInstanceId
+    && left.activeGenerationId === right.activeGenerationId
+    && left.lineageEpoch === right.lineageEpoch
+    && left.protectionRevision === right.protectionRevision
+    && left.digestSchema === right.digestSchema
+    && left.stateSha256 === right.stateSha256;
+}
 
 function catalogTables(driver: DbDriver): string[] {
   try {
@@ -337,9 +358,10 @@ function readValidatedCatalog(driver: DbDriver): AppCatalogSnapshot {
       if (!generation
           || generation.target.appInstanceId !== app.appInstanceId
           || generation.target.lineageEpoch !== app.currentLineageEpoch
-          || generation.target.protectionRevision !== app.currentProtectionRevision
+          || BigInt(generation.target.protectionRevision) > BigInt(app.currentProtectionRevision)
           || generation.target.digestSchema !== app.digestSchema
-          || generation.target.stateSha256 !== app.stateSha256)
+          || (generation.target.protectionRevision === app.currentProtectionRevision
+            && generation.target.stateSha256 !== app.stateSha256))
         throw new Error("active generation does not match app entry");
     }
 
@@ -495,6 +517,83 @@ export class DeviceCatalog {
         "E_CATALOG_CONFLICT", "E_CATALOG_UNAVAILABLE", "E_STALE_WRITE_EPOCH",
       ].includes(error.code)) throw error;
       throw new ClayError("E_CATALOG_UNAVAILABLE", "write lease acquisition failed");
+    }
+  }
+
+  publishSelectedTarget(input: PublishSelectedTargetInput): CatalogCasPublication {
+    const catalogGeneration = UInt64Decimal.safeParse(input.expectedCatalogGeneration);
+    const expected = TargetEvidenceV1.safeParse(input.expectedTarget);
+    const published = TargetEvidenceV1.safeParse(input.publishedTarget);
+    if (!catalogGeneration.success || !expected.success || !published.success
+        || !validClockValue(input.nowMs))
+      throw new ClayError("E_CATALOG_CONFLICT", "catalog target publication input is invalid");
+    try {
+      return this.driver.tx(() => {
+        this.assertWriteFence(input.fence, input.nowMs);
+        const before = readValidatedCatalog(this.driver);
+        if (before.catalogGeneration !== catalogGeneration.data)
+          throw new ClayError("E_CATALOG_CONFLICT", "catalog generation is stale");
+        const entry = before.entries.find(candidate =>
+          candidate.appInstanceId === before.selectedAppInstanceId);
+        if (!entry) throw new ClayError("E_GENERATION_NOT_SELECTED", "selected app is unavailable");
+        const current: TargetEvidence = {
+          appInstanceId: entry.appInstanceId,
+          activeGenerationId: entry.activeGenerationId,
+          lineageEpoch: entry.currentLineageEpoch,
+          protectionRevision: entry.currentProtectionRevision,
+          digestSchema: entry.digestSchema,
+          stateSha256: entry.stateSha256,
+        };
+        if (!sameTarget(current, expected.data))
+          throw new ClayError("E_GENERATION_NOT_SELECTED", "expected catalog target is not current");
+        if (published.data.appInstanceId !== current.appInstanceId
+            || published.data.activeGenerationId !== current.activeGenerationId
+            || published.data.lineageEpoch !== current.lineageEpoch
+            || published.data.digestSchema !== current.digestSchema
+            || BigInt(published.data.protectionRevision) <= BigInt(current.protectionRevision)
+            || BigInt(published.data.protectionRevision) > BigInt(entry.revisionHighWater)
+            || published.data.stateSha256 === current.stateSha256)
+          throw new ClayError("E_CATALOG_CONFLICT", "published target does not advance current state");
+        const nextCatalogGeneration = incrementCounter(
+          before.catalogGeneration, "E_CATALOG_CONFLICT",
+        );
+        this.driver.exec(
+          `UPDATE catalog.app_entries
+           SET current_protection_revision = ?, state_sha256 = ?
+           WHERE app_instance_id = ? AND active_generation_id = ?
+             AND current_lineage_epoch = ? AND current_protection_revision = ?
+             AND digest_schema = ? AND state_sha256 = ? AND tombstoned = 0`,
+          [published.data.protectionRevision, published.data.stateSha256,
+            current.appInstanceId, current.activeGenerationId, current.lineageEpoch,
+            current.protectionRevision, current.digestSchema, current.stateSha256],
+        );
+        this.driver.exec(
+          `UPDATE catalog.catalog_root SET catalog_generation = ?
+           WHERE singleton = 1 AND authority_incarnation_id = ?
+             AND catalog_generation = ? AND selected_app_instance_id = ?`,
+          [nextCatalogGeneration, before.authorityIncarnationId,
+            before.catalogGeneration, current.appInstanceId],
+        );
+        const after = readValidatedCatalog(this.driver);
+        const afterEntry = after.entries.find(candidate => candidate.appInstanceId === current.appInstanceId);
+        if (after.catalogGeneration !== nextCatalogGeneration || !afterEntry
+            || afterEntry.currentProtectionRevision !== published.data.protectionRevision
+            || afterEntry.stateSha256 !== published.data.stateSha256)
+          throw new ClayError("E_CATALOG_CONFLICT", "catalog target CAS failed read-back");
+        return CatalogCasPublicationV1.parse({
+          schema: 1,
+          authorityIncarnationId: after.authorityIncarnationId,
+          catalogGeneration: after.catalogGeneration,
+          selectedAppInstanceId: after.selectedAppInstanceId,
+          publishedTarget: published.data,
+        });
+      });
+    } catch (error) {
+      if (error instanceof ClayError && [
+        "E_CATALOG_CONFLICT", "E_CATALOG_UNAVAILABLE", "E_STALE_WRITE_EPOCH",
+        "E_GENERATION_NOT_SELECTED",
+      ].includes(error.code)) throw error;
+      throw new ClayError("E_CATALOG_UNAVAILABLE", "catalog target publication failed");
     }
   }
 

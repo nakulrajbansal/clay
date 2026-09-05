@@ -115,6 +115,9 @@ Target-authority tests prove exact two-table schema read-back, strict header/hig
 invariants, Merkle-derived non-self-referential evidence, census-root stability,
 idempotent response-loss reservation, monotonic high-water, abandoned gaps, and no
 current-revision advancement before a data commit.
+Catalog publication tests prove lease and epoch validation, expected target and catalog
+generation CAS, immutable sealed-generation/current-head separation, strict read-back,
+and stale replay with no state change.
 The guarded coordinator tracer authenticates expected target and Merkle prestate,
 returns a zero-write no-op without invoking mutation or creating a reservation,
 durably reserves before a meaningful write, and commits data, Merkle leaves/root,

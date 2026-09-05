@@ -850,8 +850,12 @@ ADR-049 (2026-09-04) Catalog schema 1 proceeds; raw SQLite-pair target digests a
   accepting a caller-supplied digest attestation. Thenable mutation callbacks fail before
   Merkle publication and their synchronous writes roll back. This coordinator remains
   non-exported and cannot authorize production until catalog CAS, lease/fence, worker
-  serialization,
-  every write route, and archive format 5 join the same boundary.
+  serialization, every write route, and archive format 5 join the same boundary.
+  A selected-target catalog CAS may land as a non-exported primitive: it validates the
+  current lease, expected target, catalog generation, generation/lineage, and revision
+  high-water, then publishes app head plus catalog generation atomically with read-back.
+  It does not authorize production until target reservation/commit and catalog
+  reservation/publication share the same guarded boundaries.
   Target evidence is mandatory in a new archive format. Existing format 4 remains
   importable legacy input but cannot itself certify a target. A live driver rejects
   every SQL write outside one synchronous coordinator transaction. Independent

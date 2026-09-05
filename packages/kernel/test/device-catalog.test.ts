@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AppCatalogSnapshotV1, WriteFenceV1 } from "@clay/schema";
+import { AppCatalogSnapshotV1, CatalogCasPublicationV1, WriteFenceV1 } from "@clay/schema";
 import {
   ClayError,
   openMemoryDriver,
@@ -166,6 +166,63 @@ describe("worker-owned device catalog root", () => {
         selectedAppInstanceId: ids.app,
         entries: [{ appInstanceId: ids.app, activeGenerationId: ids.generation }],
       });
+    } finally {
+      driver.close();
+    }
+  });
+
+  it("publishes one selected target with lease, expected-target, and catalog CAS", async () => {
+    const driver = await attachedCatalog();
+    try {
+      const ids = seedValidCatalog(driver);
+      const catalog = DeviceCatalog.openExisting(driver);
+      const beforeLease = catalog.snapshot();
+      const fence = catalog.acquireWriteLease({
+        expectedAuthorityIncarnationId: beforeLease.authorityIncarnationId,
+        expectedCatalogGeneration: "1",
+        expectedWriteEpoch: "0",
+        releaseId: id("rel", "r"),
+        nowMs: 1_000,
+        ttlMs: 5_000,
+      });
+      const expectedTarget = {
+        appInstanceId: ids.app,
+        activeGenerationId: ids.generation,
+        lineageEpoch: "2",
+        protectionRevision: "7",
+        digestSchema: 1 as const,
+        stateSha256: `sha256:${"e".repeat(64)}`,
+      };
+      const publishedTarget = {
+        ...expectedTarget,
+        protectionRevision: "8",
+        stateSha256: `sha256:${"f".repeat(64)}`,
+      };
+      expect(CatalogCasPublicationV1.parse(catalog.publishSelectedTarget({
+        expectedCatalogGeneration: "2",
+        expectedTarget,
+        publishedTarget,
+        fence,
+        nowMs: 2_000,
+      }))).toMatchObject({
+        catalogGeneration: "3",
+        selectedAppInstanceId: ids.app,
+        publishedTarget,
+      });
+      expect(catalog.snapshot().entries[0]).toMatchObject({
+        currentProtectionRevision: "8",
+        revisionHighWater: "9",
+        stateSha256: publishedTarget.stateSha256,
+      });
+      const after = catalog.snapshot();
+      expectCode(() => catalog.publishSelectedTarget({
+        expectedCatalogGeneration: "2",
+        expectedTarget,
+        publishedTarget,
+        fence,
+        nowMs: 2_001,
+      }), "E_CATALOG_CONFLICT");
+      expect(catalog.snapshot()).toEqual(after);
     } finally {
       driver.close();
     }

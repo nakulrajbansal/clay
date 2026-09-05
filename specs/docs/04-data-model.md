@@ -235,6 +235,14 @@ abandonment finalizes the row and leaves a permanent gap. Both tables are an all
 none census exclusion and do not change canonical app state. They remain non-exported
 and non-writable in production until format 5 and the guarded catalog coordinator land.
 
+The catalog selected-target CAS validates the current lease and write epoch, exact
+catalog generation, complete expected target, selected app/generation/lineage, revision
+high-water, and monotonic revision/digest change. It updates the app head and catalog
+generation in one transaction, rereads both, and returns a strict publication. The
+immutable generation descriptor remains the sealed initial target while the app entry
+advances within that generation. This primitive remains non-production until catalog
+reservation and target commit execute under one guard.
+
 `navigator.storage.persist()` is requested through the protected-first-write
 flow; status is evidence-derived and surfaced in Settings. Usage estimate shown.
 `usage_events` ring-buffer trimmed at 50k. `shadow.db` is deleted after every
