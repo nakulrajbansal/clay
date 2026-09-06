@@ -15,15 +15,27 @@ import {
   writeProductionRequestReceipt,
 } from "./production-request-journal";
 import {
+  captureTableImport,
+  executeCapturedTableImport,
+  type CapturedTableImport,
+} from "./production-import";
+import {
   captureStarterSeedBundle,
   executeCapturedStarterSeed,
   starterSeedCatalogMetadata,
   type CapturedStarterSeedBundle,
 } from "./production-seed";
+import {
+  captureSampleFill,
+  captureSampleRemoval,
+  executeCapturedSampleFill,
+  executeCapturedSampleRemoval,
+  type CapturedSampleFill,
+} from "./production-samples";
 import { sha256HexSync } from "./state-digest";
 import { stateLeafHashV1 } from "./state-merkle";
 import type { StateMerkleChange } from "./state-merkle-index";
-import { ClayStore } from "./store";
+import { ClayStore, refreshStoreAfterPhysicalRollback } from "./store";
 import { TargetAuthorityStore } from "./target-authority";
 
 type JsonValue = null | boolean | number | string | JsonValue[] | JsonRecord;
@@ -39,6 +51,9 @@ type CapturedProductionMutation = Readonly<{
   }
   | { route: "store.softDelete"; payload: Readonly<{ table: string; id: string }> }
   | { route: "store.commit"; payload: Readonly<{ plan: Readonly<JsonRecord> }> }
+  | { route: "table.import"; payload: CapturedTableImport }
+  | { route: "samples.fill"; payload: CapturedSampleFill }
+  | { route: "samples.remove"; payload: Readonly<Record<string, never>> }
   | { route: "starter.seed"; payload: CapturedStarterSeedBundle }
   | { route: "setting.set"; payload: Readonly<{ key: string; value: JsonValue }> }
   | { route: "setting.delete"; payload: Readonly<{ key: string }> }
@@ -243,6 +258,24 @@ function captureMutation(input: unknown): CapturedProductionMutation {
           plan: captureJsonRecord(p.plan),
         }) });
       }
+      case "table.import":
+        return Object.freeze({
+          requestId,
+          route,
+          payload: captureTableImport(payload),
+        });
+      case "samples.remove":
+        return Object.freeze({
+          requestId,
+          route,
+          payload: captureSampleRemoval(payload),
+        });
+      case "samples.fill":
+        return Object.freeze({
+          requestId,
+          route,
+          payload: captureSampleFill(payload),
+        });
       case "starter.seed":
         return Object.freeze({
           requestId,
@@ -410,6 +443,16 @@ function executeCapturedMutation(
         store,
         request.payload.plan as unknown as Parameters<ClayStore["commit"]>[0],
       );
+    case "table.import":
+      return captureJsonValue(
+        executeCapturedTableImport(store, request.payload), new WeakSet(),
+      );
+    case "samples.remove":
+      return captureJsonValue(executeCapturedSampleRemoval(store), new WeakSet());
+    case "samples.fill":
+      return captureJsonValue(
+        executeCapturedSampleFill(store, request.payload), new WeakSet(),
+      );
     case "starter.seed":
       if (starterSeedInstant === null)
         throw invalid("trusted starter seed instant is unavailable");
@@ -548,7 +591,8 @@ class SimulatedInvocationCrash extends Error {
 export type ProductionMutationTestFailure =
   | "live_mutation"
   | "abandonment_unavailable"
-  | "crash_after_invocation";
+  | "crash_after_invocation"
+  | "after_live_mutation";
 const TEST_FAILURE = new WeakMap<
   ProductionMutationCoordinator, ProductionMutationTestFailure
 >();
@@ -889,6 +933,7 @@ export class ProductionMutationCoordinator {
     let reservedCatalogGeneration: string | null = null;
     let prepared: ProductionRequestReceipt | null = null;
     let result: JsonValue = null;
+    let liveTransactionAttempted = false;
     try {
       const reservation = this.#writeAuthority.run(() => {
         const at = trustedInstant(this.#clock);
@@ -964,7 +1009,7 @@ export class ProductionMutationCoordinator {
       });
 
       const testFailure = TEST_FAILURE.get(this);
-      if (testFailure) {
+      if (testFailure && testFailure !== "after_live_mutation") {
         TEST_FAILURE.delete(this);
         if (testFailure === "crash_after_invocation") {
           this.#poisoned = true;
@@ -974,6 +1019,7 @@ export class ProductionMutationCoordinator {
         throw new Error("injected after reservation");
       }
 
+      liveTransactionAttempted = true;
       const committedState = this.#writeAuthority.run(() => {
         const at = trustedInstant(this.#clock);
         const catalog = DeviceCatalog.openExisting(this.#driver);
@@ -994,6 +1040,10 @@ export class ProductionMutationCoordinator {
           throw invalid("production mutation prestate changed before commit");
         result = executeCapturedMutation(this.#store, request, starterSeedInstant);
         if (isThenable(result)) throw invalid("production mutation must be synchronous");
+        if (TEST_FAILURE.get(this) === "after_live_mutation") {
+          TEST_FAILURE.delete(this);
+          throw new Error("injected after live mutation");
+        }
         if (request.route === "starter.seed"
             && STORE_GET_SETTING.call(this.#store, "shell_id") !== request.payload.shellId)
           throw invalid("starter seed system shell metadata failed read-back");
@@ -1102,6 +1152,14 @@ export class ProductionMutationCoordinator {
         } catch (abandonmentError) {
           this.#poisoned = true;
           throw abandonmentError;
+        }
+      }
+      if (liveTransactionAttempted) {
+        try {
+          refreshStoreAfterPhysicalRollback(this.#store);
+        } catch {
+          this.#poisoned = true;
+          throw invalid("production mutation rollback recovery requires reopen");
         }
       }
       throw error;

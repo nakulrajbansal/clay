@@ -308,7 +308,10 @@ export class WorkerClient {
   }
   keep(): Promise<{ version: number }> { return this.call("keep"); }
   discard(): Promise<null> { return this.call("discard"); }
-  removeSamples(): Promise<null> { return this.call("removeSamples"); }
+  removeSamples(): Promise<{
+    affected: number;
+    recovery: { kind: "soft_delete"; recoverable: number };
+  }> { return this.call("removeSamples"); }
   fillSamples(): Promise<{ added: number; tables: number }> { return this.call("fillSamples"); }
   sampleCount(): Promise<number> { return this.call("sampleCount"); }
   reset(): Promise<null> { return this.call("reset"); }

@@ -123,6 +123,55 @@ function valueFor(col: RegColumn, i: number, rng: () => number, tableName = ""):
 
 const ROWS_PER_TABLE = 8;
 
+export type SampleFillBundle = {
+  tables: Array<{ table: string; rows: Record<string, unknown>[] }>;
+};
+
+function canGenerateRequiredValue(column: RegColumn): boolean {
+  return column.type === "text" || column.type === "number" || column.type === "integer"
+    || column.type === "date" || column.type === "boolean"
+    || (column.type === "enum" && (column.values?.length ?? 0) > 0);
+}
+
+/**
+ * Prepare sample candidates from the read-only registry. The authority later
+ * captures, stages, validates, and publishes these rows; this helper never
+ * receives or mutates a live Store capability.
+ */
+export function createSampleFillBundle(
+  store: Pick<ClayStore, "registrySnapshot">,
+): SampleFillBundle {
+  let seed = 42;
+  const rng = (): number => {
+    seed = (seed * 1664525 + 1013904223) % 4294967296;
+    return seed / 4294967296;
+  };
+  const tables: SampleFillBundle["tables"] = [];
+  for (const table of store.registrySnapshot().values()) {
+    const names = new Set(table.columns.map(column => column.name));
+    if (/(activity|_log|_history)$/.test(table.name)
+        || (names.has("from_stage") && names.has("to_stage"))) continue;
+    const writable = table.columns.filter(column =>
+      column.type !== "computed" && column.type !== "json" && !column.hidden);
+    if (writable.length === 0
+        || writable.some(column => column.required && !canGenerateRequiredValue(column))) continue;
+    const rows: Record<string, unknown>[] = [];
+    for (let rowIndex = 0; rowIndex < ROWS_PER_TABLE; rowIndex++) {
+      const row: Record<string, unknown> = {};
+      for (let columnIndex = 0; columnIndex < writable.length; columnIndex++) {
+        const column = writable[columnIndex]!;
+        const value = valueFor(
+          column, rowIndex + Math.floor(rng() * 3), rng, table.name,
+        );
+        if (value !== undefined && value !== null) row[column.name] = value;
+      }
+      rows.push(row);
+    }
+    tables.push({ table: table.name, rows });
+  }
+  return { tables };
+}
+
 /** Fill every table with plausible rows, tracked in the sample_rows marker.
  * Returns per-table counts. Deterministic-ish but varied (seeded LCG). */
 export function fillSampleRows(store: ClayStore): { added: number; tables: number } {

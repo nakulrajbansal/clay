@@ -508,6 +508,15 @@ function stableFingerprint(value: string): string {
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
+const PHYSICAL_ROLLBACK_REFRESH = new WeakMap<ClayStore, () => void>();
+
+/** Source-private recovery hook; intentionally absent from the public index. */
+export function refreshStoreAfterPhysicalRollback(store: ClayStore): void {
+  const refresh = PHYSICAL_ROLLBACK_REFRESH.get(store);
+  if (!refresh) throw new ClayError("E_INTERNAL", "store rollback recovery is unavailable");
+  refresh();
+}
+
 export class ClayStore {
   readonly #driver: DbDriver;
   private reg: Registry = new Map();
@@ -521,6 +530,7 @@ export class ClayStore {
     this.#driver = driver;
     this.#observer = new Observer(driver);
     this.#privateMetrics = new PrivateMetricsReducer(new SqlitePrivateMetricDriver(driver));
+    PHYSICAL_ROLLBACK_REFRESH.set(this, () => this.loadRegistry());
   }
 
   static async openMemory(): Promise<ClayStore> {
@@ -626,6 +636,7 @@ export class ClayStore {
   rowHistoryCap = 10_000;
 
   close(): void {
+    PHYSICAL_ROLLBACK_REFRESH.delete(this);
     this.#driver.close();
   }
 

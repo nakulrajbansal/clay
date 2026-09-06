@@ -111,7 +111,7 @@ export function parseImportFile(text: string, filename: string): ParsedFile {
       return r;
     });
   }
-  if (headers.length === 0) throw new Error("No columns found — is this a CSV or JSON file?");
+  if (headers.length === 0) throw new Error("No columns found — is this a CSV, TSV, or JSON data file?");
 
   // sanitize + de-duplicate column names, keep a header→ident map
   const idents: string[] = []; const seen = new Set<string>();

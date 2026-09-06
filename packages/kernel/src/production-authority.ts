@@ -29,6 +29,7 @@ import {
   type ProductionMutationTestFailure,
   type ProductionMutationResult,
 } from "./production-mutation-coordinator";
+import { activeSampleRowCount } from "./production-samples";
 import { StateMerkleIndex } from "./state-merkle-index";
 import { ClayStore } from "./store";
 import { TargetCommitCoordinator } from "./target-commit-coordinator";
@@ -841,6 +842,10 @@ export class ProductionStoreAuthority {
 
   readRowHistoryCount(): number {
     return this.#store.rowHistoryCount();
+  }
+
+  sampleRowCount(): number {
+    return activeSampleRowCount(this.#store);
   }
 
   executeMutation(input: unknown): Promise<ProductionMutationResult> {

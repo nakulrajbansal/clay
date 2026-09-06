@@ -352,8 +352,8 @@ export function App(): React.JSX.Element {
     setThemeId(id);
   };
 
-  // Bring-your-own-data: parse the file in the trusted shell, create the table
-  // + rows (one reversible commit), then let the model build the dashboard.
+  // Bring-your-own-data: parse/capture in the trusted shell, then let the
+  // authority stage the import and atomically publish schema, rows, and panel.
   const importFile = async (file: File): Promise<void> => {
     setBusy(true);
     try {
@@ -562,8 +562,10 @@ export function App(): React.JSX.Element {
       setBusy(true);
       try {
         if (clearing) {
-          await client().removeSamples();
-          setFeed(f => [...f, { kind: "info", text: "Cleared the sample rows — only generated rows were removed; they're under each table's deleted rows if you need them back." }]);
+          const result = await client().removeSamples();
+          setFeed(f => [...f, { kind: "info", text: result.affected === 0
+            ? `No active sample rows needed clearing. ${result.recovery.recoverable} generated row${result.recovery.recoverable === 1 ? " remains" : "s remain"} recoverable under deleted rows.`
+            : `Cleared ${result.affected} generated sample row${result.affected === 1 ? "" : "s"}; ${result.recovery.recoverable} can be restored from deleted rows.` }]);
         } else {
           const res = await client().fillSamples();
           setFeed(f => [...f, {
@@ -1014,11 +1016,13 @@ export function App(): React.JSX.Element {
   };
 
   const removeSamples = async (): Promise<void> => {
-    await client().removeSamples();
+    const result = await client().removeSamples();
     liveBridge?.notifyWrite("items");
     for (const p of panels)
       for (const q of p.declared_queries) liveBridge?.notifyWrite(q.from);
-    pushToast("Sample rows removed", "success");
+    pushToast(result.affected === 0
+      ? "No active sample rows to remove"
+      : `${result.affected} sample row${result.affected === 1 ? "" : "s"} removed; recoverable`, "success");
   };
 
   // Scrub takes precedence (read-only render at K); otherwise S5 merging:
@@ -1442,10 +1446,10 @@ export function App(): React.JSX.Element {
             </> : <>
             <div className="empty-canvas-spark">✦</div>
             <h2>What do you want to build?</h2>
-            <p>Describe it in plain words, or <strong>upload a spreadsheet</strong> and
+            <p>Describe it in plain words, or <strong>upload a CSV, TSV, or JSON data file</strong> and
               Clay builds a dashboard around your data. Every change is reversible.</p>
             <label className="empty-upload file-label">
-              ⬆ Upload a spreadsheet (CSV or JSON)
+              ⬆ Upload a CSV, TSV, or JSON data file
               <input type="file" accept=".csv,.tsv,.txt,.json" style={{ display: "none" }}
                 disabled={busy}
                 onChange={e => { const f = e.target.files?.[0]; if (f) void importFile(f); e.target.value = ""; }} />
