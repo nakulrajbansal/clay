@@ -29,6 +29,7 @@ import {
   type ProductionMutationTestFailure,
   type ProductionMutationResult,
 } from "./production-mutation-coordinator";
+import { assertLiveSampleProvenance } from "./sample-provenance-proof";
 import { activeSampleRowCount } from "./production-samples";
 import { StateMerkleIndex } from "./state-merkle-index";
 import { ClayStore } from "./store";
@@ -845,6 +846,9 @@ export class ProductionStoreAuthority {
   }
 
   sampleRowCount(): number {
+    assertLiveSampleProvenance(
+      this.#driver, this.#store, TargetAuthorityStore.open(this.#driver).evidence(),
+    );
     return activeSampleRowCount(this.#store);
   }
 

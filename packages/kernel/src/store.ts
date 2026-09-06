@@ -18,7 +18,7 @@ import {
   findColumn, findStoredColumn, getTable, isVirtualColumn,
   type Registry, type RegColumn, type RegTable,
 } from "./registry";
-import { nowIso, uuidv7, validateInsert, validatePatch } from "./rows";
+import { isUuidV7, nowIso, uuidv7, validateInsert, validatePatch } from "./rows";
 import {
   applyForwardOps, applyInverseOps, createTableSql, deriveInverse, validateMigrationPlan,
   type MigrationPlanT,
@@ -36,7 +36,7 @@ import {
   type AutomationRun, type AutomationSimulation, type AutomationValue, type ClayNotification,
 } from "./automation";
 import {
-  createFieldId, createRelationshipId, createTableId, semanticRegistryIssues,
+  createFieldId, createRelationshipId, createTableId, isTableId, semanticRegistryIssues,
   type FieldId, type FieldSemanticV1, type PreparedSemanticAssignmentsV1,
   type SemanticIdentityEventV1, type SemanticOperationBounds, type SemanticOrigin,
   type SemanticRelationshipRecordV1, type SemanticSchemaTraceV1,
@@ -81,6 +81,18 @@ export type FieldProvenance = {
   lastChangedVersion: number;
   derivation?: { expression: string; dependencyFieldIds: FieldId[] };
 };
+
+export type SampleRowProvenanceEntry = Readonly<{
+  tableId: TableId;
+  rowId: string;
+  operationId: string;
+}>;
+
+export type SampleRowProvenanceState = SampleRowProvenanceEntry & Readonly<{
+  tableName: string;
+  tableActive: boolean;
+  rowState: "active" | "deleted";
+}>;
 
 export type CommitInput = {
   intent: string;
@@ -1238,6 +1250,105 @@ export class ClayStore {
 
   deleteSetting(key: string): void {
     this.#driver.exec("DELETE FROM sys.settings WHERE key = ?", [key]);
+  }
+
+  sampleRowProvenance(): SampleRowProvenanceEntry[] {
+    return this.#sampleRowProvenance();
+  }
+
+  #sampleRowProvenance(): SampleRowProvenanceEntry[] {
+    const rows = this.#driver.select(
+      "SELECT value_json FROM sys.settings WHERE key = 'sample_provenance_v1'",
+    );
+    if (rows.length === 0) return [];
+    if (rows.length !== 1 || typeof rows[0]!.value_json !== "string")
+      throw new ClayError("E_TARGET_AUTHORITY_INVALID", "sample provenance ledger is invalid");
+    let parsed: unknown;
+    try { parsed = JSON.parse(rows[0]!.value_json); }
+    catch { throw new ClayError("E_TARGET_AUTHORITY_INVALID", "sample provenance ledger is invalid"); }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+      throw new ClayError("E_TARGET_AUTHORITY_INVALID", "sample provenance ledger is invalid");
+    const record = parsed as Record<string, unknown>;
+    if (Object.keys(record).length !== 2 || record.schema !== 1 || !Array.isArray(record.entries)
+        || record.entries.length > 100_000)
+      throw new ClayError("E_TARGET_AUTHORITY_INVALID", "sample provenance ledger is invalid");
+    const result: SampleRowProvenanceEntry[] = [];
+    const seen = new Set<string>();
+    for (let index = 0; index < record.entries.length; index++) {
+      const raw = record.entries[index];
+      if (typeof raw !== "object" || raw === null || Array.isArray(raw))
+        throw new ClayError("E_TARGET_AUTHORITY_INVALID", "sample provenance ledger is invalid");
+      const entry = raw as Record<string, unknown>;
+      if (Object.keys(entry).length !== 3 || !isTableId(entry.tableId)
+          || !isUuidV7(entry.rowId)
+          || typeof entry.operationId !== "string" || !/^op_[a-z2-7]{26}$/.test(entry.operationId))
+        throw new ClayError("E_TARGET_AUTHORITY_INVALID", "sample provenance ledger is invalid");
+      const coordinate = `${entry.tableId}\u0000${entry.rowId}`;
+      if (seen.has(coordinate))
+        throw new ClayError("E_TARGET_AUTHORITY_INVALID", "sample provenance ledger is duplicated");
+      seen.add(coordinate);
+      result.push(Object.freeze({
+        tableId: entry.tableId,
+        rowId: entry.rowId,
+        operationId: entry.operationId,
+      }));
+    }
+    return result;
+  }
+
+  sampleRowProvenanceState(entry: SampleRowProvenanceEntry): SampleRowProvenanceState {
+    return this.#sampleRowProvenanceState(entry);
+  }
+
+  #sampleRowProvenanceState(entry: SampleRowProvenanceEntry): SampleRowProvenanceState {
+    const matches = [...this.reg.values()].filter(table =>
+      table.semantic?.tableId === entry.tableId);
+    if (matches.length !== 1)
+      throw new ClayError("E_TARGET_AUTHORITY_INVALID", "sample provenance table identity is unavailable");
+    const table = matches[0]!;
+    const rows = this.#driver.select(
+      `SELECT deleted_at FROM ${qid(table.name)} WHERE id = ?`, [entry.rowId],
+    );
+    if (rows.length !== 1)
+      throw new ClayError("E_TARGET_AUTHORITY_INVALID", "sample provenance references a missing row");
+    return Object.freeze({
+      ...entry,
+      tableName: table.name,
+      tableActive: !table.inactive,
+      rowState: rows[0]!.deleted_at == null ? "active" : "deleted",
+    });
+  }
+
+  recordSampleRowProvenance(entries: readonly SampleRowProvenanceEntry[]): void {
+    const existing = this.#sampleRowProvenance();
+    if (existing.length + entries.length > 100_000)
+      throw new ClayError("E_TARGET_AUTHORITY_INVALID", "sample provenance ledger exceeds its limit");
+    const coordinates = new Set(existing.map(entry => `${entry.tableId}\u0000${entry.rowId}`));
+    const additions: SampleRowProvenanceEntry[] = [];
+    for (let index = 0; index < entries.length; index++) {
+      const entry = entries[index]!;
+      if (!isTableId(entry.tableId) || !isUuidV7(entry.rowId)
+          || !/^op_[a-z2-7]{26}$/.test(entry.operationId))
+        throw new ClayError("E_TARGET_AUTHORITY_INVALID", "sample provenance entry is invalid");
+      const coordinate = `${entry.tableId}\u0000${entry.rowId}`;
+      if (coordinates.has(coordinate))
+        throw new ClayError("E_TARGET_AUTHORITY_INVALID", "sample provenance entry is duplicated");
+      coordinates.add(coordinate);
+      const state = this.#sampleRowProvenanceState(entry);
+      if (!state.tableActive || state.rowState !== "active")
+        throw new ClayError("E_TARGET_AUTHORITY_INVALID", "new sample provenance must reference an active row");
+      additions.push(Object.freeze({ ...entry }));
+    }
+    if (additions.length === 0) return;
+    const merged = [...existing, ...additions].sort((left, right) =>
+      left.tableId < right.tableId ? -1
+        : left.tableId > right.tableId ? 1
+          : left.rowId < right.rowId ? -1 : left.rowId > right.rowId ? 1 : 0);
+    this.#driver.exec(
+      `INSERT INTO sys.settings(key, value_json) VALUES ('sample_provenance_v1', ?)
+       ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json`,
+      [JSON.stringify({ schema: 1, entries: merged })],
+    );
   }
 
   scrubLegacyCredentialSettings(): void {

@@ -126,6 +126,7 @@ export const CLAY_STORE_WRITER_CENSUS = Object.freeze({
   setPrivateMetricsEnabled: "unavailable",
   clearPrivateMetrics: "unavailable",
   setSetting: "authority",
+  recordSampleRowProvenance: "authority",
   deleteSetting: "authority",
   scrubLegacyCredentialSettings: "unavailable",
   commit: "unavailable",

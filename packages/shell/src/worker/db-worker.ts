@@ -117,7 +117,7 @@ function authorityRequestId(req: Request): string {
 async function runAuthorityMutation(
   route: "seed" | "importTable" | "removeSamples" | "fillSamples"
     | "setSetting" | "deleteSetting" | "compareAndSetSetting" | "commitLayout",
-  payload: Record<string, unknown>,
+  payload: unknown,
   req: Request,
 ): Promise<unknown> {
   const target = mustAuthority();
@@ -142,6 +142,9 @@ async function runAuthorityMutation(
     route: "samples.fill",
     payload,
   })).result;
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload))
+    throw new ClayError("E_TARGET_AUTHORITY_INVALID", "worker mutation payload is invalid");
+  const captured = payload as Record<string, unknown>;
   if (route === "commitLayout") return (await target.executeMutation({
     requestId,
     route: "store.commit",
@@ -150,23 +153,23 @@ async function runAuthorityMutation(
       summary: "Saved layout changes.",
       semanticOrigin: "direct",
       migration: null,
-      panels: payload.layout,
+      panels: captured.layout,
       diff: [],
     } },
   })).result;
   if (route === "setSetting") return (await target.executeMutation({
-    requestId, route: "setting.set", payload: { key: payload.key, value: payload.value },
+    requestId, route: "setting.set", payload: { key: captured.key, value: captured.value },
   })).result;
   if (route === "deleteSetting") return (await target.executeMutation({
-    requestId, route: "setting.delete", payload: { key: payload.key },
+    requestId, route: "setting.delete", payload: { key: captured.key },
   })).result;
   return (await target.executeMutation({
     requestId,
     route: "setting.compareAndSet",
     payload: {
-      key: payload.key,
-      expectedRevision: payload.expectedRevision,
-      value: payload.value,
+      key: captured.key,
+      expectedRevision: captured.expectedRevision,
+      value: captured.value,
     },
   })).result;
 }

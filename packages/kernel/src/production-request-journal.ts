@@ -1,19 +1,37 @@
-import { RequestId } from "@clay/schema";
+import {
+  AppInstanceId,
+  AuthorityIncarnationId,
+  GenerationId,
+  OperationId,
+  RequestId,
+  UInt64Decimal,
+} from "@clay/schema";
 import {
   ProductionRequestReceiptV1,
   type ProductionRequestReceiptV1 as ProductionRequestReceipt,
 } from "@clay/schema/catalog";
 import type { DbDriver, SqlRow, SqlValue } from "./db";
 import { ClayError } from "./errors";
+import { sampleProducerRouteForOperationId } from "./production-operation-id";
 import { sha256HexSync } from "./state-digest";
 
 const TARGET_TABLE = "sys.production_request_receipts";
 const CATALOG_TABLE = "catalog.production_request_receipts";
 const MAX_RESPONSE_BYTES = 2_000_000;
+const MAX_SAMPLE_ROUTE_SCAN_RECEIPTS = 100_000;
+const MAX_SAMPLE_PRODUCER_RECEIPTS = 10_001;
+const MAX_SAMPLE_PRODUCER_RESPONSE_BYTES = 8_000_000;
 
 export type PersistedProductionRequestReceipt = ProductionRequestReceipt & {
   responseJson: string | null;
 };
+
+export type SampleProducerReceiptScope = Readonly<{
+  authorityIncarnationId: string;
+  appInstanceId: string;
+  activeGenerationId: string;
+  lineageEpoch: string;
+}>;
 
 function invalid(message: string): ClayError {
   return new ClayError("E_TARGET_AUTHORITY_INVALID", message);
@@ -77,6 +95,24 @@ function immutable(receipt: ProductionRequestReceipt): string {
   });
 }
 
+function persistedFromRows(
+  targetRow: SqlRow,
+  catalogRow: SqlRow,
+): PersistedProductionRequestReceipt {
+  const target = parseReceipt(targetRow);
+  const catalog = parseReceipt(catalogRow);
+  if (common(target) !== common(catalog))
+    throw invalid("production request receipt mirrors diverged");
+  const responseJson = nullableText(targetRow.response_json);
+  if (target.responseSha256 === null) {
+    if (responseJson !== null)
+      throw invalid("nonterminal production receipt contains a response");
+  } else if (responseJson === null || responseDigest(responseJson) !== target.responseSha256) {
+    throw invalid("production request response hash is invalid");
+  }
+  return Object.freeze({ ...target, responseJson });
+}
+
 function params(receipt: ProductionRequestReceipt): SqlValue[] {
   return [
     receipt.requestId,
@@ -112,19 +148,88 @@ export function readProductionRequestReceipt(
   if (targetRows.length === 0 && catalogRows.length === 0) return null;
   if (targetRows.length !== 1 || catalogRows.length !== 1)
     throw invalid("production request receipt mirror is incomplete");
-  const target = parseReceipt(targetRows[0]!);
-  const catalog = parseReceipt(catalogRows[0]!);
-  if (common(target) !== common(catalog))
-    throw invalid("production request receipt mirrors diverged");
-  const responseJson = nullableText(targetRows[0]!.response_json);
-  if (target.responseSha256 === null) {
-    if (responseJson !== null)
-      throw invalid("nonterminal production receipt contains a response");
-  } else {
-    if (responseJson === null || responseDigest(responseJson) !== target.responseSha256)
-      throw invalid("production request response hash is invalid");
+  return persistedFromRows(targetRows[0]!, catalogRows[0]!);
+}
+
+export function readCommittedSampleProducerReceipts(
+  driver: DbDriver,
+  input: SampleProducerReceiptScope,
+): readonly PersistedProductionRequestReceipt[] {
+  const authority = AuthorityIncarnationId.safeParse(input.authorityIncarnationId);
+  const app = AppInstanceId.safeParse(input.appInstanceId);
+  const generation = GenerationId.safeParse(input.activeGenerationId);
+  const lineage = UInt64Decimal.safeParse(input.lineageEpoch);
+  if (!authority.success || !app.success || !generation.success || !lineage.success)
+    throw invalid("sample producer receipt scope is invalid");
+  const where = `state='committed' AND app_instance_id=?
+    AND active_generation_id=? AND lineage_epoch=?`;
+  const queryParams: SqlValue[] = [app.data, generation.data, lineage.data];
+  const summary = driver.select(
+    `SELECT COUNT(*) AS receipt_count FROM ${TARGET_TABLE} WHERE ${where}`,
+    queryParams,
+  );
+  const count = Number(summary[0]?.receipt_count);
+  if (summary.length !== 1 || !Number.isSafeInteger(count) || count < 0)
+    throw invalid("sample receipt route history summary is invalid");
+  if (count > MAX_SAMPLE_ROUTE_SCAN_RECEIPTS)
+    throw invalid("sample receipt route history exceeds its evidence limit");
+  const metadataRows = driver.select(
+    `SELECT request_id,operation_id,
+       CASE WHEN response_json IS NULL THEN -1
+         ELSE length(CAST(response_json AS BLOB)) END AS response_bytes
+     FROM ${TARGET_TABLE} WHERE ${where} ORDER BY request_id`,
+    queryParams,
+  );
+  if (metadataRows.length !== count)
+    throw invalid("sample receipt route history changed during read");
+  const producers: Array<{ requestId: string; responseBytes: number }> = [];
+  let producerResponseBytes = 0;
+  for (const row of metadataRows) {
+    const request = RequestId.safeParse(row.request_id);
+    const operation = OperationId.safeParse(row.operation_id);
+    const responseBytes = Number(row.response_bytes);
+    if (!request.success || !operation.success
+        || !Number.isSafeInteger(responseBytes) || responseBytes < 0)
+      throw invalid("sample receipt route metadata is invalid");
+    if (sampleProducerRouteForOperationId(
+      authority.data, request.data, operation.data,
+    ) === null) continue;
+    producers.push({ requestId: request.data, responseBytes });
+    producerResponseBytes += responseBytes;
+    if (!Number.isSafeInteger(producerResponseBytes))
+      throw invalid("sample producer response history is invalid");
   }
-  return Object.freeze({ ...target, responseJson });
+  if (producers.length > MAX_SAMPLE_PRODUCER_RECEIPTS
+      || producerResponseBytes > MAX_SAMPLE_PRODUCER_RESPONSE_BYTES)
+    throw invalid("sample producer receipt history exceeds its evidence limit");
+  const requestIds = producers.map(row => row.requestId);
+  if (requestIds.length === 0) return Object.freeze([]);
+  const targetRows: SqlRow[] = [];
+  const catalogRows: SqlRow[] = [];
+  for (let offset = 0; offset < requestIds.length; offset += 400) {
+    const chunk = requestIds.slice(offset, offset + 400);
+    const placeholders = chunk.map(() => "?").join(",");
+    targetRows.push(...driver.select(
+      `SELECT * FROM ${TARGET_TABLE} WHERE request_id IN (${placeholders})`, chunk,
+    ));
+    catalogRows.push(...driver.select(
+      `SELECT * FROM ${CATALOG_TABLE} WHERE request_id IN (${placeholders})`, chunk,
+    ));
+  }
+  if (targetRows.length !== requestIds.length || catalogRows.length !== requestIds.length)
+    throw invalid("sample producer receipt mirror is incomplete or changed during read");
+  const catalogByRequest = new Map<string, SqlRow>();
+  for (const row of catalogRows) {
+    if (typeof row.request_id !== "string" || catalogByRequest.has(row.request_id))
+      throw invalid("sample producer receipt mirror is invalid or duplicated");
+    catalogByRequest.set(row.request_id, row);
+  }
+  const receipts = targetRows.map(row => {
+    const mirror = catalogByRequest.get(String(row.request_id));
+    if (!mirror) throw invalid("sample producer receipt mirror is incomplete");
+    return persistedFromRows(row, mirror);
+  });
+  return Object.freeze(receipts);
 }
 
 export function writeProductionRequestReceipt(

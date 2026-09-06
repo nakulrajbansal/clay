@@ -30,6 +30,11 @@ export function uuidv7(now: number = Date.now()): string {
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})?)?$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+export function isUuidV7(value: unknown): value is string {
+  return typeof value === "string" && UUID_V7.test(value);
+}
 
 export function coerceValue(table: string, col: RegColumn, v: unknown): SqlValue {
   const bad = (want: string): never => {

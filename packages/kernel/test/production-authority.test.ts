@@ -11,6 +11,8 @@ import {
   planLegacyBootstrap,
   resolveCatalogInventory,
 } from "../src/production-authority";
+import { productionOperationIdV1 } from "../src/production-operation-id";
+import { sha256HexSync } from "../src/state-digest";
 import { StateMerkleIndex } from "../src/state-merkle-index";
 import { TargetAuthorityStore } from "../src/target-authority";
 
@@ -539,6 +541,42 @@ describe("production Store authority", () => {
     }
   });
 
+  it("replays own __proto__ setting data without changing the result", async () => {
+    const { driver } = await legacyStore();
+    const authority = ProductionStoreAuthority.adoptLegacy(driver, {
+      inventory: legacyInventory,
+      storageKey: "default",
+      displayName: "My app",
+      appInstanceId: opaque("app", "a"),
+      generationId: opaque("gen", "b"),
+      namespaceId: opaque("ns", "c"),
+      adoptionOperationId: opaque("op", "d"),
+      releaseId: opaque("rel", "e"),
+      nowMs: Date.now(),
+      leaseTtlMs: 60_000,
+    });
+    try {
+      const value = Object.create(null) as Record<string, unknown>;
+      value.__proto__ = { retained: true };
+      value.revision = 1;
+      value.safe = 1;
+      const request = {
+        requestId: opaque("req", "l"),
+        route: "setting.compareAndSet",
+        payload: { key: "prototype_data", expectedRevision: 0, value },
+      } as const;
+      const live = await authority.executeMutation(request);
+      const replay = await authority.executeMutation(request);
+      expect(replay).toEqual({ ...live, replayed: true });
+      const current = (replay.result as { current: Record<string, unknown> }).current;
+      expect(Object.getPrototypeOf(current)).toBeNull();
+      expect(Object.hasOwn(current, "__proto__")).toBe(true);
+      expect(current.__proto__).toEqual({ retained: true });
+    } finally {
+      authority.close();
+    }
+  });
+
   it("does not expose mutable target evidence to a caller", async () => {
     const { driver } = await legacyStore();
     const authority = ProductionStoreAuthority.adoptLegacy(driver, {
@@ -612,6 +650,84 @@ describe("production Store authority", () => {
         replayed: true,
         evidence: first.evidence,
         result: null,
+      });
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("replays an exact-current legacy v1 raw receipt", async () => {
+    const { driver } = await legacyStore();
+    const authority = ProductionStoreAuthority.adoptLegacy(driver, {
+      inventory: legacyInventory,
+      storageKey: "default",
+      displayName: "My app",
+      appInstanceId: opaque("app", "a"),
+      generationId: opaque("gen", "b"),
+      namespaceId: opaque("ns", "c"),
+      adoptionOperationId: opaque("op", "d"),
+      releaseId: opaque("rel", "e"),
+      nowMs: Date.now(),
+      leaseTtlMs: 60_000,
+    });
+    const request = {
+      requestId: opaque("req", "s"),
+      route: "setting.set",
+      payload: { key: "legacy_raw", value: 1 },
+    } as const;
+    const committed = await authority.executeMutation(request);
+    const reopenedDriver = await snapshotAuthorityDriver(driver);
+    authority.close();
+    const root = reopenedDriver.select(
+      "SELECT authority_incarnation_id FROM catalog.catalog_root WHERE singleton=1",
+    )[0]!;
+    const legacyOperationId = productionOperationIdV1(
+      String(root.authority_incarnation_id), request.requestId,
+    );
+    const responseJson = "null";
+    const responseSha256 = `sha256:${sha256HexSync(new TextEncoder().encode(responseJson))}`;
+    reopenedDriver.exec(
+      "INSERT INTO catalog.id_registry(id_value,id_kind,retained_at) VALUES(?,?,?)",
+      [legacyOperationId, "operation", "2026-09-06T00:00:00.000Z"],
+    );
+    reopenedDriver.exec(
+      `UPDATE sys.production_request_receipts
+       SET operation_id=?,response_sha256=?,response_json=? WHERE request_id=?`,
+      [legacyOperationId, responseSha256, responseJson, request.requestId],
+    );
+    reopenedDriver.exec(
+      `UPDATE catalog.production_request_receipts
+       SET operation_id=?,response_sha256=? WHERE request_id=?`,
+      [legacyOperationId, responseSha256, request.requestId],
+    );
+    reopenedDriver.exec(
+      "UPDATE sys.target_revision_reservations SET operation_id=? WHERE operation_id=?",
+      [legacyOperationId, committed.operationId],
+    );
+    reopenedDriver.exec(
+      "UPDATE catalog.revision_reservations SET operation_id=? WHERE operation_id=?",
+      [legacyOperationId, committed.operationId],
+    );
+    reopenedDriver.exec(
+      "UPDATE catalog.catalog_generation_events SET operation_id=? WHERE operation_id=?",
+      [legacyOperationId, committed.operationId],
+    );
+    reopenedDriver.exec(
+      "DELETE FROM catalog.id_registry WHERE id_value=?",
+      [committed.operationId],
+    );
+    const reopened = ProductionStoreAuthority.openExisting(reopenedDriver, {
+      inventory: { ...legacyInventory, catalogPresent: true },
+      storageKey: "default",
+      releaseId: opaque("rel", "f"),
+      nowMs: Date.now(),
+      leaseTtlMs: 60_000,
+    });
+    try {
+      await expect(reopened.executeMutation(request)).resolves.toEqual({
+        ...committed,
+        operationId: legacyOperationId,
+        replayed: true,
       });
     } finally {
       reopened.close();
@@ -699,6 +815,49 @@ describe("production Store authority", () => {
       await expect(reopened.executeMutation(request))
         .rejects.toThrow(/receipt mirror is incomplete/i);
       expect(reopened.readSetting("mirrored")).toBe(1);
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("rejects current receipt replay when its target reservation diverges", async () => {
+    const { driver } = await legacyStore();
+    const authority = ProductionStoreAuthority.adoptLegacy(driver, {
+      inventory: legacyInventory,
+      storageKey: "default",
+      displayName: "My app",
+      appInstanceId: opaque("app", "a"),
+      generationId: opaque("gen", "b"),
+      namespaceId: opaque("ns", "c"),
+      adoptionOperationId: opaque("op", "d"),
+      releaseId: opaque("rel", "e"),
+      nowMs: Date.now(),
+      leaseTtlMs: 60_000,
+    });
+    const request = {
+      requestId: opaque("req", "v"),
+      route: "setting.set",
+      payload: { key: "reservation_join", value: 1 },
+    } as const;
+    const committed = await authority.executeMutation(request);
+    const reopenedDriver = await snapshotAuthorityDriver(driver);
+    authority.close();
+    reopenedDriver.exec(
+      `UPDATE sys.target_revision_reservations
+       SET operation_id=?, request_sha256=? WHERE operation_id=?`,
+      [opaque("op", "z"), `sha256:${"f".repeat(64)}`, committed.operationId],
+    );
+    const reopened = ProductionStoreAuthority.openExisting(reopenedDriver, {
+      inventory: { ...legacyInventory, catalogPresent: true },
+      storageKey: "default",
+      releaseId: opaque("rel", "y"),
+      nowMs: Date.now(),
+      leaseTtlMs: 60_000,
+    });
+    try {
+      await expect(reopened.executeMutation(request))
+        .rejects.toThrow(/reservation evidence.*incomplete|reservation.*diverge/i);
+      expect(reopened.readSetting("reservation_join")).toBe(1);
     } finally {
       reopened.close();
     }

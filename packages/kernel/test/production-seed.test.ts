@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { openMemoryDriver } from "../src/index";
+import { ClayStore, openMemoryDriver } from "../src/index";
 import { ProductionStoreAuthority } from "../src/production-authority";
+import {
+  captureStarterSeedBundle,
+  executeCapturedStarterSeed,
+} from "../src/production-seed";
 
 const opaque = (prefix: string, char: string): string => `${prefix}_${char.repeat(26)}`;
 
@@ -62,6 +66,64 @@ function blankBundle(): {
 }
 
 describe("production starter seed authority", () => {
+  it("uses the shared one-million-string and two-million-request limits", () => {
+    const bundle = trackerBundle();
+    bundle.tables = [];
+    bundle.panels = [
+      { ...bundle.panels[0]!, panel_id: "large_one", code: "x".repeat(800_000) },
+      { ...bundle.panels[0]!, panel_id: "large_two", code: "y".repeat(400_000) },
+    ];
+    expect(() => captureStarterSeedBundle(bundle)).not.toThrow();
+  });
+
+  it("rejects multibyte seed JSON above 2,000,000 bytes before reservation", async () => {
+    const authority = await freshAuthority("7");
+    try {
+      const bundle = blankBundle();
+      bundle.panels = [{
+        panel_id: "large_panel",
+        title: "Large",
+        placement: { region: "main", order: 0 },
+        code: "界".repeat(700_000),
+        declared_queries: [],
+        declared_writes: [],
+      }];
+      await expect(Promise.resolve().then(() => authority.executeMutation({
+        requestId: opaque("req", "7"), route: "starter.seed", payload: bundle,
+      }))).rejects.toThrow(/2,000,000 UTF-8 bytes/i);
+      expect(authority.inspectAuthority().targetReservations).toHaveLength(0);
+      expect(authority.inspectAuthority().catalogReservations).toHaveLength(0);
+    } finally {
+      authority.close();
+    }
+  });
+
+  it("returns exact sample coordinates directly from inserted rows", async () => {
+    const driver = await openMemoryDriver();
+    const store = ClayStore.fromDriver(driver);
+    try {
+      const bundle = trackerBundle();
+      bundle.tables = bundle.tables.slice(0, 1);
+      bundle.panels = [];
+      const outcome = executeCapturedStarterSeed(
+        store,
+        captureStarterSeedBundle(bundle),
+        "2026-09-06T12:00:00.000Z",
+        opaque("op", "2"),
+      );
+      const row = store.query({ from: "alpha" })[0]!;
+      const tableId = store.validationRegistrySnapshot().get("alpha")!.semantic!.tableId;
+      expect(outcome).toEqual({
+        result: null,
+        sampleProvenance: [{ tableId, rowId: String(row.id) }],
+      });
+      expect(Object.isFrozen(outcome)).toBe(true);
+      expect(Object.isFrozen(outcome.sampleProvenance)).toBe(true);
+    } finally {
+      store.close();
+    }
+  });
+
   it("routes one captured starter bundle through one protection revision and stable replay", async () => {
     const authority = await freshAuthority("s");
     const fetchSpy = vi.spyOn(globalThis, "fetch");
@@ -104,9 +166,11 @@ describe("production starter seed authority", () => {
       expect(panel.panel_id).toBe("alpha_table");
       expect(panel.code).not.toContain("//#blueprint");
       expect(panel.declared_queries).toEqual([expect.objectContaining({ from: "alpha" })]);
-      const sampleRows = authority.readSetting<Record<string, string[]>>("sample_rows")!;
-      for (const table of ["alpha", "beta", "gamma", "delta"])
-        expect(sampleRows[table]).toEqual(authority.query({ from: table }).map(row => String(row.id)));
+      const seededTables = ["alpha", "beta", "gamma", "delta"];
+      expect(authority.sampleRowCount()).toBe(seededTables.reduce(
+        (total, table) => total + authority.query({ from: table }).length, 0,
+      ));
+      expect(authority.readSetting("sample_rows")).toBeUndefined();
       expect(authority.readSetting("shell_id")).toBe("tracker");
       expect(authority.inspectAuthority().targetReservations).toHaveLength(1);
       expect(authority.inspectAuthority().catalogReservations).toHaveLength(1);
@@ -142,7 +206,8 @@ describe("production starter seed authority", () => {
       expect(authority.readStore().headVersion()).toBe(1);
       expect(authority.readStore().registrySnapshot().size).toBe(0);
       expect(authority.readStore().livePanels()).toEqual([]);
-      expect(authority.readSetting("sample_rows")).toEqual({});
+      expect(authority.sampleRowCount()).toBe(0);
+      expect(authority.readSetting("sample_rows")).toBeUndefined();
       expect(authority.readSetting("shell_id")).toBe("blank");
       expect(authority.inspectAuthority().targetReservations).toHaveLength(1);
     } finally {
@@ -211,7 +276,7 @@ describe("production starter seed authority", () => {
         panel_id: `panel_${id}`,
         title: id,
         placement: { region: "main", order },
-        code: "x".repeat(600_000),
+        code: "x".repeat(999_900),
         declared_queries: [],
         declared_writes: [],
       }));
