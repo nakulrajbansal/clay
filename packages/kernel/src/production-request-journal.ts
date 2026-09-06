@@ -164,33 +164,61 @@ export function readCommittedSampleProducerReceipts(
   const where = `state='committed' AND app_instance_id=?
     AND active_generation_id=? AND lineage_epoch=?`;
   const queryParams: SqlValue[] = [app.data, generation.data, lineage.data];
-  const summary = driver.select(
+  const targetSummary = driver.select(
     `SELECT COUNT(*) AS receipt_count FROM ${TARGET_TABLE} WHERE ${where}`,
     queryParams,
   );
-  const count = Number(summary[0]?.receipt_count);
-  if (summary.length !== 1 || !Number.isSafeInteger(count) || count < 0)
+  const targetCount = Number(targetSummary[0]?.receipt_count);
+  if (targetSummary.length !== 1 || !Number.isSafeInteger(targetCount) || targetCount < 0)
     throw invalid("sample receipt route history summary is invalid");
-  if (count > MAX_SAMPLE_ROUTE_SCAN_RECEIPTS)
+  if (targetCount > MAX_SAMPLE_ROUTE_SCAN_RECEIPTS)
     throw invalid("sample receipt route history exceeds its evidence limit");
-  const metadataRows = driver.select(
+  const catalogSummary = driver.select(
+    `SELECT COUNT(*) AS receipt_count FROM ${CATALOG_TABLE} WHERE ${where}`,
+    queryParams,
+  );
+  const catalogCount = Number(catalogSummary[0]?.receipt_count);
+  if (catalogSummary.length !== 1 || !Number.isSafeInteger(catalogCount) || catalogCount < 0)
+    throw invalid("sample receipt route history summary is invalid");
+  if (catalogCount > MAX_SAMPLE_ROUTE_SCAN_RECEIPTS)
+    throw invalid("sample receipt route history exceeds its evidence limit");
+  if (targetCount !== catalogCount)
+    throw invalid("sample producer receipt mirror is incomplete");
+  const targetMetadataRows = driver.select(
     `SELECT request_id,operation_id,
        CASE WHEN response_json IS NULL THEN -1
          ELSE length(CAST(response_json AS BLOB)) END AS response_bytes
      FROM ${TARGET_TABLE} WHERE ${where} ORDER BY request_id`,
     queryParams,
   );
-  if (metadataRows.length !== count)
+  const catalogMetadataRows = driver.select(
+    `SELECT request_id,operation_id
+     FROM ${CATALOG_TABLE} WHERE ${where} ORDER BY request_id`,
+    queryParams,
+  );
+  if (targetMetadataRows.length !== targetCount
+      || catalogMetadataRows.length !== catalogCount)
     throw invalid("sample receipt route history changed during read");
+  const catalogMetadataByRequest = new Map<string, string>();
+  for (const row of catalogMetadataRows) {
+    const request = RequestId.safeParse(row.request_id);
+    const operation = OperationId.safeParse(row.operation_id);
+    if (!request.success || !operation.success
+        || catalogMetadataByRequest.has(request.data))
+      throw invalid("sample receipt mirror metadata is invalid or duplicated");
+    catalogMetadataByRequest.set(request.data, operation.data);
+  }
   const producers: Array<{ requestId: string; responseBytes: number }> = [];
   let producerResponseBytes = 0;
-  for (const row of metadataRows) {
+  for (const row of targetMetadataRows) {
     const request = RequestId.safeParse(row.request_id);
     const operation = OperationId.safeParse(row.operation_id);
     const responseBytes = Number(row.response_bytes);
     if (!request.success || !operation.success
         || !Number.isSafeInteger(responseBytes) || responseBytes < 0)
       throw invalid("sample receipt route metadata is invalid");
+    if (catalogMetadataByRequest.get(request.data) !== operation.data)
+      throw invalid("sample producer receipt mirror metadata diverged");
     if (sampleProducerRouteForOperationId(
       authority.data, request.data, operation.data,
     ) === null) continue;
@@ -199,6 +227,8 @@ export function readCommittedSampleProducerReceipts(
     if (!Number.isSafeInteger(producerResponseBytes))
       throw invalid("sample producer response history is invalid");
   }
+  if (catalogMetadataByRequest.size !== targetMetadataRows.length)
+    throw invalid("sample producer receipt mirror metadata diverged");
   if (producers.length > MAX_SAMPLE_PRODUCER_RECEIPTS
       || producerResponseBytes > MAX_SAMPLE_PRODUCER_RESPONSE_BYTES)
     throw invalid("sample producer receipt history exceeds its evidence limit");
