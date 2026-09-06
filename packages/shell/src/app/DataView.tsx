@@ -425,11 +425,13 @@ export function DataView(props: {
     if (props.onConfirm && !await props.onConfirm(
       "Clear all generated sample rows? Your own records stay untouched, and samples remain restorable.")) return;
     try {
-      await worker.removeSamples();
-      setSamples(0);
+      const result = await worker.removeSamples();
+      setSamples(await worker.sampleCount());
       if (selected) await reload(selected);
       for (const t of tables) props.onWrite(t.name);
-      props.onInfo("Sample rows cleared. Only generated rows were removed — your own data is untouched, and the cleared rows sit under “deleted rows” if you want them back.");
+      props.onInfo(result.affected === 0
+        ? `No active sample rows needed clearing. ${result.recovery.recoverable} generated row${result.recovery.recoverable === 1 ? " remains" : "s remain"} recoverable under “deleted rows”.`
+        : `Cleared ${result.affected} generated sample row${result.affected === 1 ? "" : "s"}. Your own data is untouched, and ${result.recovery.recoverable} generated row${result.recovery.recoverable === 1 ? " is" : "s are"} recoverable under “deleted rows”.`);
     } catch (e) {
       props.onError(e instanceof Error ? e.message : String(e));
     }
@@ -581,16 +583,16 @@ export function DataView(props: {
               Clear samples ({samples})
             </button>
           ) : null}
-          <label className="dataview-import file-label" title="Add a CSV or JSON file as a new table">
+          <label className="dataview-import file-label" title="Add a CSV, TSV, or JSON data file as a new table">
             ⬆ Import file
-            <input className="visually-hidden-file" type="file" aria-label="Import CSV or JSON"
+            <input className="visually-hidden-file" type="file" aria-label="Import CSV, TSV, or JSON data file"
               accept=".csv,.tsv,.txt,.json"
               onChange={e => { const f = e.target.files?.[0]; if (f) props.onImport(f); e.target.value = ""; }} />
           </label>
           {table ? (
             <button
               className="dataview-import"
-              title={`Download “${table.name}” as a spreadsheet — your data is always yours`}
+              title={`Download “${table.name}” as CSV — your data is always yours`}
               onClick={() => {
                 const esc = (v: unknown): string => {
                   const s = typeof v === "object" && v !== null
@@ -1037,11 +1039,11 @@ export function DataView(props: {
       ) : (
         <div className="dataview-empty">
           <p>No data yet.</p>
-          <p className="dataview-empty-sub">Import a spreadsheet, or describe an app and Clay creates the tables for you.</p>
+          <p className="dataview-empty-sub">Import a CSV, TSV, or JSON data file, or describe an app and Clay creates the tables for you.</p>
           <label className="empty-upload file-label">
-            ⬆ Upload a spreadsheet (CSV or JSON)
+            ⬆ Upload a CSV, TSV, or JSON data file
             <input className="visually-hidden-file" type="file"
-              aria-label="Upload a CSV or JSON spreadsheet" accept=".csv,.tsv,.txt,.json"
+              aria-label="Upload a CSV, TSV, or JSON data file" accept=".csv,.tsv,.txt,.json"
               onChange={e => { const f = e.target.files?.[0]; if (f) props.onImport(f); e.target.value = ""; }} />
           </label>
         </div>

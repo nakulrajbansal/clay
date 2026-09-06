@@ -14,7 +14,7 @@ import type {
   ProductionStoreReader,
 } from "@clay/kernel/worker-authority";
 import { createStarterSeedBundle } from "../shells/seed";
-import { sampleRowCount } from "./samples";
+import { createSampleFillBundle } from "./samples";
 import { DB_WORKER_ROUTE_CENSUS } from "./mutation-route-census";
 
 export type PreviewInfo = {
@@ -143,7 +143,8 @@ type DirectAuthorityRoute = keyof typeof DIRECT_AUTHORITY_ROUTES;
 
 async function runAuthorityMutation(
   route:
-    | "seed" | "setSetting" | "deleteSetting" | "compareAndSetSetting" | "commitLayout"
+    | "seed" | "importTable" | "removeSamples" | "fillSamples"
+    | "setSetting" | "deleteSetting" | "compareAndSetSetting" | "commitLayout"
     | "addAttachment" | "removeAttachment" | "purgeDeletedAttachments"
     | "applyBatch" | "undoBatch" | "restoreRow" | "removeColumn"
     | "upsertAutomation" | "deleteAutomation" | "runAutomations" | "runAutomationNow"
@@ -159,6 +160,21 @@ async function runAuthorityMutation(
   const requestId = authorityRequestId(req);
   if (route === "seed") return (await target.executeMutation({
     requestId, route: "starter.seed", payload,
+  })).result;
+  if (route === "importTable") return (await target.executeMutation({
+    requestId,
+    route: "table.import",
+    payload,
+  })).result;
+  if (route === "removeSamples") return (await target.executeMutation({
+    requestId,
+    route: "samples.remove",
+    payload,
+  })).result;
+  if (route === "fillSamples") return (await target.executeMutation({
+    requestId,
+    route: "samples.fill",
+    payload,
   })).result;
   if (route === "commitLayout") return (await target.executeMutation({
     requestId,
@@ -420,8 +436,9 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     }
     case "forkApp":
     case "deleteApp":
-    case "importTable":
       return failClosedMutation(req.op);
+    case "importTable":
+      return runAuthorityMutation("importTable", p, req);
     case "seed":
       return runAuthorityMutation("seed", createStarterSeedBundle(p.shellId), req);
     case "panels":
@@ -543,11 +560,11 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "discard":
       return discardPendingPreview(req);
     case "removeSamples":
-      return failClosedMutation(req.op);
+      return runAuthorityMutation("removeSamples", p, req);
     case "fillSamples":
-      return failClosedMutation(req.op);
+      return runAuthorityMutation("fillSamples", createSampleFillBundle(mustStore()), req);
     case "sampleCount":
-      return sampleRowCount(mustStore());
+      return mustAuthority().sampleRowCount();
     case "restoreRow":
       return runAuthorityMutation("restoreRow", p, req);
     case "restorableRows":

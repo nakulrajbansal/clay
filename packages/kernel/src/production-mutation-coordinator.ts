@@ -35,11 +35,23 @@ import {
   writeProductionRequestReceipt,
 } from "./production-request-journal";
 import {
+  captureTableImport,
+  executeCapturedTableImport,
+  type CapturedTableImport,
+} from "./production-import";
+import {
   captureStarterSeedBundle,
   executeCapturedStarterSeed,
   starterSeedCatalogMetadata,
   type CapturedStarterSeedBundle,
 } from "./production-seed";
+import {
+  captureSampleFill,
+  captureSampleRemoval,
+  executeCapturedSampleFill,
+  executeCapturedSampleRemoval,
+  type CapturedSampleFill,
+} from "./production-samples";
 import { stableJson } from "./stable-json";
 import { sha256HexSync } from "./state-digest";
 import { stateLeafHashV1 } from "./state-merkle";
@@ -47,6 +59,7 @@ import type { StateMerkleChange } from "./state-merkle-index";
 import {
   ClayStore,
   executeCapturedAttachmentAdd,
+  refreshStoreAfterPhysicalRollback,
 } from "./store";
 import { TargetAuthorityStore } from "./target-authority";
 
@@ -78,6 +91,9 @@ type CapturedProductionMutation = CapturedCoreMutation | Readonly<{
   | { route: "planner.finalize"; payload: PlannerAttemptFinalization }
   | { route: "planner.discard"; payload: PreparedMutationCommand }
   | { route: "planner.keep"; payload: PreparedMutationCommand }
+  | { route: "table.import"; payload: CapturedTableImport }
+  | { route: "samples.fill"; payload: CapturedSampleFill }
+  | { route: "samples.remove"; payload: Readonly<Record<string, never>> }
   | { route: "starter.seed"; payload: CapturedStarterSeedBundle }
   | {
     route: "attachment.add";
@@ -532,6 +548,24 @@ function captureMutation(input: unknown): CapturedProductionMutation {
           plan: captureJsonRecord(fields.plan, budget),
         }) });
       }
+      case "table.import":
+        return Object.freeze({
+          requestId,
+          route,
+          payload: captureTableImport(payload),
+        });
+      case "samples.remove":
+        return Object.freeze({
+          requestId,
+          route,
+          payload: captureSampleRemoval(payload),
+        });
+      case "samples.fill":
+        return Object.freeze({
+          requestId,
+          route,
+          payload: captureSampleFill(payload),
+        });
       case "starter.seed":
         return Object.freeze({
           requestId,
@@ -936,6 +970,16 @@ function executeCapturedMutation(
       return null;
     case "planner.keep":
       return executePreparedPlannerKeep(store, request.payload);
+    case "table.import":
+      return captureJsonValue(
+        executeCapturedTableImport(store, request.payload), new WeakSet(),
+      );
+    case "samples.remove":
+      return captureJsonValue(executeCapturedSampleRemoval(store), new WeakSet());
+    case "samples.fill":
+      return captureJsonValue(
+        executeCapturedSampleFill(store, request.payload), new WeakSet(),
+      );
     case "starter.seed":
       if (executionInstant === null)
         throw invalid("trusted starter seed instant is unavailable");
@@ -1151,7 +1195,8 @@ export type ProductionMutationTestFailure =
   | "after_live_mutation"
   | "stale_fence"
   | "abandonment_unavailable"
-  | "crash_after_invocation";
+  | "crash_after_invocation"
+  | "after_live_mutation";
 const TEST_FAILURE = new WeakMap<
   ProductionMutationCoordinator, ProductionMutationTestFailure
 >();
@@ -1673,6 +1718,7 @@ export class ProductionMutationCoordinator {
     let reservedCatalogGeneration: string | null = null;
     let prepared: ProductionRequestReceipt | null = null;
     let result: JsonValue = null;
+    let liveTransactionAttempted = false;
     try {
       const reservation = this.#writeAuthority.run(() => {
         const at = trustedInstant(this.#clock);
@@ -1758,6 +1804,7 @@ export class ProductionMutationCoordinator {
         throw new Error("injected after reservation");
       }
 
+      liveTransactionAttempted = true;
       const committedState = this.#writeAuthority.run(() => {
         const at = trustedInstant(this.#clock);
         const catalog = DeviceCatalog.openExisting(this.#driver);
@@ -1896,6 +1943,14 @@ export class ProductionMutationCoordinator {
         } catch (abandonmentError) {
           this.#poisoned = true;
           throw abandonmentError;
+        }
+      }
+      if (liveTransactionAttempted) {
+        try {
+          refreshStoreAfterPhysicalRollback(this.#store);
+        } catch {
+          this.#poisoned = true;
+          throw invalid("production mutation rollback recovery requires reopen");
         }
       }
       throw error;

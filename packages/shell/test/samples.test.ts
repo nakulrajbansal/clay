@@ -4,7 +4,9 @@
 import { describe, expect, it } from "vitest";
 import { ClayStore, deriveInverse, type MigrationPlanT } from "@clay/kernel";
 import { removeSampleRows, seedStarterShell } from "../src/shells/seed-store";
-import { fillSampleRows, sampleRowCount } from "../src/worker/samples";
+import {
+  createSampleFillBundle, fillSampleRows, sampleRowCount,
+} from "../src/worker/samples";
 
 async function storeWithProjects(): Promise<ClayStore> {
   const store = await ClayStore.openMemory();
@@ -27,6 +29,19 @@ async function storeWithProjects(): Promise<ClayStore> {
 }
 
 describe("sample data fill/clear", () => {
+  it("prepares a detached fill bundle without mutating the live store", async () => {
+    const store = await storeWithProjects();
+    const bundle = createSampleFillBundle(store);
+    expect(bundle.tables).toHaveLength(1);
+    expect(bundle.tables[0]).toMatchObject({ table: "projects" });
+    expect(bundle.tables[0]!.rows).toHaveLength(8);
+    expect(store.query({ from: "projects" })).toEqual([]);
+    expect(store.getSetting("sample_rows")).toBeUndefined();
+    store.rollbackTo(0);
+    expect(createSampleFillBundle(store).tables).toEqual([]);
+    store.close();
+  });
+
   it("fills typed rows and tracks them in the marker", async () => {
     const store = await storeWithProjects();
     const res = fillSampleRows(store);
