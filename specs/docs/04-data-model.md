@@ -349,14 +349,50 @@ fixed-size receipt identity metadata for the current app generation and lineage,
 loads bodies only for independently identified producers. It refuses more than
 100,000 current-target committed receipt identities, 10,001 producer receipts, or
 8,000,000 aggregate producer-response bytes; receipt and reservation joins are
-map-indexed rather than quadratic. Internal consistency proof does not authenticate a
-wholesale coherent rewrite of every unsigned store and digest, so protected backup
-claims additionally require authenticated outer format-5 bytes. Those outer
-authenticated bytes remain a Release B blocker: `checksumAuthenticated` continues
-to describe checksum consistency only and does not claim cryptographic authentication.
+map-indexed rather than quadratic. Internal consistency proof does not authenticate
+a wholesale coherent rewrite of every unsigned store and digest, so protected
+backup claims additionally require the
+ADR-052 authenticated outer format-5 envelope. Format 5 is a deterministic RFC 9052
+COSE_Mac0 value using HMAC 256/256 (COSE algorithm 5). Its payload is the complete
+byte-for-byte inner format-5 container. The protected headers bind authentication
+version 1, archive format 5, content type, a random non-secret key ID, a random
+16-byte backup-series ID, and a monotonically increasing uint64 generation. The full
+32-byte tag authenticates the protected-header bytes and complete inner archive
+payload through the standard `MAC_structure`. COSE tag 17, the outer array framing,
+the required empty unprotected map, and the tag field encoding are not MAC inputs.
+A strict parser requires their one deterministic encoding and rejects a nonempty
+unprotected map, alternate framing, malformed lengths, and trailing bytes. Clay makes
+no cryptographic-coverage claim for bytes that RFC 9052 excludes from `MAC_structure`.
+
+The HMAC key is a single-purpose random 256-bit Backup Trust Key. It never appears in
+the archive, destination handle, account data, telemetry, or hosted service. A
+device-protected working copy may support automatic writes only after the owner has
+exported and test-imported a separate Recovery Kit. A clean device imports that kit
+before verification. Format 5 provides authentication but not confidentiality; the
+records remain readable to anyone who can access the file. Losing every key copy makes
+authentication irrecoverable, and a replacement key starts a new trust series rather
+than blessing old archives. Unsigned pre-release format-5 candidates may report only
+self-consistent checksums through explicit development tooling and are rejected by
+normal restore. `checksumAuthenticated` remains a legacy implementation name and must
+never produce a cryptographic, protected-backup, freshness, or newest-backup claim.
+
+Import parses only the bounded outer envelope needed to select an already trusted key,
+then verifies the MAC before decompressing members, parsing JSON, opening SQLite, or
+changing state. The same immutable verified payload bytes feed all later checks.
+Generation high-water evidence rejects known replay and forks; after total loss of that
+separate evidence, Clay may verify authenticity but must state that freshness is
+unknown. A hosted checkpoint may hold only series ID, generation, and envelope digest,
+never record bytes or key material.
 The older name-keyed `sample_rows` value has no independent origin evidence and therefore
 blocks production sample actions rather than being silently migrated or trusted.
-Format-5 export/import must apply this same historical proof.
-Restore-as-new with nonempty provenance remains rejected before opening a fresh
-target until the worker-owned lifecycle can perform private chunked provenance
-rebind operations under fresh target and catalog authority.
+Format-5 export/import must apply this same historical proof. Restore-as-new with
+nonempty provenance may not copy source operation IDs. Before publishing the app, the
+worker-owned lifecycle must authenticate the source envelope, import into an isolated
+fresh target, rewrite the complete sample ledger to one fresh internal
+`archive.restore.samples` operation, and publish its exact-coordinate response envelope
+with matching target and catalog receipts and reservations. The source envelope digest,
+source authority identity, fresh target identity, and bidirectional coordinate set are
+bound by that operation. Import, re-attestation, canonical read-back, and catalog app
+publication must be one recoverable lifecycle transaction or remain unpublished and
+retryable. Empty provenance creates no sample-producer receipt. This protocol and the
+Recovery Kit are not yet implemented, so format 5 and Release B remain uncertified.

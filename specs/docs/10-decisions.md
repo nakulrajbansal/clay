@@ -893,3 +893,61 @@ ADR-049 (2026-09-04) Catalog schema 1 proceeds; raw SQLite-pair target digests a
   real-OPFS catalog-first integration, complete route fencing, reservation semantics,
   concurrency, archive-format gate, performance matrix, and release-bound crash/reopen
   evidence pass.
+
+ADR-052 (2026-09-06) Format 5 uses a user-held COSE_Mac0 Backup Trust Key
+  NORMATIVE REFERENCES: RFC 9052 <https://www.rfc-editor.org/rfc/rfc9052>,
+  RFC 9053 <https://www.rfc-editor.org/rfc/rfc9053>, and RFC 8949
+  <https://www.rfc-editor.org/rfc/rfc8949>.
+  CONTEXT: format-5 member hashes, canonical-state evidence, Merkle roots, receipts,
+  and catalog history detect corruption and internal inconsistency but do not stop an
+  archive-only attacker from coherently replacing every byte and recomputing every
+  unsigned digest. A device-local key alone also fails disaster recovery after browser
+  or device loss, while account passwords, hosted identity, archive-embedded secrets,
+  and plaintext key escrow violate the product contract. Sample-bearing restore cannot
+  copy provenance operation IDs after changing target identity.
+  DECISION: the external format-5 file is deterministic RFC 9052 COSE_Mac0, CBOR tag
+  17, using the full 32-byte HMAC 256/256 tag (COSE algorithm 5). Its payload is the
+  complete byte-for-byte inner format-5 container. The protected map is closed and
+  binds authentication version 1, archive format 5, content type, a random 16-byte key
+  ID, a random 16-byte backup-series ID, and a monotonically increasing uint64
+  generation. The standard `MAC_structure` authenticates the protected-header bytes
+  and complete inner archive payload. It does not include COSE tag 17, outer array
+  framing, the unprotected map, or the tag field encoding. Those fields use one RFC
+  8949 core-deterministic form with definite lengths and an empty unprotected map; a
+  strict parser rejects alternate framing, a nonempty map, unknown critical headers,
+  malformed lengths, and trailing bytes before any authentication claim. Verification
+  selects an already trusted key and authenticates the `MAC_structure` before
+  decompression, JSON parsing, SQLite open, migration, restore callbacks, or writes.
+  Inner hashes remain mandatory defense in depth but cannot independently authenticate.
+
+  The key is a CSPRNG-generated, single-purpose 256-bit Backup Trust Key. It is never
+  stored in an archive, destination handle, account record, telemetry event, or hosted
+  service. Automatic backup may use a device-protected working copy only after the owner
+  exports and test-imports a separate versioned Recovery Kit. Restore after device loss
+  requires that kit and works offline. Lost key plus lost kit is irrecoverable; a new
+  key starts a new series and cannot bless old archives. Rotation is explicit, preserves
+  old verification cutoffs when the old key remains available, and never silently
+  re-authenticates prior files. The envelope authenticates but does not encrypt; product
+  copy must state that anyone with file access can read records and anyone with the kit
+  can forge a matching seal. Unsigned pre-release format 5 is rejected by normal restore
+  and may claim only self-consistent checksums through explicit development tooling.
+
+  A trusted generation high-water mark rejects known replay and forks. On a clean device
+  with no independent checkpoint, a valid MAC establishes authenticity but not newest
+  status, so freshness is shown as unknown. A hosted checkpoint may contain only series
+  ID, generation, and envelope digest. It contains neither records nor key material.
+
+  Sample-bearing restore-as-new authenticates the source envelope first, then uses the
+  worker-owned lifecycle to rewrite the ledger to a fresh internal
+  `archive.restore.samples` operation. Its response envelope carries the exact restored
+  coordinates and is joined to matching target and catalog receipts and reservations,
+  the source envelope digest, source authority, and fresh target. Re-attestation,
+  canonical read-back, and catalog publication are one recoverable transaction. A
+  partial result remains unpublished and retryable; empty provenance creates no sample
+  producer receipt.
+  CONSEQUENCE: no protected-backup or cryptographic-authentication claim is available
+  until deterministic COSE vectors, constant-overhead MAC processing, key lifecycle,
+  Recovery Kit creation/test-import, tamper and replay matrices, re-attestation crash
+  recovery, and one exact integrated browser tree pass. The current
+  `checksumAuthenticated` field describes checksum consistency only and must be renamed
+  or quarantined before release.
