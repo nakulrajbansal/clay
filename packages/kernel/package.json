@@ -5,6 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./backup": "./src/backup.ts",
+    "./recovery": "./src/recovery.ts",
     "./expr": "./src/expr.ts",
     "./errors": "./src/errors.ts",
     "./worker-authority": "./src/worker-authority.ts"

@@ -1,4 +1,4 @@
-// @clay/kernel public API. Shell code may import ONLY from here (doc 02 §7).
+// @clay/kernel public API. Shell code may import ONLY public package entry points.
 export type { Query } from "@clay/schema";
 export { BLUEPRINT_KINDS, expandBlueprint, parseBlueprintDirective,
   type BlueprintResult } from "./blueprints";
