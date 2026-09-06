@@ -209,6 +209,7 @@ export function readCommittedSampleProducerReceipts(
     catalogMetadataByRequest.set(request.data, operation.data);
   }
   const producers: Array<{ requestId: string; responseBytes: number }> = [];
+  const targetMetadataRequests = new Set<string>();
   let producerResponseBytes = 0;
   for (const row of targetMetadataRows) {
     const request = RequestId.safeParse(row.request_id);
@@ -217,6 +218,9 @@ export function readCommittedSampleProducerReceipts(
     if (!request.success || !operation.success
         || !Number.isSafeInteger(responseBytes) || responseBytes < 0)
       throw invalid("sample receipt route metadata is invalid");
+    if (targetMetadataRequests.has(request.data))
+      throw invalid("sample receipt target metadata is duplicated");
+    targetMetadataRequests.add(request.data);
     if (catalogMetadataByRequest.get(request.data) !== operation.data)
       throw invalid("sample producer receipt mirror metadata diverged");
     if (sampleProducerRouteForOperationId(
@@ -227,7 +231,7 @@ export function readCommittedSampleProducerReceipts(
     if (!Number.isSafeInteger(producerResponseBytes))
       throw invalid("sample producer response history is invalid");
   }
-  if (catalogMetadataByRequest.size !== targetMetadataRows.length)
+  if (catalogMetadataByRequest.size !== targetMetadataRequests.size)
     throw invalid("sample producer receipt mirror metadata diverged");
   if (producers.length > MAX_SAMPLE_PRODUCER_RECEIPTS
       || producerResponseBytes > MAX_SAMPLE_PRODUCER_RESPONSE_BYTES)
