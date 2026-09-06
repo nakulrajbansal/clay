@@ -1,0 +1,164 @@
+/**
+ * Closed, machine-readable classification of every production DB-worker,
+ * Store RPC, Bridge, and public ClayStore route which can reach durable state.
+ *
+ * `authority` routes must enter the worker-owned ProductionStoreAuthority.
+ * `unavailable` routes are deliberately disabled until their complete state
+ * transition can be represented by that authority.  They must never fall back
+ * to a raw Store or driver write.
+ */
+export type MutationRouteEnforcement =
+  | "read"
+  | "ephemeral"
+  | "shadow"
+  | "boot"
+  | "authority"
+  | "authority-store-port"
+  | "unavailable";
+
+export type MutationRouteClassification = {
+  enforcement: MutationRouteEnforcement;
+  mutates: "none" | "shadow" | "live" | "lifecycle";
+};
+
+const route = (
+  enforcement: MutationRouteEnforcement,
+  mutates: MutationRouteClassification["mutates"],
+): MutationRouteClassification => ({ enforcement, mutates });
+
+export const DB_WORKER_ROUTE_CENSUS = Object.freeze({
+  boot: route("boot", "lifecycle"),
+  setModelAccess: route("ephemeral", "none"),
+  forkApp: route("unavailable", "lifecycle"),
+  deleteApp: route("unavailable", "lifecycle"),
+  seed: route("authority", "live"),
+  importTable: route("unavailable", "live"),
+  panels: route("read", "none"),
+  panelProvenance: route("read", "none"),
+  semanticTrace: route("read", "none"),
+  fieldProvenance: route("read", "none"),
+  recordPrivateMetric: route("unavailable", "live"),
+  privateMetricsSummary: route("read", "none"),
+  setPrivateMetricsEnabled: route("unavailable", "live"),
+  clearPrivateMetrics: route("unavailable", "live"),
+  commitLayout: route("authority", "live"),
+  history: route("read", "none"),
+  setCheckpoint: route("unavailable", "live"),
+  panelsAt: route("read", "none"),
+  makeLatest: route("unavailable", "live"),
+  registryTables: route("read", "none"),
+  storePort: route("authority-store-port", "live"),
+  intent: route("unavailable", "live"),
+  repairPanel: route("unavailable", "live"),
+  revertPanel: route("unavailable", "live"),
+  renamePanel: route("unavailable", "live"),
+  addAttachment: route("unavailable", "live"),
+  attachmentsForRecord: route("read", "none"),
+  readAttachment: route("read", "none"),
+  removeAttachment: route("unavailable", "live"),
+  attachmentStorage: route("read", "none"),
+  purgeDeletedAttachments: route("unavailable", "live"),
+  listAutomations: route("read", "none"),
+  upsertAutomation: route("unavailable", "live"),
+  deleteAutomation: route("unavailable", "live"),
+  simulateAutomation: route("read", "none"),
+  runAutomations: route("unavailable", "live"),
+  runAutomationNow: route("unavailable", "live"),
+  automationRuns: route("read", "none"),
+  undoAutomationRun: route("unavailable", "live"),
+  notifications: route("read", "none"),
+  markNotificationRead: route("unavailable", "live"),
+  globalSearch: route("read", "none"),
+  applyBatch: route("unavailable", "live"),
+  operationBatches: route("read", "none"),
+  undoBatch: route("unavailable", "live"),
+  rowHistory: route("read", "none"),
+  previewRelationConversion: route("read", "none"),
+  convertTextToRelation: route("unavailable", "live"),
+  addColumn: route("unavailable", "live"),
+  renameColumn: route("unavailable", "live"),
+  removePanel: route("unavailable", "live"),
+  keep: route("unavailable", "live"),
+  discard: route("unavailable", "live"),
+  removeSamples: route("unavailable", "live"),
+  fillSamples: route("unavailable", "live"),
+  sampleCount: route("read", "none"),
+  restoreRow: route("unavailable", "live"),
+  restorableRows: route("read", "none"),
+  suggestions: route("read", "none"),
+  recordFilter: route("unavailable", "live"),
+  dismissSuggestion: route("unavailable", "live"),
+  acceptSuggestion: route("unavailable", "live"),
+  reset: route("unavailable", "lifecycle"),
+  exportArchive: route("unavailable", "live"),
+  importArchive: route("unavailable", "lifecycle"),
+  status: route("read", "none"),
+  requestPersist: route("ephemeral", "none"),
+  debugLog: route("read", "none"),
+  getSetting: route("read", "none"),
+  setSetting: route("authority", "live"),
+  deleteSetting: route("authority", "live"),
+  compareAndSetSetting: route("authority", "live"),
+} as const satisfies Record<string, MutationRouteClassification>);
+
+export const STORE_RPC_ROUTE_CENSUS = Object.freeze({
+  query: route("read", "none"),
+  insert: route("authority", "live"),
+  update: route("authority", "live"),
+  softDelete: route("authority", "live"),
+  registryTables: route("read", "none"),
+} as const satisfies Record<string, MutationRouteClassification>);
+
+export const BRIDGE_WRITE_ROUTE_CENSUS = Object.freeze({
+  "db.query": route("read", "none"),
+  "db.watch": route("read", "none"),
+  "db.unwatch": route("ephemeral", "none"),
+  "db.insert": route("authority", "live"),
+  "db.update": route("authority", "live"),
+  "db.softDelete": route("authority", "live"),
+} as const satisfies Record<string, MutationRouteClassification>);
+
+/** Public Store methods with durable write reachability. */
+export const CLAY_STORE_WRITER_CENSUS = Object.freeze({
+  openMemory: "boot",
+  fromDriver: "boot",
+  recordPrivateMetric: "unavailable",
+  setPrivateMetricsEnabled: "unavailable",
+  clearPrivateMetrics: "unavailable",
+  setSetting: "authority",
+  deleteSetting: "authority",
+  scrubLegacyCredentialSettings: "unavailable",
+  commit: "unavailable",
+  commitLayout: "authority",
+  renamePanel: "unavailable",
+  removePanel: "unavailable",
+  setCheckpoint: "unavailable",
+  beginAttempt: "unavailable",
+  finishAttempt: "unavailable",
+  rollbackTo: "unavailable",
+  rollForwardTo: "unavailable",
+  convertTextToRelation: "unavailable",
+  insert: "authority",
+  recordUsage: "unavailable",
+  markSuggestionShown: "unavailable",
+  dismissSuggestion: "unavailable",
+  acceptSuggestion: "unavailable",
+  addAttachment: "unavailable",
+  removeAttachment: "unavailable",
+  purgeDeletedAttachments: "unavailable",
+  upsertAutomation: "unavailable",
+  deleteAutomation: "unavailable",
+  runAutomationNow: "unavailable",
+  runDueAutomations: "unavailable",
+  undoAutomationRun: "unavailable",
+  markNotificationRead: "unavailable",
+  applyBatch: "unavailable",
+  undoBatch: "unavailable",
+  restoreRow: "unavailable",
+  update: "authority",
+  softDelete: "authority",
+  revertPanel: "unavailable",
+  exportArchive: "unavailable",
+  replaceFromArchive: "unavailable",
+  importArchive: "unavailable",
+} as const satisfies Record<string, "boot" | "authority" | "unavailable">);

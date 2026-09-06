@@ -223,17 +223,26 @@ the three Merkle tables are explicit exclusions; unknown tables, indexes, trigge
 views, partial Merkle state, malformed values, or divergent persisted roots fail
 closed.
 
-Target authority schema 1 adds archive-format-5-only `sys.target_authority_header`
-and `sys.target_revision_reservations`. The singleton header stores app instance,
+Target authority schema 1 adds archive-format-5-only `sys.target_authority_header`,
+`sys.target_revision_reservations`, and `sys.production_request_receipts`. The singleton
+header stores app instance,
 active generation, current/high-water lineage epoch, current/high-water protection
 revision, and digest schema, but never stores the state digest it authenticates.
 The digest is read from the separately audited Merkle root. Reservation rows bind a
 nonzero revision to one operation, active generation, lineage epoch, canonical
 reservation time, and closed `reserved|committed|abandoned` state. Reserve advances
 high-water without advancing current; response-loss retry returns the original value;
-abandonment finalizes the row and leaves a permanent gap. Both tables are an all-or-
-none census exclusion and do not change canonical app state. They remain non-exported
-and non-writable in production until format 5 and the guarded catalog coordinator land.
+abandonment finalizes the row and leaves a permanent gap. These authority tables are an
+all-or-none census exclusion and do not change canonical app state.
+
+Every accepted production request owns a non-null deterministic operation identity and
+a target/catalog-mirrored receipt. Meaningful requests move through
+`prepared -> invoked -> committed|failed`; `invoked` is durable before any live Store
+primitive executes. An unresolved invoked receipt is ambiguous and can never be invoked
+again after restart. Canonical no-ops publish directly from a revalidated shadow result
+without calling the live Store, consuming a revision, or creating mutation history.
+Target receipts retain the bounded canonical response while the catalog mirror retains
+its digest only. Missing, divergent, historical, or hash-mismatched mirrors fail closed.
 
 Each catalog app entry retains an immutable journal-genesis generation, lineage,
 protection revision, and digest. Validation starts at that explicit tuple rather than
@@ -245,7 +254,13 @@ events, or a finalization generation other than the immediate successor of reser
 lineage, revision, digest schema, and state digest, so a coherent app-row and descriptor
 rewrite cannot re-anchor history. App seeding, lease issuance, reservation, ordinary
 finalization, and expired-owner takeover each write their typed event in the same CAS
-transaction. Root rollback, a missing event, a reused generation, a mismatched seed target,
+transaction. App entries bind canonical display and shell metadata. `app_selected` events
+make target switches explicit, while `app_metadata` records standalone metadata changes.
+A revision-commit event may carry starter metadata in that same physical publication.
+A bounded `legacy_bootstrap_manifest` declares every exact physical namespace and
+preallocated identity before the first legacy target is adopted. Each target initialization
+and manifest deletion is atomic, so restart resumes declared work and rejects unexplained
+files. Root rollback, a missing event, a reused generation, a mismatched seed target,
 or an event without its corresponding app, lease, or reservation fails catalog open.
 
 Catalog revision reservations bind the authority incarnation, reserving catalog

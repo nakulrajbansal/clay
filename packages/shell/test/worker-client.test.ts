@@ -23,19 +23,34 @@ function harness(reply?: (message: Posted) => unknown): {
 }
 
 describe("WorkerClient boot boundary", () => {
-  it("returns validated neutral boot information and sends only an app hint", async () => {
-    const bootInfo = { persistent: true, seeded: true, shellId: "tracker" } as const;
+  it("returns a canonical catalog projection and sends bounded cache hints", async () => {
+    const bootInfo = {
+      persistent: true,
+      seeded: true,
+      shellId: "tracker",
+      selectedAppInstanceId: `app_${"a".repeat(26)}`,
+      catalogGeneration: "7",
+      apps: [{ id: `app_${"a".repeat(26)}`, name: "Tracker", shellId: "tracker" }],
+    } as const;
     const { client, posted } = harness(message => message.op === "boot" ? bootInfo : null);
-    const result = await client.boot("default");
+    const hints = [{ id: "default", name: "Tracker", shellId: "tracker" }];
+    const result = await client.boot({ requestedAppId: "default", appCache: hints });
     expect(result).toEqual(bootInfo);
-    expect(posted[0]).toEqual({ id: 1, op: "boot", payload: { appId: "default" } });
+    expect(posted[0]).toMatchObject({
+      id: 1,
+      op: "boot",
+      payload: { requestedAppId: "default", appCache: hints },
+    });
+    expect((posted[0] as unknown as { requestId: string }).requestId)
+      .toMatch(/^req_[a-z2-7]{26}$/);
   });
 
   it("rejects malformed neutral boot information", async () => {
     const { client } = harness(message => message.op === "boot" ? {
       persistent: "yes", seeded: true, shellId: "tracker", detail: "secret",
     } : null);
-    await expect(client.boot("default")).rejects.toThrow("invalid boot response");
+    await expect(client.boot({ requestedAppId: "default", appCache: [] }))
+      .rejects.toThrow("invalid boot response");
   });
 });
 

@@ -6,6 +6,7 @@ import {
   CatalogReservationRecoveryV1,
   CatalogRevisionReservationV1,
   ImmutableAppGenerationV1,
+  ProductionRequestReceiptV1,
   TargetAuthorityHeaderV1,
   TargetEvidenceV1,
   WriteFenceV1,
@@ -16,6 +17,7 @@ const digest = (char: string): string => `sha256:${char.repeat(64)}`;
 const entry = {
   appInstanceId: id("app", "a"),
   displayName: "Field Service",
+  shellId: "tracker",
   activeGenerationId: id("gen", "b"),
   journalGenesisGenerationId: id("gen", "b"),
   journalGenesisLineageEpoch: "2",
@@ -95,6 +97,8 @@ describe("authoritative app catalog and write-fence schemas", () => {
       writeEpoch: fence.writeEpoch,
       at: "2026-09-05T00:00:00.000Z",
       target: null,
+      displayName: null,
+      shellId: null,
     };
     expect(CatalogGenerationEventV1.parse(event)).toEqual(event);
     expect(CatalogGenerationEventV1.safeParse({
@@ -106,6 +110,8 @@ describe("authoritative app catalog and write-fence schemas", () => {
     const seed = {
       ...event,
       eventKind: "app_seed" as const,
+      displayName: entry.displayName,
+      shellId: entry.shellId,
       target: {
         appInstanceId: entry.appInstanceId,
         activeGenerationId: entry.journalGenesisGenerationId,
@@ -116,6 +122,16 @@ describe("authoritative app catalog and write-fence schemas", () => {
       },
     };
     expect(CatalogGenerationEventV1.parse(seed)).toEqual(seed);
+    const committedWithMetadata = {
+      ...event,
+      eventKind: "revision_committed" as const,
+      displayName: "Projects",
+      shellId: "tracker",
+    };
+    expect(CatalogGenerationEventV1.parse(committedWithMetadata)).toEqual(committedWithMetadata);
+    expect(CatalogGenerationEventV1.safeParse({
+      ...committedWithMetadata, shellId: null,
+    }).success).toBe(false);
     expect(CatalogGenerationEventV1.safeParse({ ...seed, target: null }).success).toBe(false);
   });
 
@@ -247,6 +263,61 @@ describe("authoritative app catalog and write-fence schemas", () => {
     expect(CatalogReservationRecoveryV1.safeParse({
       ...recovery,
       fence: { ...recoveryFence, writeEpoch: "5" },
+    }).success).toBe(false);
+  });
+
+  it("accepts only coherent durable request receipt transitions", () => {
+    const prepared = {
+      schema: 1 as const,
+      requestId: id("req", "j"),
+      operationId: id("op", "k"),
+      requestSha256: digest("a"),
+      appInstanceId: entry.appInstanceId,
+      activeGenerationId: entry.activeGenerationId,
+      lineageEpoch: entry.currentLineageEpoch,
+      expectedProtectionRevision: entry.currentProtectionRevision,
+      expectedStateSha256: entry.stateSha256,
+      state: "prepared" as const,
+      resultingProtectionRevision: null,
+      resultingStateSha256: null,
+      responseSha256: null,
+      preparedAt: "2026-09-05T12:00:00.000Z",
+      invokedAt: null,
+      completedAt: null,
+    };
+    expect(ProductionRequestReceiptV1.parse(prepared)).toEqual(prepared);
+    const invoked = {
+      ...prepared,
+      state: "invoked" as const,
+      invokedAt: "2026-09-05T12:00:01.000Z",
+    };
+    expect(ProductionRequestReceiptV1.parse(invoked)).toEqual(invoked);
+    const committed = {
+      ...invoked,
+      state: "committed" as const,
+      resultingProtectionRevision: "8",
+      resultingStateSha256: digest("e"),
+      responseSha256: digest("f"),
+      completedAt: "2026-09-05T12:00:02.000Z",
+    };
+    expect(ProductionRequestReceiptV1.parse(committed)).toEqual(committed);
+    const noOp = {
+      ...prepared,
+      state: "no_op" as const,
+      resultingProtectionRevision: prepared.expectedProtectionRevision,
+      resultingStateSha256: prepared.expectedStateSha256,
+      responseSha256: digest("f"),
+      completedAt: "2026-09-05T12:00:02.000Z",
+    };
+    expect(ProductionRequestReceiptV1.parse(noOp)).toEqual(noOp);
+    expect(ProductionRequestReceiptV1.safeParse({
+      ...prepared, resultingProtectionRevision: "7",
+    }).success).toBe(false);
+    expect(ProductionRequestReceiptV1.safeParse({
+      ...noOp, invokedAt: "2026-09-05T12:00:01.000Z",
+    }).success).toBe(false);
+    expect(ProductionRequestReceiptV1.safeParse({
+      ...invoked, invokedAt: "2026-09-05T11:59:59.000Z",
     }).success).toBe(false);
   });
 

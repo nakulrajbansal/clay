@@ -54,6 +54,7 @@ export const AuthorityIncarnationId = lowerBase32Id("auth");
 export const NamespaceId = lowerBase32Id("ns");
 export const LeaseId = lowerBase32Id("lease");
 export const OperationId = lowerBase32Id("op");
+export const RequestId = lowerBase32Id("req");
 export const ReleaseId = lowerBase32Id("rel");
 export const Sha256 = z.string().regex(/^sha256:[0-9a-f]{64}$/);
 

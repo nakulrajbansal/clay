@@ -5,7 +5,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   createApp, currentApp, currentAppId, ensureLegacyAdopted, listApps,
-  removeApp, renameApp, setCurrentApp, shellName,
+  removeApp, renameApp, replaceAppCache, setCurrentApp, shellName,
 } from "../src/app/apps";
 
 beforeEach(() => localStorage.clear());
@@ -70,6 +70,17 @@ describe("app registry", () => {
   it("ensureLegacyAdopted does nothing when unseeded", () => {
     ensureLegacyAdopted(false, null);
     expect(listApps()).toEqual([]);
+  });
+
+  it("replaces stale presentation state from a canonical worker projection", () => {
+    createApp("Old local name", "tracker");
+    const canonical = [
+      { id: `app_${"a".repeat(26)}`, name: "Projects", shellId: "tracker" },
+      { id: `app_${"b".repeat(26)}`, name: "Inventory", shellId: "inventory" },
+    ];
+    replaceAppCache(canonical, canonical[1]!.id);
+    expect(listApps()).toEqual(canonical);
+    expect(currentAppId()).toBe(canonical[1]!.id);
   });
 
   it("shellName maps ids to friendly names", () => {

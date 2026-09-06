@@ -3,6 +3,11 @@
 // system.db is ATTACHed as `sys` so one transaction spans DDL + registry +
 // version_log (doc 04 §4).
 import sqlite3InitModule, { type Database, type Sqlite3Static } from "@sqlite.org/sqlite-wasm";
+import {
+  classifyDurableFileInventory,
+  type DurableFileInventory,
+  type DurableNamespaceInventoryEntry,
+} from "./durable-inventory";
 import { ClayError } from "./errors";
 
 export type SqlValue = string | number | bigint | Uint8Array | null;
@@ -515,6 +520,7 @@ type PoolUtil = {
   unlink?(name: string): boolean;
   getCapacity?(): number;
   getFileCount?(): number;
+  getFileNames?(): string[];
   addCapacity?(n: number): Promise<number>;
 };
 let activePool: PoolUtil | null = null;
@@ -547,6 +553,93 @@ async function openOnPool(s: Sqlite3Static, pool: PoolUtil, appId?: string): Pro
     throw e;
   }
   return new SqliteWasmDriver(db, s);
+}
+
+const CATALOG_FILE = "/clay-device-catalog-v1.db";
+
+async function strictBrowserPool(s: Sqlite3Static): Promise<PoolUtil> {
+  if (activePool) return activePool;
+  if (!opfsSupported())
+    throw new ClayError("E_CATALOG_UNAVAILABLE", "durable browser storage is unavailable");
+  const withPool = s as unknown as {
+    installOpfsSAHPoolVfs(opts?: { name?: string; initialCapacity?: number }): Promise<PoolUtil>;
+  };
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      activePool = await withPool.installOpfsSAHPoolVfs({ initialCapacity: 24 });
+      return activePool;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 4) await sleep(250 * (attempt + 1));
+    }
+  }
+  throw new ClayError("E_CATALOG_UNAVAILABLE",
+    `durable browser storage could not be opened: ${String(lastError)}`);
+}
+
+/** Trusted worker inventory from the VFS itself, before any target is opened. */
+export async function browserDurableInventory(): Promise<DurableFileInventory> {
+  const s = await sqlite3();
+  const pool = await strictBrowserPool(s);
+  if (!pool.getFileNames)
+    throw new ClayError("E_CATALOG_UNAVAILABLE", "durable file inventory is unavailable");
+  let names: string[];
+  try {
+    const actual = pool.getFileNames();
+    if (!Array.isArray(actual)) throw new Error("inventory is not an array");
+    names = new Array<string>(actual.length);
+    for (let index = 0; index < actual.length; index++) {
+      if (typeof actual[index] !== "string") throw new Error("inventory name is invalid");
+      names[index] = actual[index]!;
+    }
+  } catch {
+    throw new ClayError("E_CATALOG_UNAVAILABLE", "durable file inventory is unreadable");
+  }
+  return classifyDurableFileInventory(names);
+}
+
+/** Catalog-only probe. It is closed before the selected target is opened. */
+export async function openBrowserCatalogProbe(): Promise<DbDriver> {
+  const s = await sqlite3();
+  await strictBrowserPool(s);
+  const db = new s.oo1.DB(":memory:");
+  try {
+    db.exec(`ATTACH 'file:${CATALOG_FILE}?vfs=opfs-sahpool' AS catalog`);
+    return new SqliteWasmDriver(db, s);
+  } catch (error) {
+    try { db.close(); } catch { /* already closed */ }
+    throw new ClayError("E_CATALOG_UNAVAILABLE",
+      `authoritative catalog could not be attached: ${String(error)}`);
+  }
+}
+
+/** Final production topology: selected user + system + catalog on one handle. */
+export async function openBrowserProductionTarget(
+  namespace: DurableNamespaceInventoryEntry,
+): Promise<DbDriver> {
+  const classified = classifyDurableFileInventory([namespace.userFile, namespace.systemFile]);
+  if (classified.state !== "complete" || classified.catalogPresent
+      || classified.namespaces.length !== 1)
+    throw new ClayError("E_CATALOG_UNAVAILABLE", "selected durable target inventory is invalid");
+  const exact = classified.namespaces[0]!;
+  if (exact.storageKey !== namespace.storageKey || exact.userFile !== namespace.userFile
+      || exact.systemFile !== namespace.systemFile || exact.kind !== namespace.kind)
+    throw new ClayError("E_CATALOG_UNAVAILABLE", "selected durable target inventory is invalid");
+  const s = await sqlite3();
+  const pool = await strictBrowserPool(s);
+  await ensureHeadroom(pool);
+  const db = new pool.OpfsSAHPoolDb(namespace.userFile);
+  try {
+    db.exec("PRAGMA foreign_keys = ON");
+    db.exec(`ATTACH 'file:${namespace.systemFile}?vfs=opfs-sahpool' AS sys`);
+    db.exec(`ATTACH 'file:${CATALOG_FILE}?vfs=opfs-sahpool' AS catalog`);
+    return new SqliteWasmDriver(db, s);
+  } catch (error) {
+    try { db.close(); } catch { /* already closed */ }
+    throw new ClayError("E_CATALOG_UNAVAILABLE",
+      `selected durable target could not be attached: ${String(error)}`);
+  }
 }
 
 /** Per-app OPFS filenames (G4 multi-app). The legacy single-app files

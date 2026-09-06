@@ -509,16 +509,18 @@ function stableFingerprint(value: string): string {
 }
 
 export class ClayStore {
+  readonly #driver: DbDriver;
   private reg: Registry = new Map();
   private batchContext: {
     id: string; source: BatchSource; pending: Map<string, string>;
   } | null = null;
-  readonly observer: Observer;
-  readonly privateMetrics: PrivateMetricsReducer;
+  readonly #observer: Observer;
+  readonly #privateMetrics: PrivateMetricsReducer;
 
-  private constructor(private readonly driver: DbDriver) {
-    this.observer = new Observer(driver);
-    this.privateMetrics = new PrivateMetricsReducer(new SqlitePrivateMetricDriver(driver));
+  private constructor(driver: DbDriver) {
+    this.#driver = driver;
+    this.#observer = new Observer(driver);
+    this.#privateMetrics = new PrivateMetricsReducer(new SqlitePrivateMetricDriver(driver));
   }
 
   static async openMemory(): Promise<ClayStore> {
@@ -601,10 +603,10 @@ export class ClayStore {
    * their proportions. Guarded by a settings flag; new apps skip it.
    */
   private migrateLayoutScheme(): void {
-    const done = this.driver.select(
+    const done = this.#driver.select(
       "SELECT value_json FROM sys.settings WHERE key = 'layout_scheme'")[0];
     if (done && String(done.value_json) === "2") return;
-    const rows = this.driver.select(
+    const rows = this.#driver.select(
       "SELECT version, panel_id, placement_json FROM sys.panel_blobs");
     for (const r of rows) {
       let pl: { w?: number } & Record<string, unknown>;
@@ -612,11 +614,11 @@ export class ClayStore {
       const remap = pl.w === 1 ? 2 : pl.w === 2 ? 4 : undefined;
       if (remap === undefined) continue;
       pl.w = remap;
-      this.driver.exec(
+      this.#driver.exec(
         "UPDATE sys.panel_blobs SET placement_json = ? WHERE version = ? AND panel_id = ?",
         [JSON.stringify(pl), Number(r.version), String(r.panel_id)]);
     }
-    this.driver.exec(
+    this.#driver.exec(
       "INSERT OR REPLACE INTO sys.settings(key, value_json) VALUES ('layout_scheme', '2')");
   }
 
@@ -624,13 +626,13 @@ export class ClayStore {
   rowHistoryCap = 10_000;
 
   close(): void {
-    this.driver.close();
+    this.#driver.close();
   }
 
   // ---------- registry ----------
   private loadRegistry(): void {
     this.reg = new Map();
-    for (const row of this.driver.select("SELECT spec_json FROM sys.tables_registry")) {
+    for (const row of this.#driver.select("SELECT spec_json FROM sys.tables_registry")) {
       const spec = JSON.parse(String(row.spec_json)) as RegTable;
       this.reg.set(spec.name, spec);
     }
@@ -1064,9 +1066,9 @@ export class ClayStore {
   }
 
   private persistRegistry(version: number): void {
-    this.driver.exec("DELETE FROM sys.tables_registry");
+    this.#driver.exec("DELETE FROM sys.tables_registry");
     for (const t of this.reg.values()) {
-      this.driver.exec(
+      this.#driver.exec(
         `INSERT INTO sys.tables_registry(table_name, version, spec_json, created_by, updated_at)
          VALUES (?, ?, ?, ?, ?)`,
         [t.name, version, JSON.stringify(t), "kernel", nowIso()]);
@@ -1180,22 +1182,22 @@ export class ClayStore {
   }
 
   recordPrivateMetric(event: PrivateMetricEvent): void {
-    this.privateMetrics.record(event);
+    this.#privateMetrics.record(event);
   }
 
   privateMetricsSummary(): PrivateMetricsSummary {
-    return this.privateMetrics.summary();
+    return this.#privateMetrics.summary();
   }
 
   setPrivateMetricsEnabled(enabled: boolean): void {
-    this.privateMetrics.setCollectionEnabled(enabled);
+    this.#privateMetrics.setCollectionEnabled(enabled);
   }
 
-  clearPrivateMetrics(): void { this.privateMetrics.clear(); }
+  clearPrivateMetrics(): void { this.#privateMetrics.clear(); }
 
   // ---------- versions ----------
   headVersion(): number {
-    const rows = this.driver.select("SELECT MAX(version) AS v FROM sys.version_log");
+    const rows = this.#driver.select("SELECT MAX(version) AS v FROM sys.version_log");
     return Number(rows[0]?.v ?? 0);
   }
 
@@ -1210,31 +1212,31 @@ export class ClayStore {
 
   // ---------- settings (doc 04 §3: mode, byo key, sample markers, …) ----------
   getSetting<T>(key: string): T | undefined {
-    const rows = this.driver.select(
+    const rows = this.#driver.select(
       "SELECT value_json FROM sys.settings WHERE key = ?", [key]);
     const raw = rows[0]?.value_json;
     return raw === undefined ? undefined : JSON.parse(String(raw)) as T;
   }
 
   setSetting(key: string, value: unknown): void {
-    this.driver.exec(
+    this.#driver.exec(
       `INSERT INTO sys.settings(key, value_json) VALUES (?, ?)
        ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json`,
       [key, JSON.stringify(value)]);
   }
 
   deleteSetting(key: string): void {
-    this.driver.exec("DELETE FROM sys.settings WHERE key = ?", [key]);
+    this.#driver.exec("DELETE FROM sys.settings WHERE key = ?", [key]);
   }
 
   scrubLegacyCredentialSettings(): void {
-    this.driver.tx(() => {
+    this.#driver.tx(() => {
       for (const key of LEGACY_CREDENTIAL_SETTING_KEYS) this.deleteSetting(key);
     });
   }
 
   getEntry(version: number): VersionEntry {
-    const rows = this.driver.select(
+    const rows = this.#driver.select(
       "SELECT * FROM sys.version_log WHERE version = ?", [version]);
     const r = rows[0];
     if (!r) throw new ClayError("E_VALIDATION", `no version ${version}`);
@@ -1253,7 +1255,7 @@ export class ClayStore {
 
   private semanticOperationBounds(): SemanticOperationBounds {
     const bounds = new Map<number, readonly (number | null)[]>();
-    for (const row of this.driver.select(
+    for (const row of this.#driver.select(
       "SELECT version, migration_json FROM sys.version_log WHERE migration_json IS NOT NULL",
     )) {
       let operations: MigrationPlanT["operations"];
@@ -1280,7 +1282,7 @@ export class ClayStore {
     const semanticAssignments = input.semanticAssignments
       ?? this.prepareSemanticAssignments(input.migration, semanticOrigin);
     try {
-      return this.driver.tx(() => {
+      return this.#driver.tx(() => {
         // capture the pre-commit manifest for the G16 rename rewrite
         const preLive = this.livePanels();
         const untouched = preLive.filter(p =>
@@ -1299,7 +1301,7 @@ export class ClayStore {
               ? [{ table: operation.table, from: operation.from, to: operation.to }] : []);
         if (input.migration) {
           validateMigrationPlan(input.migration, this.reg);
-          applyForwardOps(this.driver, this.reg, input.migration.operations);
+          applyForwardOps(this.#driver, this.reg, input.migration.operations);
         }
         this.assertAutomationsCompatible();
         this.assertRelationIntegrity();
@@ -1309,7 +1311,7 @@ export class ClayStore {
           semanticAssignments,
         );
         this.persistRegistry(version);
-        this.driver.exec(
+        this.#driver.exec(
           `INSERT INTO sys.version_log(version, parent, created_at, intent_text,
              summary, diff_json, migration_json, inverse_json)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -1330,7 +1332,7 @@ export class ClayStore {
           this.writePanelBlob(version, { ...p, placement });
         }
         for (const id of input.removePanels ?? [])
-          this.driver.exec(
+          this.#driver.exec(
             "INSERT INTO sys.panel_tombstones(version, panel_id) VALUES (?, ?)",
             [version, id]);
 
@@ -1374,7 +1376,7 @@ export class ClayStore {
   }
 
   private writePanelBlob(version: number, p: PanelBlobInput): void {
-    this.driver.exec(
+    this.#driver.exec(
       `INSERT OR REPLACE INTO sys.panel_blobs(version, panel_id, code,
          placement_json, declared_q_json) VALUES (?, ?, ?, ?, ?)`,
       [version, p.panel_id, p.code, JSON.stringify(p.placement),
@@ -1471,7 +1473,7 @@ export class ClayStore {
    * K rendered against CURRENT data, no inverses run (doc 02 §6). */
   livePanels(at?: number): LivePanel[] {
     const v = at ?? this.currentVersion();
-    const rows = this.driver.select(
+    const rows = this.#driver.select(
       `SELECT b.panel_id, b.version, b.code, b.placement_json, b.declared_q_json
        FROM sys.panel_blobs b
        JOIN (SELECT panel_id, MAX(version) AS mv FROM sys.panel_blobs
@@ -1480,7 +1482,7 @@ export class ClayStore {
        ORDER BY b.panel_id`, [v, ]);
     const out: LivePanel[] = [];
     for (const r of rows) {
-      const tomb = this.driver.select(
+      const tomb = this.#driver.select(
         `SELECT MAX(version) AS tv FROM sys.panel_tombstones
          WHERE panel_id = ? AND version <= ?`, [String(r.panel_id), v]);
       const tv = tomb[0]?.tv;
@@ -1504,13 +1506,13 @@ export class ClayStore {
    * version logs. Old apps gain it immediately without a new metadata table. */
   panelProvenance(panelId: string, at?: number): PanelProvenance | null {
     const version = at ?? this.currentVersion();
-    const removed = this.driver.select(
+    const removed = this.#driver.select(
       `SELECT MAX(version) AS removed_version FROM sys.panel_tombstones
        WHERE panel_id = ? AND version <= ?`,
       [panelId, version],
     )[0]?.removed_version;
     const afterVersion = removed == null ? 0 : Number(removed);
-    const row = this.driver.select(
+    const row = this.#driver.select(
       `SELECT MIN(version) AS created_version, MAX(version) AS changed_version
        FROM sys.panel_blobs WHERE panel_id = ? AND version > ? AND version <= ?`,
       [panelId, afterVersion, version],
@@ -1536,7 +1538,7 @@ export class ClayStore {
   /** The full linear chain, oldest first (history view / time slider).
    * Joins any user-set checkpoint label (named moments on the timeline). */
   history(): HistoryEntry[] {
-    return this.driver.select(
+    return this.#driver.select(
       `SELECT v.version, v.parent, v.created_at, v.intent_text, v.summary, v.diff_json, c.label
        FROM sys.version_log v
        LEFT JOIN sys.checkpoints c ON c.version = v.version
@@ -1554,10 +1556,10 @@ export class ClayStore {
   setCheckpoint(version: number, label: string): void {
     const trimmed = label.trim().slice(0, 60);
     if (trimmed === "") {
-      this.driver.exec("DELETE FROM sys.checkpoints WHERE version = ?", [version]);
+      this.#driver.exec("DELETE FROM sys.checkpoints WHERE version = ?", [version]);
       return;
     }
-    this.driver.exec(
+    this.#driver.exec(
       `INSERT INTO sys.checkpoints(version, label, created_at) VALUES (?, ?, ?)
        ON CONFLICT(version) DO UPDATE SET label = excluded.label`,
       [version, trimmed, nowIso()]);
@@ -1565,7 +1567,7 @@ export class ClayStore {
 
   /** Last n commit summaries, newest first (S1 context, doc 05 §1). */
   recentSummaries(n: number): string[] {
-    return this.driver
+    return this.#driver
       .select("SELECT summary FROM sys.version_log ORDER BY version DESC LIMIT ?", [n])
       .map(r => String(r.summary));
   }
@@ -1573,21 +1575,21 @@ export class ClayStore {
   // ---------- attempts (S0/doc 05 §5 analytics) ----------
   beginAttempt(intent: string): string {
     const id = uuidv7();
-    this.driver.exec(
+    this.#driver.exec(
       "INSERT INTO sys.attempts(id, at, intent_text, outcome, error_code) VALUES (?, ?, ?, 'pending', NULL)",
       [id, nowIso(), intent]);
     return id;
   }
 
   finishAttempt(id: string, outcome: string, errorCode: string | null = null): void {
-    this.driver.exec(
+    this.#driver.exec(
       "UPDATE sys.attempts SET outcome = ?, error_code = ? WHERE id = ?",
       [outcome, errorCode, id]);
   }
 
   /** Independent full copy for the S4 shadow dry-run (doc 05 §1). */
   async shadowCopy(): Promise<ClayStore> {
-    const copy = new ClayStore(await this.driver.snapshot());
+    const copy = new ClayStore(await this.#driver.snapshot());
     copy.loadRegistry();
     return copy;
   }
@@ -1598,21 +1600,21 @@ export class ClayStore {
     if (target < 0 || target >= cur)
       throw new ClayError("E_VALIDATION", `cannot roll back from ${cur} to ${target}`);
     try {
-      this.driver.tx(() => {
+      this.#driver.tx(() => {
         for (let v = cur; v > target; v--) {
           const entry = this.getEntry(v);
           if (entry.migration)
-            applyInverseOps(this.driver, this.reg, entry.migration.inverse);
+            applyInverseOps(this.#driver, this.reg, entry.migration.inverse);
         }
         this.alignSemanticLabelsToPhysicalShape();
         this.assertAutomationsCompatible();
         this.assertRelationIntegrity();
         this.persistRegistry(target);
         if (opts.truncate) {
-          this.driver.exec("DELETE FROM sys.version_log WHERE version > ?", [target]);
-          this.driver.exec("DELETE FROM sys.panel_blobs WHERE version > ?", [target]);
-          this.driver.exec("DELETE FROM sys.panel_tombstones WHERE version > ?", [target]);
-          this.driver.exec("DELETE FROM sys.checkpoints WHERE version > ?", [target]);
+          this.#driver.exec("DELETE FROM sys.version_log WHERE version > ?", [target]);
+          this.#driver.exec("DELETE FROM sys.panel_blobs WHERE version > ?", [target]);
+          this.#driver.exec("DELETE FROM sys.panel_tombstones WHERE version > ?", [target]);
+          this.#driver.exec("DELETE FROM sys.checkpoints WHERE version > ?", [target]);
           this.pruneSemanticAfter(target);
           this.persistRegistry(target);
         }
@@ -1631,11 +1633,11 @@ export class ClayStore {
     if (target <= cur || target > head)
       throw new ClayError("E_VALIDATION", `cannot roll forward from ${cur} to ${target} (head ${head})`);
     try {
-      this.driver.tx(() => {
+      this.#driver.tx(() => {
         for (let v = cur + 1; v <= target; v++) {
           const entry = this.getEntry(v);
           if (entry.migration)
-            applyForwardOps(this.driver, this.reg, entry.migration.operations);
+            applyForwardOps(this.#driver, this.reg, entry.migration.operations);
         }
         this.alignSemanticLabelsToPhysicalShape();
         this.assertAutomationsCompatible();
@@ -1673,7 +1675,7 @@ export class ClayStore {
       for (let offset = 0; offset < uniqueIds.length; offset += 400) {
         const batch = uniqueIds.slice(offset, offset + 400);
         if (batch.length === 0) continue;
-        const found = this.driver.select(
+        const found = this.#driver.select(
           `SELECT "id" FROM ${qid(column.relation.target_table)}
            WHERE "deleted_at" IS NULL AND "id" IN (${batch.map(() => "?").join(", ")})`,
           batch,
@@ -1683,7 +1685,7 @@ export class ClayStore {
             `'${table.name}.${field}' contains a missing linked record`);
       }
       if (!column.relation.unique_targets || uniqueIds.length === 0) continue;
-      const others = this.driver.select(
+      const others = this.#driver.select(
         `SELECT "id", ${qid(field)} FROM ${qid(table.name)} WHERE "deleted_at" IS NULL`
           + (excludeRowId ? ` AND "id" != ?` : ""),
         excludeRowId ? [excludeRowId] : [],
@@ -1726,7 +1728,7 @@ export class ClayStore {
       if (table.inactive) continue;
       for (const column of table.columns) {
         if (column.inactive || column.type !== "relation" || !column.relation) continue;
-        const rows = this.driver.select(
+        const rows = this.#driver.select(
           `SELECT "id", ${qid(column.name)} AS value FROM ${qid(table.name)}
            WHERE "deleted_at" IS NULL AND ${qid(column.name)} IS NOT NULL`);
         for (const row of rows) {
@@ -1764,11 +1766,11 @@ export class ClayStore {
     if (!displayColumn || displayColumn.hidden || isVirtualColumn(displayColumn)
         || !["text", "enum", "rich_text"].includes(displayColumn.type))
       throw new ClayError("E_VALIDATION", "display field must be visible text");
-    const sources = this.driver.select(
+    const sources = this.#driver.select(
       `SELECT "id", ${qid(input.sourceField)} FROM ${qid(input.sourceTable)}
        WHERE "deleted_at" IS NULL ORDER BY "id"`,
     );
-    const targets = this.driver.select(
+    const targets = this.#driver.select(
       `SELECT "id", ${qid(input.displayField)} FROM ${qid(input.targetTable)}
        WHERE "deleted_at" IS NULL ORDER BY "id"`,
     );
@@ -1857,7 +1859,7 @@ export class ClayStore {
     };
     let version = 0;
     try {
-      this.driver.tx(() => {
+      this.#driver.tx(() => {
         version = this.commit({
           intent: `connect ${input.sourceTable}.${input.sourceField} to ${input.targetTable}`,
           summary: `Connects ${label} to ${input.targetTable} records without deleting the original text.`,
@@ -1868,9 +1870,9 @@ export class ClayStore {
             table: input.sourceTable, from: input.sourceField, to: relationField,
           }],
         });
-        for (const row of this.driver.select(
+        for (const row of this.#driver.select(
           `SELECT "id" FROM ${qid(input.sourceTable)} WHERE "deleted_at" IS NULL`)) {
-          this.driver.exec(
+          this.#driver.exec(
             `UPDATE ${qid(input.sourceTable)} SET ${qid(relationField)} = ? WHERE "id" = ?`,
             [analyzed.matches.get(String(row.id)) ?? null, String(row.id)],
           );
@@ -1888,7 +1890,7 @@ export class ClayStore {
     changedFields: string[],
   ): void {
     const snapshot = this.rowById(table, id);
-    this.driver.exec(
+    this.#driver.exec(
       `INSERT INTO sys.record_events(
          id, at, table_name, row_id, kind, changed_fields_json, origin, row_json)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -1905,33 +1907,33 @@ export class ClayStore {
     const now = nowIso();
     const allCols = ["id", "created_at", "updated_at", ...cols];
     const allVals: SqlValue[] = [id, now, now, ...vals];
-    this.driver.tx(() => {
-      this.driver.exec(
+    this.#driver.tx(() => {
+      this.#driver.exec(
         `INSERT INTO ${qid(table)} (${allCols.map(qid).join(", ")})
          VALUES (${allCols.map(() => "?").join(", ")})`, allVals);
       for (const column of t.columns) {
         if (!column.inactive || isVirtualColumn(column)) continue;
-        this.driver.exec(
+        this.#driver.exec(
           `INSERT OR IGNORE INTO sys.inactive_cells(table_name, column_name, row_id)
            VALUES (?, ?, ?)`, [table, column.name, id]);
       }
       this.recordRowEvent(table, id, "created", cols);
     });
     if (this.batchContext) {
-      const after = this.driver.select(`SELECT * FROM ${qid(table)} WHERE "id" = ?`, [id])[0];
-      this.driver.exec(
+      const after = this.#driver.select(`SELECT * FROM ${qid(table)} WHERE "id" = ?`, [id])[0];
+      this.#driver.exec(
         `INSERT INTO "row_history"(
            "id", "table", "row_id", "at", "before_json", "after_json", "batch_id", "change_kind", "sequence")
          VALUES (?, ?, ?, ?, ?, ?, ?, 'create',
            (SELECT COALESCE(MAX("sequence"), 0) + 1 FROM "row_history"))`,
         [uuidv7(), table, id, now, "null", JSON.stringify(after), this.batchContext.id]);
     }
-    this.observer.record({ kind: "insert", subject: table });
+    this.#observer.record({ kind: "insert", subject: table });
     return this.rowById(table, id);
   }
 
   // ---------- Observer (doc 02 §1) ----------
-  recordUsage(ev: UsageEvent): void { this.observer.record(ev); }
+  recordUsage(ev: UsageEvent): void { this.#observer.record(ev); }
   suggestions(): Suggestion[] {
     // tables that already have at least one panel — so "table with data but
     // no view" can be offered (ambient reshaping, B3).
@@ -1951,16 +1953,16 @@ export class ClayStore {
         if (isChart) charted.add(q.from);
       }
     }
-    return this.observer.suggestions(this.registrySnapshot(), viewed, boarded, flowed, charted);
+    return this.#observer.suggestions(this.registrySnapshot(), viewed, boarded, flowed, charted);
   }
   markSuggestionShown(subject: string, kind: string): void {
-    this.observer.markShown(subject, kind);
+    this.#observer.markShown(subject, kind);
   }
   dismissSuggestion(subject: string, kind: string): void {
-    this.observer.dismiss(subject, kind);
+    this.#observer.dismiss(subject, kind);
   }
   acceptSuggestion(subject: string, kind: string): void {
-    this.observer.accept(subject, kind);
+    this.#observer.accept(subject, kind);
   }
 
   private attachmentColumn(table: string, field: string): RegColumn {
@@ -1972,7 +1974,7 @@ export class ClayStore {
 
   private attachmentIds(table: string, rowId: string, field: string): string[] {
     this.attachmentColumn(table, field);
-    const row = this.driver.select(
+    const row = this.#driver.select(
       `SELECT ${qid(field)} AS value FROM ${qid(table)} WHERE "id" = ?`, [rowId])[0];
     if (!row) throw new ClayError("E_VALIDATION", `record '${table}/${rowId}' does not exist`);
     if (row.value === null) return [];
@@ -1996,7 +1998,7 @@ export class ClayStore {
     for (const table of this.reg.values()) {
       for (const column of table.columns.filter(candidate =>
         candidate.type === "attachment")) {
-        for (const row of this.driver.select(
+        for (const row of this.#driver.select(
           `SELECT ${qid(column.name)} AS value FROM ${qid(table.name)}
            WHERE "deleted_at" IS NULL AND ${qid(column.name)} IS NOT NULL`)) {
           if (typeof row.value !== "string") continue;
@@ -2014,7 +2016,7 @@ export class ClayStore {
     if (this.attachmentActivelyReferenced(id)) return true;
     for (const table of this.reg.values()) {
       for (const column of table.columns.filter(candidate => candidate.type === "attachment")) {
-        for (const row of this.driver.select(
+        for (const row of this.#driver.select(
           `SELECT ${qid(column.name)} AS value FROM ${qid(table.name)}
            WHERE ${qid(column.name)} IS NOT NULL`)) {
           try {
@@ -2040,7 +2042,7 @@ export class ClayStore {
     const table = this.reg.get(tableName);
     if (!table) return;
     for (const column of table.columns.filter(candidate => candidate.type === "attachment")) {
-      const raw = this.driver.select(
+      const raw = this.#driver.select(
         `SELECT ${qid(column.name)} AS value FROM ${qid(tableName)} WHERE id = ?`, [rowId])[0]?.value;
       if (typeof raw !== "string") continue;
       let ids: string[];
@@ -2048,18 +2050,18 @@ export class ClayStore {
         const parsed = JSON.parse(raw) as unknown;
         ids = Array.isArray(parsed) ? parsed.filter(id => typeof id === "string") : [];
       } catch { ids = []; }
-      const existing = ids.filter(id => this.driver.select(
+      const existing = ids.filter(id => this.#driver.select(
         `SELECT id FROM "__clay_attachments" WHERE id = ?`, [id])[0] !== undefined);
       for (const id of existing)
-        this.driver.exec(`UPDATE "__clay_attachments" SET deleted_at = NULL WHERE id = ?`, [id]);
+        this.#driver.exec(`UPDATE "__clay_attachments" SET deleted_at = NULL WHERE id = ?`, [id]);
       if (existing.length !== ids.length)
-        this.driver.exec(`UPDATE ${qid(tableName)} SET ${qid(column.name)} = ? WHERE id = ?`,
+        this.#driver.exec(`UPDATE ${qid(tableName)} SET ${qid(column.name)} = ? WHERE id = ?`,
           [JSON.stringify(existing), rowId]);
     }
     const now = nowIso();
     for (const id of previouslyReferenced)
       if (!this.attachmentActivelyReferenced(id))
-        this.driver.exec(`UPDATE "__clay_attachments" SET deleted_at = ? WHERE id = ?`, [now, id]);
+        this.#driver.exec(`UPDATE "__clay_attachments" SET deleted_at = ? WHERE id = ?`, [now, id]);
   }
 
   async addAttachment(input: AttachmentInput): Promise<AttachmentMetadata> {
@@ -2073,8 +2075,8 @@ export class ClayStore {
     const id = `file_${uuidv7().replaceAll("-", "")}`;
     const createdAt = nowIso();
     const digest = await sha256(input.bytes);
-    this.driver.tx(() => {
-      const state = this.driver.select(
+    this.#driver.tx(() => {
+      const state = this.#driver.select(
         `SELECT "deleted_at" FROM ${qid(input.table)} WHERE "id" = ?`, [input.rowId])[0];
       if (!state || state.deleted_at !== null)
         throw new ClayError("E_VALIDATION", "files can only be added to an active record");
@@ -2088,14 +2090,14 @@ export class ClayStore {
           > MAX_RETAINED_ATTACHMENT_BYTES)
         throw new ClayError("E_LIMIT",
           "this app is limited to 250 MB of retained files; clean up old removed files first");
-      this.driver.exec(
+      this.#driver.exec(
         `INSERT INTO "__clay_attachments"(
            id, name, mime, size, sha256, bytes, created_at, deleted_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
         [id, identity.name, identity.mime, input.bytes.byteLength,
          digest, input.bytes, createdAt]);
       this.writeRowHistory(input.table, input.rowId, "attachment_add");
-      this.driver.exec(
+      this.#driver.exec(
         `UPDATE ${qid(input.table)} SET ${qid(input.field)} = ?, "updated_at" = ? WHERE "id" = ?`,
         [JSON.stringify([...ids, id]), createdAt, input.rowId]);
       this.recordRowEvent(input.table, input.rowId, "updated", [input.field]);
@@ -2107,7 +2109,7 @@ export class ClayStore {
   attachmentsForRecord(table: string, rowId: string, field: string): AttachmentMetadata[] {
     const ids = this.attachmentIds(table, rowId, field);
     if (ids.length === 0) return [];
-    const rows = this.driver.select(
+    const rows = this.#driver.select(
       `SELECT id, name, mime, size, sha256, created_at FROM "__clay_attachments"
        WHERE deleted_at IS NULL AND id IN (${ids.map(() => "?").join(", ")})`, ids);
     const byId = new Map(rows.map(row => [String(row.id), this.attachmentMetadata(row)]));
@@ -2115,7 +2117,7 @@ export class ClayStore {
   }
 
   async readAttachment(id: string): Promise<AttachmentFile> {
-    const row = this.driver.select(`SELECT * FROM "__clay_attachments"
+    const row = this.#driver.select(`SELECT * FROM "__clay_attachments"
       WHERE id = ? AND deleted_at IS NULL`, [id])[0];
     if (!row) throw new ClayError("E_VALIDATION", "file not found");
     if (!(row.bytes instanceof Uint8Array) || row.bytes.byteLength !== Number(row.size)
@@ -2128,19 +2130,19 @@ export class ClayStore {
     const ids = this.attachmentIds(table, rowId, field);
     if (!ids.includes(id)) throw new ClayError("E_VALIDATION", "file is not attached to this record");
     const now = nowIso();
-    this.driver.tx(() => {
+    this.#driver.tx(() => {
       this.writeRowHistory(table, rowId, "attachment_remove");
-      this.driver.exec(
+      this.#driver.exec(
         `UPDATE ${qid(table)} SET ${qid(field)} = ?, "updated_at" = ? WHERE "id" = ?`,
         [JSON.stringify(ids.filter(candidate => candidate !== id)), now, rowId]);
       if (!this.attachmentActivelyReferenced(id))
-        this.driver.exec(`UPDATE "__clay_attachments" SET deleted_at = ? WHERE id = ?`, [now, id]);
+        this.#driver.exec(`UPDATE "__clay_attachments" SET deleted_at = ? WHERE id = ?`, [now, id]);
       this.recordRowEvent(table, rowId, "updated", [field]);
     });
   }
 
   attachmentStorage(): AttachmentStorageSummary {
-    const rows = this.driver.select(
+    const rows = this.#driver.select(
       `SELECT deleted_at IS NULL AS active, COUNT(*) AS files,
          COALESCE(SUM(size), 0) AS bytes FROM "__clay_attachments"
        GROUP BY deleted_at IS NULL`);
@@ -2156,12 +2158,12 @@ export class ClayStore {
     if (!Number.isFinite(minAgeDays) || minAgeDays < 30)
       throw new ClayError("E_VALIDATION", "deleted files must be retained for at least 30 days");
     const cutoff = new Date(now.getTime() - minAgeDays * 86_400_000).toISOString();
-    const candidates = this.driver.select(
+    const candidates = this.#driver.select(
       `SELECT id, size FROM "__clay_attachments" WHERE deleted_at IS NOT NULL AND deleted_at <= ?`,
       [cutoff]).filter(row => !this.attachmentRecoverablyReferenced(String(row.id)));
-    if (candidates.length > 0) this.driver.tx(() => {
+    if (candidates.length > 0) this.#driver.tx(() => {
       for (const candidate of candidates)
-        this.driver.exec(`DELETE FROM "__clay_attachments" WHERE id = ?`, [String(candidate.id)]);
+        this.#driver.exec(`DELETE FROM "__clay_attachments" WHERE id = ?`, [String(candidate.id)]);
     });
     return { files: candidates.length,
       bytes: candidates.reduce((total, row) => total + Number(row.size), 0) };
@@ -2169,7 +2171,7 @@ export class ClayStore {
 
   private async attachmentIntegrityIssues(manifest?: ClayManifest): Promise<string[]> {
     const issues: string[] = [];
-    const rows = this.driver.select(`SELECT * FROM "__clay_attachments"`);
+    const rows = this.#driver.select(`SELECT * FROM "__clay_attachments"`);
     const active = new Set<string>();
     let activeBytes = 0;
     let retainedBytes = 0;
@@ -2197,7 +2199,7 @@ export class ClayStore {
     for (const table of this.reg.values()) {
       for (const column of table.columns.filter(candidate =>
         candidate.type === "attachment")) {
-        for (const row of this.driver.select(
+        for (const row of this.#driver.select(
           `SELECT ${qid(column.name)} AS value FROM ${qid(table.name)}
            WHERE ${qid(column.name)} IS NOT NULL`)) {
           try {
@@ -2225,7 +2227,7 @@ export class ClayStore {
 
   private automationIntegrityIssues(): string[] {
     const issues: string[] = [];
-    for (const row of this.driver.select(
+    for (const row of this.#driver.select(
       `SELECT id, definition_json, created_at, updated_at, last_event_seq FROM sys.automations`,
     )) {
       const id = String(row.id);
@@ -2253,7 +2255,7 @@ export class ClayStore {
   }
 
   listAutomations(): AutomationDefinition[] {
-    return this.driver.select(
+    return this.#driver.select(
       `SELECT id, definition_json, created_at, updated_at FROM sys.automations
        ORDER BY created_at ASC, id ASC`).map(row => ({
       ...(JSON.parse(String(row.definition_json)) as AutomationDefinitionInput),
@@ -2264,7 +2266,7 @@ export class ClayStore {
   upsertAutomation(input: AutomationDefinitionInput): AutomationDefinition {
     const normalized = validateAutomationDefinition(this.reg, input);
     const current = normalized.id
-      ? this.driver.select(`SELECT definition_json, created_at, updated_at, last_event_seq
+      ? this.#driver.select(`SELECT definition_json, created_at, updated_at, last_event_seq
           FROM sys.automations WHERE id = ?`, [normalized.id])[0] : undefined;
     if (normalized.id && !current)
       throw new ClayError("E_VALIDATION", "unknown automation");
@@ -2274,12 +2276,12 @@ export class ClayStore {
     const id = normalized.id ?? `auto_${uuidv7().replaceAll("-", "")}`;
     const prior = current
       ? JSON.parse(String(current.definition_json)) as AutomationDefinitionInput : null;
-    const maxSeq = Number(this.driver.select(
+    const maxSeq = Number(this.#driver.select(
       `SELECT COALESCE(MAX(seq), 0) AS n FROM sys.record_events`)[0]?.n ?? 0);
     const cursor = !current || (prior && !prior.enabled && normalized.enabled)
       ? maxSeq : Number(current.last_event_seq);
     const stored: AutomationDefinitionInput = { ...normalized, id };
-    this.driver.exec(
+    this.#driver.exec(
       `INSERT INTO sys.automations(id, definition_json, created_at, updated_at, last_event_seq)
        VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET definition_json = excluded.definition_json,
@@ -2289,11 +2291,11 @@ export class ClayStore {
   }
 
   deleteAutomation(id: string): void {
-    const row = this.driver.select(`SELECT id FROM sys.automations WHERE id = ?`, [id])[0];
+    const row = this.#driver.select(`SELECT id FROM sys.automations WHERE id = ?`, [id])[0];
     if (!row) throw new ClayError("E_VALIDATION", "unknown automation");
-    this.driver.tx(() => {
-      this.driver.exec(`DELETE FROM sys.automation_matches WHERE automation_id = ?`, [id]);
-      this.driver.exec(`DELETE FROM sys.automations WHERE id = ?`, [id]);
+    this.#driver.tx(() => {
+      this.#driver.exec(`DELETE FROM sys.automation_matches WHERE automation_id = ?`, [id]);
+      this.#driver.exec(`DELETE FROM sys.automations WHERE id = ?`, [id]);
     });
   }
 
@@ -2434,7 +2436,7 @@ export class ClayStore {
   }
 
   private automationTriggerSucceeded(automationId: string, triggerKey: string): boolean {
-    return this.driver.select(
+    return this.#driver.select(
       `SELECT id FROM sys.automation_runs WHERE automation_id = ? AND status = 'success'
        AND (trigger_key = ? OR trigger_key LIKE ?) LIMIT 1`,
       [automationId, triggerKey, `${triggerKey}:retry:%`],
@@ -2449,7 +2451,7 @@ export class ClayStore {
     onSuccess?: () => void,
   ): AutomationRun | null {
     if (this.automationTriggerSucceeded(definition.id, triggerKey)) return null;
-    const priorFailures = Number(this.driver.select(
+    const priorFailures = Number(this.#driver.select(
       `SELECT COUNT(*) AS n FROM sys.automation_runs WHERE automation_id = ?
        AND (trigger_key = ? OR trigger_key LIKE ?)`,
       [definition.id, triggerKey, `${triggerKey}:retry:%`],
@@ -2459,14 +2461,14 @@ export class ClayStore {
     const runId = uuidv7();
     const at = now.toISOString();
     try {
-      return this.driver.tx(() => {
+      return this.#driver.tx(() => {
         const plan = this.automationPlan(definition, sources);
         const batch = plan.mutations.length > 0 ? this.applyBatch({
           source: "automation", summary: definition.name, mutations: plan.mutations,
         }) : null;
         for (const notice of plan.notifications) {
           const table = definition.trigger.kind === "schedule" ? null : definition.trigger.table;
-          this.driver.exec(
+          this.#driver.exec(
             `INSERT INTO sys.notifications(
                id, at, automation_id, run_id, title, body, table_name, row_id, read_at, dismissed_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
@@ -2474,7 +2476,7 @@ export class ClayStore {
              table, notice.source ? String(notice.source.id) : null]);
         }
         const matched = definition.trigger.kind === "schedule" ? 1 : sources.length;
-        this.driver.exec(
+        this.#driver.exec(
           `INSERT INTO sys.automation_runs(
              id, automation_id, at, trigger_key, status, matched_count,
              changed_count, batch_id, error_code, undone_at)
@@ -2490,7 +2492,7 @@ export class ClayStore {
       });
     } catch (error) {
       const code = error instanceof ClayError ? error.code : "E_INTERNAL";
-      this.driver.exec(
+      this.#driver.exec(
         `INSERT OR IGNORE INTO sys.automation_runs(
            id, automation_id, at, trigger_key, status, matched_count,
            changed_count, batch_id, error_code, undone_at)
@@ -2518,9 +2520,9 @@ export class ClayStore {
     for (const definition of this.listAutomations().filter(candidate => candidate.enabled)) {
       const trigger = definition.trigger;
       if (trigger.kind === "record_created" || trigger.kind === "record_updated") {
-        const stored = this.driver.select(
+        const stored = this.#driver.select(
           `SELECT last_event_seq FROM sys.automations WHERE id = ?`, [definition.id])[0]!;
-        const events = this.driver.select(
+        const events = this.#driver.select(
           `SELECT seq, row_id, kind, origin, row_json FROM sys.record_events
            WHERE table_name = ? AND seq > ? ORDER BY seq ASC LIMIT 500`,
           [trigger.table, Number(stored.last_event_seq)]);
@@ -2567,7 +2569,7 @@ export class ClayStore {
           if (run?.status === "success" || this.automationTriggerSucceeded(definition.id, key))
             cursor = sequence;
         }
-        this.driver.exec(`UPDATE sys.automations SET last_event_seq = ? WHERE id = ?`,
+        this.#driver.exec(`UPDATE sys.automations SET last_event_seq = ? WHERE id = ?`,
           [cursor, definition.id]);
         continue;
       }
@@ -2575,20 +2577,20 @@ export class ClayStore {
         const rows = this.automationRows(definition, now,
           { maxMatches: 100, truncate: false });
         const currentIds = new Set(rows.map(row => String(row.id)));
-        for (const active of this.driver.select(
+        for (const active of this.#driver.select(
           `SELECT row_id FROM sys.automation_matches WHERE automation_id = ?`, [definition.id])) {
           if (!currentIds.has(String(active.row_id)))
-            this.driver.exec(
+            this.#driver.exec(
               `DELETE FROM sys.automation_matches WHERE automation_id = ? AND row_id = ?`,
               [definition.id, String(active.row_id)]);
         }
-        const active = new Set(this.driver.select(
+        const active = new Set(this.#driver.select(
           `SELECT row_id FROM sys.automation_matches WHERE automation_id = ?`, [definition.id])
           .map(row => String(row.row_id)));
         for (const row of rows.filter(candidate => !active.has(String(candidate.id)))) {
           const key = `match:${String(row.id)}:${String(row.updated_at)}:${definition.updatedAt}`;
           const rowId = String(row.id);
-          const persistMatch = (): void => this.driver.exec(
+          const persistMatch = (): void => this.#driver.exec(
             `INSERT OR IGNORE INTO sys.automation_matches(automation_id, row_id) VALUES (?, ?)`,
             [definition.id, rowId]);
           const run = this.executeAutomation(definition, [row], key, now, persistMatch);
@@ -2623,17 +2625,17 @@ export class ClayStore {
   automationRuns(automationId?: string, limit = 100): AutomationRun[] {
     const bounded = Math.max(1, Math.min(500, Math.trunc(limit)));
     const rows = automationId
-      ? this.driver.select(`SELECT * FROM sys.automation_runs WHERE automation_id = ?
+      ? this.#driver.select(`SELECT * FROM sys.automation_runs WHERE automation_id = ?
           ORDER BY at DESC, id DESC LIMIT ?`, [automationId, bounded])
-      : this.driver.select(`SELECT * FROM sys.automation_runs
+      : this.#driver.select(`SELECT * FROM sys.automation_runs
           ORDER BY at DESC, id DESC LIMIT ?`, [bounded]);
     return rows.map(row => this.automationRunFromRow(row));
   }
 
   undoAutomationRun(id: string): AutomationRun {
     let original: SqlRow | undefined;
-    this.driver.tx(() => {
-      const row = this.driver.select(
+    this.#driver.tx(() => {
+      const row = this.#driver.select(
         `SELECT * FROM sys.automation_runs WHERE id = ?`, [id])[0];
       if (!row) throw new ClayError("E_VALIDATION", "unknown automation run");
       if (row.undone_at !== null)
@@ -2643,9 +2645,9 @@ export class ClayStore {
       original = row;
       if (row.batch_id !== null) this.undoBatch(String(row.batch_id));
       const at = nowIso();
-      this.driver.exec(
+      this.#driver.exec(
         `UPDATE sys.automation_runs SET undone_at = ? WHERE id = ?`, [at, id]);
-      this.driver.exec(
+      this.#driver.exec(
         `UPDATE sys.notifications SET dismissed_at = ? WHERE run_id = ?`, [at, id]);
     });
     return { ...this.automationRunFromRow(original!), undone: true };
@@ -2653,7 +2655,7 @@ export class ClayStore {
 
   listNotifications(limit = 100): ClayNotification[] {
     const bounded = Math.max(1, Math.min(500, Math.trunc(limit)));
-    return this.driver.select(
+    return this.#driver.select(
       `SELECT * FROM sys.notifications WHERE dismissed_at IS NULL
        ORDER BY at DESC, id DESC LIMIT ?`, [bounded]).map(row => ({
       id: String(row.id), at: String(row.at), automationId: String(row.automation_id),
@@ -2665,7 +2667,7 @@ export class ClayStore {
   }
 
   markNotificationRead(id: string): void {
-    const changed = this.driver.exec(
+    const changed = this.#driver.exec(
       `UPDATE sys.notifications SET read_at = COALESCE(read_at, ?) WHERE id = ? AND dismissed_at IS NULL`,
       [nowIso(), id]);
     void changed;
@@ -2774,7 +2776,7 @@ export class ClayStore {
     const created: { table: string; id: string }[] = [];
     const previous = this.batchContext;
     try {
-      return this.driver.tx(() => {
+      return this.#driver.tx(() => {
         this.batchContext = { id, source: input.source, pending: new Map() };
         try {
           for (const mutation of input.mutations) {
@@ -2798,10 +2800,10 @@ export class ClayStore {
           this.assertRelationIntegrity();
           if (this.batchContext.pending.size !== 0)
             throw new ClayError("E_INTERNAL", "batch history was not finalized");
-          const changed = Number(this.driver.select(
+          const changed = Number(this.#driver.select(
             `SELECT COUNT(*) AS count FROM "row_history" WHERE "batch_id" = ?`, [id],
           )[0]?.count ?? 0);
-          this.driver.exec(
+          this.#driver.exec(
             `INSERT INTO sys.operation_batches(
                id, at, source, summary, changed_count, created_json, undone_at)
              VALUES (?, ?, ?, ?, ?, ?, NULL)`,
@@ -2821,7 +2823,7 @@ export class ClayStore {
 
   operationBatches(limit = 50): BatchReceipt[] {
     const bounded = Math.max(1, Math.min(200, Math.trunc(limit)));
-    return this.driver.select(
+    return this.#driver.select(
       `SELECT id, at, source, summary, changed_count, created_json, undone_at
        FROM sys.operation_batches ORDER BY at DESC, id DESC LIMIT ?`, [bounded])
       .map(row => ({
@@ -2833,12 +2835,12 @@ export class ClayStore {
   }
 
   undoBatch(id: string): BatchReceipt {
-    const batch = this.driver.select(
+    const batch = this.#driver.select(
       `SELECT id, at, source, summary, changed_count, created_json, undone_at
        FROM sys.operation_batches WHERE id = ?`, [id])[0];
     if (!batch) throw new ClayError("E_VALIDATION", "unknown operation batch");
     if (batch.undone_at !== null) throw new ClayError("E_CONFLICT", "operation batch is already undone");
-    const entries = this.driver.select(
+    const entries = this.#driver.select(
       `SELECT "table", "row_id", "before_json", "after_json", "change_kind"
        FROM "row_history" WHERE "batch_id" = ? ORDER BY "sequence" DESC`, [id]);
     if (entries.length !== Number(batch.changed_count))
@@ -2847,19 +2849,19 @@ export class ClayStore {
     for (const entry of entries) {
       const table = String(entry.table);
       getTable(this.reg, table);
-      const current = this.driver.select(
+      const current = this.#driver.select(
         `SELECT * FROM ${qid(table)} WHERE "id" = ?`, [String(entry.row_id)])[0];
       if (!current || JSON.stringify(current) !== String(entry.after_json))
         throw new ClayError("E_CONFLICT", "a record changed after this batch; undo was not applied");
     }
 
-    this.driver.tx(() => {
+    this.#driver.tx(() => {
       for (const entry of entries) {
         const table = String(entry.table);
         const rowId = String(entry.row_id);
         if (entry.change_kind === "create") {
           const at = nowIso();
-          this.driver.exec(
+          this.#driver.exec(
             `UPDATE ${qid(table)} SET "deleted_at" = ?, "updated_at" = ? WHERE "id" = ?`,
             [at, at, rowId]);
           continue;
@@ -2867,13 +2869,13 @@ export class ClayStore {
         const before = JSON.parse(String(entry.before_json)) as Record<string, SqlValue>;
         const columns = Object.keys(before).filter(column => column !== "id");
         const priorAttachments = this.rowAttachmentIds(table, rowId);
-        this.driver.exec(
+        this.#driver.exec(
           `UPDATE ${qid(table)} SET ${columns.map(column => `${qid(column)} = ?`).join(", ")}
            WHERE "id" = ?`, [...columns.map(column => before[column] ?? null), rowId]);
         this.reconcileRowAttachments(table, rowId, priorAttachments);
       }
       this.assertRelationIntegrity();
-      this.driver.exec(`UPDATE sys.operation_batches SET undone_at = ? WHERE id = ?`,
+      this.#driver.exec(`UPDATE sys.operation_batches SET undone_at = ? WHERE id = ?`,
         [nowIso(), id]);
     });
     return {
@@ -2888,11 +2890,11 @@ export class ClayStore {
   private writeRowHistory(
     table: string, id: string, changeKind = "update",
   ): string | null {
-    const rows = this.driver.select(
+    const rows = this.#driver.select(
       `SELECT * FROM ${qid(table)} WHERE "id" = ?`, [id]);
     if (!rows[0]) return null;
     const historyId = uuidv7();
-    this.driver.exec(
+    this.#driver.exec(
       `INSERT INTO "row_history"(
          "id", "table", "row_id", "at", "before_json", "batch_id", "change_kind", "sequence")
        VALUES (?, ?, ?, ?, ?, ?, ?,
@@ -2901,10 +2903,10 @@ export class ClayStore {
        this.batchContext?.id ?? null, changeKind]);
     if (this.batchContext)
       this.batchContext.pending.set(`${table}\u0000${id}`, historyId);
-    const n = Number(this.driver.select(
+    const n = Number(this.#driver.select(
       `SELECT COUNT(*) AS n FROM "row_history"`)[0]?.n ?? 0);
     if (n > this.rowHistoryCap) {
-      this.driver.exec(
+      this.#driver.exec(
         `DELETE FROM "row_history" WHERE "id" IN (
            SELECT "id" FROM "row_history" ORDER BY "sequence" ASC LIMIT ?)`,
         [n - this.rowHistoryCap]);
@@ -2915,21 +2917,21 @@ export class ClayStore {
   private finishBatchHistory(table: string, id: string): void {
     const historyId = this.batchContext?.pending.get(`${table}\u0000${id}`);
     if (!historyId) return;
-    const row = this.driver.select(`SELECT * FROM ${qid(table)} WHERE "id" = ?`, [id])[0];
+    const row = this.#driver.select(`SELECT * FROM ${qid(table)} WHERE "id" = ?`, [id])[0];
     if (!row) throw new ClayError("E_INTERNAL", "batch result row vanished");
-    this.driver.exec(`UPDATE "row_history" SET "after_json" = ? WHERE "id" = ?`,
+    this.#driver.exec(`UPDATE "row_history" SET "after_json" = ? WHERE "id" = ?`,
       [JSON.stringify(row), historyId]);
     this.batchContext!.pending.delete(`${table}\u0000${id}`);
   }
 
   rowHistoryCount(): number {
-    return Number(this.driver.select(
+    return Number(this.#driver.select(
       `SELECT COUNT(*) AS n FROM "row_history"`)[0]?.n ?? 0);
   }
 
   /** Local attempt stats for Settings (doc 05 §5). No network. */
   attemptStats(): { kept: number; discarded: number; failed: number; clarify: number } {
-    const rows = this.driver.select(
+    const rows = this.#driver.select(
       `SELECT outcome, COUNT(*) AS n FROM sys.attempts GROUP BY outcome`);
     const by = (o: string): number =>
       Number(rows.find(r => r.outcome === o)?.n ?? 0);
@@ -2941,7 +2943,7 @@ export class ClayStore {
   restorableRows(table: string, sinceDays = 30): string[] {
     getTable(this.reg, table);
     const cutoff = new Date(Date.now() - sinceDays * 86_400_000).toISOString();
-    return this.driver.select(
+    return this.#driver.select(
       `SELECT DISTINCT "row_id" FROM "row_history" WHERE "table" = ? AND "at" >= ?`,
       [table, cutoff]).map(r => String(r.row_id));
   }
@@ -2955,7 +2957,7 @@ export class ClayStore {
     { at: string; values: Record<string, unknown> }[] {
     const t = getTable(this.reg, table);
     const live = new Set(t.columns.filter(c => !c.inactive).map(c => c.name));
-    return this.driver.select(
+    return this.#driver.select(
       `SELECT "at", "before_json" FROM "row_history"
        WHERE "table" = ? AND "row_id" = ? ORDER BY "sequence" DESC LIMIT ?`,
       [table, id, limit]).map(r => {
@@ -2971,7 +2973,7 @@ export class ClayStore {
    * — a projection, not a loss (doc 04 §5 spirit). */
   restoreRow(table: string, id: string): QueryRow {
     const t = getTable(this.reg, table);
-    const entry = this.driver.select(
+    const entry = this.#driver.select(
       `SELECT "before_json" FROM "row_history"
        WHERE "table" = ? AND "row_id" = ? AND COALESCE("change_kind", '') != 'restore'
        ORDER BY "sequence" DESC LIMIT 1`,
@@ -2985,13 +2987,13 @@ export class ClayStore {
       "deleted_at",
     ]);
     const cols = Object.keys(before).filter(k => settable.has(k));
-    const current = this.driver.select(`SELECT * FROM ${qid(table)} WHERE "id" = ?`, [id])[0]!;
+    const current = this.#driver.select(`SELECT * FROM ${qid(table)} WHERE "id" = ?`, [id])[0]!;
     if (cols.every(column => current[column] === (before[column] ?? null)))
       return this.rowById(table, id);
     const priorAttachments = this.rowAttachmentIds(table, id);
-    if (cols.length > 0) this.driver.tx(() => {
+    if (cols.length > 0) this.#driver.tx(() => {
       this.writeRowHistory(table, id, "restore");   // restoring is itself undoable
-      this.driver.exec(
+      this.#driver.exec(
         `UPDATE ${qid(table)} SET ${cols.map(c => `${qid(c)} = ?`).join(", ")},
            "updated_at" = ? WHERE "id" = ?`,
         [...cols.map(c => before[c] ?? null), nowIso(), id]);
@@ -3008,14 +3010,14 @@ export class ClayStore {
     this.mustExist(table, id);
     this.validateRelationReferences(t, patch, id);
     const { cols, vals } = validatePatch(t, patch);
-    const current = this.driver.select(
+    const current = this.#driver.select(
       `SELECT ${cols.map(qid).join(", ")} FROM ${qid(table)} WHERE "id" = ?`, [id],
     )[0]!;
     if (cols.every((column, index) => (current[column] ?? null) === (vals[index] ?? null)))
       return this.rowById(table, id);
-    this.driver.tx(() => {
+    this.#driver.tx(() => {
       this.writeRowHistory(table, id);
-      this.driver.exec(
+      this.#driver.exec(
         `UPDATE ${qid(table)} SET ${cols.map(c => `${qid(c)} = ?`).join(", ")},
            "updated_at" = ? WHERE "id" = ?`,
         [...vals, nowIso(), id]);
@@ -3028,9 +3030,9 @@ export class ClayStore {
   softDelete(table: string, id: string): void {
     getTable(this.reg, table);
     this.mustExist(table, id);
-    this.driver.tx(() => {
+    this.#driver.tx(() => {
       this.writeRowHistory(table, id, "soft_delete");
-      this.driver.exec(
+      this.#driver.exec(
         `UPDATE ${qid(table)} SET "deleted_at" = ?, "updated_at" = ? WHERE "id" = ?`,
         [nowIso(), nowIso(), id]);
       if (!this.batchContext) this.assertRelationIntegrity();
@@ -3040,18 +3042,18 @@ export class ClayStore {
   }
 
   query(q: QueryT, now: Date = new Date()): QueryRow[] {
-    return runQuery(this.driver, this.reg, q, now);
+    return runQuery(this.#driver, this.reg, q, now);
   }
 
   private mustExist(table: string, id: string): void {
-    const rows = this.driver.select(
+    const rows = this.#driver.select(
       `SELECT "id" FROM ${qid(table)} WHERE "id" = ?`, [id]);
     if (rows.length === 0)
       throw new ClayError("E_VALIDATION", `no row '${id}' in '${table}'`);
   }
 
   private rowById(table: string, id: string): QueryRow {
-    const rows = runQuery(this.driver, this.reg,
+    const rows = runQuery(this.#driver, this.reg,
       { from: table, where: [{ field: "id", op: "eq", value: id }], includeDeleted: true });
     const row = rows[0];
     if (!row) throw new ClayError("E_INTERNAL", "row vanished after write");
@@ -3064,7 +3066,7 @@ export class ClayStore {
     const current = this.livePanels().find(p => p.panel_id === panelId);
     if (!current)
       throw new ClayError("E_VALIDATION", `no live panel '${panelId}'`);
-    const rows = this.driver.select(
+    const rows = this.#driver.select(
       `SELECT version, code, placement_json, declared_q_json FROM sys.panel_blobs
        WHERE panel_id = ? AND version < ? ORDER BY version DESC LIMIT 1`,
       [panelId, current.version]);
@@ -3093,7 +3095,7 @@ export class ClayStore {
   /** Raw physical dump, ordered by id — bit-equality checks (PB1, spine). */
   dumpTable(table: string): SqlRow[] {
     getTable(this.reg, table);
-    return this.driver.select(`SELECT * FROM ${qid(table)} ORDER BY "id"`);
+    return this.#driver.select(`SELECT * FROM ${qid(table)} ORDER BY "id"`);
   }
 
   // ---------- .clay archives (doc 04 §7) ----------
@@ -3105,7 +3107,7 @@ export class ClayStore {
     if (attachmentIssues.length > 0)
       throw new ClayError("E_VALIDATION",
         `attachment integrity check failed: ${attachmentIssues.join("; ")}`);
-    const { user, system } = await this.driver.exportDatabases();
+    const { user, system } = await this.#driver.exportDatabases();
     const attachmentStorage = this.attachmentStorage();
     const manifest: ClayManifest = {
       format: 4, app: appName, exported_at: nowIso(),
@@ -3173,7 +3175,7 @@ export class ClayStore {
     let timelineValid = true;
     const plans: Array<{ version: number; plan: MigrationPlanT }> = [];
     const registries = new Map<number, Registry>([[0, cloneRegistry(replay)]]);
-    for (const row of this.driver.select(
+    for (const row of this.#driver.select(
       `SELECT version, migration_json, inverse_json FROM sys.version_log ORDER BY version`,
     )) {
       const version = Number(row.version);
@@ -3202,7 +3204,7 @@ export class ClayStore {
       const expected = cloneRegistry(replay);
       const readOnlyDriver = {
         exec: () => undefined,
-        select: (sql: string, params?: SqlValue[]) => this.driver.select(sql, params),
+        select: (sql: string, params?: SqlValue[]) => this.#driver.select(sql, params),
         tx: <T>(fn: () => T) => fn(),
       } as unknown as DbDriver;
       const current = this.currentVersion();
@@ -3248,14 +3250,14 @@ export class ClayStore {
     )];
     issues.push(...this.archiveTimelineIssues(manifest?.format === 4));
     const registryNames = new Set(this.reg.keys());
-    const physicalTables = new Set(this.driver.select(
+    const physicalTables = new Set(this.#driver.select(
       `SELECT name FROM main.sqlite_master
        WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
          AND name NOT IN ('row_history', '__clay_attachments')`,
     ).map(row => String(row.name)));
     for (const table of physicalTables)
       if (!registryNames.has(table)) issues.push(`physical table '${table}' is not registered`);
-    for (const row of this.driver.select(
+    for (const row of this.#driver.select(
       "SELECT table_name, spec_json FROM sys.tables_registry",
     )) {
       try {
@@ -3273,7 +3275,7 @@ export class ClayStore {
         issues.push(`manifest version count ${manifest.versions} does not match head ${this.headVersion()}`);
     }
     for (const t of this.reg.values()) {
-      const info = this.driver.select(`PRAGMA main.table_info(${qid(t.name)})`);
+      const info = this.#driver.select(`PRAGMA main.table_info(${qid(t.name)})`);
       const physical = new Set(info.map(r => String(r.name)));
       if (physical.size === 0) { issues.push(`table '${t.name}' is missing`); continue; }
       for (const col of ["id", "created_at", "updated_at", "deleted_at"])
@@ -3289,12 +3291,12 @@ export class ClayStore {
         if (!registered.has(column))
           issues.push(`'${t.name}' has unregistered physical column '${column}'`);
     }
-    const markers=this.driver.select("SELECT table_name,column_name,row_id FROM sys.inactive_cells");
+    const markers=this.#driver.select("SELECT table_name,column_name,row_id FROM sys.inactive_cells");
     for(const m of markers){
       const t=this.reg.get(String(m.table_name));
       const c=t&&findStoredColumn(t,String(m.column_name));
       if(!t||!c?.inactive){issues.push("inactive-cell marker has no inactive column");continue;}
-      const r=this.driver.select(`SELECT ${qid(c.name)} AS v FROM ${qid(t.name)} WHERE "id"=?`,[String(m.row_id)]);
+      const r=this.#driver.select(`SELECT ${qid(c.name)} AS v FROM ${qid(t.name)} WHERE "id"=?`,[String(m.row_id)]);
       if(r.length!==1||r[0]?.v!==null)issues.push("inactive-cell marker does not point to a NULL cell");
     }
     const chain = this.history();
@@ -3314,7 +3316,7 @@ export class ClayStore {
         name: table.name,
         sql: createTableSql(table, { includeInactive: true }),
       }));
-    const indexes = this.driver.select(
+    const indexes = this.#driver.select(
       `SELECT name, tbl_name FROM main.sqlite_master
        WHERE type = 'index' AND sql IS NOT NULL
          AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'idx_row_history_%'
@@ -3322,7 +3324,7 @@ export class ClayStore {
     ).map(row => {
       const name = String(row.name);
       const table = String(row.tbl_name);
-      const columns = this.driver.select(`PRAGMA main.index_info(${qid(name)})`);
+      const columns = this.#driver.select(`PRAGMA main.index_info(${qid(name)})`);
       if (columns.length !== 1)
         throw new ClayError("E_VALIDATION", `archive index '${name}' is not canonical`);
       return { name, table, column: String(columns[0]!.name) };
@@ -3333,7 +3335,7 @@ export class ClayStore {
   async replaceFromArchive(bytes: Uint8Array): Promise<{
     store: ClayStore; manifest: ClayManifest; invalidPanels: string[];
   }> {
-    return ClayStore.importArchive(bytes, async () => this.driver);
+    return ClayStore.importArchive(bytes, async () => this.#driver);
   }
 
   /**
@@ -3400,7 +3402,7 @@ export class ClayStore {
       const fresh = await openFresh();
       const shape = staging.archiveCopyShape();
       let installed: ClayStore | null = null;
-      copyDatabase(staging.driver, fresh, shape, () => {
+      copyDatabase(staging.#driver, fresh, shape, () => {
         installed = ClayStore.fromDriver(
           fresh, { requireSemanticRegistry: manifest.format >= 3 });
         const readBackIssues = installed.verifyIntegrity(

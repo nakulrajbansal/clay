@@ -19,8 +19,8 @@ import { Onboarding } from "./Onboarding";
 import { TimeSlider } from "./TimeSlider";
 import { AppSwitcher } from "./AppSwitcher";
 import {
-  addForkEntry, createApp, currentApp, currentAppId, deriveAppName, ensureLegacyAdopted,
-  listApps, removeApp, renameApp, setCurrentApp, shellName, type AppEntry,
+  addForkEntry, createApp, currentApp, currentAppId, deriveAppName, listApps,
+  removeApp, renameApp, replaceAppCache, setCurrentApp, shellName, type AppEntry,
 } from "./apps";
 import {
   THEMES, applyThemeToRoot, getThemeId, panelThemeCss, setThemeId as saveThemeId, themeById,
@@ -388,8 +388,14 @@ export function App(): React.JSX.Element {
     workerRef.current = wc;
     void (async () => {
       try {
-        const cur = currentApp();                     // registry entry or null
-        const boot = await withTimeout(wc.boot(cur?.id), 20_000, "Opening the app");
+        const cache = listApps();
+        const cur = currentApp();
+        const boot = await withTimeout(wc.boot({
+          requestedAppId: cur?.id ?? null,
+          appCache: cache,
+        }), 20_000, "Opening the app");
+        replaceAppCache(boot.apps, boot.selectedAppInstanceId);
+        const activeApp = boot.apps.find(app => app.id === boot.selectedAppInstanceId)!;
         setPersistent(boot.persistent);
 
         // Device-global model access (B1): migrate any legacy per-app key up
@@ -419,20 +425,18 @@ export function App(): React.JSX.Element {
         ));
         setHasKey(hasModelAccess());
 
-        // Existing single-app user with data but no registry: adopt it (G4).
-        if (boot.seeded) ensureLegacyAdopted(true, boot.shellId);
-
         if (!boot.seeded) {
-          if (cur) {
+          if (cache.length > 0) {
             // a freshly created additional app pending its first seed
-            await withTimeout(wc.seed(cur.shellId as StarterShellId), 20_000, "Setting up the app");
+            await withTimeout(wc.seed(activeApp.shellId as StarterShellId),
+              20_000, "Setting up the app");
           } else {
             setPhase("onboarding");         // first run ever — pick a template
             return;
           }
         }
-        setApps(listApps());
-        setCurrentId(currentApp()?.id ?? null);
+        setApps(boot.apps);
+        setCurrentId(boot.selectedAppInstanceId);
         setLiveBridge(makeBridge(wc, "live", pushToast, recordFault, askConfirm,
           (table, id) => openRecordRef.current(table, id)));
         const [bootPanels, bootHistory, bootTables, bootSuggestions, bootProvenance,
