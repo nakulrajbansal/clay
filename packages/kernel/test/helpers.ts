@@ -1,5 +1,11 @@
 // Shared fixtures: the Context B-shaped registry and a seeded in-memory store.
-import { ClayStore, type MigrationPlanT, type Registry } from "../src/index";
+import {
+  ClayStore,
+  openMemoryDriver,
+  type DbDriver,
+  type MigrationPlanT,
+  type Registry,
+} from "../src/index";
 
 export function projectsRegistry(): Registry {
   return new Map([[
@@ -32,8 +38,12 @@ export const CREATE_PROJECTS: MigrationPlanT = {
   inverse: [{ op: "drop_table_if_created_by_this", table: "projects" }],
 };
 
-export async function seededStore(): Promise<ClayStore> {
-  const store = await ClayStore.openMemory();
+export async function seededStoreWithDriver(): Promise<{
+  store: ClayStore;
+  driver: DbDriver;
+}> {
+  const driver = await openMemoryDriver();
+  const store = ClayStore.fromDriver(driver);
   store.commit({
     intent: "seed", summary: "Creates the projects table.",
     migration: CREATE_PROJECTS,
@@ -50,7 +60,11 @@ export async function seededStore(): Promise<ClayStore> {
     name: "Cygnus", owner: "Dev", status: "red",
     next_milestone: "2026-07-03", slipped_milestones: 4, open_risks: 5,
   });
-  return store;
+  return { store, driver };
+}
+
+export async function seededStore(): Promise<ClayStore> {
+  return (await seededStoreWithDriver()).store;
 }
 
 export const HEALTH_COMPUTED: MigrationPlanT = {

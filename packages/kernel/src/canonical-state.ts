@@ -33,7 +33,7 @@ const MERKLE_SYSTEM_TABLES = [
   "state_digest_leaves", "state_digest_buckets", "state_digest_root",
 ] as const;
 const TARGET_AUTHORITY_SYSTEM_TABLES = [
-  "target_authority_header", "target_revision_reservations",
+  "target_authority_header", "target_revision_reservations", "production_request_receipts",
 ] as const;
 const STORAGE_TYPE: Record<RegColumn["type"], string | null> = {
   text: "TEXT", number: "REAL", integer: "INTEGER", boolean: "INTEGER",

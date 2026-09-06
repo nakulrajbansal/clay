@@ -65,7 +65,11 @@ Four state stores, deliberately separate:
   selected immutable generation, lineage/revision/digest high-water marks, write
   epoch, and pending lifecycle jobs. Shell `localStorage` may cache a projection
   but cannot prove existence, choose a target, allocate identity, or authorize a
-  write.
+  write. On first migration, a catalog manifest declares the complete physical namespace
+  set and preallocated identities before any legacy target changes. Each target is adopted
+  atomically and interrupted work resumes on the next worker. Boot returns a detached full
+  catalog projection that replaces the shell cache; requested selection is validated or
+  published through catalog CAS before opening the target.
 - Persistent per-app state: SQLite (user.db + system.db). Source of truth for
   records, shape, history, and app-owned metadata. Every authorizing handle binds
   the catalog-selected `(appInstanceId, activeGenerationId, lineageEpoch,
@@ -86,6 +90,12 @@ initialization are separate APIs. The live SQLite driver is deny-by-default for 
 writes; one internal synchronous coordinator must validate authority incarnation,
 write epoch, lease, selected complete target, and operation identity before opening
 the outer transaction. Long-lived Store RPC ports receive no ambient exception.
+The guarded `DbDriver` and its write opener are separate frozen capabilities; no exported
+object exposes both. Every production request is captured without accessors, assigned one
+stable operation, and mirrored as `prepared` then `invoked` before any live primitive.
+Terminal response bytes are hash-bound across target and catalog. Ambiguous `invoked`
+requests are never re-entered after restart, and canonical no-ops complete from a
+revalidated shadow without invoking the live Store.
 Target digest schema 1 is a target-owned, 1,024-bucket canonical logical Merkle map.
 It hashes stable logical keys and type-tagged values, commits attachment content
 digests rather than retained bytes, and excludes its own metadata plus device-local

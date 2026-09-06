@@ -3,6 +3,9 @@ import {
   ClayError,
   ClayStore,
   deriveInverse,
+  openDriverFromBytes,
+  openMemoryDriver,
+  zipRead,
   type DbDriver,
   type ForwardOpT,
 } from "../src/index";
@@ -19,7 +22,8 @@ async function fixture(): Promise<{
   rowId: string;
   attachmentId: string;
 }> {
-  const store = await ClayStore.openMemory();
+  const driver = await openMemoryDriver();
+  const store = ClayStore.fromDriver(driver);
   const operations: ForwardOpT[] = [{ op: "create_table", table: "projects", columns: [
     { name: "name", type: "text", required: true },
     { name: "estimate", type: "number", required: false },
@@ -45,7 +49,7 @@ async function fixture(): Promise<{
   });
   return {
     store,
-    driver: (store as unknown as { driver: DbDriver }).driver,
+    driver,
     rowId: String(row.id),
     attachmentId: attachment.id,
   };
@@ -401,9 +405,17 @@ describe("canonical target-state enumeration", () => {
       const table = registry.get("projects")!;
       const field = table.columns.find(column => column.name === "title")!;
       const key = `schema/index/main/${table.semantic!.tableId}/${field.semantic!.fieldId}/`;
-      const driver = (imported as unknown as { driver: DbDriver }).driver;
-      expect(enumerateCanonicalStateV1(driver, registry).leaves
-        .some(entry => entry.seed.key.startsWith(key))).toBe(true);
+      const parts = zipRead(await imported.exportArchive("canonical-index-audit"));
+      const driver = await openDriverFromBytes(
+        parts.find(part => part.name === "user.db")!.data,
+        parts.find(part => part.name === "system.db")!.data,
+      );
+      try {
+        expect(enumerateCanonicalStateV1(driver, registry).leaves
+          .some(entry => entry.seed.key.startsWith(key))).toBe(true);
+      } finally {
+        driver.close();
+      }
     } finally {
       imported?.close();
       store.close();

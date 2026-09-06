@@ -437,8 +437,7 @@ export class PrivateMetricsReducer {
   summary(): PrivateMetricsSummary {
     const day = this.today();
     return this.driver.transaction(() => {
-      this.maintain(day);
-      const state = this.driver.state();
+      const state = this.projectState(day);
       const cells = this.driver.cells().filter((cell) =>
         cell.dayUtc >= day - (SUMMARY_DAYS - 1) && cell.dayUtc <= day
       );
@@ -779,8 +778,11 @@ export class PrivateMetricsReducer {
     }
   }
 
-  private maintain(day: number): void {
-    let state = this.driver.state();
+  private projectState(
+    day: number,
+    initial: PrivateMetricStateRow = this.driver.state(),
+  ): PrivateMetricStateRow {
+    let state = initial;
     if (state.schemaVersion !== PRIVATE_METRIC_SCHEMA_VERSION) {
       throw new Error(`unsupported private metric schema ${state.schemaVersion}`);
     }
@@ -801,8 +803,14 @@ export class PrivateMetricsReducer {
       if (day > firstKeepDay + 20 && state.d14Window !== null) {
         state = { ...state, firstKeepDay: null };
       }
-      this.driver.replaceState(state);
     }
+    return state;
+  }
+
+  private maintain(day: number): void {
+    const current = this.driver.state();
+    const projected = this.projectState(day, current);
+    if (projected !== current) this.driver.replaceState(projected);
     this.driver.deleteBefore(day - (RETAINED_DAYS - 1));
   }
 

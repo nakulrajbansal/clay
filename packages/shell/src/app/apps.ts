@@ -1,8 +1,5 @@
-// The multi-app registry (G4): the list of apps the user has, and which is
-// current, kept in localStorage on the MAIN thread (the worker has no
-// localStorage). Switching is reload-based — set current, reload, and boot
-// opens that app's namespaced OPFS files. Data lives per-app in OPFS; this
-// is just the lightweight index.
+// Presentation cache of the worker-owned durable app catalog. The worker boot
+// response replaces this whole cache; it is never a source of target authority.
 export type AppEntry = { id: string; name: string; shellId: string };
 
 const APPS_KEY = "clay_apps";
@@ -30,6 +27,14 @@ export function currentApp(): AppEntry | null {
 
 function saveApps(apps: AppEntry[]): void {
   localStorage.setItem(APPS_KEY, JSON.stringify(apps));
+}
+
+export function replaceAppCache(apps: readonly AppEntry[], selectedId: string): void {
+  const copy = apps.map(app => ({ ...app }));
+  if (!copy.some(app => app.id === selectedId))
+    throw new Error("catalog projection does not contain selected app");
+  saveApps(copy);
+  setCurrentApp(selectedId);
 }
 
 export function setCurrentApp(id: string): void {

@@ -16,7 +16,7 @@ import { ClayError } from "./errors";
  * independent disposable database which cannot alter live state or catalog
  * authority.
  */
-export class LiveWriteGuard implements DbDriver {
+class LiveWriteGuard implements DbDriver {
   #authorized = false;
   readonly #owner = Symbol("clay.live-write-guard");
   readonly #inner: DbDriver;
@@ -72,4 +72,29 @@ export class LiveWriteGuard implements DbDriver {
   exportDatabases(): Promise<{ user: Uint8Array; system: Uint8Array }> {
     return this.#inner.exportDatabases();
   }
+}
+
+export type LiveWriteAuthority = Readonly<{
+  run<T>(fn: () => T): T;
+}>;
+
+export type LiveWriteSession = Readonly<{
+  driver: DbDriver;
+  authority: LiveWriteAuthority;
+}>;
+
+export function createLiveWriteGuard(inner: DbDriver): LiveWriteSession {
+  const controller = new LiveWriteGuard(inner);
+  const driver: DbDriver = Object.freeze({
+    exec: controller.exec.bind(controller),
+    select: controller.select.bind(controller),
+    tx: controller.tx.bind(controller),
+    close: controller.close.bind(controller),
+    snapshot: controller.snapshot.bind(controller),
+    exportDatabases: controller.exportDatabases.bind(controller),
+  });
+  const authority: LiveWriteAuthority = Object.freeze({
+    run: controller.runAuthorized.bind(controller),
+  });
+  return Object.freeze({ driver, authority });
 }

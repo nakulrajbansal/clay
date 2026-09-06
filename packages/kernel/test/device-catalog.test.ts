@@ -60,13 +60,13 @@ function seedValidCatalog(driver: DbDriver): SeededCatalogIds {
   );
   driver.exec(
     `INSERT INTO catalog.app_entries(
-      app_instance_id,display_name,active_generation_id,
+      app_instance_id,display_name,shell_id,active_generation_id,
       journal_genesis_generation_id,journal_genesis_lineage_epoch,
       journal_genesis_protection_revision,journal_genesis_state_sha256,current_lineage_epoch,
       lineage_epoch_high_water,current_protection_revision,revision_high_water,
       digest_schema,state_sha256,tombstoned
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
-    [ids.app, "Field Service", ids.generation, ids.generation, "2", "7", state,
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
+    [ids.app, "Field Service", "tracker", ids.generation, ids.generation, "2", "7", state,
       "2", "4", "7", "7", 1, state],
   );
   driver.exec(
@@ -75,11 +75,12 @@ function seedValidCatalog(driver: DbDriver): SeededCatalogIds {
   );
   driver.exec(
     `INSERT INTO catalog.catalog_generation_events(
-      catalog_generation,event_kind,app_instance_id,operation_id,write_epoch,at,
+      catalog_generation,event_kind,app_instance_id,operation_id,write_epoch,at,display_name,shell_id,
       target_generation_id,target_lineage_epoch,target_protection_revision,
       target_digest_schema,target_state_sha256
-    ) VALUES ('1','app_seed',?,?,'0',?,?,?,?,?,?)`,
-    [ids.app, ids.operation, at, ids.generation, "2", "7", 1, state],
+    ) VALUES ('1','app_seed',?,?,'0',?,?,?,?,?,?,?,?)`,
+    [ids.app, ids.operation, at, "Field Service", "tracker",
+      ids.generation, "2", "7", 1, state],
   );
   return ids;
 }
@@ -185,6 +186,131 @@ describe("worker-owned device catalog root", () => {
     } finally {
       driver.close();
     }
+  });
+
+  it("persists a complete legacy bootstrap manifest before adding any app target", async () => {
+    const driver = await attachedCatalog();
+    DeviceCatalog.initializeFresh(driver);
+    const entry = {
+      storageKey: "default",
+      userFile: "/user.db",
+      systemFile: "/system.db",
+      kind: "legacy" as const,
+      appInstanceId: id("app", "m"),
+      generationId: id("gen", "n"),
+      namespaceId: id("ns", "o"),
+      operationId: id("op", "p"),
+      displayName: "Field Service",
+      shellId: "tracker",
+      selected: true,
+    };
+    const catalog = DeviceCatalog.openExisting(driver);
+    catalog.beginLegacyBootstrap([entry], "2026-09-05T00:00:00.000Z");
+    expect(catalog.legacyBootstrapManifest()).toEqual([entry]);
+    expect(catalog.snapshot()).toMatchObject({
+      catalogGeneration: "0", selectedAppInstanceId: null, entries: [],
+    });
+    const before = catalog.snapshot();
+    const fence = catalog.acquireWriteLease({
+      expectedAuthorityIncarnationId: before.authorityIncarnationId,
+      expectedCatalogGeneration: before.catalogGeneration,
+      expectedWriteEpoch: before.writeEpoch,
+      releaseId: id("rel", "q"),
+      nowMs: 2_000,
+      ttlMs: 5_000,
+    });
+    catalog.addAppTarget({
+      expectedCatalogGeneration: catalog.snapshot().catalogGeneration,
+      target: {
+        appInstanceId: entry.appInstanceId,
+        activeGenerationId: entry.generationId,
+        lineageEpoch: "0", protectionRevision: "0", digestSchema: 1,
+        stateSha256: `sha256:${"f".repeat(64)}`,
+      },
+      namespaceId: entry.namespaceId,
+      storageKey: entry.storageKey,
+      displayName: entry.displayName,
+      shellId: entry.shellId,
+      operationId: entry.operationId,
+      fence,
+      nowMs: 2_001,
+      select: true,
+      bootstrapStorageKey: entry.storageKey,
+    });
+    expect(catalog.legacyBootstrapManifest()).toEqual([]);
+    expect(catalog.snapshot()).toMatchObject({
+      catalogGeneration: "2", selectedAppInstanceId: entry.appInstanceId,
+    });
+    driver.close();
+  });
+
+  it("rejects accessor-backed legacy manifest entries before catalog write", async () => {
+    const driver = await attachedCatalog();
+    DeviceCatalog.initializeFresh(driver);
+    const catalog = DeviceCatalog.openExisting(driver);
+    let reads = 0;
+    const entry = {
+      storageKey: "default", userFile: "/user.db", systemFile: "/system.db",
+      kind: "legacy", appInstanceId: id("app", "m"), generationId: id("gen", "n"),
+      namespaceId: id("ns", "o"), operationId: id("op", "p"),
+      shellId: "tracker", selected: true,
+      get displayName() { reads++; return "Field Service"; },
+    };
+    expect(() => catalog.beginLegacyBootstrap(
+      [entry] as never, "2026-09-05T00:00:00.000Z",
+    )).toThrow();
+    expect(reads).toBe(0);
+    expect(catalog.legacyBootstrapManifest()).toEqual([]);
+    driver.close();
+  });
+
+  it("adds and selects a second app target under one exact fence", async () => {
+    const driver = await attachedCatalog();
+    const first = seedValidCatalog(driver);
+    const catalog = DeviceCatalog.openExisting(driver);
+    const before = catalog.snapshot();
+    const fence = catalog.acquireWriteLease({
+      expectedAuthorityIncarnationId: before.authorityIncarnationId,
+      expectedCatalogGeneration: before.catalogGeneration,
+      expectedWriteEpoch: before.writeEpoch,
+      releaseId: id("rel", "w"),
+      nowMs: 2_000,
+      ttlMs: 5_000,
+    });
+    const second = {
+      appInstanceId: id("app", "u"),
+      activeGenerationId: id("gen", "v"),
+      lineageEpoch: "0",
+      protectionRevision: "0",
+      digestSchema: 1 as const,
+      stateSha256: `sha256:${"d".repeat(64)}`,
+    };
+    const published = catalog.addAppTarget({
+      expectedCatalogGeneration: catalog.snapshot().catalogGeneration,
+      target: second,
+      namespaceId: id("ns", "x"),
+      storageKey: id("ns", "x"),
+      displayName: "Inventory",
+      shellId: "inventory",
+      operationId: id("op", "y"),
+      fence,
+      nowMs: 2_001,
+      select: true,
+    });
+    expect(published.catalogGeneration).toBe("3");
+    expect(published.selectedAppInstanceId).toBe(second.appInstanceId);
+    expect(published.entries).toHaveLength(2);
+    expect(catalog.activeTargetStorageInventory()).toHaveLength(2);
+    const selected = catalog.selectApp({
+      expectedCatalogGeneration: published.catalogGeneration,
+      appInstanceId: first.app,
+      operationId: id("op", "s"),
+      fence,
+      nowMs: 2_002,
+    });
+    expect(selected.catalogGeneration).toBe("4");
+    expect(selected.selectedAppInstanceId).toBe(first.app);
+    driver.close();
   });
 
   it("durably reserves the next selected-target revision under one current fence", async () => {

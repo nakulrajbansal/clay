@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { TargetAuthorityHeaderV1, TargetEvidenceV1 } from "@clay/schema/catalog";
-import type { DbDriver } from "../src/index";
 import { enumerateCanonicalStateV1 } from "../src/canonical-state";
 import { StateMerkleIndex } from "../src/state-merkle-index";
 import { TargetAuthorityStore } from "../src/target-authority";
-import { seededStore } from "./helpers";
+import { seededStoreWithDriver } from "./helpers";
 
 const id = (prefix: string, char: string): string => `${prefix}_${char.repeat(26)}`;
 
@@ -29,8 +28,7 @@ function reserve(target: TargetAuthorityStore, operationId: string, reservedAt: 
 
 describe("target-owned authority metadata", () => {
   it("initializes one strict header and derives evidence from the persisted Merkle root", async () => {
-    const clay = await seededStore();
-    const driver = (clay as unknown as { driver: DbDriver }).driver;
+    const { store: clay, driver } = await seededStoreWithDriver();
     try {
       const registry = clay.validationRegistrySnapshot();
       const before = enumerateCanonicalStateV1(driver, registry);
@@ -56,8 +54,7 @@ describe("target-owned authority metadata", () => {
   });
 
   it("reserves non-reusable protection revisions idempotently without advancing current state", async () => {
-    const clay = await seededStore();
-    const driver = (clay as unknown as { driver: DbDriver }).driver;
+    const { store: clay, driver } = await seededStoreWithDriver();
     try {
       const census = enumerateCanonicalStateV1(driver, clay.validationRegistrySnapshot());
       StateMerkleIndex.createSchema(driver);
@@ -93,8 +90,7 @@ describe("target-owned authority metadata", () => {
   });
 
   it("abandons a reserved revision without reuse or current-state advancement", async () => {
-    const clay = await seededStore();
-    const driver = (clay as unknown as { driver: DbDriver }).driver;
+    const { store: clay, driver } = await seededStoreWithDriver();
     try {
       const census = enumerateCanonicalStateV1(driver, clay.validationRegistrySnapshot());
       StateMerkleIndex.createSchema(driver);
@@ -122,8 +118,7 @@ describe("target-owned authority metadata", () => {
   });
 
   it("refuses target evidence when the reservation journal is corrupted after open", async () => {
-    const clay = await seededStore();
-    const driver = (clay as unknown as { driver: DbDriver }).driver;
+    const { store: clay, driver } = await seededStoreWithDriver();
     try {
       const census = enumerateCanonicalStateV1(driver, clay.validationRegistrySnapshot());
       StateMerkleIndex.createSchema(driver);
@@ -142,8 +137,7 @@ describe("target-owned authority metadata", () => {
   });
 
   it("refuses evidence when a journal row claims a revision committed beyond current", async () => {
-    const clay = await seededStore();
-    const driver = (clay as unknown as { driver: DbDriver }).driver;
+    const { store: clay, driver } = await seededStoreWithDriver();
     try {
       const census = enumerateCanonicalStateV1(driver, clay.validationRegistrySnapshot());
       StateMerkleIndex.createSchema(driver);
@@ -162,8 +156,7 @@ describe("target-owned authority metadata", () => {
   });
 
   it("refuses evidence when an earlier reserved revision is missing from the journal", async () => {
-    const clay = await seededStore();
-    const driver = (clay as unknown as { driver: DbDriver }).driver;
+    const { store: clay, driver } = await seededStoreWithDriver();
     try {
       const census = enumerateCanonicalStateV1(driver, clay.validationRegistrySnapshot());
       StateMerkleIndex.createSchema(driver);
@@ -180,8 +173,7 @@ describe("target-owned authority metadata", () => {
   });
 
   it("rejects unauditable historical committed replay after current advances", async () => {
-    const clay = await seededStore();
-    const driver = (clay as unknown as { driver: DbDriver }).driver;
+    const { store: clay, driver } = await seededStoreWithDriver();
     try {
       const census = enumerateCanonicalStateV1(driver, clay.validationRegistrySnapshot());
       StateMerkleIndex.createSchema(driver);

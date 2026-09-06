@@ -893,3 +893,15 @@ ADR-049 (2026-09-04) Catalog schema 1 proceeds; raw SQLite-pair target digests a
   real-OPFS catalog-first integration, complete route fencing, reservation semantics,
   concurrency, archive-format gate, performance matrix, and release-bound crash/reopen
   evidence pass.
+  IMPLEMENTATION UPDATE (2026-09-06): Production authority now uses a separate frozen
+  guarded driver and opaque write opener. Mirrored request receipts persist
+  `prepared|invoked|committed|no_op|failed`; live mutation begins only after durable
+  `invoked`, ambiguous invocation never re-enters, and no-op completes from a revalidated
+  shadow. Catalog-first boot adopts a declared multi-legacy manifest, replaces shell app
+  caches from a detached catalog projection, and publishes app selection/metadata events.
+  A real Chromium 149 OPFS worker gate has passed multi-namespace declaration, interruption
+  after one atomic adoption, fresh-worker resume, and canonical switching, but remains a
+  slice-only `releaseCertificate: false` report. CRUD, settings, structural layout, and
+  starter seeding are authority-routed. Remaining lifecycle, preview, automation, import,
+  attachment, undo, restore, and archive routes remain fail-closed and therefore block
+  protection publication and release certification.

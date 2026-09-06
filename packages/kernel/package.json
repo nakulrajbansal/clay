@@ -6,7 +6,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./expr": "./src/expr.ts",
-    "./errors": "./src/errors.ts"
+    "./errors": "./src/errors.ts",
+    "./worker-authority": "./src/worker-authority.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

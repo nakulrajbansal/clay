@@ -6,6 +6,7 @@ import {
   LeaseId,
   NamespaceId,
   OperationId,
+  RequestId,
   ReleaseId,
   Sha256,
   UInt64Decimal,
@@ -41,6 +42,56 @@ export type TargetAuthorityHeaderV1 = z.infer<typeof TargetAuthorityHeaderV1>;
 export const CanonicalInstant = z.string().datetime({ offset: true }).refine((value) => {
   try { return new Date(value).toISOString() === value; } catch { return false; }
 }, "exact UTC millisecond instant required");
+
+export const ProductionRequestReceiptV1 = z.object({
+  schema: z.literal(1),
+  requestId: RequestId,
+  operationId: OperationId,
+  appInstanceId: AppInstanceId,
+  activeGenerationId: GenerationId,
+  lineageEpoch: UInt64Decimal,
+  expectedProtectionRevision: UInt64Decimal,
+  expectedStateSha256: Sha256,
+  requestSha256: Sha256,
+  state: z.enum(["prepared", "invoked", "committed", "no_op", "failed"]),
+  resultingProtectionRevision: UInt64Decimal.nullable(),
+  resultingStateSha256: Sha256.nullable(),
+  responseSha256: Sha256.nullable(),
+  preparedAt: CanonicalInstant,
+  invokedAt: CanonicalInstant.nullable(),
+  completedAt: CanonicalInstant.nullable(),
+}).strict().superRefine((value, context) => {
+  const terminal = value.state === "committed" || value.state === "no_op"
+    || value.state === "failed";
+  const hasAnyResult = value.resultingProtectionRevision !== null
+    || value.resultingStateSha256 !== null || value.responseSha256 !== null
+    || value.completedAt !== null;
+  const hasResult = value.resultingProtectionRevision !== null
+    && value.resultingStateSha256 !== null && value.responseSha256 !== null
+    && value.completedAt !== null;
+  if (value.state === "prepared" && (value.invokedAt !== null || hasAnyResult))
+    context.addIssue({ code: "custom", message: "prepared request receipt is inconsistent" });
+  if (value.state === "invoked" && (value.invokedAt === null || hasAnyResult))
+    context.addIssue({ code: "custom", message: "invoked request receipt is inconsistent" });
+  if (terminal && !hasResult)
+    context.addIssue({ code: "custom", message: "terminal request receipt is incomplete" });
+  if ((value.state === "no_op" || value.state === "failed") && hasResult
+      && (value.resultingProtectionRevision !== value.expectedProtectionRevision
+        || value.resultingStateSha256 !== value.expectedStateSha256))
+    context.addIssue({ code: "custom", message: "non-commit receipt changed target identity" });
+  if (value.state === "no_op" && value.invokedAt !== null)
+    context.addIssue({ code: "custom", message: "canonical no-op must not invoke live mutation" });
+  if (value.state === "committed" && (value.invokedAt === null || !hasResult
+      || BigInt(value.resultingProtectionRevision!) <= BigInt(value.expectedProtectionRevision)
+      || value.resultingStateSha256 === value.expectedStateSha256))
+    context.addIssue({ code: "custom", message: "committed request receipt is inconsistent" });
+  if (value.invokedAt !== null && Date.parse(value.invokedAt) < Date.parse(value.preparedAt))
+    context.addIssue({ code: "custom", message: "request invocation predates preparation" });
+  if (value.completedAt !== null && Date.parse(value.completedAt) < Date.parse(value.preparedAt))
+    context.addIssue({ code: "custom", message: "request completion predates preparation" });
+});
+export type ProductionRequestReceiptV1 = z.infer<typeof ProductionRequestReceiptV1>;
+
 const ProvenanceId = z.string().min(1).max(256)
   .refine(value => value === value.trim(), "canonical provenance identity required");
 export const ImmutableAppGenerationV1 = z.object({
@@ -68,9 +119,11 @@ export type WriteFenceV1 = z.infer<typeof WriteFenceV1>;
 
 const CatalogDisplayName = z.string().min(1).max(40)
   .refine(value => value === value.trim(), "canonical display name required");
+const CatalogShellId = z.string().regex(/^[a-z0-9_-]{1,64}$/);
 export const AppCatalogEntryV1 = z.object({
   appInstanceId: AppInstanceId,
   displayName: CatalogDisplayName,
+  shellId: CatalogShellId,
   activeGenerationId: GenerationId,
   journalGenesisGenerationId: GenerationId,
   journalGenesisLineageEpoch: UInt64Decimal,
@@ -138,13 +191,15 @@ export const CatalogGenerationEventV1 = z.object({
   catalogGeneration: UInt64Decimal,
   eventKind: z.enum([
     "app_seed", "lease_issued", "revision_reserved", "revision_committed",
-    "revision_abandoned", "recovery_takeover",
+    "revision_abandoned", "recovery_takeover", "app_selected", "app_metadata",
   ]),
   appInstanceId: AppInstanceId.nullable(),
   operationId: OperationId.nullable(),
   writeEpoch: UInt64Decimal,
   at: CanonicalInstant,
   target: TargetEvidenceV1.nullable(),
+  displayName: CatalogDisplayName.nullable(),
+  shellId: CatalogShellId.nullable(),
 }).strict().superRefine((value, context) => {
   if (value.catalogGeneration === "0")
     context.addIssue({ code: "custom", message: "catalog generation event cannot be zero" });
@@ -153,12 +208,18 @@ export const CatalogGenerationEventV1 = z.object({
     context.addIssue({ code: "custom", message: "catalog event requires app and operation identity" });
   if (!requiresOperation && value.operationId !== null)
     context.addIssue({ code: "custom", message: "lease event cannot claim an operation identity" });
-  if (value.eventKind === "app_seed") {
+  if (value.eventKind === "app_seed" || value.eventKind === "app_selected") {
     if (value.target === null || value.target.appInstanceId !== value.appInstanceId)
       context.addIssue({ code: "custom", message: "app seed event requires its complete target" });
   } else if (value.target !== null) {
-    context.addIssue({ code: "custom", message: "only app seed events carry a target" });
+    context.addIssue({ code: "custom", message: "only app target events carry a target" });
   }
+  const requiredMetadata = value.eventKind === "app_seed" || value.eventKind === "app_metadata";
+  const hasMetadata = value.displayName !== null && value.shellId !== null;
+  const partialMetadata = (value.displayName === null) !== (value.shellId === null);
+  if (partialMetadata || (requiredMetadata && !hasMetadata)
+      || (!requiredMetadata && value.eventKind !== "revision_committed" && hasMetadata))
+    context.addIssue({ code: "custom", message: "catalog metadata event fields are invalid" });
 });
 export type CatalogGenerationEventV1 = z.infer<typeof CatalogGenerationEventV1>;
 

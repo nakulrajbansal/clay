@@ -7,7 +7,8 @@ import type {
 } from "@clay/schema/catalog";
 import { DeviceCatalog } from "./device-catalog";
 import { ClayError } from "./errors";
-import type { LiveWriteGuard } from "./live-write-guard";
+import type { LiveWriteAuthority, LiveWriteSession } from "./live-write-guard";
+import type { DbDriver } from "./db";
 import type { Registry } from "./registry";
 import { sha256HexSync } from "./state-digest";
 import { stateLeafHashV1 } from "./state-merkle";
@@ -141,19 +142,25 @@ function captureChanges(input: unknown[]): StateMerkleChange[] {
 }
 
 export class TargetCommitCoordinator {
+  readonly #driver: DbDriver;
+  readonly #writeAuthority: LiveWriteAuthority;
+
   constructor(
-    private readonly driver: LiveWriteGuard,
+    session: LiveWriteSession,
     private readonly registry?: Registry,
     private readonly clock: () => number = Date.now,
-  ) {}
+  ) {
+    this.#driver = session.driver;
+    this.#writeAuthority = session.authority;
+  }
 
   recoverExpiredReservation(input: RecoverExpiredReservationInput): CatalogReservationRecovery {
     const operation = OperationId.safeParse(input.operationId);
     if (!operation.success)
       throw new ClayError("E_TARGET_AUTHORITY_INVALID", "reservation recovery operation is invalid");
     const recoveryTime = trustedInstant(this.clock);
-    const catalog = DeviceCatalog.openExisting(this.driver);
-    const target = TargetAuthorityStore.open(this.driver);
+    const catalog = DeviceCatalog.openExisting(this.#driver);
+    const target = TargetAuthorityStore.open(this.#driver);
     const targetReservation = target.reservations()
       .find(candidate => candidate.operationId === operation.data);
     const catalogReservation = catalog.revisionReservations()
@@ -182,7 +189,7 @@ export class TargetCommitCoordinator {
         || entry.currentProtectionRevision !== current.protectionRevision
         || entry.stateSha256 !== current.stateSha256)
       throw new ClayError("E_TARGET_AUTHORITY_INVALID", "mirrored reservation recovery is inconsistent");
-    return this.driver.runAuthorized(() => {
+    return this.#writeAuthority.run(() => {
       const recovery = catalog.recoverExpiredSelectedReservation({
         expectedAuthorityIncarnationId: input.expectedAuthorityIncarnationId,
         expectedCatalogGeneration: input.expectedCatalogGeneration,
@@ -239,11 +246,11 @@ export class TargetCommitCoordinator {
       if (!catalogGeneration.success || !fence.success)
         throw new ClayError("E_TARGET_AUTHORITY_INVALID", "target commit catalog authority is invalid");
       catalogAuthority = { generation: catalogGeneration.data, fence: fence.data };
-      catalog = DeviceCatalog.openExisting(this.driver);
+      catalog = DeviceCatalog.openExisting(this.#driver);
     } else if (captured.expectedCatalogGeneration !== undefined || captured.fence !== undefined) {
       throw new ClayError("E_TARGET_AUTHORITY_INVALID", "target commit catalog authority is invalid");
     }
-    const target = TargetAuthorityStore.open(this.driver);
+    const target = TargetAuthorityStore.open(this.#driver);
     const committed = target.committedEvidence(operation.data, expected.data, fingerprint);
     if (committed) {
       if (!catalog || catalogAuthority === null)
@@ -275,7 +282,7 @@ export class TargetCommitCoordinator {
     const current = target.evidence();
     if (!sameTarget(current, expected.data))
       throw new ClayError("E_GENERATION_NOT_SELECTED", "expected target is not current");
-    const index = StateMerkleIndex.open(this.driver);
+    const index = StateMerkleIndex.open(this.#driver);
     if (!index.wouldChange(preparedChanges)) return { changed: false, evidence: current };
     if (!catalog || catalogAuthority === null)
       throw new ClayError("E_TARGET_AUTHORITY_INVALID", "meaningful target commit requires catalog authority");
@@ -283,7 +290,7 @@ export class TargetCommitCoordinator {
       throw new ClayError("E_TARGET_AUTHORITY_INVALID", "trusted canonical registry is unavailable");
     const reservedTime = trustedInstant(this.clock);
     let reservedCatalogGeneration: string | null = null;
-    this.driver.runAuthorized(() => {
+    this.#writeAuthority.run(() => {
       const targetReservation = target.reserveProtectionRevision(
         operation.data, reservedTime.instant, expected.data, fingerprint);
       if (!catalog) return;
@@ -310,7 +317,7 @@ export class TargetCommitCoordinator {
       const finalizedTime = trustedInstant(this.clock);
       if (finalizedTime.milliseconds < reservedTime.milliseconds)
         throw new ClayError("E_TARGET_AUTHORITY_INVALID", "trusted worker clock moved backward");
-      const evidence = this.driver.runAuthorized(() => {
+      const evidence = this.#writeAuthority.run(() => {
         catalog.assertWriteFence(catalogAuthority.fence, finalizedTime.milliseconds);
         const committedTarget = target.commitReservedProtectionRevision({
           operationId: operation.data,
@@ -353,7 +360,7 @@ export class TargetCommitCoordinator {
         const abandonedTime = trustedInstant(this.clock);
         if (abandonedTime.milliseconds < reservedTime.milliseconds)
           throw new ClayError("E_TARGET_AUTHORITY_INVALID", "trusted worker clock moved backwards");
-        this.driver.runAuthorized(() => {
+        this.#writeAuthority.run(() => {
           target.abandonProtectionRevision(operation.data, abandonedTime.instant);
           if (catalog) {
             if (reservedCatalogGeneration === null)

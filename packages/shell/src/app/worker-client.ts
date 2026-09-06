@@ -8,27 +8,91 @@ import type {
   PrivateMetricEvent, PrivateMetricsSummary, RegTable, RelationConversionPreview,
   RelationConversionRequest, RelationConversionResult, SemanticSchemaTraceV1, Suggestion,
 } from "@clay/kernel";
+import { ClayError } from "@clay/kernel/errors";
 import type { IntentOutcome } from "../worker/db-worker";
 
 export type TraceEntry = { at: string; intent: string; events: DebugEvent[] };
 
-export type BootInfo = {
-  persistent: boolean; seeded: boolean; shellId: string | null;
+export type BootAppEntry = {
+  id: string;
+  name: string;
+  shellId: string;
 };
+
+export type BootRequest = {
+  requestedAppId: string | null;
+  appCache: BootAppEntry[];
+};
+
+export type BootInfo = {
+  persistent: boolean;
+  seeded: boolean;
+  shellId: string | null;
+  selectedAppInstanceId: string;
+  catalogGeneration: string;
+  apps: BootAppEntry[];
+};
+
+const APP_ID = /^app_[a-z2-7]{26}$/;
+const UINT64 = /^(?:0|[1-9][0-9]{0,19})$/;
+const CACHE_ID = /^(?:default|[a-zA-Z0-9_-]{1,80})$/;
+
+function parseAppEntry(value: unknown, canonical: boolean): BootAppEntry {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw new Error("invalid boot app entry");
+  const raw = value as Record<string, unknown>;
+  if (Object.keys(raw).length !== 3
+      || !Object.hasOwn(raw, "id") || !Object.hasOwn(raw, "name")
+      || !Object.hasOwn(raw, "shellId")
+      || typeof raw.id !== "string" || !(canonical ? APP_ID : CACHE_ID).test(raw.id)
+      || typeof raw.name !== "string" || raw.name !== raw.name.trim()
+      || raw.name.length < 1 || raw.name.length > 40
+      || typeof raw.shellId !== "string" || !/^[a-z0-9_-]{1,64}$/.test(raw.shellId))
+    throw new Error("invalid boot app entry");
+  return { id: raw.id, name: raw.name, shellId: raw.shellId };
+}
+
+function parseBootRequest(value: BootRequest): BootRequest {
+  const requestedAppId = value.requestedAppId;
+  if (requestedAppId !== null
+      && (typeof requestedAppId !== "string" || !CACHE_ID.test(requestedAppId)))
+    throw new Error("invalid boot request");
+  if (!Array.isArray(value.appCache) || value.appCache.length > 1_000)
+    throw new Error("invalid boot request");
+  const appCache = value.appCache.map(entry => parseAppEntry(entry, false));
+  if (new Set(appCache.map(entry => entry.id)).size !== appCache.length)
+    throw new Error("invalid boot request");
+  return { requestedAppId, appCache };
+}
 
 function parseBootInfo(value: unknown): BootInfo {
   if (typeof value !== "object" || value === null || Array.isArray(value))
     throw new Error("invalid boot response");
   const raw = value as Record<string, unknown>;
-  const allowed = new Set(["persistent", "seeded", "shellId"]);
-  if (Object.keys(raw).some(key => !allowed.has(key))
+  const allowed = new Set([
+    "persistent", "seeded", "shellId", "selectedAppInstanceId",
+    "catalogGeneration", "apps",
+  ]);
+  if (Object.keys(raw).length !== allowed.size
+      || Object.keys(raw).some(key => !allowed.has(key))
       || typeof raw.persistent !== "boolean" || typeof raw.seeded !== "boolean"
-      || (raw.shellId !== null && typeof raw.shellId !== "string"))
+      || (raw.shellId !== null && typeof raw.shellId !== "string")
+      || typeof raw.selectedAppInstanceId !== "string"
+      || !APP_ID.test(raw.selectedAppInstanceId)
+      || typeof raw.catalogGeneration !== "string" || !UINT64.test(raw.catalogGeneration)
+      || !Array.isArray(raw.apps) || raw.apps.length < 1 || raw.apps.length > 1_000)
+    throw new Error("invalid boot response");
+  const apps = raw.apps.map(entry => parseAppEntry(entry, true));
+  if (new Set(apps.map(entry => entry.id)).size !== apps.length
+      || !apps.some(entry => entry.id === raw.selectedAppInstanceId))
     throw new Error("invalid boot response");
   return {
     persistent: raw.persistent,
     seeded: raw.seeded,
-    shellId: raw.shellId,
+    shellId: raw.shellId as string | null,
+    selectedAppInstanceId: raw.selectedAppInstanceId,
+    catalogGeneration: raw.catalogGeneration,
+    apps,
   };
 }
 export type StatusInfo = {
@@ -43,6 +107,24 @@ export type StatusInfo = {
   };
 };
 
+function mintWorkerRequestId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(17));
+  const alphabet = "abcdefghijklmnopqrstuvwxyz234567";
+  let bits = 0;
+  let value = 0;
+  let encoded = "";
+  for (let index = 0; index < bytes.length && encoded.length < 26; index++) {
+    value = (value << 8) | bytes[index]!;
+    bits += 8;
+    while (bits >= 5 && encoded.length < 26) {
+      bits -= 5;
+      encoded += alphabet[(value >>> bits) & 31];
+      value &= (1 << bits) - 1;
+    }
+  }
+  return `req_${encoded}`;
+}
+
 export class WorkerClient {
   private nextId = 1;
   private readonly pending = new Map<number, {
@@ -51,11 +133,18 @@ export class WorkerClient {
 
   constructor(private readonly worker: Worker) {
     worker.onmessage = (ev): void => {
-      const msg = ev.data as { id: number; ok: boolean; result?: unknown; error?: string };
+      const msg = ev.data as {
+        id: number; ok: boolean; result?: unknown;
+        error?: string | { code?: string; message?: string };
+      };
       const entry = this.pending.get(msg.id);
       if (!entry) return;
       this.pending.delete(msg.id);
       if (msg.ok) entry.resolve(msg.result);
+      else if (typeof msg.error === "object" && msg.error !== null) entry.reject(new ClayError(
+        (msg.error.code ?? "E_INTERNAL") as ClayError["code"],
+        msg.error.message ?? "worker error",
+      ));
       else entry.reject(new Error(msg.error ?? "worker error"));
     };
   }
@@ -64,7 +153,7 @@ export class WorkerClient {
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
       this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
-      this.worker.postMessage({ id, op, payload }, transfer ?? []);
+      this.worker.postMessage({ id, requestId: mintWorkerRequestId(), op, payload }, transfer ?? []);
     });
   }
 
@@ -72,8 +161,9 @@ export class WorkerClient {
    * reload so the next worker can acquire the pool without contention. */
   terminate(): void { try { this.worker.terminate(); } catch { /* already gone */ } }
 
-  async boot(appId?: string): Promise<BootInfo> {
-    return parseBootInfo(await this.call<unknown>("boot", { appId }));
+  async boot(request: BootRequest): Promise<BootInfo> {
+    const captured = parseBootRequest(request);
+    return parseBootInfo(await this.call<unknown>("boot", captured));
   }
   setModelAccess(access: {
     provider: "clay" | "openai" | "anthropic" | "codex";

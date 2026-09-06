@@ -162,7 +162,7 @@ export function fillSampleRows(store: ClayStore): { added: number; tables: numbe
 }
 
 /** How many tracked sample rows currently exist (drives the Clear button). */
-export function sampleRowCount(store: ClayStore): number {
+export function sampleRowCount(store: Pick<ClayStore, "getSetting">): number {
   const marker = store.getSetting<Record<string, string[]>>("sample_rows") ?? {};
   return Object.values(marker).reduce((s, ids) => s + ids.length, 0);
 }

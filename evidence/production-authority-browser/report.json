@@ -1,0 +1,441 @@
+{
+  "schema": 1,
+  "verdict": "PRODUCTION_BOOT_SLICE_VALIDATED",
+  "releaseCertificate": false,
+  "browser": "149.0.7827.55",
+  "sourceSha256": {
+    "runner": "9523b966c2c8aa569ae442acb8a6f45288fd1d3f8ae65f2e2fd8cd25f55732d3",
+    "controller": "b2bb09d1806829e9121266c0605ea18fbd7ed4f62bc56e37d4065e9135b8f6c9",
+    "viteConfig": "cb6c67254bc1e04409000b228f8fd947350eda32a2cb3b14d7f18193b096104c",
+    "worker": "63bb3b9b976638ed956ea0cfdaeeda52fea9dfc6cd44c8223b99e1d4815149ca",
+    "authority": "eba46254fe1e3fc595c3c486adce39a59e1551f24c7e253037deeb00bbef4775",
+    "catalog": "ba19b7bf62af2920428538d2e2a2ac02e6194ed4ab30c219959050e34438bb55",
+    "coordinator": "a341ebd31efac415195a9228fe2462da3275218e403cf99010e8e2cd1fa46103",
+    "requestJournal": "e0f5e8c12379025e4f78ee5bcec7d49665743b9392452b8b41b98715df0dc5a9",
+    "store": "228c4fcab6c8a2e82ba161063ccdf3160b155cbd7fc49626d271a052f0d40794",
+    "db": "c02b20f73fdf67aebc6fdc021840ab688983247d120962cdea86f4c487fac7af",
+    "inventory": "a1a0308ad07089a42e855efc6eee84d21a6912d8020fa6598268cbd73d3d1964",
+    "targetAuthority": "b9eb47be5a13da4f6bd69b9b254f67102cebc5cb4cd3f7bfe887495c2b55cd77",
+    "merkle": "e43eefdfd525da8262e8e2dac383d6f9b88d89be56a7ea979973c8e8987c89ef",
+    "schemaCatalog": "fe7fe9b1b6b59a7958484d3cbd6ea4d966848a345fb5131fc1eca819a30b28ec",
+    "lockfile": "cc82f58b5c64ee5fa839f8fb1483ac5b3df4b5d5d4e5b31a998f419c3d4c3a3e"
+  },
+  "cases": {
+    "emptyCatalogAttachmentRecovery": true,
+    "twoLegacyNamespaces": true,
+    "interruptedAfterOneAtomicAdoption": true,
+    "freshWorkerResume": true,
+    "catalogCanonicalSwitch": true
+  },
+  "emptySeeded": {
+    "state": "complete",
+    "catalogPresent": false,
+    "namespaces": [
+      {
+        "storageKey": "default",
+        "userFile": "/user.db",
+        "systemFile": "/system.db",
+        "kind": "legacy"
+      },
+      {
+        "storageKey": "field",
+        "userFile": "/app-field-user.db",
+        "systemFile": "/app-field-system.db",
+        "kind": "legacy"
+      }
+    ]
+  },
+  "emptyCatalog": {
+    "state": "complete",
+    "catalogPresent": true,
+    "namespaces": [
+      {
+        "storageKey": "default",
+        "userFile": "/user.db",
+        "systemFile": "/system.db",
+        "kind": "legacy"
+      },
+      {
+        "storageKey": "field",
+        "userFile": "/app-field-user.db",
+        "systemFile": "/app-field-system.db",
+        "kind": "legacy"
+      }
+    ]
+  },
+  "emptyRecovered": {
+    "boot": {
+      "persistent": true,
+      "seeded": true,
+      "shellId": "inventory",
+      "adopted": true,
+      "selectedAppInstanceId": "app_5lsknt5zalolan2zvcndt26yp2",
+      "catalogGeneration": "4",
+      "apps": [
+        {
+          "id": "app_5k66kephypofhlkxo5j5o47txh",
+          "name": "Projects",
+          "shellId": "tracker"
+        },
+        {
+          "id": "app_5lsknt5zalolan2zvcndt26yp2",
+          "name": "Field Service",
+          "shellId": "inventory"
+        }
+      ]
+    },
+    "rows": [
+      {
+        "id": "01a07533-f286-7e74-9a01-309d3dbd36c7",
+        "created_at": "2026-09-06T05:32:13.830Z",
+        "updated_at": "2026-09-06T05:32:13.830Z",
+        "name": "Field row"
+      }
+    ],
+    "evidence": {
+      "catalog": {
+        "schema": 1,
+        "authorityIncarnationId": "auth_b5ozaxnq3yn26ityxi4mmgjsjt",
+        "catalogGeneration": "4",
+        "selectedAppInstanceId": "app_5lsknt5zalolan2zvcndt26yp2",
+        "entries": [
+          {
+            "appInstanceId": "app_5k66kephypofhlkxo5j5o47txh",
+            "displayName": "Projects",
+            "shellId": "tracker",
+            "activeGenerationId": "gen_ftr7zhv3yz7jhqush23uwk5zyc",
+            "journalGenesisGenerationId": "gen_ftr7zhv3yz7jhqush23uwk5zyc",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:6bff743f037b40daccd4a55ba0ff13c31fca5910407640b2c22e55418cea48ad",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:6bff743f037b40daccd4a55ba0ff13c31fca5910407640b2c22e55418cea48ad",
+            "tombstoned": false
+          },
+          {
+            "appInstanceId": "app_5lsknt5zalolan2zvcndt26yp2",
+            "displayName": "Field Service",
+            "shellId": "inventory",
+            "activeGenerationId": "gen_g4ho2lg2firpbhyz2pgkhixooz",
+            "journalGenesisGenerationId": "gen_g4ho2lg2firpbhyz2pgkhixooz",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:987fcd1d7710b22c0ace9637eb9d7fc4d21458a9eaf0836bc675492533f870a2",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:987fcd1d7710b22c0ace9637eb9d7fc4d21458a9eaf0836bc675492533f870a2",
+            "tombstoned": false
+          }
+        ],
+        "writeEpoch": "2"
+      },
+      "target": {
+        "appInstanceId": "app_5lsknt5zalolan2zvcndt26yp2",
+        "activeGenerationId": "gen_g4ho2lg2firpbhyz2pgkhixooz",
+        "lineageEpoch": "0",
+        "protectionRevision": "0",
+        "digestSchema": 1,
+        "stateSha256": "sha256:987fcd1d7710b22c0ace9637eb9d7fc4d21458a9eaf0836bc675492533f870a2"
+      },
+      "targetReservations": [],
+      "catalogReservations": []
+    }
+  },
+  "seeded": {
+    "state": "complete",
+    "catalogPresent": false,
+    "namespaces": [
+      {
+        "storageKey": "default",
+        "userFile": "/user.db",
+        "systemFile": "/system.db",
+        "kind": "legacy"
+      },
+      {
+        "storageKey": "field",
+        "userFile": "/app-field-user.db",
+        "systemFile": "/app-field-system.db",
+        "kind": "legacy"
+      }
+    ]
+  },
+  "partial": {
+    "remaining": 1,
+    "entries": 1,
+    "selectedStorageKey": "default"
+  },
+  "resumed": {
+    "boot": {
+      "persistent": true,
+      "seeded": true,
+      "shellId": "inventory",
+      "adopted": true,
+      "selectedAppInstanceId": "app_5rgfdlev555dzghvmxf5le3axv",
+      "catalogGeneration": "4",
+      "apps": [
+        {
+          "id": "app_5rgfdlev555dzghvmxf5le3axv",
+          "name": "Field Service",
+          "shellId": "inventory"
+        },
+        {
+          "id": "app_t354i3hxfs2bc3be7wizzr2vvn",
+          "name": "Projects",
+          "shellId": "tracker"
+        }
+      ]
+    },
+    "rows": [
+      {
+        "id": "01a07533-fa0d-7390-b118-e391138067fc",
+        "created_at": "2026-09-06T05:32:15.757Z",
+        "updated_at": "2026-09-06T05:32:15.757Z",
+        "name": "Field row"
+      }
+    ],
+    "evidence": {
+      "catalog": {
+        "schema": 1,
+        "authorityIncarnationId": "auth_hdheo7ktfjuohvpyjqn26khqfa",
+        "catalogGeneration": "4",
+        "selectedAppInstanceId": "app_5rgfdlev555dzghvmxf5le3axv",
+        "entries": [
+          {
+            "appInstanceId": "app_5rgfdlev555dzghvmxf5le3axv",
+            "displayName": "Field Service",
+            "shellId": "inventory",
+            "activeGenerationId": "gen_qzwnhhvqghttpuzgobsiv53rp7",
+            "journalGenesisGenerationId": "gen_qzwnhhvqghttpuzgobsiv53rp7",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:c14999873b1057a2f06ad7ad151c7e727625d0517419421b48208e8dead4bf9e",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:c14999873b1057a2f06ad7ad151c7e727625d0517419421b48208e8dead4bf9e",
+            "tombstoned": false
+          },
+          {
+            "appInstanceId": "app_t354i3hxfs2bc3be7wizzr2vvn",
+            "displayName": "Projects",
+            "shellId": "tracker",
+            "activeGenerationId": "gen_zstwzbjbtokvdpoag263h6rkew",
+            "journalGenesisGenerationId": "gen_zstwzbjbtokvdpoag263h6rkew",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:42f68168b6f7854ea2f637548bf39e347a25e0f4c5c73fa595315c2d5be38d3b",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:42f68168b6f7854ea2f637548bf39e347a25e0f4c5c73fa595315c2d5be38d3b",
+            "tombstoned": false
+          }
+        ],
+        "writeEpoch": "2"
+      },
+      "target": {
+        "appInstanceId": "app_5rgfdlev555dzghvmxf5le3axv",
+        "activeGenerationId": "gen_qzwnhhvqghttpuzgobsiv53rp7",
+        "lineageEpoch": "0",
+        "protectionRevision": "0",
+        "digestSchema": 1,
+        "stateSha256": "sha256:c14999873b1057a2f06ad7ad151c7e727625d0517419421b48208e8dead4bf9e"
+      },
+      "targetReservations": [],
+      "catalogReservations": []
+    }
+  },
+  "switched": {
+    "boot": {
+      "persistent": true,
+      "seeded": true,
+      "shellId": "tracker",
+      "adopted": false,
+      "selectedAppInstanceId": "app_t354i3hxfs2bc3be7wizzr2vvn",
+      "catalogGeneration": "7",
+      "apps": [
+        {
+          "id": "app_5rgfdlev555dzghvmxf5le3axv",
+          "name": "Field Service",
+          "shellId": "inventory"
+        },
+        {
+          "id": "app_t354i3hxfs2bc3be7wizzr2vvn",
+          "name": "Projects",
+          "shellId": "tracker"
+        }
+      ]
+    },
+    "rows": [
+      {
+        "id": "01a07533-f934-7937-8a10-74adf71e05d8",
+        "created_at": "2026-09-06T05:32:15.540Z",
+        "updated_at": "2026-09-06T05:32:15.540Z",
+        "name": "Projects row"
+      }
+    ],
+    "evidence": {
+      "catalog": {
+        "schema": 1,
+        "authorityIncarnationId": "auth_hdheo7ktfjuohvpyjqn26khqfa",
+        "catalogGeneration": "7",
+        "selectedAppInstanceId": "app_t354i3hxfs2bc3be7wizzr2vvn",
+        "entries": [
+          {
+            "appInstanceId": "app_5rgfdlev555dzghvmxf5le3axv",
+            "displayName": "Field Service",
+            "shellId": "inventory",
+            "activeGenerationId": "gen_qzwnhhvqghttpuzgobsiv53rp7",
+            "journalGenesisGenerationId": "gen_qzwnhhvqghttpuzgobsiv53rp7",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:c14999873b1057a2f06ad7ad151c7e727625d0517419421b48208e8dead4bf9e",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:c14999873b1057a2f06ad7ad151c7e727625d0517419421b48208e8dead4bf9e",
+            "tombstoned": false
+          },
+          {
+            "appInstanceId": "app_t354i3hxfs2bc3be7wizzr2vvn",
+            "displayName": "Projects",
+            "shellId": "tracker",
+            "activeGenerationId": "gen_zstwzbjbtokvdpoag263h6rkew",
+            "journalGenesisGenerationId": "gen_zstwzbjbtokvdpoag263h6rkew",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:42f68168b6f7854ea2f637548bf39e347a25e0f4c5c73fa595315c2d5be38d3b",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:42f68168b6f7854ea2f637548bf39e347a25e0f4c5c73fa595315c2d5be38d3b",
+            "tombstoned": false
+          }
+        ],
+        "writeEpoch": "4"
+      },
+      "target": {
+        "appInstanceId": "app_t354i3hxfs2bc3be7wizzr2vvn",
+        "activeGenerationId": "gen_zstwzbjbtokvdpoag263h6rkew",
+        "lineageEpoch": "0",
+        "protectionRevision": "0",
+        "digestSchema": 1,
+        "stateSha256": "sha256:42f68168b6f7854ea2f637548bf39e347a25e0f4c5c73fa595315c2d5be38d3b"
+      },
+      "targetReservations": [],
+      "catalogReservations": []
+    }
+  },
+  "final": {
+    "inventory": {
+      "state": "complete",
+      "catalogPresent": true,
+      "namespaces": [
+        {
+          "storageKey": "default",
+          "userFile": "/user.db",
+          "systemFile": "/system.db",
+          "kind": "legacy"
+        },
+        {
+          "storageKey": "field",
+          "userFile": "/app-field-user.db",
+          "systemFile": "/app-field-system.db",
+          "kind": "legacy"
+        }
+      ]
+    },
+    "catalog": {
+      "schema": 1,
+      "authorityIncarnationId": "auth_hdheo7ktfjuohvpyjqn26khqfa",
+      "catalogGeneration": "7",
+      "selectedAppInstanceId": "app_t354i3hxfs2bc3be7wizzr2vvn",
+      "entries": [
+        {
+          "appInstanceId": "app_5rgfdlev555dzghvmxf5le3axv",
+          "displayName": "Field Service",
+          "shellId": "inventory",
+          "activeGenerationId": "gen_qzwnhhvqghttpuzgobsiv53rp7",
+          "journalGenesisGenerationId": "gen_qzwnhhvqghttpuzgobsiv53rp7",
+          "journalGenesisLineageEpoch": "0",
+          "journalGenesisProtectionRevision": "0",
+          "journalGenesisStateSha256": "sha256:c14999873b1057a2f06ad7ad151c7e727625d0517419421b48208e8dead4bf9e",
+          "currentLineageEpoch": "0",
+          "lineageEpochHighWater": "0",
+          "currentProtectionRevision": "0",
+          "revisionHighWater": "0",
+          "digestSchema": 1,
+          "stateSha256": "sha256:c14999873b1057a2f06ad7ad151c7e727625d0517419421b48208e8dead4bf9e",
+          "tombstoned": false
+        },
+        {
+          "appInstanceId": "app_t354i3hxfs2bc3be7wizzr2vvn",
+          "displayName": "Projects",
+          "shellId": "tracker",
+          "activeGenerationId": "gen_zstwzbjbtokvdpoag263h6rkew",
+          "journalGenesisGenerationId": "gen_zstwzbjbtokvdpoag263h6rkew",
+          "journalGenesisLineageEpoch": "0",
+          "journalGenesisProtectionRevision": "0",
+          "journalGenesisStateSha256": "sha256:42f68168b6f7854ea2f637548bf39e347a25e0f4c5c73fa595315c2d5be38d3b",
+          "currentLineageEpoch": "0",
+          "lineageEpochHighWater": "0",
+          "currentProtectionRevision": "0",
+          "revisionHighWater": "0",
+          "digestSchema": 1,
+          "stateSha256": "sha256:42f68168b6f7854ea2f637548bf39e347a25e0f4c5c73fa595315c2d5be38d3b",
+          "tombstoned": false
+        }
+      ],
+      "writeEpoch": "4"
+    },
+    "manifest": [],
+    "activeStorage": [
+      {
+        "target": {
+          "appInstanceId": "app_5rgfdlev555dzghvmxf5le3axv",
+          "activeGenerationId": "gen_qzwnhhvqghttpuzgobsiv53rp7",
+          "lineageEpoch": "0",
+          "protectionRevision": "0",
+          "digestSchema": 1,
+          "stateSha256": "sha256:c14999873b1057a2f06ad7ad151c7e727625d0517419421b48208e8dead4bf9e"
+        },
+        "namespaceId": "ns_k3detjxkcz5yj6r2txxjeufck3",
+        "storageKey": "field"
+      },
+      {
+        "target": {
+          "appInstanceId": "app_t354i3hxfs2bc3be7wizzr2vvn",
+          "activeGenerationId": "gen_zstwzbjbtokvdpoag263h6rkew",
+          "lineageEpoch": "0",
+          "protectionRevision": "0",
+          "digestSchema": 1,
+          "stateSha256": "sha256:42f68168b6f7854ea2f637548bf39e347a25e0f4c5c73fa595315c2d5be38d3b"
+        },
+        "namespaceId": "ns_gje3dbfiuxpbkogmjqgzbnal4x",
+        "storageKey": "default"
+      }
+    ]
+  },
+  "failures": [],
+  "consoleErrors": [],
+  "limitations": [
+    "Chromium OPFS only; other durable runtimes remain uncertified.",
+    "The interruption is between committed adoption transactions, not during native SQLite COMMIT.",
+    "This certifies catalog-first boot/adoption/switch only, not complete production write routing or Release B."
+  ]
+}

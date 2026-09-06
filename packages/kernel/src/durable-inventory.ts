@@ -14,8 +14,37 @@ export type DurableFileInventory =
   };
 
 const CATALOG_FILE = "/clay-device-catalog-v1.db";
+const LEGACY_STORAGE_KEY = /^[a-zA-Z0-9_][a-zA-Z0-9_-]{0,79}$/;
 const LEGACY_APP_FILE = /^\/app-([a-zA-Z0-9_][a-zA-Z0-9_-]{0,79})-(user|system)\.db$/;
 const GENERATION_FILE = /^\/(ns_[a-z2-7]{26})-(user|system)\.db$/;
+
+export function physicalNamespaceEntry(
+  storageKey: string,
+  namespaceId: string,
+): DurableNamespaceInventoryEntry {
+  if (!/^ns_[a-z2-7]{26}$/.test(namespaceId))
+    throw new Error("durable namespace id is invalid");
+  if (storageKey === namespaceId) return {
+    storageKey,
+    userFile: `/${storageKey}-user.db`,
+    systemFile: `/${storageKey}-system.db`,
+    kind: "generation",
+  };
+  if (storageKey === "default") return {
+    storageKey,
+    userFile: "/user.db",
+    systemFile: "/system.db",
+    kind: "legacy",
+  };
+  if (!LEGACY_STORAGE_KEY.test(storageKey))
+    throw new Error("legacy storage key is invalid");
+  return {
+    storageKey,
+    userFile: `/app-${storageKey}-user.db`,
+    systemFile: `/app-${storageKey}-system.db`,
+    kind: "legacy",
+  };
+}
 
 export function classifyDurableFileInventory(files: string[]): DurableFileInventory {
   if (new Set(files).size !== files.length) return { state: "ambiguous", reason: "duplicate_file" };

@@ -31,6 +31,10 @@ import type {
   WriteFenceV1 as WriteFence,
 } from "@clay/schema/catalog";
 import type { DbDriver, SqlRow } from "./db";
+import {
+  physicalNamespaceEntry,
+  type DurableNamespaceInventoryEntry,
+} from "./durable-inventory";
 import { ClayError } from "./errors";
 
 const EXPECTED_TABLES = [
@@ -40,8 +44,10 @@ const EXPECTED_TABLES = [
   "generations",
   "id_registry",
   "leases",
+  "legacy_bootstrap_manifest",
   "lineage_reservations",
   "pending_jobs",
+  "production_request_receipts",
   "revision_reservations",
 ] as const;
 
@@ -58,12 +64,14 @@ const CATALOG_DDL = [
     catalog_generation TEXT PRIMARY KEY,
     event_kind TEXT NOT NULL CHECK(event_kind IN (
       'app_seed','lease_issued','revision_reserved','revision_committed',
-      'revision_abandoned','recovery_takeover'
+      'revision_abandoned','recovery_takeover','app_selected','app_metadata'
     )),
     app_instance_id TEXT,
     operation_id TEXT,
     write_epoch TEXT NOT NULL,
     at TEXT NOT NULL,
+    display_name TEXT,
+    shell_id TEXT,
     target_generation_id TEXT,
     target_lineage_epoch TEXT,
     target_protection_revision TEXT,
@@ -74,17 +82,23 @@ const CATALOG_DDL = [
       OR (event_kind <> 'lease_issued' AND app_instance_id IS NOT NULL AND operation_id IS NOT NULL)
     ),
     CHECK(
-      (event_kind = 'app_seed' AND target_generation_id IS NOT NULL
+      (event_kind IN ('app_seed','app_selected') AND target_generation_id IS NOT NULL
         AND target_lineage_epoch IS NOT NULL AND target_protection_revision IS NOT NULL
         AND target_digest_schema = 1 AND target_state_sha256 IS NOT NULL)
-      OR (event_kind <> 'app_seed' AND target_generation_id IS NULL
+      OR (event_kind NOT IN ('app_seed','app_selected') AND target_generation_id IS NULL
         AND target_lineage_epoch IS NULL AND target_protection_revision IS NULL
         AND target_digest_schema IS NULL AND target_state_sha256 IS NULL)
+    ),
+    CHECK(
+      (event_kind IN ('app_seed','app_metadata','revision_committed')
+        AND display_name IS NOT NULL AND shell_id IS NOT NULL)
+      OR (event_kind NOT IN ('app_seed','app_metadata') AND display_name IS NULL AND shell_id IS NULL)
     )
   )`,
   `CREATE TABLE catalog.app_entries(
     app_instance_id TEXT PRIMARY KEY,
     display_name TEXT NOT NULL,
+    shell_id TEXT NOT NULL,
     active_generation_id TEXT NOT NULL UNIQUE,
     journal_genesis_generation_id TEXT NOT NULL,
     journal_genesis_lineage_epoch TEXT NOT NULL,
@@ -127,6 +141,20 @@ const CATALOG_DDL = [
     expires_at_ms TEXT NOT NULL,
     revoked INTEGER NOT NULL CHECK(revoked IN (0,1))
   )`,
+  `CREATE TABLE catalog.legacy_bootstrap_manifest(
+    storage_key TEXT PRIMARY KEY,
+    user_file TEXT NOT NULL,
+    system_file TEXT NOT NULL,
+    storage_kind TEXT NOT NULL CHECK(storage_kind IN ('legacy','generation')),
+    app_instance_id TEXT NOT NULL UNIQUE,
+    generation_id TEXT NOT NULL UNIQUE,
+    namespace_id TEXT NOT NULL UNIQUE,
+    operation_id TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    shell_id TEXT NOT NULL,
+    selected INTEGER NOT NULL CHECK(selected IN (0,1)),
+    declared_at TEXT NOT NULL
+  )`,
   `CREATE TABLE catalog.pending_jobs(
     job_id TEXT PRIMARY KEY,
     authority_incarnation_id TEXT NOT NULL,
@@ -136,6 +164,40 @@ const CATALOG_DDL = [
     operation_id TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE catalog.production_request_receipts(
+    request_id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL,
+    request_sha256 TEXT NOT NULL,
+    app_instance_id TEXT NOT NULL,
+    active_generation_id TEXT NOT NULL,
+    lineage_epoch TEXT NOT NULL,
+    expected_protection_revision TEXT NOT NULL,
+    expected_state_sha256 TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('prepared','invoked','committed','no_op','failed')),
+    resulting_protection_revision TEXT,
+    resulting_state_sha256 TEXT,
+    response_sha256 TEXT,
+    prepared_at TEXT NOT NULL,
+    invoked_at TEXT,
+    completed_at TEXT,
+    CHECK(
+      (state = 'prepared' AND invoked_at IS NULL AND completed_at IS NULL
+        AND resulting_protection_revision IS NULL AND resulting_state_sha256 IS NULL
+        AND response_sha256 IS NULL)
+      OR (state = 'invoked' AND invoked_at IS NOT NULL AND completed_at IS NULL
+        AND resulting_protection_revision IS NULL AND resulting_state_sha256 IS NULL
+        AND response_sha256 IS NULL)
+      OR (state = 'no_op' AND invoked_at IS NULL AND completed_at IS NOT NULL
+        AND resulting_protection_revision = expected_protection_revision
+        AND resulting_state_sha256 = expected_state_sha256 AND response_sha256 IS NOT NULL)
+      OR (state = 'committed' AND invoked_at IS NOT NULL AND completed_at IS NOT NULL
+        AND resulting_protection_revision IS NOT NULL
+        AND resulting_state_sha256 <> expected_state_sha256 AND response_sha256 IS NOT NULL)
+      OR (state = 'failed' AND completed_at IS NOT NULL
+        AND resulting_protection_revision = expected_protection_revision
+        AND resulting_state_sha256 = expected_state_sha256 AND response_sha256 IS NOT NULL)
+    )
   )`,
   `CREATE TABLE catalog.revision_reservations(
     app_instance_id TEXT NOT NULL,
@@ -173,14 +235,16 @@ const CATALOG_DDL = [
 ] as const;
 
 const EXPECTED_COLUMN_SIGNATURES: Record<typeof EXPECTED_TABLES[number], string> = {
-  app_entries: "app_instance_id:TEXT:0:1|display_name:TEXT:1:0|active_generation_id:TEXT:1:0|journal_genesis_generation_id:TEXT:1:0|journal_genesis_lineage_epoch:TEXT:1:0|journal_genesis_protection_revision:TEXT:1:0|journal_genesis_state_sha256:TEXT:1:0|current_lineage_epoch:TEXT:1:0|lineage_epoch_high_water:TEXT:1:0|current_protection_revision:TEXT:1:0|revision_high_water:TEXT:1:0|digest_schema:INTEGER:1:0|state_sha256:TEXT:1:0|tombstoned:INTEGER:1:0",
-  catalog_generation_events: "catalog_generation:TEXT:0:1|event_kind:TEXT:1:0|app_instance_id:TEXT:0:0|operation_id:TEXT:0:0|write_epoch:TEXT:1:0|at:TEXT:1:0|target_generation_id:TEXT:0:0|target_lineage_epoch:TEXT:0:0|target_protection_revision:TEXT:0:0|target_digest_schema:INTEGER:0:0|target_state_sha256:TEXT:0:0",
+  app_entries: "app_instance_id:TEXT:0:1|display_name:TEXT:1:0|shell_id:TEXT:1:0|active_generation_id:TEXT:1:0|journal_genesis_generation_id:TEXT:1:0|journal_genesis_lineage_epoch:TEXT:1:0|journal_genesis_protection_revision:TEXT:1:0|journal_genesis_state_sha256:TEXT:1:0|current_lineage_epoch:TEXT:1:0|lineage_epoch_high_water:TEXT:1:0|current_protection_revision:TEXT:1:0|revision_high_water:TEXT:1:0|digest_schema:INTEGER:1:0|state_sha256:TEXT:1:0|tombstoned:INTEGER:1:0",
+  catalog_generation_events: "catalog_generation:TEXT:0:1|event_kind:TEXT:1:0|app_instance_id:TEXT:0:0|operation_id:TEXT:0:0|write_epoch:TEXT:1:0|at:TEXT:1:0|display_name:TEXT:0:0|shell_id:TEXT:0:0|target_generation_id:TEXT:0:0|target_lineage_epoch:TEXT:0:0|target_protection_revision:TEXT:0:0|target_digest_schema:INTEGER:0:0|target_state_sha256:TEXT:0:0",
   catalog_root: "singleton:INTEGER:0:1|schema_version:INTEGER:1:0|authority_incarnation_id:TEXT:1:0|catalog_generation:TEXT:1:0|selected_app_instance_id:TEXT:0:0|write_epoch:TEXT:1:0",
   generations: "generation_id:TEXT:0:1|app_instance_id:TEXT:1:0|namespace_id:TEXT:1:0|storage_key:TEXT:1:0|operation_id:TEXT:1:0|lineage_epoch:TEXT:1:0|first_revision:TEXT:1:0|digest_schema:INTEGER:1:0|state_sha256:TEXT:1:0|source_archive_sha256:TEXT:0:0|source_provenance_id:TEXT:0:0|sealed_at:TEXT:1:0|read_back_at:TEXT:1:0",
   id_registry: "id_value:TEXT:0:1|id_kind:TEXT:1:0|retained_at:TEXT:1:0",
   leases: "lease_id:TEXT:0:1|authority_incarnation_id:TEXT:1:0|write_epoch:TEXT:1:0|release_id:TEXT:1:0|issued_at_ms:TEXT:1:0|expires_at_ms:TEXT:1:0|revoked:INTEGER:1:0",
+  legacy_bootstrap_manifest: "storage_key:TEXT:0:1|user_file:TEXT:1:0|system_file:TEXT:1:0|storage_kind:TEXT:1:0|app_instance_id:TEXT:1:0|generation_id:TEXT:1:0|namespace_id:TEXT:1:0|operation_id:TEXT:1:0|display_name:TEXT:1:0|shell_id:TEXT:1:0|selected:INTEGER:1:0|declared_at:TEXT:1:0",
   lineage_reservations: "app_instance_id:TEXT:1:1|lineage_epoch:TEXT:1:2|operation_id:TEXT:1:0|state:TEXT:1:0",
   pending_jobs: "job_id:TEXT:0:1|authority_incarnation_id:TEXT:1:0|app_instance_id:TEXT:0:0|kind:TEXT:1:0|state:TEXT:1:0|operation_id:TEXT:1:0|created_at:TEXT:1:0|updated_at:TEXT:1:0",
+  production_request_receipts: "request_id:TEXT:0:1|operation_id:TEXT:1:0|request_sha256:TEXT:1:0|app_instance_id:TEXT:1:0|active_generation_id:TEXT:1:0|lineage_epoch:TEXT:1:0|expected_protection_revision:TEXT:1:0|expected_state_sha256:TEXT:1:0|state:TEXT:1:0|resulting_protection_revision:TEXT:0:0|resulting_state_sha256:TEXT:0:0|response_sha256:TEXT:0:0|prepared_at:TEXT:1:0|invoked_at:TEXT:0:0|completed_at:TEXT:0:0",
   revision_reservations: "app_instance_id:TEXT:1:1|revision:TEXT:1:2|operation_id:TEXT:1:0|authority_incarnation_id:TEXT:1:0|reserved_catalog_generation:TEXT:1:0|finalized_catalog_generation:TEXT:0:0|write_epoch:TEXT:1:0|lease_id:TEXT:1:0|release_id:TEXT:1:0|finalized_write_epoch:TEXT:0:0|finalized_lease_id:TEXT:0:0|finalized_release_id:TEXT:0:0|active_generation_id:TEXT:1:0|lineage_epoch:TEXT:1:0|expected_protection_revision:TEXT:1:0|expected_state_sha256:TEXT:1:0|request_sha256:TEXT:1:0|state:TEXT:1:0|published_active_generation_id:TEXT:0:0|published_lineage_epoch:TEXT:0:0|state_sha256:TEXT:0:0|reserved_at:TEXT:1:0|finalized_at:TEXT:0:0",
 };
 
@@ -243,6 +307,7 @@ export type PublishSelectedTargetInput = {
   publishedTarget: TargetEvidence;
   operationId: string;
   requestSha256: string;
+  metadata?: { displayName: string; shellId: string };
   fence: WriteFence;
   nowMs: number;
 };
@@ -286,8 +351,55 @@ export type SeedSelectedTargetInput = {
   namespaceId: string;
   storageKey: string;
   displayName: string;
+  shellId: string;
   operationId: string;
   at: string;
+};
+
+export type LegacyBootstrapEntry = DurableNamespaceInventoryEntry & {
+  appInstanceId: string;
+  generationId: string;
+  namespaceId: string;
+  operationId: string;
+  displayName: string;
+  shellId: string;
+  selected: boolean;
+};
+
+export type AddAppTargetInput = {
+  expectedCatalogGeneration: string;
+  target: TargetEvidence;
+  namespaceId: string;
+  storageKey: string;
+  displayName: string;
+  shellId: string;
+  operationId: string;
+  fence: WriteFence;
+  nowMs: number;
+  select: boolean;
+  bootstrapStorageKey?: string;
+};
+
+export type UpdateSelectedAppMetadataInput = {
+  expectedCatalogGeneration: string;
+  displayName: string;
+  shellId: string;
+  operationId: string;
+  fence: WriteFence;
+  nowMs: number;
+};
+
+export type SelectAppInput = {
+  expectedCatalogGeneration: string;
+  appInstanceId: string;
+  operationId: string;
+  fence: WriteFence;
+  nowMs: number;
+};
+
+type CatalogGenerationEventInput = Omit<CatalogGenerationEvent, "displayName" | "shellId"> & {
+  displayName?: string | null;
+  shellId?: string | null;
 };
 
 function mapCatalogGenerationEvent(row: SqlRow): CatalogGenerationEvent {
@@ -312,6 +424,8 @@ function mapCatalogGenerationEvent(row: SqlRow): CatalogGenerationEvent {
     writeEpoch: row.write_epoch,
     at: row.at,
     target,
+    displayName: row.display_name,
+    shellId: row.shell_id,
   });
 }
 
@@ -324,16 +438,16 @@ function readCatalogGenerationEvents(driver: DbDriver): CatalogGenerationEvent[]
     });
 }
 
-function insertCatalogGenerationEvent(driver: DbDriver, event: CatalogGenerationEvent): void {
-  const parsed = CatalogGenerationEventV1.parse(event);
+function insertCatalogGenerationEvent(driver: DbDriver, event: CatalogGenerationEventInput): void {
+  const parsed = CatalogGenerationEventV1.parse({ displayName: null, shellId: null, ...event });
   driver.exec(
     `INSERT INTO catalog.catalog_generation_events(
-      catalog_generation,event_kind,app_instance_id,operation_id,write_epoch,at,
+      catalog_generation,event_kind,app_instance_id,operation_id,write_epoch,at,display_name,shell_id,
       target_generation_id,target_lineage_epoch,target_protection_revision,
       target_digest_schema,target_state_sha256
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [parsed.catalogGeneration, parsed.eventKind, parsed.appInstanceId,
-      parsed.operationId, parsed.writeEpoch, parsed.at,
+      parsed.operationId, parsed.writeEpoch, parsed.at, parsed.displayName, parsed.shellId,
       parsed.target?.activeGenerationId ?? null, parsed.target?.lineageEpoch ?? null,
       parsed.target?.protectionRevision ?? null, parsed.target?.digestSchema ?? null,
       parsed.target?.stateSha256 ?? null],
@@ -443,6 +557,7 @@ function mapLiveEntry(row: SqlRow): AppCatalogSnapshot["entries"][number] {
   return {
     appInstanceId: String(row.app_instance_id),
     displayName: String(row.display_name),
+    shellId: String(row.shell_id),
     activeGenerationId: String(row.active_generation_id),
     journalGenesisGenerationId: String(row.journal_genesis_generation_id),
     journalGenesisLineageEpoch: String(row.journal_genesis_lineage_epoch),
@@ -773,6 +888,24 @@ function readValidatedCatalog(driver: DbDriver): AppCatalogSnapshot {
             || event.at !== genesis.sealedAt || event.target === null
             || !sameTarget(event.target, genesis.target))
           throw new Error("catalog app seed event is invalid");
+      } else if (event.eventKind === "app_selected") {
+        const selectedTarget = event.target;
+        const generation = selectedTarget
+          ? generations.get(selectedTarget.activeGenerationId) : undefined;
+        const matchesGenesis = generation !== undefined && selectedTarget !== null
+          && sameTarget(selectedTarget, generation.target);
+        const matchesCommit = selectedTarget !== null && reservations.some(item =>
+          item.state === "committed"
+          && item.appInstanceId === selectedTarget.appInstanceId
+          && item.publishedActiveGenerationId === selectedTarget.activeGenerationId
+          && item.publishedLineageEpoch === selectedTarget.lineageEpoch
+          && item.revision === selectedTarget.protectionRevision
+          && item.stateSha256 === selectedTarget.stateSha256);
+        if (!matchesGenesis && !matchesCommit)
+          throw new Error("catalog app selection event is invalid");
+      } else if (event.eventKind === "app_metadata") {
+        if (!apps.has(event.appInstanceId!))
+          throw new Error("catalog metadata event references an unknown app");
       } else if (event.eventKind === "lease_issued") {
         const matches = [...leases.values()].filter(lease =>
           lease.writeEpoch === event.writeEpoch
@@ -801,6 +934,18 @@ function readValidatedCatalog(driver: DbDriver): AppCatalogSnapshot {
     }
     if ((generationEvents.at(-1)?.writeEpoch ?? "0") !== snapshot.writeEpoch)
       throw new Error("catalog event write epoch does not match root");
+    const latestSelection = generationEvents.filter(event =>
+      event.eventKind === "app_seed" || event.eventKind === "app_selected").at(-1);
+    if ((latestSelection?.appInstanceId ?? null) !== snapshot.selectedAppInstanceId)
+      throw new Error("catalog selected app does not match its latest event");
+
+    for (const app of apps.values()) {
+      const latestMetadata = [...generationEvents].reverse().find(event =>
+        event.appInstanceId === app.appInstanceId && event.displayName !== null);
+      if (!latestMetadata || latestMetadata.displayName !== app.displayName
+          || latestMetadata.shellId !== app.shellId)
+        throw new Error("catalog app metadata does not match its latest event");
+    }
     for (const app of apps.values()) {
       const seeds = generationEvents.filter(event => event.eventKind === "app_seed"
         && event.appInstanceId === app.appInstanceId);
@@ -845,6 +990,10 @@ function readValidatedCatalog(driver: DbDriver): AppCatalogSnapshot {
 export class DeviceCatalog {
   private constructor(private readonly driver: DbDriver) {}
 
+  static isAbsent(driver: DbDriver): boolean {
+    return catalogTables(driver).length === 0;
+  }
+
   static openExisting(driver: DbDriver): DeviceCatalog {
     if (!hasExactSchema(catalogTables(driver)) || !hasOnlyExpectedObjects(driver)
         || !hasExactTableShapes(driver) || !hasExactTableDdl(driver))
@@ -880,6 +1029,50 @@ export class DeviceCatalog {
 
   snapshot(): AppCatalogSnapshot {
     return readValidatedCatalog(this.driver);
+  }
+
+  activeTargetStorageInventory(): SelectedTargetStorage[] {
+    return this.driver.tx(() => {
+      const snapshot = readValidatedCatalog(this.driver);
+      const entries = new Map(snapshot.entries
+        .map(entry => [entry.appInstanceId, entry] as const));
+      const rows = this.driver.select(
+        `SELECT a.app_instance_id, a.active_generation_id, g.namespace_id, g.storage_key
+         FROM catalog.app_entries AS a
+         JOIN catalog.generations AS g
+           ON g.app_instance_id = a.app_instance_id
+          AND g.generation_id = a.active_generation_id
+         WHERE a.tombstoned = 0
+         ORDER BY a.app_instance_id`,
+      );
+      if (rows.length !== snapshot.entries.length)
+        throw new ClayError("E_CATALOG_UNAVAILABLE", "active catalog storage inventory is incomplete");
+      const storageKeys = new Set<string>();
+      return rows.map(row => {
+        const appInstanceId = AppInstanceId.safeParse(row.app_instance_id);
+        const generationId = GenerationId.safeParse(row.active_generation_id);
+        const namespaceId = NamespaceId.safeParse(row.namespace_id);
+        const storageKey = typeof row.storage_key === "string" ? row.storage_key : "";
+        const entry = appInstanceId.success ? entries.get(appInstanceId.data) : undefined;
+        if (!appInstanceId.success || !generationId.success || !namespaceId.success
+            || !entry || entry.activeGenerationId !== generationId.data
+            || !validStorageKey(storageKey) || storageKeys.has(storageKey))
+          throw new ClayError("E_CATALOG_UNAVAILABLE", "active catalog storage inventory is invalid");
+        storageKeys.add(storageKey);
+        return {
+          target: {
+            appInstanceId: entry.appInstanceId,
+            activeGenerationId: entry.activeGenerationId,
+            lineageEpoch: entry.currentLineageEpoch,
+            protectionRevision: entry.currentProtectionRevision,
+            digestSchema: entry.digestSchema,
+            stateSha256: entry.stateSha256,
+          },
+          namespaceId: namespaceId.data,
+          storageKey,
+        };
+      });
+    });
   }
 
   selectedTargetStorage(): SelectedTargetStorage {
@@ -948,6 +1141,7 @@ export class DeviceCatalog {
         || !validStorageKey(input.storageKey)
         || typeof input.displayName !== "string" || input.displayName.trim() !== input.displayName
         || input.displayName.length < 1 || input.displayName.length > 40
+        || typeof input.shellId !== "string" || !/^[a-z0-9_-]{1,64}$/.test(input.shellId)
         || typeof input.at !== "string" || Number.isNaN(Date.parse(input.at))
         || new Date(input.at).toISOString() !== input.at
         || target.data.protectionRevision !== "0" || target.data.lineageEpoch !== "0")
@@ -988,13 +1182,14 @@ export class DeviceCatalog {
         );
         this.driver.exec(
           `INSERT INTO catalog.app_entries(
-             app_instance_id,display_name,active_generation_id,
+             app_instance_id,display_name,shell_id,active_generation_id,
              journal_genesis_generation_id,journal_genesis_lineage_epoch,
              journal_genesis_protection_revision,journal_genesis_state_sha256,
              current_lineage_epoch,lineage_epoch_high_water,current_protection_revision,
              revision_high_water,digest_schema,state_sha256,tombstoned
-           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
-          [target.data.appInstanceId, input.displayName, target.data.activeGenerationId,
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
+          [target.data.appInstanceId, input.displayName, input.shellId,
+            target.data.activeGenerationId,
             target.data.activeGenerationId, target.data.lineageEpoch,
             target.data.protectionRevision, target.data.stateSha256,
             target.data.lineageEpoch, target.data.lineageEpoch,
@@ -1010,6 +1205,8 @@ export class DeviceCatalog {
           writeEpoch: "0",
           at: input.at,
           target: target.data,
+          displayName: input.displayName,
+          shellId: input.shellId,
         });
         this.driver.exec(
           `UPDATE catalog.catalog_root
@@ -1023,6 +1220,7 @@ export class DeviceCatalog {
         if (after.catalogGeneration !== "1"
             || after.selectedAppInstanceId !== target.data.appInstanceId
             || after.entries.length !== 1 || !entry
+            || entry.shellId !== input.shellId
             || entry.activeGenerationId !== target.data.activeGenerationId
             || entry.stateSha256 !== target.data.stateSha256)
           throw new ClayError("E_CATALOG_CONFLICT", "catalog app seed failed read-back");
@@ -1032,6 +1230,388 @@ export class DeviceCatalog {
       if (error instanceof ClayError && ["E_CATALOG_CONFLICT", "E_CATALOG_UNAVAILABLE"]
         .includes(error.code)) throw error;
       throw new ClayError("E_CATALOG_UNAVAILABLE", "catalog app seed failed");
+    }
+  }
+
+  beginLegacyBootstrap(entries: readonly LegacyBootstrapEntry[], at: string): void {
+    if (!Array.isArray(entries) || entries.length < 1 || entries.length > 1_000
+        || typeof at !== "string" || Number.isNaN(Date.parse(at))
+        || new Date(at).toISOString() !== at)
+      throw new ClayError("E_CATALOG_CONFLICT", "legacy bootstrap declaration is invalid");
+    if (Object.getPrototypeOf(entries) !== Array.prototype
+        || Reflect.ownKeys(entries).some(key => key !== "length"
+          && (typeof key !== "string" || !/^(?:0|[1-9][0-9]*)$/.test(key))))
+      throw new ClayError("E_CATALOG_CONFLICT", "legacy bootstrap list is not plain");
+    const captured: LegacyBootstrapEntry[] = [];
+    const entryKeys = ["storageKey", "userFile", "systemFile", "kind", "appInstanceId",
+      "generationId", "namespaceId", "operationId", "displayName", "shellId", "selected"];
+    for (let index = 0; index < entries.length; index++) {
+      const arrayDescriptor = Object.getOwnPropertyDescriptor(entries, String(index));
+      const candidate = arrayDescriptor && "value" in arrayDescriptor
+        ? arrayDescriptor.value : undefined;
+      if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)
+          || (Object.getPrototypeOf(candidate) !== Object.prototype
+            && Object.getPrototypeOf(candidate) !== null)
+          || Reflect.ownKeys(candidate).length !== entryKeys.length)
+        throw new ClayError("E_CATALOG_CONFLICT", "legacy bootstrap entry is not plain data");
+      const values: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+      for (const key of entryKeys) {
+        const descriptor = Object.getOwnPropertyDescriptor(candidate, key);
+        if (!descriptor || !("value" in descriptor))
+          throw new ClayError("E_CATALOG_CONFLICT", "legacy bootstrap entry is not plain data");
+        values[key] = descriptor.value;
+      }
+      if (Reflect.ownKeys(candidate).some(key => typeof key !== "string"
+          || !entryKeys.includes(key)))
+        throw new ClayError("E_CATALOG_CONFLICT", "legacy bootstrap entry has unknown fields");
+      const app = AppInstanceId.safeParse(values.appInstanceId);
+      const generation = GenerationId.safeParse(values.generationId);
+      const namespace = NamespaceId.safeParse(values.namespaceId);
+      const operation = OperationId.safeParse(values.operationId);
+      if (!app.success || !generation.success || !namespace.success || !operation.success
+          || typeof values.storageKey !== "string" || !validStorageKey(values.storageKey)
+          || typeof values.displayName !== "string" || values.displayName !== values.displayName.trim()
+          || values.displayName.length < 1 || values.displayName.length > 40
+          || typeof values.shellId !== "string" || !/^[a-z0-9_-]{1,64}$/.test(values.shellId)
+          || typeof values.selected !== "boolean")
+        throw new ClayError("E_CATALOG_CONFLICT", "legacy bootstrap entry is invalid");
+      const physical = physicalNamespaceEntry(values.storageKey, namespace.data);
+      if (values.userFile !== physical.userFile || values.systemFile !== physical.systemFile
+          || values.kind !== physical.kind)
+        throw new ClayError("E_CATALOG_CONFLICT", "legacy bootstrap physical entry is invalid");
+      captured.push({ ...physical, appInstanceId: app.data, generationId: generation.data,
+        namespaceId: namespace.data, operationId: operation.data,
+        displayName: values.displayName, shellId: values.shellId, selected: values.selected });
+    }
+    const unique = (values: string[]): boolean => new Set(values).size === values.length;
+    if (captured.filter(entry => entry.selected).length !== 1
+        || !unique(captured.map(entry => entry.storageKey))
+        || !unique(captured.map(entry => entry.appInstanceId))
+        || !unique(captured.map(entry => entry.generationId))
+        || !unique(captured.map(entry => entry.namespaceId))
+        || !unique(captured.map(entry => entry.operationId)))
+      throw new ClayError("E_CATALOG_CONFLICT", "legacy bootstrap identities are not unique");
+    this.driver.tx(() => {
+      const before = readValidatedCatalog(this.driver);
+      if (before.catalogGeneration !== "0" || before.selectedAppInstanceId !== null
+          || before.entries.length !== 0 || this.legacyBootstrapManifest().length !== 0)
+        throw new ClayError("E_CATALOG_CONFLICT", "catalog is not empty for legacy bootstrap");
+      for (const entry of captured) this.driver.exec(
+        `INSERT INTO catalog.legacy_bootstrap_manifest(
+           storage_key,user_file,system_file,storage_kind,app_instance_id,generation_id,
+           namespace_id,operation_id,display_name,shell_id,selected,declared_at
+         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [entry.storageKey, entry.userFile, entry.systemFile, entry.kind,
+          entry.appInstanceId, entry.generationId, entry.namespaceId, entry.operationId,
+          entry.displayName, entry.shellId, entry.selected ? 1 : 0, at],
+      );
+      if (JSON.stringify(this.legacyBootstrapManifest()) !== JSON.stringify(
+        [...captured].sort((left, right) => left.storageKey.localeCompare(right.storageKey)),
+      )) throw new ClayError("E_CATALOG_CONFLICT", "legacy bootstrap failed read-back");
+    });
+  }
+
+  legacyBootstrapManifest(): LegacyBootstrapEntry[] {
+    return this.driver.select(
+      `SELECT storage_key,user_file,system_file,storage_kind,app_instance_id,
+              generation_id,namespace_id,operation_id,display_name,shell_id,selected,declared_at
+       FROM catalog.legacy_bootstrap_manifest ORDER BY storage_key`,
+    ).map(row => {
+      const storageKey = String(row.storage_key);
+      const namespaceId = NamespaceId.parse(String(row.namespace_id));
+      const expected = physicalNamespaceEntry(storageKey, namespaceId);
+      const entry: LegacyBootstrapEntry = {
+        storageKey,
+        userFile: String(row.user_file),
+        systemFile: String(row.system_file),
+        kind: String(row.storage_kind) as "legacy" | "generation",
+        appInstanceId: AppInstanceId.parse(String(row.app_instance_id)),
+        generationId: GenerationId.parse(String(row.generation_id)),
+        namespaceId,
+        operationId: OperationId.parse(String(row.operation_id)),
+        displayName: String(row.display_name),
+        shellId: String(row.shell_id),
+        selected: Number(row.selected) === 1,
+      };
+      if (entry.userFile !== expected.userFile || entry.systemFile !== expected.systemFile
+          || entry.kind !== expected.kind || entry.displayName !== entry.displayName.trim()
+          || entry.displayName.length < 1 || entry.displayName.length > 40
+          || !/^[a-z0-9_-]{1,64}$/.test(entry.shellId)
+          || ![0, 1].includes(Number(row.selected))
+          || typeof row.declared_at !== "string"
+          || new Date(row.declared_at).toISOString() !== row.declared_at)
+        throw new ClayError("E_CATALOG_UNAVAILABLE", "legacy bootstrap manifest is invalid");
+      return entry;
+    });
+  }
+
+  addAppTarget(input: AddAppTargetInput): ReturnType<DeviceCatalog["snapshot"]> {
+    const catalogGeneration = UInt64Decimal.safeParse(input.expectedCatalogGeneration);
+    const target = TargetEvidenceV1.safeParse(input.target);
+    const namespaceId = NamespaceId.safeParse(input.namespaceId);
+    const operationId = OperationId.safeParse(input.operationId);
+    const fence = WriteFenceV1.safeParse(input.fence);
+    if (!catalogGeneration.success || !target.success || !namespaceId.success
+        || !operationId.success || !fence.success || !validStorageKey(input.storageKey)
+        || typeof input.displayName !== "string" || input.displayName !== input.displayName.trim()
+        || input.displayName.length < 1 || input.displayName.length > 40
+        || typeof input.shellId !== "string" || !/^[a-z0-9_-]{1,64}$/.test(input.shellId)
+        || !validClockValue(input.nowMs) || input.select !== true
+        || target.data.lineageEpoch !== "0" || target.data.protectionRevision !== "0")
+      throw new ClayError("E_CATALOG_CONFLICT", "catalog app add input is invalid");
+    const at = new Date(input.nowMs).toISOString();
+    try {
+      return this.driver.tx(() => {
+        const before = readValidatedCatalog(this.driver);
+        this.assertWriteFence(fence.data, input.nowMs);
+        const bootstrap = input.bootstrapStorageKey === undefined ? undefined
+          : this.legacyBootstrapManifest().find(entry =>
+            entry.storageKey === input.bootstrapStorageKey);
+        if (input.bootstrapStorageKey !== undefined && (!bootstrap
+            || bootstrap.appInstanceId !== target.data.appInstanceId
+            || bootstrap.generationId !== target.data.activeGenerationId
+            || bootstrap.namespaceId !== namespaceId.data
+            || bootstrap.operationId !== operationId.data
+            || bootstrap.displayName !== input.displayName
+            || bootstrap.shellId !== input.shellId
+            || bootstrap.storageKey !== input.storageKey))
+          throw new ClayError("E_CATALOG_CONFLICT", "catalog bootstrap manifest does not match");
+        const firstBootstrap = before.selectedAppInstanceId === null
+          && before.entries.length === 0 && input.select && bootstrap !== undefined;
+        if (before.catalogGeneration !== catalogGeneration.data
+            || before.authorityIncarnationId !== fence.data.authorityIncarnationId
+            || before.writeEpoch !== fence.data.writeEpoch
+            || (before.selectedAppInstanceId === null && !firstBootstrap))
+          throw new ClayError("E_CATALOG_CONFLICT", "catalog app add CAS is stale");
+        if (this.driver.select(
+          "SELECT generation_id FROM catalog.generations WHERE storage_key = ?", [input.storageKey],
+        ).length !== 0)
+          throw new ClayError("E_CATALOG_CONFLICT", "catalog storage key is already retained");
+        const retained = [
+          [target.data.appInstanceId, "app"],
+          [target.data.activeGenerationId, "generation"],
+          [namespaceId.data, "namespace"],
+          [operationId.data, "operation"],
+        ] as const;
+        for (const [value] of retained) {
+          if (this.driver.select(
+            "SELECT id_value FROM catalog.id_registry WHERE id_value = ?", [value],
+          ).length !== 0)
+            throw new ClayError("E_CATALOG_CONFLICT", "catalog app add identity was already retained");
+        }
+        for (const [value, kind] of retained) this.driver.exec(
+          "INSERT INTO catalog.id_registry(id_value,id_kind,retained_at) VALUES (?,?,?)",
+          [value, kind, at],
+        );
+        this.driver.exec(
+          `INSERT INTO catalog.generations(
+             generation_id,app_instance_id,namespace_id,storage_key,operation_id,
+             lineage_epoch,first_revision,digest_schema,state_sha256,
+             source_archive_sha256,source_provenance_id,sealed_at,read_back_at
+           ) VALUES (?,?,?,?,?,?,?,?,?,NULL,NULL,?,?)`,
+          [target.data.activeGenerationId, target.data.appInstanceId, namespaceId.data,
+            input.storageKey, operationId.data, target.data.lineageEpoch,
+            target.data.protectionRevision, target.data.digestSchema, target.data.stateSha256,
+            at, at],
+        );
+        this.driver.exec(
+          `INSERT INTO catalog.app_entries(
+             app_instance_id,display_name,shell_id,active_generation_id,
+             journal_genesis_generation_id,journal_genesis_lineage_epoch,
+             journal_genesis_protection_revision,journal_genesis_state_sha256,
+             current_lineage_epoch,lineage_epoch_high_water,current_protection_revision,
+             revision_high_water,digest_schema,state_sha256,tombstoned
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
+          [target.data.appInstanceId, input.displayName, input.shellId,
+            target.data.activeGenerationId, target.data.activeGenerationId,
+            target.data.lineageEpoch, target.data.protectionRevision, target.data.stateSha256,
+            target.data.lineageEpoch, target.data.lineageEpoch,
+            target.data.protectionRevision, target.data.protectionRevision,
+            target.data.digestSchema, target.data.stateSha256],
+        );
+        const nextCatalogGeneration = incrementCounter(
+          before.catalogGeneration, "E_CATALOG_CONFLICT",
+        );
+        insertCatalogGenerationEvent(this.driver, {
+          schema: 1,
+          catalogGeneration: nextCatalogGeneration,
+          eventKind: "app_seed",
+          appInstanceId: target.data.appInstanceId,
+          operationId: operationId.data,
+          writeEpoch: fence.data.writeEpoch,
+          at,
+          target: target.data,
+          displayName: input.displayName,
+          shellId: input.shellId,
+        });
+        const selectedAppInstanceId = target.data.appInstanceId;
+        this.driver.exec(
+          `UPDATE catalog.catalog_root
+           SET catalog_generation = ?, selected_app_instance_id = ?
+           WHERE singleton = 1 AND authority_incarnation_id = ?
+             AND catalog_generation = ? AND write_epoch = ?`,
+          [nextCatalogGeneration, selectedAppInstanceId, before.authorityIncarnationId,
+            before.catalogGeneration, before.writeEpoch],
+        );
+        if (bootstrap) this.driver.exec(
+          "DELETE FROM catalog.legacy_bootstrap_manifest WHERE storage_key = ?",
+          [bootstrap.storageKey],
+        );
+        const after = readValidatedCatalog(this.driver);
+        const entry = after.entries.find(candidate =>
+          candidate.appInstanceId === target.data.appInstanceId);
+        if (after.catalogGeneration !== nextCatalogGeneration
+            || after.selectedAppInstanceId !== selectedAppInstanceId || !entry
+            || entry.activeGenerationId !== target.data.activeGenerationId
+            || entry.shellId !== input.shellId || entry.stateSha256 !== target.data.stateSha256
+            || (bootstrap !== undefined
+              && this.legacyBootstrapManifest().some(item => item.storageKey === bootstrap.storageKey)))
+          throw new ClayError("E_CATALOG_CONFLICT", "catalog app add failed read-back");
+        return after;
+      });
+    } catch (error) {
+      if (error instanceof ClayError && [
+        "E_CATALOG_CONFLICT", "E_CATALOG_UNAVAILABLE", "E_STALE_WRITE_EPOCH",
+      ].includes(error.code)) throw error;
+      throw new ClayError("E_CATALOG_UNAVAILABLE", "catalog app add failed");
+    }
+  }
+
+  updateSelectedAppMetadata(
+    input: UpdateSelectedAppMetadataInput,
+  ): ReturnType<DeviceCatalog["snapshot"]> {
+    const generation = UInt64Decimal.safeParse(input.expectedCatalogGeneration);
+    const operation = OperationId.safeParse(input.operationId);
+    const fence = WriteFenceV1.safeParse(input.fence);
+    if (!generation.success || !operation.success || !fence.success
+        || typeof input.displayName !== "string" || input.displayName !== input.displayName.trim()
+        || input.displayName.length < 1 || input.displayName.length > 40
+        || typeof input.shellId !== "string" || !/^[a-z0-9_-]{1,64}$/.test(input.shellId)
+        || !validClockValue(input.nowMs))
+      throw new ClayError("E_CATALOG_CONFLICT", "app metadata update is invalid");
+    return this.driver.tx(() => {
+      const before = readValidatedCatalog(this.driver);
+      this.assertWriteFence(fence.data, input.nowMs);
+      if (before.catalogGeneration !== generation.data
+          || before.authorityIncarnationId !== fence.data.authorityIncarnationId
+          || before.writeEpoch !== fence.data.writeEpoch
+          || before.selectedAppInstanceId === null
+          || this.legacyBootstrapManifest().length !== 0)
+        throw new ClayError("E_CATALOG_CONFLICT", "app metadata compare-and-swap failed");
+      const app = before.entries.find(item =>
+        item.appInstanceId === before.selectedAppInstanceId && !item.tombstoned);
+      if (!app) throw new ClayError("E_CATALOG_CONFLICT", "selected app is unavailable");
+      if (app.displayName === input.displayName && app.shellId === input.shellId) return before;
+      if (this.driver.select(
+        "SELECT id_value FROM catalog.id_registry WHERE id_value = ?", [operation.data],
+      ).length !== 0)
+        throw new ClayError("E_CATALOG_CONFLICT", "app metadata operation identity was reused");
+      const at = new Date(input.nowMs).toISOString();
+      const nextGeneration = incrementCounter(before.catalogGeneration, "E_CATALOG_CONFLICT");
+      this.driver.exec(
+        "INSERT INTO catalog.id_registry(id_value,id_kind,retained_at) VALUES(?,?,?)",
+        [operation.data, "operation", at],
+      );
+      this.driver.exec(
+        `UPDATE catalog.app_entries SET display_name = ?, shell_id = ?
+         WHERE app_instance_id = ? AND tombstoned = 0`,
+        [input.displayName, input.shellId, app.appInstanceId],
+      );
+      insertCatalogGenerationEvent(this.driver, {
+        schema: 1,
+        catalogGeneration: nextGeneration,
+        eventKind: "app_metadata",
+        appInstanceId: app.appInstanceId,
+        operationId: operation.data,
+        writeEpoch: fence.data.writeEpoch,
+        at,
+        target: null,
+        displayName: input.displayName,
+        shellId: input.shellId,
+      });
+      this.driver.exec(
+        `UPDATE catalog.catalog_root SET catalog_generation = ?
+         WHERE singleton = 1 AND authority_incarnation_id = ?
+           AND catalog_generation = ? AND write_epoch = ?`,
+        [nextGeneration, before.authorityIncarnationId,
+          before.catalogGeneration, before.writeEpoch],
+      );
+      const after = readValidatedCatalog(this.driver);
+      if (after.catalogGeneration !== nextGeneration
+          || after.selectedAppInstanceId !== app.appInstanceId)
+        throw new ClayError("E_CATALOG_CONFLICT", "app metadata publication failed read-back");
+      const updated = after.entries.find(item => item.appInstanceId === app.appInstanceId);
+      if (!updated || updated.displayName !== input.displayName || updated.shellId !== input.shellId)
+        throw new ClayError("E_CATALOG_CONFLICT", "app metadata failed read-back");
+      return after;
+    });
+  }
+
+  selectApp(input: SelectAppInput): ReturnType<DeviceCatalog["snapshot"]> {
+    const catalogGeneration = UInt64Decimal.safeParse(input.expectedCatalogGeneration);
+    const appInstanceId = AppInstanceId.safeParse(input.appInstanceId);
+    const operationId = OperationId.safeParse(input.operationId);
+    const fence = WriteFenceV1.safeParse(input.fence);
+    if (!catalogGeneration.success || !appInstanceId.success || !operationId.success
+        || !fence.success || !validClockValue(input.nowMs))
+      throw new ClayError("E_CATALOG_CONFLICT", "catalog app selection input is invalid");
+    const at = new Date(input.nowMs).toISOString();
+    try {
+      return this.driver.tx(() => {
+        const before = readValidatedCatalog(this.driver);
+        this.assertWriteFence(fence.data, input.nowMs);
+        const app = before.entries.find(entry =>
+          entry.appInstanceId === appInstanceId.data && !entry.tombstoned);
+        if (before.catalogGeneration !== catalogGeneration.data
+            || before.writeEpoch !== fence.data.writeEpoch || !app
+            || this.legacyBootstrapManifest().length !== 0)
+          throw new ClayError("E_CATALOG_CONFLICT", "catalog app selection CAS is stale");
+        if (before.selectedAppInstanceId === appInstanceId.data) return before;
+        if (this.driver.select(
+          "SELECT id_value FROM catalog.id_registry WHERE id_value = ?", [operationId.data],
+        ).length !== 0)
+          throw new ClayError("E_CATALOG_CONFLICT", "catalog app selection operation was reused");
+        this.driver.exec(
+          "INSERT INTO catalog.id_registry(id_value,id_kind,retained_at) VALUES (?, 'operation', ?)",
+          [operationId.data, at],
+        );
+        const nextCatalogGeneration = incrementCounter(
+          before.catalogGeneration, "E_CATALOG_CONFLICT",
+        );
+        insertCatalogGenerationEvent(this.driver, {
+          schema: 1,
+          catalogGeneration: nextCatalogGeneration,
+          eventKind: "app_selected",
+          appInstanceId: app.appInstanceId,
+          operationId: operationId.data,
+          writeEpoch: fence.data.writeEpoch,
+          at,
+          target: {
+            appInstanceId: app.appInstanceId,
+            activeGenerationId: app.activeGenerationId,
+            lineageEpoch: app.currentLineageEpoch,
+            protectionRevision: app.currentProtectionRevision,
+            digestSchema: app.digestSchema,
+            stateSha256: app.stateSha256,
+          },
+        });
+        this.driver.exec(
+          `UPDATE catalog.catalog_root SET catalog_generation=?,selected_app_instance_id=?
+           WHERE singleton=1 AND catalog_generation=? AND write_epoch=?`,
+          [nextCatalogGeneration, app.appInstanceId,
+            before.catalogGeneration, before.writeEpoch],
+        );
+        const after = readValidatedCatalog(this.driver);
+        if (after.catalogGeneration !== nextCatalogGeneration
+            || after.selectedAppInstanceId !== app.appInstanceId)
+          throw new ClayError("E_CATALOG_CONFLICT", "catalog app selection failed read-back");
+        return after;
+      });
+    } catch (error) {
+      if (error instanceof ClayError && [
+        "E_CATALOG_CONFLICT", "E_CATALOG_UNAVAILABLE", "E_STALE_WRITE_EPOCH",
+      ].includes(error.code)) throw error;
+      throw new ClayError("E_CATALOG_UNAVAILABLE", "catalog app selection failed");
     }
   }
 
@@ -1489,9 +2069,18 @@ export class DeviceCatalog {
     const operation = OperationId.safeParse(input.operationId);
     const requestSha256 = Sha256.safeParse(input.requestSha256);
     const requestedFence = WriteFenceV1.safeParse(input.fence);
+    const metadata = input.metadata ?? null;
+    const metadataValid = metadata === null || (
+      typeof metadata === "object" && !Array.isArray(metadata)
+      && Reflect.ownKeys(metadata).length === 2
+      && typeof metadata.displayName === "string"
+      && metadata.displayName === metadata.displayName.trim()
+      && metadata.displayName.length >= 1 && metadata.displayName.length <= 40
+      && typeof metadata.shellId === "string" && /^[a-z0-9_-]{1,64}$/.test(metadata.shellId)
+    );
     if (!catalogGeneration.success || !expected.success || !published.success
         || !operation.success || !requestSha256.success || !requestedFence.success
-        || !validClockValue(input.nowMs))
+        || !metadataValid || !validClockValue(input.nowMs))
       throw new ClayError("E_CATALOG_CONFLICT", "catalog target publication input is invalid");
     let finalizedAt: string;
     try {
@@ -1542,7 +2131,9 @@ export class DeviceCatalog {
               || reservation.publishedActiveGenerationId !== published.data.activeGenerationId
               || reservation.publishedLineageEpoch !== published.data.lineageEpoch
               || reservation.stateSha256 !== published.data.stateSha256
-              || !sameTarget(current, published.data))
+              || !sameTarget(current, published.data)
+              || (metadata !== null && (entry.displayName !== metadata.displayName
+                || entry.shellId !== metadata.shellId)))
             throw new ClayError("E_CATALOG_CONFLICT", "committed catalog publication is not current");
           return publication(reservation.finalizedCatalogGeneration);
         }
@@ -1564,12 +2155,13 @@ export class DeviceCatalog {
         );
         this.driver.exec(
           `UPDATE catalog.app_entries
-           SET current_protection_revision = ?, state_sha256 = ?
+           SET current_protection_revision = ?, state_sha256 = ?, display_name = ?, shell_id = ?
            WHERE app_instance_id = ? AND active_generation_id = ?
              AND current_lineage_epoch = ? AND current_protection_revision = ?
              AND revision_high_water = ? AND digest_schema = ? AND state_sha256 = ?
              AND tombstoned = 0`,
           [published.data.protectionRevision, published.data.stateSha256,
+            metadata?.displayName ?? entry.displayName, metadata?.shellId ?? entry.shellId,
             current.appInstanceId, current.activeGenerationId, current.lineageEpoch,
             current.protectionRevision, reservation.revision,
             current.digestSchema, current.stateSha256],
@@ -1592,6 +2184,8 @@ export class DeviceCatalog {
           eventKind: "revision_committed", appInstanceId: current.appInstanceId,
           operationId: operation.data, writeEpoch: fence.writeEpoch, at: finalizedAt,
           target: null,
+          displayName: metadata?.displayName ?? null,
+          shellId: metadata?.shellId ?? null,
         });
         this.driver.exec(
           `UPDATE catalog.catalog_root SET catalog_generation = ?
@@ -1610,7 +2204,9 @@ export class DeviceCatalog {
             || committed.finalizedCatalogGeneration !== nextCatalogGeneration
             || committed.stateSha256 !== published.data.stateSha256
             || afterEntry.currentProtectionRevision !== published.data.protectionRevision
-            || afterEntry.stateSha256 !== published.data.stateSha256)
+            || afterEntry.stateSha256 !== published.data.stateSha256
+            || (metadata !== null && (afterEntry.displayName !== metadata.displayName
+              || afterEntry.shellId !== metadata.shellId)))
           throw new ClayError("E_CATALOG_CONFLICT", "catalog target CAS failed read-back");
         return CatalogCasPublicationV1.parse({
           schema: 1,

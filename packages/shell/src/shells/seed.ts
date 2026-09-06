@@ -8,7 +8,7 @@
 // land in one commit; then sample rows.
 import {
   ClayStore, deriveInverse, expandBlueprint, parseBlueprintDirective,
-  type MigrationPlanT,
+  type MigrationPlanT, type PanelBlobInput,
 } from "@clay/kernel";
 import { SEED_PANELS } from "./seed-panels";
 
@@ -36,17 +36,27 @@ export type StarterShell = {
   tables: ShellTable[];
 };
 
+export type StarterSeedBundle = {
+  [key: string]: unknown;
+  schema: 1;
+  shellId: StarterShellId;
+  shellName: string;
+  tables: ShellTable[];
+  panels: PanelBlobInput[];
+};
+
 const col = (name: string, type: ShellColumn["type"],
   required = false, values?: string[]): ShellColumn =>
   ({ name, type, required, ...(values ? { values } : {}) });
 
 // Sample dates relative to seed time, so "upcoming / next N days" panels are
 // populated on first run whenever the app is opened (not stale fixed dates).
-const soon = (offsetDays: number): string => {
-  const d = new Date();
-  d.setDate(d.getDate() + offsetDays);
-  return d.toISOString().slice(0, 10);
-};
+// Keep transport replay-stable across worker reloads: the trusted executor
+// resolves this directive against one instant captured for the authority
+// attempt, rather than baking module-load time into the request fingerprint.
+const RELATIVE_STARTER_DAY = /^@clay\/starter-day:([+-]?\d{1,5})$/;
+const soon = (offsetDays: number): string =>
+  `@clay/starter-day:${offsetDays >= 0 ? "+" : ""}${offsetDays}`;
 
 export const STARTER_SHELLS: StarterShell[] = [
   {
@@ -581,13 +591,110 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
+function copySeedValue(input: unknown): unknown {
+  if (input === null || typeof input === "string" || typeof input === "boolean") return input;
+  if (typeof input === "number" && Number.isFinite(input)) return input;
+  if (Array.isArray(input)) {
+    const output: unknown[] = [];
+    for (let index = 0; index < input.length; index++) output.push(copySeedValue(input[index]));
+    return output;
+  }
+  if (typeof input === "object" && input !== null
+      && (Object.getPrototypeOf(input) === Object.prototype
+        || Object.getPrototypeOf(input) === null)) {
+    const output: Record<string, unknown> = {};
+    for (const key of Object.keys(input))
+      output[key] = copySeedValue((input as Record<string, unknown>)[key]);
+    return output;
+  }
+  throw new Error("trusted starter seed contains non-plain data");
+}
+
+function materializeSampleRow(
+  table: ShellTable,
+  row: Record<string, unknown>,
+  seedInstant: string,
+): Record<string, unknown> {
+  const materialized = { ...row };
+  for (const column of table.columns) {
+    if (column.type !== "date") continue;
+    const value = materialized[column.name];
+    if (typeof value !== "string" || !value.startsWith("@clay/starter-day:")) continue;
+    const match = RELATIVE_STARTER_DAY.exec(value);
+    const offset = match ? Number(match[1]) : Number.NaN;
+    if (!Number.isSafeInteger(offset) || Math.abs(offset) > 36_500)
+      throw new Error("starter seed relative date is invalid");
+    const date = new Date(seedInstant);
+    date.setDate(date.getDate() + offset);
+    materialized[column.name] = date.toISOString().slice(0, 10);
+  }
+  return materialized;
+}
+
+/**
+ * Worker transport shape: a detached, bounded plain-data copy of the trusted
+ * static shell and panel registries. The kernel independently captures and
+ * validates this bundle before authority preparation.
+ */
+export function createStarterSeedBundle(id: unknown): StarterSeedBundle {
+  const shell = typeof id === "string" ? STARTER_SHELLS.find(candidate => candidate.id === id) : null;
+  if (!shell) throw new Error(`unknown starter shell '${String(id)}'`);
+  const rawPanels = SEED_PANELS[shell.id] ?? [];
+  if (shell.tables.length > 64 || rawPanels.length > 256)
+    throw new Error("trusted starter seed exceeds structural limits");
+  let sampleRowCount = 0;
+  const tables: ShellTable[] = [];
+  for (const table of shell.tables) {
+    sampleRowCount += table.sampleRows.length;
+    if (table.columns.length < 1 || table.columns.length > 128
+        || table.sampleRows.length > 1_000 || sampleRowCount > 10_000)
+      throw new Error("trusted starter seed exceeds structural limits");
+    tables.push({
+      name: table.name,
+      columns: table.columns.map(column => ({
+        name: column.name,
+        type: column.type,
+        required: column.required,
+        ...(column.values === undefined ? {} : { values: [...column.values] }),
+      })),
+      sampleRows: table.sampleRows.map(row =>
+        copySeedValue(row) as Record<string, unknown>),
+    });
+  }
+  const panels: PanelBlobInput[] = rawPanels.map(panel => ({
+    panel_id: panel.panel_id,
+    title: panel.title,
+    placement: {
+      region: panel.placement.region,
+      order: panel.placement.order,
+      ...(panel.placement.w === undefined ? {} : { w: panel.placement.w }),
+      ...(panel.placement.h === undefined ? {} : { h: panel.placement.h }),
+      ...(panel.placement.col === undefined ? {} : { col: panel.placement.col }),
+    },
+    code: panel.code,
+    declared_queries: panel.declared_queries.map(query =>
+      copySeedValue(query) as PanelBlobInput["declared_queries"][number]),
+    declared_writes: [...panel.declared_writes],
+  }));
+  const bundle: StarterSeedBundle = {
+    schema: 1,
+    shellId: shell.id,
+    shellName: shell.name,
+    tables,
+    panels,
+  };
+  if (new TextEncoder().encode(JSON.stringify(bundle)).byteLength > 900_000)
+    throw new Error("trusted starter seed exceeds aggregate limits");
+  return bundle;
+}
+
 export function seedStarterShell(store: ClayStore, id: StarterShellId): void {
-  const shell = STARTER_SHELLS.find(s => s.id === id);
-  if (!shell) throw new Error(`unknown starter shell '${id}'`);
+  const bundle = createStarterSeedBundle(id);
+  const seedInstant = new Date().toISOString();
 
   // Tables in commits of <=3 (invariant I5). Multi-table templates take
   // more than one commit; that is fine — they land before any panel.
-  for (const group of chunk(shell.tables, 3)) {
+  for (const group of chunk(bundle.tables, 3)) {
     const operations: MigrationPlanT["operations"] = group.map(t => ({
       op: "create_table", table: t.name,
       columns: t.columns.map(c => ({
@@ -607,8 +714,8 @@ export function seedStarterShell(store: ClayStore, id: StarterShellId): void {
   // Panels may be blueprint DIRECTIVES (ADR-029/030): expand them here
   // against the just-created registry — templates ride the same expansion
   // path model plans do, so the two can never drift.
-  const isBlank = shell.tables.length === 0;
-  const panels = (SEED_PANELS[shell.id] ?? []).map(p => {
+  const isBlank = bundle.tables.length === 0;
+  const panels = bundle.panels.map(p => {
     const spec = parseBlueprintDirective(p.code);
     if (spec === null) return p;
     const ex = expandBlueprint(spec, store.registrySnapshot());
@@ -618,19 +725,20 @@ export function seedStarterShell(store: ClayStore, id: StarterShellId): void {
   });
   store.commit({
     intent: "first run",
-    summary: isBlank ? "Starts a blank canvas." : `Creates your ${shell.name} views.`,
+    summary: isBlank ? "Starts a blank canvas." : `Creates your ${bundle.shellName} views.`,
     semanticOrigin: "seed",
     migration: null, panels,
-    diff: isBlank ? [] : [{ kind: "add_panel", detail: `${shell.name} starter panels` }],
+    diff: isBlank ? [] : [{ kind: "add_panel", detail: `${bundle.shellName} starter panels` }],
   });
 
   // Sample rows, flagged for one-click removal.
   const sampleIds: Record<string, string[]> = {};
-  for (const t of shell.tables) {
-    sampleIds[t.name] = t.sampleRows.map(row => String(store.insert(t.name, row).id));
+  for (const t of bundle.tables) {
+    sampleIds[t.name] = t.sampleRows.map(row =>
+      String(store.insert(t.name, materializeSampleRow(t, row, seedInstant)).id));
   }
   store.setSetting("sample_rows", sampleIds);
-  store.setSetting("shell_id", shell.id);
+  store.setSetting("shell_id", bundle.shellId);
 }
 
 /** One-click sample removal (G9): kernel-local, soft-deleted (reversible). */

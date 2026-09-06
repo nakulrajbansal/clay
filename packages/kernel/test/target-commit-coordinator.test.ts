@@ -6,11 +6,11 @@ import {
 import { type DbDriver } from "../src/index";
 import { enumerateCanonicalStateV1 } from "../src/canonical-state";
 import { DeviceCatalog } from "../src/device-catalog";
-import { LiveWriteGuard } from "../src/live-write-guard";
+import { createLiveWriteGuard } from "../src/live-write-guard";
 import { StateMerkleIndex } from "../src/state-merkle-index";
 import { TargetAuthorityStore } from "../src/target-authority";
 import { TargetCommitCoordinator } from "../src/target-commit-coordinator";
-import { seededStore } from "./helpers";
+import { seededStoreWithDriver } from "./helpers";
 
 const id = (prefix: string, char: string): string => `${prefix}_${char.repeat(26)}`;
 const header: TargetAuthorityHeaderV1 = {
@@ -58,13 +58,13 @@ function seedCatalogForTarget(driver: DbDriver, target: {
   );
   driver.exec(
     `INSERT INTO catalog.app_entries(
-      app_instance_id,display_name,active_generation_id,
+      app_instance_id,display_name,shell_id,active_generation_id,
       journal_genesis_generation_id,journal_genesis_lineage_epoch,
       journal_genesis_protection_revision,journal_genesis_state_sha256,current_lineage_epoch,
       lineage_epoch_high_water,current_protection_revision,revision_high_water,
       digest_schema,state_sha256,tombstoned
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
-    [target.appInstanceId, "Projects", target.activeGenerationId,
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
+    [target.appInstanceId, "Projects", "tracker", target.activeGenerationId,
       target.activeGenerationId, target.lineageEpoch, target.protectionRevision,
       target.stateSha256, target.lineageEpoch, target.lineageEpoch,
       target.protectionRevision, target.protectionRevision,
@@ -76,11 +76,11 @@ function seedCatalogForTarget(driver: DbDriver, target: {
   );
   driver.exec(
     `INSERT INTO catalog.catalog_generation_events(
-      catalog_generation,event_kind,app_instance_id,operation_id,write_epoch,at,
+      catalog_generation,event_kind,app_instance_id,operation_id,write_epoch,at,display_name,shell_id,
       target_generation_id,target_lineage_epoch,target_protection_revision,
       target_digest_schema,target_state_sha256
-    ) VALUES ('1','app_seed',?,?,'0',?,?,?,?,?,?)`,
-    [target.appInstanceId, operationId, at, target.activeGenerationId,
+    ) VALUES ('1','app_seed',?,?,'0',?,?,?,?,?,?,?,?)`,
+    [target.appInstanceId, operationId, at, "Projects", "tracker", target.activeGenerationId,
       target.lineageEpoch, target.protectionRevision, target.digestSchema, target.stateSha256],
   );
   const catalog = DeviceCatalog.openExisting(driver);
@@ -107,8 +107,7 @@ function commitClock(): () => number {
 
 describe("guarded target commit coordinator", () => {
   it("returns a canonical no-op without mutation or revision reservation", async () => {
-    const clay = await seededStore();
-    const driver = (clay as unknown as { driver: DbDriver }).driver;
+    const { store: clay, driver } = await seededStoreWithDriver();
     try {
       const census = enumerateCanonicalStateV1(driver, clay.validationRegistrySnapshot());
       StateMerkleIndex.createSchema(driver);
@@ -117,8 +116,9 @@ describe("guarded target commit coordinator", () => {
       const target = TargetAuthorityStore.initialize(driver, header);
       const expectedTarget = target.evidence();
       const unchanged = census.leaves[0]!.seed;
-      const guard = new LiveWriteGuard(driver);
-      const coordinator = new TargetCommitCoordinator(guard);
+      const session = createLiveWriteGuard(driver);
+      const guard = session.driver;
+      const coordinator = new TargetCommitCoordinator(session);
       let invoked = false;
       expect(coordinator.commit({
         expectedTarget,
@@ -135,8 +135,7 @@ describe("guarded target commit coordinator", () => {
   });
 
   it("rejects a meaningful change before guarded publication is implemented", async () => {
-    const clay = await seededStore();
-    const driver = (clay as unknown as { driver: DbDriver }).driver;
+    const { store: clay, driver } = await seededStoreWithDriver();
     try {
       const census = enumerateCanonicalStateV1(driver, clay.validationRegistrySnapshot());
       StateMerkleIndex.createSchema(driver);
@@ -146,9 +145,10 @@ describe("guarded target commit coordinator", () => {
       const changed = census.leaves[0]!.seed;
       const fields = changed.fields.map(field => field.kind === "text"
         ? { ...field, value: `${field.value} changed` } : field);
-      const guard = new LiveWriteGuard(driver);
+      const session = createLiveWriteGuard(driver);
+      const guard = session.driver;
       const coordinator = new TargetCommitCoordinator(
-        guard, clay.validationRegistrySnapshot(),
+        session, clay.validationRegistrySnapshot(),
       );
       let invoked = false;
       expect(() => coordinator.commit({
@@ -165,8 +165,7 @@ describe("guarded target commit coordinator", () => {
   });
 
   it("rolls back target allocation when catalog reservation CAS fails", async () => {
-    const clay = await seededStore();
-    const driver = (clay as unknown as { driver: DbDriver }).driver;
+    const { store: clay, driver } = await seededStoreWithDriver();
     try {
       const registry = clay.validationRegistrySnapshot();
       const census = enumerateCanonicalStateV1(driver, registry);
@@ -175,13 +174,14 @@ describe("guarded target commit coordinator", () => {
       TargetAuthorityStore.createSchema(driver);
       const expectedTarget = TargetAuthorityStore.initialize(driver, header).evidence();
       const catalogContext = seedCatalogForTarget(driver, expectedTarget);
-      const guard = new LiveWriteGuard(driver);
+      const session = createLiveWriteGuard(driver);
+      const guard = session.driver;
       const catalog = DeviceCatalog.openExisting(guard);
       const beforeCatalog = catalog.snapshot();
       const changed = census.leaves[0]!.seed;
       const fields = changed.fields.map(field => field.kind === "text"
         ? { ...field, value: `${field.value} changed` } : field);
-      const coordinator = new TargetCommitCoordinator(guard, registry, commitClock());
+      const coordinator = new TargetCommitCoordinator(session, registry, commitClock());
       let invoked = false;
       expect(() => coordinator.commit({
         expectedTarget,
@@ -204,8 +204,7 @@ describe("guarded target commit coordinator", () => {
   });
 
   it("validates the final lease before mutation at the exact expiry boundary", async () => {
-    const clay = await seededStore();
-    const driver = (clay as unknown as { driver: DbDriver }).driver;
+    const { store: clay, driver } = await seededStoreWithDriver();
     try {
       const registry = clay.validationRegistrySnapshot();
       const census = enumerateCanonicalStateV1(driver, registry);
@@ -214,21 +213,17 @@ describe("guarded target commit coordinator", () => {
       TargetAuthorityStore.createSchema(driver);
       const expectedTarget = TargetAuthorityStore.initialize(driver, header).evidence();
       const catalogContext = seedCatalogForTarget(driver, expectedTarget);
-      const guard = new LiveWriteGuard(driver);
+      const session = createLiveWriteGuard(driver);
+      const guard = session.driver;
       const changed = census.leaves[0]!.seed;
       const fields = changed.fields.map(field => field.kind === "text"
         ? { ...field, value: `${field.value} changed` } : field);
-      const ClockedCoordinator = TargetCommitCoordinator as unknown as new (
-        guarded: LiveWriteGuard,
-        registryValue: typeof registry,
-        clock: () => number,
-      ) => TargetCommitCoordinator;
       const instants = [
         Date.parse("2026-09-05T00:00:00.000Z"),
         Date.parse("2026-09-05T00:04:59.000Z"),
       ];
       let clockIndex = 0;
-      const coordinator = new ClockedCoordinator(guard, registry,
+      const coordinator = new TargetCommitCoordinator(session, registry,
         () => instants[Math.min(clockIndex++, instants.length - 1)]!);
       let invoked = false;
       expect(() => coordinator.commit({
@@ -253,8 +248,7 @@ describe("guarded target commit coordinator", () => {
   });
 
   it("takes over an expired lease and abandons both mirrored reservations", async () => {
-    const clay = await seededStore();
-    const driver = (clay as unknown as { driver: DbDriver }).driver;
+    const { store: clay, driver } = await seededStoreWithDriver();
     try {
       const registry = clay.validationRegistrySnapshot();
       const census = enumerateCanonicalStateV1(driver, registry);
@@ -264,11 +258,12 @@ describe("guarded target commit coordinator", () => {
       const target = TargetAuthorityStore.initialize(driver, header);
       const expectedTarget = target.evidence();
       const catalogContext = seedCatalogForTarget(driver, expectedTarget);
-      const guard = new LiveWriteGuard(driver);
+      const session = createLiveWriteGuard(driver);
+      const guard = session.driver;
       const catalog = DeviceCatalog.openExisting(guard);
       const operationId = id("op", "t");
       const requestSha256 = `sha256:${"d".repeat(64)}`;
-      guard.runAuthorized(() => {
+      session.authority.run(() => {
         const targetReservation = TargetAuthorityStore.open(guard).reserveProtectionRevision(
           operationId, "2026-09-05T00:00:00.000Z", expectedTarget, requestSha256,
         );
@@ -284,7 +279,7 @@ describe("guarded target commit coordinator", () => {
       });
       expect(catalog.snapshot().catalogGeneration).toBe("3");
       const recoveryNow = Date.parse("2026-09-05T00:05:00.000Z");
-      const coordinator = new TargetCommitCoordinator(guard, registry, () => recoveryNow);
+      const coordinator = new TargetCommitCoordinator(session, registry, () => recoveryNow);
       const recover = coordinator as unknown as {
         recoverExpiredReservation(input: {
           expectedAuthorityIncarnationId: string;
@@ -355,7 +350,7 @@ describe("guarded target commit coordinator", () => {
         catalogGeneration: "6",
         entries: [{ currentProtectionRevision: "2", revisionHighWater: "2" }],
       });
-      guard.runAuthorized(() => {
+      session.authority.run(() => {
         guard.exec(
           "UPDATE catalog.catalog_generation_events SET event_kind='revision_abandoned' WHERE catalog_generation='4'",
         );
@@ -389,8 +384,7 @@ describe("guarded target commit coordinator", () => {
   });
 
   it("commits target and selected catalog head on one operation and revision", async () => {
-    const clay = await seededStore();
-    const driver = (clay as unknown as { driver: DbDriver }).driver;
+    const { store: clay, driver } = await seededStoreWithDriver();
     try {
       const registry = clay.validationRegistrySnapshot();
       const census = enumerateCanonicalStateV1(driver, registry);
@@ -409,9 +403,10 @@ describe("guarded target commit coordinator", () => {
       const fields = row.fields.map(field =>
         field.name === `field/${name.semantic!.fieldId}` && field.kind === "text"
           ? { ...field, value: "Catalog committed" } : field);
-      const guard = new LiveWriteGuard(driver);
+      const session = createLiveWriteGuard(driver);
+      const guard = session.driver;
       const catalog = DeviceCatalog.openExisting(guard);
-      const coordinator = new TargetCommitCoordinator(guard, registry, commitClock());
+      const coordinator = new TargetCommitCoordinator(session, registry, commitClock());
       const operationId = id("op", "m");
       const unexpectedOperationId = id("op", "n");
       const operationSequence = [
@@ -459,8 +454,7 @@ describe("guarded target commit coordinator", () => {
   });
 
   it("commits one meaningful row change with Merkle, header, and journal atomically", async () => {
-    const clay = await seededStore();
-    const driver = (clay as unknown as { driver: DbDriver }).driver;
+    const { store: clay, driver } = await seededStoreWithDriver();
     try {
       const registry = clay.validationRegistrySnapshot();
       const census = enumerateCanonicalStateV1(driver, registry);
@@ -479,9 +473,10 @@ describe("guarded target commit coordinator", () => {
         field.name === `field/${name.semantic!.fieldId}` && field.kind === "text"
           ? { ...field, value: "Changed" } : field);
       const catalogContext = seedCatalogForTarget(driver, expectedTarget);
-      const guard = new LiveWriteGuard(driver);
+      const session = createLiveWriteGuard(driver);
+      const guard = session.driver;
       const catalog = DeviceCatalog.openExisting(guard);
-      const coordinator = new TargetCommitCoordinator(guard, registry, commitClock());
+      const coordinator = new TargetCommitCoordinator(session, registry, commitClock());
       const result = coordinator.commit({
         expectedTarget,
         ...catalogContext,
@@ -522,7 +517,7 @@ describe("guarded target commit coordinator", () => {
       expect(TargetAuthorityStore.open(guard).reservations()).toHaveLength(1);
       const beforeExpiredRetry = catalog.snapshot();
       const expiredRetry = new TargetCommitCoordinator(
-        guard, registry, () => Date.parse("2026-09-05T00:05:00.000Z"),
+        session, registry, () => Date.parse("2026-09-05T00:05:00.000Z"),
       );
       expect(expiredRetry.commit({
         expectedTarget,
@@ -534,7 +529,7 @@ describe("guarded target commit coordinator", () => {
       expect(retriedMutation).toBe(false);
       expect(catalog.snapshot()).toEqual(beforeExpiredRetry);
       expect(catalog.revisionReservations()).toHaveLength(1);
-      const replacementFence = guard.runAuthorized(() => catalog.acquireWriteLease({
+      const replacementFence = session.authority.run(() => catalog.acquireWriteLease({
         expectedAuthorityIncarnationId: catalogContext.fence.authorityIncarnationId,
         expectedCatalogGeneration: beforeExpiredRetry.catalogGeneration,
         expectedWriteEpoch: catalogContext.fence.writeEpoch,
@@ -570,7 +565,7 @@ describe("guarded target commit coordinator", () => {
         mutate: () => { retriedMutation = true; },
       })).toThrow();
       expect(retriedMutation).toBe(false);
-      guard.runAuthorized(() => guard.exec(
+      session.authority.run(() => guard.exec(
         "UPDATE sys.target_revision_reservations SET state_sha256 = ? WHERE operation_id = ?",
         [`sha256:${"e".repeat(64)}`, id("op", "e")],
       ));
@@ -588,8 +583,7 @@ describe("guarded target commit coordinator", () => {
   });
 
   it("rolls back a failed mutation and leaves one abandoned reservation gap", async () => {
-    const clay = await seededStore();
-    const driver = (clay as unknown as { driver: DbDriver }).driver;
+    const { store: clay, driver } = await seededStoreWithDriver();
     try {
       const registry = clay.validationRegistrySnapshot();
       const census = enumerateCanonicalStateV1(driver, registry);
@@ -608,9 +602,10 @@ describe("guarded target commit coordinator", () => {
         field.name === `field/${name.semantic!.fieldId}` && field.kind === "text"
           ? { ...field, value: "Broken" } : field);
       const catalogContext = seedCatalogForTarget(driver, expectedTarget);
-      const guard = new LiveWriteGuard(driver);
+      const session = createLiveWriteGuard(driver);
+      const guard = session.driver;
       const catalog = DeviceCatalog.openExisting(guard);
-      const coordinator = new TargetCommitCoordinator(guard, registry, commitClock());
+      const coordinator = new TargetCommitCoordinator(session, registry, commitClock());
       expect(() => coordinator.commit({
         expectedTarget,
         ...catalogContext,
@@ -647,8 +642,7 @@ describe("guarded target commit coordinator", () => {
   });
 
   it("rejects mutation of the caller-owned change set after request fingerprinting", async () => {
-    const clay = await seededStore();
-    const driver = (clay as unknown as { driver: DbDriver }).driver;
+    const { store: clay, driver } = await seededStoreWithDriver();
     try {
       const registry = clay.validationRegistrySnapshot();
       const census = enumerateCanonicalStateV1(driver, registry);
@@ -688,9 +682,10 @@ describe("guarded target commit coordinator", () => {
         },
       });
       const catalogContext = seedCatalogForTarget(driver, expectedTarget);
-      const guard = new LiveWriteGuard(driver);
+      const session = createLiveWriteGuard(driver);
+      const guard = session.driver;
       const catalog = DeviceCatalog.openExisting(guard);
-      const coordinator = new TargetCommitCoordinator(guard, registry, commitClock());
+      const coordinator = new TargetCommitCoordinator(session, registry, commitClock());
       expect(() => coordinator.commit({
         expectedTarget,
         ...catalogContext,
@@ -727,8 +722,7 @@ describe("guarded target commit coordinator", () => {
   });
 
   it("rejects a thenable mutation result before Merkle publication", async () => {
-    const clay = await seededStore();
-    const driver = (clay as unknown as { driver: DbDriver }).driver;
+    const { store: clay, driver } = await seededStoreWithDriver();
     try {
       const registry = clay.validationRegistrySnapshot();
       const census = enumerateCanonicalStateV1(driver, registry);
@@ -747,9 +741,10 @@ describe("guarded target commit coordinator", () => {
         field.name === `field/${name.semantic!.fieldId}` && field.kind === "text"
           ? { ...field, value: "Async" } : field);
       const catalogContext = seedCatalogForTarget(driver, expectedTarget);
-      const guard = new LiveWriteGuard(driver);
+      const session = createLiveWriteGuard(driver);
+      const guard = session.driver;
       const catalog = DeviceCatalog.openExisting(guard);
-      const coordinator = new TargetCommitCoordinator(guard, registry, commitClock());
+      const coordinator = new TargetCommitCoordinator(session, registry, commitClock());
       expect(() => coordinator.commit({
         expectedTarget,
         ...catalogContext,
