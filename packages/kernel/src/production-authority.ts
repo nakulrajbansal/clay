@@ -860,6 +860,11 @@ export class ProductionStoreAuthority {
     return this.#coordinator.execute(input);
   }
 
+  /** Fixed device-local telemetry path; never a canonical production request. */
+  executeOperationalMetricMutation(input: unknown): Promise<ProductionMutationResult> {
+    return this.#coordinator.executeOperationalMetric(input);
+  }
+
   createRequestId(): string {
     return this.#coordinator.mintRequestId();
   }

@@ -2516,110 +2516,134 @@ export class ClayStore {
   }
 
   runDueAutomations(now: Date = new Date()): AutomationRun[] {
-    const completed: AutomationRun[] = [];
-    for (const definition of this.listAutomations().filter(candidate => candidate.enabled)) {
-      const trigger = definition.trigger;
-      if (trigger.kind === "record_created" || trigger.kind === "record_updated") {
-        const stored = this.#driver.select(
-          `SELECT last_event_seq FROM sys.automations WHERE id = ?`, [definition.id])[0]!;
-        const events = this.#driver.select(
-          `SELECT seq, row_id, kind, origin, row_json FROM sys.record_events
-           WHERE table_name = ? AND seq > ? ORDER BY seq ASC LIMIT 500`,
-          [trigger.table, Number(stored.last_event_seq)]);
-        let cursor = Number(stored.last_event_seq);
-        const eligible = new Map<number, QueryRow>();
-        for (const event of events) {
-          if (event.origin !== "user"
-              || (trigger.kind === "record_created" && event.kind !== "created")
-              || (trigger.kind === "record_updated" && event.kind !== "updated")) continue;
-          let snapshot: QueryRow | null = null;
-          if (typeof event.row_json === "string") {
-            try { snapshot = JSON.parse(event.row_json) as QueryRow; }
-            catch { snapshot = null; }
+    return this.#driver.tx(() => {
+      const completed: AutomationRun[] = [];
+      let matchedRecords = 0;
+      const consumeMatch = (): void => {
+        matchedRecords += 1;
+        if (matchedRecords > 100)
+          throw new ClayError("E_LIMIT",
+            "automation run request matches more than 100 records; narrow its rules");
+      };
+      for (const definition of this.listAutomations().filter(candidate => candidate.enabled)) {
+        const trigger = definition.trigger;
+        if (trigger.kind === "record_created" || trigger.kind === "record_updated") {
+          const stored = this.#driver.select(
+            `SELECT last_event_seq FROM sys.automations WHERE id = ?`, [definition.id])[0]!;
+          const events = this.#driver.select(
+            `SELECT seq, row_id, kind, origin, row_json FROM sys.record_events
+             WHERE table_name = ? AND seq > ? ORDER BY seq ASC LIMIT 500`,
+            [trigger.table, Number(stored.last_event_seq)]);
+          let cursor = Number(stored.last_event_seq);
+          const eligible = new Map<number, QueryRow>();
+          for (const event of events) {
+            if (event.origin !== "user"
+                || (trigger.kind === "record_created" && event.kind !== "created")
+                || (trigger.kind === "record_updated" && event.kind !== "updated")) continue;
+            let snapshot: QueryRow | null = null;
+            if (typeof event.row_json === "string") {
+              try { snapshot = JSON.parse(event.row_json) as QueryRow; }
+              catch { snapshot = null; }
+            }
+            if (!snapshot) snapshot = this.query({
+              from: trigger.table,
+              where: [{ field: "id", op: "eq", value: String(event.row_id) }],
+              limit: 1,
+            }, now)[0] ?? null;
+            if (snapshot && rowMatchesConditions(snapshot, trigger.conditions, now)) {
+              eligible.set(Number(event.seq), snapshot);
+              if (eligible.size > 100)
+                throw new ClayError("E_LIMIT",
+                  "automation matches more than 100 queued event records; narrow its conditions");
+            }
           }
-          if (!snapshot) snapshot = this.query({
-            from: trigger.table,
-            where: [{ field: "id", op: "eq", value: String(event.row_id) }],
-            limit: 1,
-          }, now)[0] ?? null;
-          if (snapshot && rowMatchesConditions(snapshot, trigger.conditions, now)) {
-            eligible.set(Number(event.seq), snapshot);
-            if (eligible.size > 100)
-              throw new ClayError("E_LIMIT",
-                "automation matches more than 100 queued event records; narrow its conditions");
+          for (const event of events) {
+            const sequence = Number(event.seq);
+            if (event.origin !== "user"
+                || (trigger.kind === "record_created" && event.kind !== "created")
+                || (trigger.kind === "record_updated" && event.kind !== "updated")) {
+              cursor = sequence;
+              continue;
+            }
+            const snapshot = eligible.get(sequence);
+            if (!snapshot) {
+              cursor = sequence;
+              continue;
+            }
+            const key = `event:${sequence}`;
+            if (this.automationTriggerSucceeded(definition.id, key)) {
+              cursor = sequence;
+              continue;
+            }
+            consumeMatch();
+            const run = this.executeAutomation(definition, [snapshot], key, now);
+            if (run) completed.push(run);
+            if (run?.status === "failed") break;
+            if (run?.status === "success" || this.automationTriggerSucceeded(definition.id, key))
+              cursor = sequence;
           }
+          this.#driver.exec(`UPDATE sys.automations SET last_event_seq = ? WHERE id = ?`,
+            [cursor, definition.id]);
+          continue;
         }
-        for (const event of events) {
-          const sequence = Number(event.seq);
-          if (event.origin !== "user"
-              || (trigger.kind === "record_created" && event.kind !== "created")
-              || (trigger.kind === "record_updated" && event.kind !== "updated")) {
-            cursor = sequence;
-            continue;
+        if (trigger.kind === "record_matches") {
+          const rows = this.automationRows(definition, now,
+            { maxMatches: 100, truncate: false });
+          const currentIds = new Set(rows.map(row => String(row.id)));
+          for (const active of this.#driver.select(
+            `SELECT row_id FROM sys.automation_matches WHERE automation_id = ?`, [definition.id])) {
+            if (!currentIds.has(String(active.row_id)))
+              this.#driver.exec(
+                `DELETE FROM sys.automation_matches WHERE automation_id = ? AND row_id = ?`,
+                [definition.id, String(active.row_id)]);
           }
-          const snapshot = eligible.get(sequence);
-          if (!snapshot) {
-            cursor = sequence;
-            continue;
+          const active = new Set(this.#driver.select(
+            `SELECT row_id FROM sys.automation_matches WHERE automation_id = ?`, [definition.id])
+            .map(row => String(row.row_id)));
+          for (const row of rows.filter(candidate => !active.has(String(candidate.id)))) {
+            const key = `match:${String(row.id)}:${String(row.updated_at)}:${definition.updatedAt}`;
+            const rowId = String(row.id);
+            const persistMatch = (): void => this.#driver.exec(
+              `INSERT OR IGNORE INTO sys.automation_matches(automation_id, row_id) VALUES (?, ?)`,
+              [definition.id, rowId]);
+            if (this.automationTriggerSucceeded(definition.id, key)) {
+              persistMatch();
+              continue;
+            }
+            consumeMatch();
+            const run = this.executeAutomation(definition, [row], key, now, persistMatch);
+            if (run) completed.push(run);
+            if (!run && this.automationTriggerSucceeded(definition.id, key)) persistMatch();
           }
-          const key = `event:${sequence}`;
-          const run = this.executeAutomation(definition, [snapshot], key, now);
+          continue;
+        }
+        if (trigger.kind === "date_due") {
+          for (const row of this.automationRows(definition, now,
+            { maxMatches: 100, truncate: false })) {
+            const due = String(row[trigger.dateField] ?? "");
+            const key = `due:${String(row.id)}:${due}:${trigger.daysBefore}`;
+            if (this.automationTriggerSucceeded(definition.id, key)) continue;
+            consumeMatch();
+            const run = this.executeAutomation(definition, [row], key, now);
+            if (run) completed.push(run);
+          }
+          continue;
+        }
+        if (trigger.kind === "schedule") {
+          const minutes = now.getHours() * 60 + now.getMinutes();
+          const [hour, minute] = trigger.localTime.split(":").map(Number);
+          if (minutes < hour! * 60 + minute!) continue;
+          if (trigger.cadence === "weekly" && now.getDay() !== trigger.weekday) continue;
+          const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+          const key = `schedule:${day}`;
+          if (this.automationTriggerSucceeded(definition.id, key)) continue;
+          consumeMatch();
+          const run = this.executeAutomation(definition, [], key, now);
           if (run) completed.push(run);
-          if (run?.status === "failed") break;
-          if (run?.status === "success" || this.automationTriggerSucceeded(definition.id, key))
-            cursor = sequence;
         }
-        this.#driver.exec(`UPDATE sys.automations SET last_event_seq = ? WHERE id = ?`,
-          [cursor, definition.id]);
-        continue;
       }
-      if (trigger.kind === "record_matches") {
-        const rows = this.automationRows(definition, now,
-          { maxMatches: 100, truncate: false });
-        const currentIds = new Set(rows.map(row => String(row.id)));
-        for (const active of this.#driver.select(
-          `SELECT row_id FROM sys.automation_matches WHERE automation_id = ?`, [definition.id])) {
-          if (!currentIds.has(String(active.row_id)))
-            this.#driver.exec(
-              `DELETE FROM sys.automation_matches WHERE automation_id = ? AND row_id = ?`,
-              [definition.id, String(active.row_id)]);
-        }
-        const active = new Set(this.#driver.select(
-          `SELECT row_id FROM sys.automation_matches WHERE automation_id = ?`, [definition.id])
-          .map(row => String(row.row_id)));
-        for (const row of rows.filter(candidate => !active.has(String(candidate.id)))) {
-          const key = `match:${String(row.id)}:${String(row.updated_at)}:${definition.updatedAt}`;
-          const rowId = String(row.id);
-          const persistMatch = (): void => this.#driver.exec(
-            `INSERT OR IGNORE INTO sys.automation_matches(automation_id, row_id) VALUES (?, ?)`,
-            [definition.id, rowId]);
-          const run = this.executeAutomation(definition, [row], key, now, persistMatch);
-          if (run) completed.push(run);
-          if (!run && this.automationTriggerSucceeded(definition.id, key)) persistMatch();
-        }
-        continue;
-      }
-      if (trigger.kind === "date_due") {
-        for (const row of this.automationRows(definition, now,
-          { maxMatches: 100, truncate: false })) {
-          const due = String(row[trigger.dateField] ?? "");
-          const run = this.executeAutomation(definition, [row],
-            `due:${String(row.id)}:${due}:${trigger.daysBefore}`, now);
-          if (run) completed.push(run);
-        }
-        continue;
-      }
-      if (trigger.kind === "schedule") {
-        const minutes = now.getHours() * 60 + now.getMinutes();
-        const [hour, minute] = trigger.localTime.split(":").map(Number);
-        if (minutes < hour! * 60 + minute!) continue;
-        if (trigger.cadence === "weekly" && now.getDay() !== trigger.weekday) continue;
-        const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-        const run = this.executeAutomation(definition, [], `schedule:${day}`, now);
-        if (run) completed.push(run);
-      }
-    }
-    return completed;
+      return completed;
+    });
   }
 
   automationRuns(automationId?: string, limit = 100): AutomationRun[] {

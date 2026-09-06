@@ -179,6 +179,43 @@ describe("production mutation route census", () => {
     expect(worker).toContain("const requestId = authorityRequestId(req)");
   });
 
+  it("authority-routes automation, notification, observer, and operational metrics", () => {
+    const worker = source("packages/shell/src/worker/db-worker.ts");
+    const workerRoutes = [
+      "upsertAutomation", "deleteAutomation", "runAutomations", "runAutomationNow",
+      "undoAutomationRun", "markNotificationRead", "recordPrivateMetric",
+      "setPrivateMetricsEnabled", "clearPrivateMetrics", "recordFilter",
+      "acceptSuggestion", "dismissSuggestion",
+    ] as const;
+    for (const route of workerRoutes) {
+      expect(DB_WORKER_ROUTE_CENSUS[route], route)
+        .toEqual({ enforcement: "authority", mutates: "live" });
+      expect(caseBody(worker, route), route).toContain(`runAuthorityMutation("${route}"`);
+      expect(caseBody(worker, route), route).not.toContain("failClosedMutation(");
+    }
+    expect(DB_WORKER_ROUTE_CENSUS.simulateAutomation)
+      .toEqual({ enforcement: "read", mutates: "none" });
+    expect(caseBody(worker, "simulateAutomation")).toContain("mustStore().simulateAutomation(");
+    expect(worker).toContain("target.executeOperationalMetricMutation(");
+    expect(worker).toContain('route: "runDueAutomations"');
+    expect(worker).toContain('route: "recordUsage"');
+    expect(worker).not.toContain("mustStore().recordPrivateMetric(");
+    expect(CLAY_STORE_WRITER_CENSUS).toMatchObject({
+      upsertAutomation: "authority",
+      deleteAutomation: "authority",
+      runAutomationNow: "authority",
+      runDueAutomations: "authority",
+      undoAutomationRun: "authority",
+      markNotificationRead: "authority",
+      recordPrivateMetric: "authority",
+      setPrivateMetricsEnabled: "authority",
+      clearPrivateMetrics: "authority",
+      recordUsage: "authority",
+      acceptSuggestion: "authority",
+      dismissSuggestion: "authority",
+    });
+  });
+
   it("keeps StoreRpc and Bridge writes on the authority-backed port", () => {
     const rpc = source("packages/kernel/src/asyncstore.ts");
     const bridge = source("packages/kernel/src/bridge.ts");

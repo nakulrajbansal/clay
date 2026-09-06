@@ -10,6 +10,12 @@ import { isThenable, type DbDriver } from "./db";
 import { DeviceCatalog } from "./device-catalog";
 import { ClayError } from "./errors";
 import type { LiveWriteAuthority } from "./live-write-guard";
+import { executeAutomationObserverAuthorityRoute } from "./production-automation-observer-routes";
+import {
+  copyPrivateMetricOperationalState,
+  executePrivateMetricAuthorityRoute,
+  privateMetricOperationalFingerprint,
+} from "./production-private-metric-authority";
 import {
   readProductionRequestReceipt,
   writeProductionRequestReceipt,
@@ -46,6 +52,23 @@ type CapturedProductionMutation = Readonly<{
     route: "setting.compareAndSet";
     payload: Readonly<{ key: string; expectedRevision: number; value: JsonValue }>;
   }
+  | { route: "upsertAutomation"; payload: Readonly<{ input: Readonly<JsonRecord> }> }
+  | { route: "deleteAutomation"; payload: Readonly<{ id: string }> }
+  | { route: "runAutomationNow"; payload: Readonly<{ id: string }> }
+  | { route: "runDueAutomations"; payload: Readonly<JsonRecord> }
+  | { route: "undoAutomationRun"; payload: Readonly<{ id: string }> }
+  | { route: "markNotificationRead"; payload: Readonly<{ id: string }> }
+  | { route: "recordUsage"; payload: Readonly<{ event: Readonly<JsonRecord> }> }
+  | { route: "acceptSuggestion"; payload: Readonly<{ subject: string; kind: string }> }
+  | { route: "dismissSuggestion"; payload: Readonly<{ subject: string; kind: string }> }
+)>;
+
+type CapturedOperationalMetricMutation = Readonly<{
+  requestId: string;
+} & (
+  | { route: "recordPrivateMetric"; payload: Readonly<{ event: Readonly<JsonRecord> }> }
+  | { route: "setPrivateMetricsEnabled"; payload: Readonly<{ enabled: boolean }> }
+  | { route: "clearPrivateMetrics"; payload: Readonly<JsonRecord> }
 )>;
 
 export type ProductionMutationResult = {
@@ -105,25 +128,26 @@ function selectedCatalogShell(
   return entry.shellId;
 }
 
-function captureExactFields(
+function exactDataFields(
   input: object,
   allowed: readonly string[],
 ): Readonly<Record<string, unknown>> {
   const prototype = Reflect.getPrototypeOf(input);
-  if (prototype !== Object.prototype && prototype !== null) throw new Error("invalid record");
+  if (prototype !== Object.prototype && prototype !== null)
+    throw new Error("unexpected prototype");
   const allowedKeys = new Set(allowed);
   const keys = Reflect.ownKeys(input);
-  if (keys.length !== allowed.length || keys.some(key =>
-    typeof key !== "string" || !allowedKeys.has(key)
-  )) throw new Error("unexpected key");
-  const output: Record<string, unknown> = Object.create(null);
+  if (keys.length !== allowed.length
+      || keys.some(key => typeof key !== "string" || !allowedKeys.has(key)))
+    throw new Error("unexpected key");
+  const values: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   for (const key of allowed) {
     const descriptor = Reflect.getOwnPropertyDescriptor(input, key);
     if (!descriptor || !("value" in descriptor) || !descriptor.enumerable)
-      throw new Error("invalid data property");
-    output[key] = descriptor.value;
+      throw new Error("unexpected property descriptor");
+    values[key] = descriptor.value;
   }
-  return Object.freeze(output);
+  return Object.freeze(values);
 }
 
 function captureMutationEnvelope(input: unknown): Readonly<{
@@ -131,9 +155,10 @@ function captureMutationEnvelope(input: unknown): Readonly<{
   route: unknown;
   payload: unknown;
 }> {
-  if (typeof input !== "object" || input === null || Array.isArray(input)
-      || (Reflect.getPrototypeOf(input) !== Object.prototype
-        && Reflect.getPrototypeOf(input) !== null))
+  if (typeof input !== "object" || input === null || Array.isArray(input))
+    throw invalid("production mutation envelope must be a plain data record");
+  const prototype = Reflect.getPrototypeOf(input);
+  if (prototype !== Object.prototype && prototype !== null)
     throw invalid("production mutation envelope must be a plain data record");
   const allowed = ["requestId", "route", "payload"] as const;
   const keys = Reflect.ownKeys(input);
@@ -162,14 +187,13 @@ const MAX_CAPTURE_KEYS = 10_000;
 const MAX_CAPTURE_KEY_LENGTH = 128;
 const MAX_CAPTURE_STRING = 1_000_000;
 const MAX_CAPTURE_BYTES = 2_000_000;
-const CAPTURE_ENCODER = new TextEncoder();
 
 type CaptureBudget = { nodes: number; bytes: number };
 
 function consumeCaptureBytes(budget: CaptureBudget, bytes: number): void {
   budget.bytes += bytes;
   if (!Number.isSafeInteger(budget.bytes) || budget.bytes > MAX_CAPTURE_BYTES)
-    throw unavailable("production mutation payload exceeds limits");
+    throw unavailable("production mutation payload exceeds the 2,000,000-byte capture limits");
 }
 
 function captureJsonValue(
@@ -180,18 +204,22 @@ function captureJsonValue(
 ): JsonValue {
   if (depth > MAX_CAPTURE_DEPTH || ++budget.nodes > MAX_CAPTURE_NODES)
     throw unavailable("production mutation payload exceeds limits");
-  if (input === null || typeof input === "boolean") {
-    consumeCaptureBytes(budget, input === null ? 4 : input ? 4 : 5);
+  if (input === null) {
+    consumeCaptureBytes(budget, 4);
+    return input;
+  }
+  if (typeof input === "boolean") {
+    consumeCaptureBytes(budget, input ? 4 : 5);
     return input;
   }
   if (typeof input === "string") {
     if (input.length > MAX_CAPTURE_STRING)
       throw unavailable("production mutation payload exceeds limits");
-    consumeCaptureBytes(budget, CAPTURE_ENCODER.encode(input).byteLength + 2);
+    consumeCaptureBytes(budget, new TextEncoder().encode(JSON.stringify(input)).byteLength);
     return input;
   }
   if (typeof input === "number" && Number.isFinite(input)) {
-    consumeCaptureBytes(budget, 24);
+    consumeCaptureBytes(budget, new TextEncoder().encode(JSON.stringify(input)).byteLength);
     return input;
   }
   if (typeof input !== "object") throw new Error("invalid JSON value");
@@ -199,21 +227,28 @@ function captureJsonValue(
   seen.add(input);
   try {
     if (Array.isArray(input)) {
-      if (Reflect.getPrototypeOf(input) !== Array.prototype) throw new Error("invalid array");
-      const lengthDescriptor = Reflect.getOwnPropertyDescriptor(input, "length");
-      const length = lengthDescriptor && "value" in lengthDescriptor
-        ? lengthDescriptor.value : -1;
-      if (typeof length !== "number" || !Number.isSafeInteger(length)
-          || length < 0 || length > MAX_CAPTURE_ARRAY)
-        throw unavailable("production mutation payload exceeds limits");
+      if (Reflect.getPrototypeOf(input) !== Array.prototype)
+        throw new Error("invalid array");
       const keys = Reflect.ownKeys(input);
-      if (keys.length !== length + 1) throw new Error("sparse or extended array");
-      consumeCaptureBytes(budget, length + 2);
+      const lengthDescriptor = Reflect.getOwnPropertyDescriptor(input, "length");
+      if (!lengthDescriptor || !("value" in lengthDescriptor)
+          || !Number.isSafeInteger(lengthDescriptor.value)
+          || (lengthDescriptor.value as number) < 0
+          || (lengthDescriptor.value as number) > MAX_CAPTURE_ARRAY)
+        throw unavailable("production mutation payload exceeds limits");
+      const length = lengthDescriptor.value as number;
+      if (keys.length !== length + 1 || keys.some(key => {
+        if (key === "length") return false;
+        if (typeof key !== "string" || !/^(?:0|[1-9][0-9]*)$/.test(key)) return true;
+        const index = Number(key);
+        return !Number.isSafeInteger(index) || index < 0 || index >= length;
+      })) throw new Error("invalid array keys");
+      consumeCaptureBytes(budget, 2 + Math.max(0, length - 1));
       const output = new Array<JsonValue>(length);
       for (let index = 0; index < length; index++) {
         const descriptor = Reflect.getOwnPropertyDescriptor(input, String(index));
         if (!descriptor || !("value" in descriptor) || !descriptor.enumerable)
-          throw new Error("invalid array data property");
+          throw new Error("invalid array item");
         output[index] = captureJsonValue(descriptor.value, seen, depth + 1, budget);
       }
       return Object.freeze(output) as JsonValue[];
@@ -223,15 +258,18 @@ function captureJsonValue(
     const output: JsonRecord = Object.create(null) as JsonRecord;
     const keys = Reflect.ownKeys(input);
     if (keys.length > MAX_CAPTURE_KEYS || keys.some(key =>
-      typeof key !== "string" || key.length > MAX_CAPTURE_KEY_LENGTH
-    )) throw unavailable("production mutation payload exceeds limits");
-    consumeCaptureBytes(budget, keys.length + 2);
+      typeof key !== "string" || key.length > MAX_CAPTURE_KEY_LENGTH))
+      throw unavailable("production mutation payload exceeds limits");
+    consumeCaptureBytes(budget, 2 + Math.max(0, keys.length - 1));
     for (let index = 0; index < keys.length; index++) {
       const key = keys[index] as string;
-      consumeCaptureBytes(budget, CAPTURE_ENCODER.encode(key).byteLength + 3);
       const descriptor = Reflect.getOwnPropertyDescriptor(input, key);
       if (!descriptor || !("value" in descriptor) || !descriptor.enumerable)
-        throw new Error("invalid record data property");
+        throw new Error("invalid record property");
+      consumeCaptureBytes(
+        budget,
+        new TextEncoder().encode(JSON.stringify(key)).byteLength + 1,
+      );
       output[key] = captureJsonValue(descriptor.value, seen, depth + 1, budget);
     }
     return Object.freeze(output);
@@ -240,10 +278,38 @@ function captureJsonValue(
   }
 }
 
-function captureJsonRecord(input: unknown): Readonly<JsonRecord> {
-  const captured = captureJsonValue(input, new WeakSet());
+function captureJsonRecord(
+  input: unknown,
+  budget: CaptureBudget = { nodes: 0, bytes: 0 },
+): Readonly<JsonRecord> {
+  const captured = captureJsonValue(input, new WeakSet(), 0, budget);
   if (typeof captured !== "object" || captured === null || Array.isArray(captured))
     throw new Error("expected record");
+  return captured;
+}
+
+function capturedJsonRecord(input: unknown): Readonly<JsonRecord> {
+  if (typeof input !== "object" || input === null || Array.isArray(input))
+    throw new Error("expected captured record");
+  return input as Readonly<JsonRecord>;
+}
+
+function validateCapturedUsageEvent(captured: Readonly<JsonRecord>): Readonly<JsonRecord> {
+  const keys = Object.keys(captured);
+  if (keys.length < 2 || keys.length > 3
+      || keys.some(key => key !== "kind" && key !== "subject" && key !== "detail")
+      || !Object.hasOwn(captured, "kind") || !Object.hasOwn(captured, "subject"))
+    throw new Error("invalid usage event fields");
+  if (captured.kind !== "insert" && captured.kind !== "update"
+      && captured.kind !== "filter" && captured.kind !== "view")
+    throw new Error("invalid usage event kind");
+  if (typeof captured.subject !== "string" || captured.subject.length < 1
+      || captured.subject.length > 256)
+    throw new Error("invalid usage event subject");
+  if (Object.hasOwn(captured, "detail")
+      && (captured.detail === null || typeof captured.detail !== "object"
+        || Array.isArray(captured.detail)))
+    throw new Error("invalid usage event detail");
   return captured;
 }
 
@@ -255,64 +321,64 @@ function captureMutation(input: unknown): CapturedProductionMutation {
     const payload = envelope.payload;
     if (typeof requestId !== "string" || !/^req_[a-z2-7]{26}$/.test(requestId)
         || typeof payload !== "object" || payload === null || Array.isArray(payload)) throw new Error();
+    if (route === "starter.seed") return Object.freeze({
+      requestId,
+      route,
+      payload: captureStarterSeedBundle(payload),
+    });
+    const capturedPayload = captureJsonRecord(payload);
     switch (route) {
       case "store.insert": {
-        const p = captureExactFields(payload, ["table", "row"]);
+        const p = exactDataFields(capturedPayload, ["table", "row"]);
         const table = p.table;
         const row = p.row;
         if (typeof table !== "string") throw new Error();
         return Object.freeze({ requestId, route, payload: Object.freeze({
-          table, row: captureJsonRecord(row),
+          table, row: capturedJsonRecord(row),
         }) });
       }
       case "store.update": {
-        const p = captureExactFields(payload, ["table", "id", "patch"]);
+        const p = exactDataFields(capturedPayload, ["table", "id", "patch"]);
         const table = p.table;
         const id = p.id;
         const patch = p.patch;
         if (typeof table !== "string" || typeof id !== "string") throw new Error();
         return Object.freeze({ requestId, route, payload: Object.freeze({
-          table, id, patch: captureJsonRecord(patch),
+          table, id, patch: capturedJsonRecord(patch),
         }) });
       }
       case "store.softDelete": {
-        const p = captureExactFields(payload, ["table", "id"]);
+        const p = exactDataFields(capturedPayload, ["table", "id"]);
         const table = p.table;
         const id = p.id;
         if (typeof table !== "string" || typeof id !== "string") throw new Error();
         return Object.freeze({ requestId, route, payload: Object.freeze({ table, id }) });
       }
       case "store.commit": {
-        const p = captureExactFields(payload, ["plan"]);
+        const p = exactDataFields(capturedPayload, ["plan"]);
         return Object.freeze({ requestId, route, payload: Object.freeze({
-          plan: captureJsonRecord(p.plan),
+          plan: capturedJsonRecord(p.plan),
         }) });
       }
-      case "starter.seed":
-        return Object.freeze({
-          requestId,
-          route,
-          payload: captureStarterSeedBundle(payload),
-        });
       case "setting.set": {
-        const p = captureExactFields(payload, ["key", "value"]);
+        const p = exactDataFields(capturedPayload, ["key", "value"]);
         const key = p.key;
         const value = p.value;
         if (typeof key !== "string") throw new Error();
         assertSettingKeyAvailable(key);
         return Object.freeze({ requestId, route, payload: Object.freeze({
-          key, value: captureJsonValue(value, new WeakSet()),
+          key, value: value as JsonValue,
         }) });
       }
       case "setting.delete": {
-        const p = captureExactFields(payload, ["key"]);
+        const p = exactDataFields(capturedPayload, ["key"]);
         const key = p.key;
         if (typeof key !== "string") throw new Error();
         assertSettingKeyAvailable(key);
         return Object.freeze({ requestId, route, payload: Object.freeze({ key }) });
       }
       case "setting.compareAndSet": {
-        const p = captureExactFields(payload, ["key", "expectedRevision", "value"]);
+        const p = exactDataFields(capturedPayload, ["key", "expectedRevision", "value"]);
         const key = p.key;
         const expectedRevision = p.expectedRevision;
         const value = p.value;
@@ -322,7 +388,42 @@ function captureMutation(input: unknown): CapturedProductionMutation {
         return Object.freeze({ requestId, route, payload: Object.freeze({
           key,
           expectedRevision: expectedRevision as number,
-          value: captureJsonValue(value, new WeakSet()),
+          value: value as JsonValue,
+        }) });
+      }
+      case "upsertAutomation": {
+        const p = exactDataFields(capturedPayload, ["input"]);
+        return Object.freeze({ requestId, route, payload: Object.freeze({
+          input: capturedJsonRecord(p.input),
+        }) });
+      }
+      case "deleteAutomation":
+      case "runAutomationNow":
+      case "undoAutomationRun":
+      case "markNotificationRead": {
+        const p = exactDataFields(capturedPayload, ["id"]);
+        if (typeof p.id !== "string") throw new Error();
+        return Object.freeze({ requestId, route, payload: Object.freeze({ id: p.id }) });
+      }
+      case "runDueAutomations":
+        exactDataFields(capturedPayload, []);
+        return Object.freeze({ requestId, route, payload: Object.freeze({}) });
+      case "recordUsage": {
+        const p = exactDataFields(capturedPayload, ["event"]);
+        return Object.freeze({ requestId, route, payload: Object.freeze({
+          event: validateCapturedUsageEvent(capturedJsonRecord(p.event)),
+        }) });
+      }
+      case "acceptSuggestion":
+      case "dismissSuggestion": {
+        const p = exactDataFields(capturedPayload, ["subject", "kind"]);
+        if (typeof p.subject !== "string" || p.subject.length < 1
+            || typeof p.kind !== "string" || ![
+              "promote_to_status", "pin_filtered_panel", "add_view", "flag_overdue",
+              "regroup_board", "make_workflow", "chart_metric",
+            ].includes(p.kind)) throw new Error();
+        return Object.freeze({ requestId, route, payload: Object.freeze({
+          subject: p.subject, kind: p.kind,
         }) });
       }
       default:
@@ -331,6 +432,42 @@ function captureMutation(input: unknown): CapturedProductionMutation {
   } catch (error) {
     if (error instanceof ClayError) throw error;
     throw invalid("production mutation request is invalid");
+  }
+}
+
+function captureOperationalMetricMutation(input: unknown): CapturedOperationalMetricMutation {
+  try {
+    const envelope = captureMutationEnvelope(input);
+    const requestId = envelope.requestId;
+    const route = envelope.route;
+    const payload = envelope.payload;
+    if (typeof requestId !== "string" || !/^req_[a-z2-7]{26}$/.test(requestId)
+        || typeof payload !== "object" || payload === null || Array.isArray(payload))
+      throw new Error();
+    const capturedPayload = captureJsonRecord(payload);
+    switch (route) {
+      case "recordPrivateMetric": {
+        const fields = exactDataFields(capturedPayload, ["event"]);
+        return Object.freeze({ requestId, route, payload: Object.freeze({
+          event: capturedJsonRecord(fields.event),
+        }) });
+      }
+      case "setPrivateMetricsEnabled": {
+        const fields = exactDataFields(capturedPayload, ["enabled"]);
+        if (typeof fields.enabled !== "boolean") throw new Error();
+        return Object.freeze({ requestId, route, payload: Object.freeze({
+          enabled: fields.enabled,
+        }) });
+      }
+      case "clearPrivateMetrics":
+        exactDataFields(capturedPayload, []);
+        return Object.freeze({ requestId, route, payload: Object.freeze({}) });
+      default:
+        throw new Error();
+    }
+  } catch (error) {
+    if (error instanceof ClayError) throw error;
+    throw invalid("operational metric mutation request is invalid");
   }
 }
 
@@ -350,6 +487,8 @@ function stableJson(input: JsonValue): string {
   }
   return `${output}}`;
 }
+
+type FixedOperationalMutation = CapturedOperationalMetricMutation;
 
 function requestFingerprint(expected: TargetEvidence, request: CapturedProductionMutation): string {
   const payload: JsonValue = {
@@ -412,6 +551,19 @@ function operationIdForRequest(authorityIncarnationId: string, requestId: string
   return OperationId.parse(encodeAuthorityId("op", bytes));
 }
 
+function operationIdForOperationalMetric(
+  authorityIncarnationId: string,
+  requestId: string,
+): string {
+  const digest = sha256HexSync(new TextEncoder().encode(
+    `clay-operational-metric-operation-v1\u0000${authorityIncarnationId}\u0000${requestId}`,
+  ));
+  const bytes = new Uint8Array(32);
+  for (let index = 0; index < bytes.length; index++)
+    bytes[index] = Number.parseInt(digest.slice(index * 2, index * 2 + 2), 16);
+  return OperationId.parse(encodeAuthorityId("op", bytes));
+}
+
 function trustedInstant(clock: () => number): { milliseconds: number; instant: string } {
   const milliseconds = clock();
   if (!Number.isSafeInteger(milliseconds) || milliseconds < 0)
@@ -431,7 +583,7 @@ const STORE_DELETE_SETTING: ClayStore["deleteSetting"] = ClayStore.prototype.del
 function executeCapturedMutation(
   store: ClayStore,
   request: CapturedProductionMutation,
-  starterSeedInstant: string | null,
+  executionInstant: string | null,
 ): JsonValue {
   switch (request.route) {
     case "store.insert":
@@ -456,9 +608,9 @@ function executeCapturedMutation(
         request.payload.plan as unknown as Parameters<ClayStore["commit"]>[0],
       );
     case "starter.seed":
-      if (starterSeedInstant === null)
+      if (executionInstant === null)
         throw invalid("trusted starter seed instant is unavailable");
-      return executeCapturedStarterSeed(store, request.payload, starterSeedInstant);
+      return executeCapturedStarterSeed(store, request.payload, executionInstant);
     case "setting.set":
       STORE_SET_SETTING.call(store, request.payload.key, request.payload.value);
       return null;
@@ -475,7 +627,28 @@ function executeCapturedMutation(
       STORE_SET_SETTING.call(store, request.payload.key, request.payload.value);
       return captureJsonValue({ ok: true, current: request.payload.value }, new WeakSet());
     }
+    case "upsertAutomation":
+    case "deleteAutomation":
+    case "runAutomationNow":
+    case "runDueAutomations":
+    case "undoAutomationRun":
+    case "markNotificationRead":
+    case "recordUsage":
+    case "acceptSuggestion":
+    case "dismissSuggestion":
+      return captureJsonValue(executeAutomationObserverAuthorityRoute(
+        store, request.route, request.payload, executionInstant,
+      ), new WeakSet());
   }
+}
+
+function executeCapturedOperationalMetricMutation(
+  store: ClayStore,
+  request: CapturedOperationalMetricMutation,
+): JsonValue {
+  return captureJsonValue(executePrivateMetricAuthorityRoute(
+    store, request.route, request.payload,
+  ), new WeakSet());
 }
 
 function copyResult(input: JsonValue): JsonValue {
@@ -592,6 +765,8 @@ class SimulatedInvocationCrash extends Error {
 
 export type ProductionMutationTestFailure =
   | "live_mutation"
+  | "after_live_mutation"
+  | "stale_fence"
   | "abandonment_unavailable"
   | "crash_after_invocation";
 const TEST_FAILURE = new WeakMap<
@@ -649,12 +824,37 @@ export class ProductionMutationCoordinator {
   execute(input: unknown): Promise<ProductionMutationResult> {
     if (this.#poisoned)
       return Promise.reject(invalid("production authority is poisoned; reopen for reservation recovery"));
-    // Capture before queueing: accessors and arrays cannot drift while another
-    // worker command is preparing its disposable preflight.
+    // Capture before queueing: caller-owned accessors and arrays are never retained.
     const captured = captureMutation(input);
     const run = this.#tail.then(() => this.#executeCaptured(captured));
     this.#tail = run.then(() => undefined, () => undefined);
     return run;
+  }
+
+  executeOperationalMetric(input: unknown): Promise<ProductionMutationResult> {
+    if (this.#poisoned)
+      return Promise.reject(invalid("production authority is poisoned; reopen for reservation recovery"));
+    const captured = captureOperationalMetricMutation(input);
+    const run = this.#tail.then(() => this.#executeOperationalCaptured(captured));
+    this.#tail = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  #supersedeFenceForTest(): void {
+    if (TEST_FAILURE.get(this) !== "stale_fence") return;
+    TEST_FAILURE.delete(this);
+    const nowMs = trustedInstant(this.#clock).milliseconds;
+    const before = DeviceCatalog.openExisting(this.#driver).snapshot();
+    this.#writeAuthority.run(() => {
+      DeviceCatalog.openExisting(this.#driver).acquireWriteLease({
+        expectedAuthorityIncarnationId: before.authorityIncarnationId,
+        expectedCatalogGeneration: before.catalogGeneration,
+        expectedWriteEpoch: before.writeEpoch,
+        releaseId: mintProductionAuthorityId("rel"),
+        nowMs,
+        ttlMs: this.#leaseTtlMs,
+      });
+    });
   }
 
   #ensureWriteFence(): void {
@@ -693,8 +893,11 @@ export class ProductionMutationCoordinator {
     if (outcome) return outcome;
     const durable = this.#durableReplay(request);
     if (durable) return durable;
+    this.#supersedeFenceForTest();
     this.#ensureWriteFence();
-    const starterSeedInstant = request.route === "starter.seed"
+    const executionInstant = request.route === "starter.seed"
+        || request.route === "runAutomationNow"
+        || request.route === "runDueAutomations"
       ? trustedInstant(this.#clock).instant : null;
 
     const expected = copyTarget(this.#target);
@@ -721,7 +924,7 @@ export class ProductionMutationCoordinator {
       );
       if (shadowBefore.stateSha256 !== liveBefore.stateSha256)
         throw invalid("production mutation snapshot is not canonical");
-      const preparedResult = executeCapturedMutation(shadow, request, starterSeedInstant);
+      const preparedResult = executeCapturedMutation(shadow, request, executionInstant);
       if (isThenable(preparedResult)) throw invalid("production mutation must be synchronous");
       shadowResult = copyResult(preparedResult);
       const shadowAfter = enumerateCanonicalStateV1(
@@ -740,7 +943,67 @@ export class ProductionMutationCoordinator {
         request, expected, expectedCatalogGeneration, shadowResult,
       );
     return this.#executeMeaningful(
-      request, expected, expectedCatalogGeneration, starterSeedInstant,
+      request, expected, expectedCatalogGeneration, executionInstant,
+    );
+  }
+
+  async #executeOperationalCaptured(
+    request: CapturedOperationalMetricMutation,
+  ): Promise<ProductionMutationResult> {
+    // Device-local telemetry is explicitly outside canonical production state.
+    // It therefore cannot use a canonical no-op receipt or reserve a target
+    // revision; this fixed path instead proves the canonical target unchanged
+    // around one guarded physical transaction.
+    if (readProductionRequestReceipt(this.#driver, request.requestId))
+      throw invalid("operational metric identity collides with a production request");
+    this.#supersedeFenceForTest();
+    this.#ensureWriteFence();
+    const expected = copyTarget(this.#target);
+    const expectedCatalogGeneration = this.#catalogGeneration;
+    const catalog = DeviceCatalog.openExisting(this.#driver);
+    if (catalog.snapshot().catalogGeneration !== expectedCatalogGeneration
+        || !sameTarget(catalog.selectedTargetStorage().target, expected)
+        || !sameTarget(TargetAuthorityStore.open(this.#driver).evidence(), expected))
+      throw new ClayError("E_GENERATION_NOT_SELECTED", "operational metric target is stale");
+    const liveCanonical = enumerateCanonicalStateV1(
+      this.#driver, this.#store.validationRegistrySnapshot(),
+    );
+    if (liveCanonical.stateSha256 !== expected.stateSha256)
+      throw invalid("operational metric prestate is not canonical");
+    const operationalBefore = privateMetricOperationalFingerprint(this.#driver);
+
+    const shadowDriver = await this.#driver.snapshot();
+    let shadow: ClayStore | null = null;
+    let changed = false;
+    let result: JsonValue = null;
+    try {
+      shadow = ClayStore.fromDriver(shadowDriver);
+      copyPrivateMetricOperationalState(this.#driver, shadowDriver);
+      const shadowCanonical = enumerateCanonicalStateV1(
+        shadowDriver, shadow.validationRegistrySnapshot(),
+      );
+      if (shadowCanonical.stateSha256 !== liveCanonical.stateSha256
+          || privateMetricOperationalFingerprint(shadowDriver) !== operationalBefore)
+        throw invalid("operational metric snapshot is not exact");
+      result = copyResult(executeCapturedOperationalMetricMutation(shadow, request));
+      const shadowAfter = enumerateCanonicalStateV1(
+        shadowDriver, shadow.validationRegistrySnapshot(),
+      );
+      if (canonicalChanges(shadowCanonical, shadowAfter).length > 0)
+        throw invalid("fixed operational metric reached canonical state");
+      changed = privateMetricOperationalFingerprint(shadowDriver) !== operationalBefore;
+    } finally {
+      try {
+        if (shadow) shadow.close();
+        else shadowDriver.close();
+      } catch { /* disposable snapshot */ }
+    }
+
+    if (!changed) return this.#executeOperationalNoOp(
+      request, expected, expectedCatalogGeneration, result, operationalBefore,
+    );
+    return this.#executeOperationalMeaningful(
+      request, expected, expectedCatalogGeneration, operationalBefore,
     );
   }
 
@@ -921,11 +1184,103 @@ export class ProductionMutationCoordinator {
     };
   }
 
+  #assertFixedOperationalPrestate(
+    expected: TargetEvidence,
+    expectedCatalogGeneration: string,
+    expectedOperationalFingerprint: string,
+    nowMs: number,
+  ): void {
+    const catalog = DeviceCatalog.openExisting(this.#driver);
+    catalog.assertWriteFence(this.#fence, nowMs);
+    if (catalog.snapshot().catalogGeneration !== expectedCatalogGeneration
+        || !sameTarget(catalog.selectedTargetStorage().target, expected)
+        || !sameTarget(TargetAuthorityStore.open(this.#driver).evidence(), expected))
+      throw new ClayError("E_GENERATION_NOT_SELECTED", "fixed operational mutation target is stale");
+    const canonical = enumerateCanonicalStateV1(
+      this.#driver, this.#store.validationRegistrySnapshot(),
+    );
+    if (canonical.stateSha256 !== expected.stateSha256)
+      throw invalid("fixed operational mutation prestate is not canonical");
+    if (privateMetricOperationalFingerprint(this.#driver) !== expectedOperationalFingerprint)
+      throw invalid("fixed operational mutation prestate changed");
+  }
+
+  #executeOperationalNoOp(
+    request: FixedOperationalMutation,
+    expected: TargetEvidence,
+    expectedCatalogGeneration: string,
+    result: JsonValue,
+    expectedOperationalFingerprint: string,
+  ): ProductionMutationResult {
+    const at = trustedInstant(this.#clock);
+    this.#assertFixedOperationalPrestate(
+      expected, expectedCatalogGeneration, expectedOperationalFingerprint, at.milliseconds,
+    );
+    return {
+      requestId: request.requestId,
+      operationId: operationIdForOperationalMetric(
+        this.#fence.authorityIncarnationId, request.requestId,
+      ),
+      changed: false,
+      replayed: false,
+      evidence: copyTarget(expected),
+      result: copyResult(result),
+    };
+  }
+
+  #executeOperationalMeaningful(
+    request: FixedOperationalMutation,
+    expected: TargetEvidence,
+    expectedCatalogGeneration: string,
+    expectedOperationalFingerprint: string,
+  ): ProductionMutationResult {
+    let result: JsonValue = null;
+    this.#writeAuthority.run(() => {
+      const at = trustedInstant(this.#clock);
+      this.#assertFixedOperationalPrestate(
+        expected, expectedCatalogGeneration, expectedOperationalFingerprint, at.milliseconds,
+      );
+      const testFailure = TEST_FAILURE.get(this);
+      if (testFailure && testFailure !== "after_live_mutation") {
+        TEST_FAILURE.delete(this);
+        throw invalid("injected fixed operational mutation failure");
+      }
+      result = executeCapturedOperationalMetricMutation(this.#store, request);
+      if (isThenable(result)) throw invalid("fixed operational mutation must be synchronous");
+      if (TEST_FAILURE.get(this) === "after_live_mutation") {
+        TEST_FAILURE.delete(this);
+        throw invalid("injected failure after live mutation");
+      }
+      const canonical = enumerateCanonicalStateV1(
+        this.#driver, this.#store.validationRegistrySnapshot(),
+      );
+      if (canonical.stateSha256 !== expected.stateSha256
+          || !sameTarget(TargetAuthorityStore.open(this.#driver).evidence(), expected))
+        throw invalid("fixed operational mutation reached canonical target state");
+      const catalog = DeviceCatalog.openExisting(this.#driver);
+      if (catalog.snapshot().catalogGeneration !== expectedCatalogGeneration
+          || !sameTarget(catalog.selectedTargetStorage().target, expected))
+        throw invalid("fixed operational mutation reached catalog authority");
+      if (privateMetricOperationalFingerprint(this.#driver) === expectedOperationalFingerprint)
+        throw invalid("fixed operational mutation became a no-op");
+    });
+    return {
+      requestId: request.requestId,
+      operationId: operationIdForOperationalMetric(
+        this.#fence.authorityIncarnationId, request.requestId,
+      ),
+      changed: true,
+      replayed: false,
+      evidence: copyTarget(expected),
+      result: copyResult(result),
+    };
+  }
+
   #executeMeaningful(
     request: CapturedProductionMutation,
     expected: TargetEvidence,
     expectedCatalogGeneration: string,
-    starterSeedInstant: string | null,
+    executionInstant: string | null,
   ): ProductionMutationResult {
     const operationId = operationIdForRequest(
       this.#fence.authorityIncarnationId, request.requestId,
@@ -1009,7 +1364,7 @@ export class ProductionMutationCoordinator {
       });
 
       const testFailure = TEST_FAILURE.get(this);
-      if (testFailure) {
+      if (testFailure && testFailure !== "after_live_mutation") {
         TEST_FAILURE.delete(this);
         if (testFailure === "crash_after_invocation") {
           this.#poisoned = true;
@@ -1037,8 +1392,12 @@ export class ProductionMutationCoordinator {
         );
         if (before.stateSha256 !== expected.stateSha256)
           throw invalid("production mutation prestate changed before commit");
-        result = executeCapturedMutation(this.#store, request, starterSeedInstant);
+        result = executeCapturedMutation(this.#store, request, executionInstant);
         if (isThenable(result)) throw invalid("production mutation must be synchronous");
+        if (TEST_FAILURE.get(this) === "after_live_mutation") {
+          TEST_FAILURE.delete(this);
+          throw invalid("injected failure after live mutation");
+        }
         if (request.route === "starter.seed"
             && STORE_GET_SETTING.call(this.#store, "shell_id") !== request.payload.shellId)
           throw invalid("starter seed system shell metadata failed read-back");
