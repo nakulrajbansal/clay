@@ -913,6 +913,7 @@ describe("production Store authority", () => {
       expect(reads).toBe(0);
       expect(authority.query({ from: "projects" })[0]).toMatchObject({ name: "Preserved" });
       expect(authority.inspectAuthority().targetReservations).toHaveLength(0);
+      expect(authority.inspectAuthority().catalogReservations).toHaveLength(0);
     } finally {
       authority.close();
     }
@@ -933,6 +934,7 @@ describe("production Store authority", () => {
         payload: { key: "aggregate", value },
       }))).rejects.toThrow(/payload.*limits/i);
       expect(authority.inspectAuthority().targetReservations).toHaveLength(0);
+      expect(authority.inspectAuthority().catalogReservations).toHaveLength(0);
     } finally {
       authority.close();
     }

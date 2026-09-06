@@ -42,6 +42,7 @@ import {
   type SemanticRelationshipRecordV1, type SemanticSchemaTraceV1,
   type TableId, type TableSemanticV1,
 } from "./semantic";
+import { sha256HexSync } from "./state-digest";
 
 type QueryT = import("@clay/schema").Query;
 
@@ -499,6 +500,23 @@ function rawArchiveSchemaIssues(driver: DbDriver, format: number): string[] {
 
 type FieldRename = { table: string; from: string; to: string };
 
+type CapturedAttachmentWriter = (
+  input: AttachmentInput,
+  sha256: string,
+) => AttachmentMetadata;
+const CAPTURED_ATTACHMENT_WRITERS = new WeakMap<object, CapturedAttachmentWriter>();
+
+/** Source-private authority seam; intentionally absent from the package index. */
+export function executeCapturedAttachmentAdd(
+  store: ClayStore,
+  input: AttachmentInput,
+  sha256: string,
+): AttachmentMetadata {
+  const writer = CAPTURED_ATTACHMENT_WRITERS.get(store);
+  if (!writer) throw new ClayError("E_INTERNAL", "attachment writer is unavailable");
+  return writer(input, sha256);
+}
+
 function stableFingerprint(value: string): string {
   let hash = 0x811c9dc5;
   for (let i = 0; i < value.length; i++) {
@@ -521,6 +539,10 @@ export class ClayStore {
     this.#driver = driver;
     this.#observer = new Observer(driver);
     this.#privateMetrics = new PrivateMetricsReducer(new SqlitePrivateMetricDriver(driver));
+    CAPTURED_ATTACHMENT_WRITERS.set(
+      this,
+      (input, digest) => this.#addCapturedAttachment(input, digest),
+    );
   }
 
   static async openMemory(): Promise<ClayStore> {
@@ -2065,17 +2087,32 @@ export class ClayStore {
   }
 
   async addAttachment(input: AttachmentInput): Promise<AttachmentMetadata> {
+    const table = input.table;
+    const rowId = input.rowId;
+    const field = input.field;
+    const name = input.name;
+    const mime = input.mime;
+    const source = input.bytes;
+    if (!(source instanceof Uint8Array))
+      throw new ClayError("E_VALIDATION", "file is empty or unreadable");
+    const bytes = new Uint8Array(source);
+    const captured = { table, rowId, field, name, mime, bytes };
+    return this.#addCapturedAttachment(captured, await sha256(bytes));
+  }
+
+  #addCapturedAttachment(input: AttachmentInput, digest: string): AttachmentMetadata {
     const identity = safeAttachmentIdentity(input.name, input.mime);
     if (!(input.bytes instanceof Uint8Array) || input.bytes.byteLength === 0)
       throw new ClayError("E_VALIDATION", "file is empty or unreadable");
     if (input.bytes.byteLength > MAX_ATTACHMENT_BYTES)
       throw new ClayError("E_LIMIT", "each file is limited to 10 MB");
     validateAttachmentSignature(input.bytes, identity.mime);
+    if (!/^[0-9a-f]{64}$/.test(digest) || sha256HexSync(input.bytes) !== digest)
+      throw new ClayError("E_VALIDATION", "attachment capture digest is invalid");
     this.attachmentColumn(input.table, input.field);
     const id = `file_${uuidv7().replaceAll("-", "")}`;
     const createdAt = nowIso();
-    const digest = await sha256(input.bytes);
-    this.#driver.tx(() => {
+    return this.#driver.tx(() => {
       const state = this.#driver.select(
         `SELECT "deleted_at" FROM ${qid(input.table)} WHERE "id" = ?`, [input.rowId])[0];
       if (!state || state.deleted_at !== null)
@@ -2101,9 +2138,20 @@ export class ClayStore {
         `UPDATE ${qid(input.table)} SET ${qid(input.field)} = ?, "updated_at" = ? WHERE "id" = ?`,
         [JSON.stringify([...ids, id]), createdAt, input.rowId]);
       this.recordRowEvent(input.table, input.rowId, "updated", [input.field]);
+      const inserted = this.#driver.select(
+        `SELECT id, name, mime, size, sha256, bytes, created_at, deleted_at
+         FROM "__clay_attachments" WHERE id = ?`, [id],
+      )[0];
+      const attached = this.attachmentIds(input.table, input.rowId, input.field);
+      if (!inserted || inserted.deleted_at !== null || !attached.includes(id)
+          || inserted.name !== identity.name || inserted.mime !== identity.mime
+          || Number(inserted.size) !== input.bytes.byteLength || inserted.sha256 !== digest
+          || !(inserted.bytes instanceof Uint8Array)
+          || inserted.bytes.byteLength !== input.bytes.byteLength
+          || sha256HexSync(inserted.bytes) !== digest)
+        throw new ClayError("E_INTERNAL", "attachment write failed atomic read-back");
+      return this.attachmentMetadata(inserted);
     });
-    return { id, name: identity.name, mime: identity.mime,
-      size: input.bytes.byteLength, sha256: digest, createdAt };
   }
 
   attachmentsForRecord(table: string, rowId: string, field: string): AttachmentMetadata[] {
@@ -2138,6 +2186,14 @@ export class ClayStore {
       if (!this.attachmentActivelyReferenced(id))
         this.#driver.exec(`UPDATE "__clay_attachments" SET deleted_at = ? WHERE id = ?`, [now, id]);
       this.recordRowEvent(table, rowId, "updated", [field]);
+      const attached = this.attachmentIds(table, rowId, field);
+      const stored = this.#driver.select(
+        `SELECT deleted_at FROM "__clay_attachments" WHERE id = ?`, [id],
+      )[0];
+      const activeElsewhere = this.attachmentActivelyReferenced(id);
+      if (attached.includes(id) || !stored
+          || (activeElsewhere ? stored.deleted_at !== null : stored.deleted_at === null))
+        throw new ClayError("E_INTERNAL", "attachment removal failed atomic read-back");
     });
   }
 
@@ -2158,15 +2214,21 @@ export class ClayStore {
     if (!Number.isFinite(minAgeDays) || minAgeDays < 30)
       throw new ClayError("E_VALIDATION", "deleted files must be retained for at least 30 days");
     const cutoff = new Date(now.getTime() - minAgeDays * 86_400_000).toISOString();
-    const candidates = this.#driver.select(
-      `SELECT id, size FROM "__clay_attachments" WHERE deleted_at IS NOT NULL AND deleted_at <= ?`,
-      [cutoff]).filter(row => !this.attachmentRecoverablyReferenced(String(row.id)));
-    if (candidates.length > 0) this.#driver.tx(() => {
+    return this.#driver.tx(() => {
+      const candidates = this.#driver.select(
+        `SELECT id, size FROM "__clay_attachments" WHERE deleted_at IS NOT NULL AND deleted_at <= ?`,
+        [cutoff]).filter(row => !this.attachmentRecoverablyReferenced(String(row.id)));
       for (const candidate of candidates)
         this.#driver.exec(`DELETE FROM "__clay_attachments" WHERE id = ?`, [String(candidate.id)]);
+      if (candidates.some(candidate => this.#driver.select(
+        `SELECT id FROM "__clay_attachments" WHERE id = ?`, [String(candidate.id)],
+      ).length !== 0))
+        throw new ClayError("E_INTERNAL", "attachment purge failed atomic read-back");
+      return {
+        files: candidates.length,
+        bytes: candidates.reduce((total, row) => total + Number(row.size), 0),
+      };
     });
-    return { files: candidates.length,
-      bytes: candidates.reduce((total, row) => total + Number(row.size), 0) };
   }
 
   private async attachmentIntegrityIssues(manifest?: ClayManifest): Promise<string[]> {
@@ -2803,6 +2865,12 @@ export class ClayStore {
           const changed = Number(this.#driver.select(
             `SELECT COUNT(*) AS count FROM "row_history" WHERE "batch_id" = ?`, [id],
           )[0]?.count ?? 0);
+          if (changed === 0) {
+            return {
+              id, at, source: input.source, summary: input.summary.trim(),
+              changed: 0, created: [], undone: true,
+            };
+          }
           this.#driver.exec(
             `INSERT INTO sys.operation_batches(
                id, at, source, summary, changed_count, created_json, undone_at)

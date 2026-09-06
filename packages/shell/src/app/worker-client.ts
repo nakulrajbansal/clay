@@ -290,6 +290,9 @@ export class WorkerClient {
   renameColumn(table: string, from: string, to: string): Promise<RegTable[]> {
     return this.call("renameColumn", { table, from, to });
   }
+  removeColumn(table: string, column: string): Promise<RegTable[]> {
+    return this.call("removeColumn", { table, column });
+  }
   removePanel(panelId: string): Promise<LivePanel[]> {
     return this.call("removePanel", { panelId });
   }
@@ -313,7 +316,7 @@ export class WorkerClient {
   sampleCount(): Promise<number> { return this.call("sampleCount"); }
   reset(): Promise<null> { return this.call("reset"); }
   registryTables(): Promise<RegTable[]> { return this.call("registryTables"); }
-  restoreRow(table: string, id: string): Promise<null> {
+  restoreRow(table: string, id: string): Promise<Record<string, unknown>> {
     return this.call("restoreRow", { table, id });
   }
   restorableRows(table: string): Promise<string[]> {

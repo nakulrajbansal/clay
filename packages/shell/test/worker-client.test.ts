@@ -91,6 +91,14 @@ describe("WorkerClient daily-work boundary", () => {
 });
 
 describe("WorkerClient connected-record boundary", () => {
+  it("serializes reversible column removal as an explicit command", async () => {
+    const { client, posted } = harness();
+    await client.removeColumn("projects", "obsolete");
+    expect(posted[0]).toMatchObject({
+      op: "removeColumn", payload: { table: "projects", column: "obsolete" },
+    });
+  });
+
   it("serializes relation previews and commits as explicit bounded operations", async () => {
     const { client, posted } = harness();
     const request = {

@@ -116,7 +116,9 @@ function authorityRequestId(req: Request): string {
 }
 
 async function runAuthorityMutation(
-  route: "seed" | "setSetting" | "deleteSetting" | "compareAndSetSetting" | "commitLayout",
+  route: "seed" | "setSetting" | "deleteSetting" | "compareAndSetSetting" | "commitLayout"
+    | "addAttachment" | "removeAttachment" | "purgeDeletedAttachments"
+    | "applyBatch" | "undoBatch" | "restoreRow" | "removeColumn",
   payload: Record<string, unknown>,
   req: Request,
 ): Promise<unknown> {
@@ -138,6 +140,27 @@ async function runAuthorityMutation(
       panels: payload.layout,
       diff: [],
     } },
+  })).result;
+  if (route === "addAttachment") return (await target.executeMutation({
+    requestId, route: "attachment.add", payload,
+  })).result;
+  if (route === "removeAttachment") return (await target.executeMutation({
+    requestId, route: "attachment.remove", payload,
+  })).result;
+  if (route === "purgeDeletedAttachments") return (await target.executeMutation({
+    requestId, route: "attachment.purge", payload,
+  })).result;
+  if (route === "applyBatch") return (await target.executeMutation({
+    requestId, route: "batch.apply", payload,
+  })).result;
+  if (route === "undoBatch") return (await target.executeMutation({
+    requestId, route: "batch.undo", payload,
+  })).result;
+  if (route === "restoreRow") return (await target.executeMutation({
+    requestId, route: "row.restore", payload,
+  })).result;
+  if (route === "removeColumn") return (await target.executeMutation({
+    requestId, route: "schema.removeColumn", payload,
   })).result;
   if (route === "setSetting") return (await target.executeMutation({
     requestId, route: "setting.set", payload: { key: payload.key, value: payload.value },
@@ -234,18 +257,18 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "renamePanel":
       return failClosedMutation(req.op);
     case "addAttachment":
-      return failClosedMutation(req.op);
+      return runAuthorityMutation("addAttachment", p, req);
     case "attachmentsForRecord":
       return mustStore().attachmentsForRecord(
         String(p.table), String(p.rowId), String(p.field));
     case "readAttachment":
       return mustStore().readAttachment(String(p.id));
     case "removeAttachment":
-      return failClosedMutation(req.op);
+      return runAuthorityMutation("removeAttachment", p, req);
     case "attachmentStorage":
       return mustStore().attachmentStorage();
     case "purgeDeletedAttachments":
-      return failClosedMutation(req.op);
+      return runAuthorityMutation("purgeDeletedAttachments", p, req);
     case "listAutomations":
       return mustStore().listAutomations();
     case "upsertAutomation":
@@ -271,11 +294,11 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "globalSearch":
       return mustStore().globalSearch(String(p.term ?? ""), Number(p.limit ?? 20));
     case "applyBatch":
-      return failClosedMutation(req.op);
+      return runAuthorityMutation("applyBatch", p, req);
     case "operationBatches":
       return mustStore().operationBatches(Number(p.limit ?? 50));
     case "undoBatch":
-      return failClosedMutation(req.op);
+      return runAuthorityMutation("undoBatch", p, req);
     case "rowHistory":
       return mustStore().rowHistory(String(p.table), String(p.id));
     case "previewRelationConversion":
@@ -286,6 +309,9 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "convertTextToRelation":
     case "addColumn":
     case "renameColumn":
+      return failClosedMutation(req.op);
+    case "removeColumn":
+      return runAuthorityMutation("removeColumn", p, req);
     case "removePanel":
       return failClosedMutation(req.op);
     case "keep":
@@ -299,7 +325,7 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "sampleCount":
       return sampleRowCount(mustStore());
     case "restoreRow":
-      return failClosedMutation(req.op);
+      return runAuthorityMutation("restoreRow", p, req);
     case "restorableRows":
       return mustStore().restorableRows(String(p.table));
     case "suggestions":

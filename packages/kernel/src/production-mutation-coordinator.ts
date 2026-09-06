@@ -23,11 +23,22 @@ import {
 import { sha256HexSync } from "./state-digest";
 import { stateLeafHashV1 } from "./state-merkle";
 import type { StateMerkleChange } from "./state-merkle-index";
-import { ClayStore } from "./store";
+import { ClayStore, executeCapturedAttachmentAdd } from "./store";
 import { TargetAuthorityStore } from "./target-authority";
 
 type JsonValue = null | boolean | number | string | JsonValue[] | JsonRecord;
 type JsonRecord = { [key: string]: JsonValue };
+type CapturedBinary = Readonly<{
+  byteLength: number;
+  sha256: string;
+  /** Private copy. Never pass this view to Store code directly. */
+  bytes: Uint8Array;
+}>;
+type CapturedBatchMutation =
+  | Readonly<{ kind: "update"; table: string; id: string; patch: Readonly<JsonRecord> }>
+  | Readonly<{ kind: "insert"; table: string; row: Readonly<JsonRecord> }>
+  | Readonly<{ kind: "soft_delete"; table: string; id: string }>
+  | Readonly<{ kind: "restore"; table: string; id: string }>;
 
 type CapturedProductionMutation = Readonly<{
   requestId: string;
@@ -40,6 +51,33 @@ type CapturedProductionMutation = Readonly<{
   | { route: "store.softDelete"; payload: Readonly<{ table: string; id: string }> }
   | { route: "store.commit"; payload: Readonly<{ plan: Readonly<JsonRecord> }> }
   | { route: "starter.seed"; payload: CapturedStarterSeedBundle }
+  | {
+    route: "attachment.add";
+    payload: Readonly<{
+      table: string;
+      rowId: string;
+      field: string;
+      name: string;
+      mime: string;
+      bytes: CapturedBinary;
+    }>;
+  }
+  | {
+    route: "attachment.remove";
+    payload: Readonly<{ table: string; rowId: string; field: string; id: string }>;
+  }
+  | { route: "attachment.purge"; payload: Readonly<Record<never, never>> }
+  | {
+    route: "batch.apply";
+    payload: Readonly<{
+      source: "user" | "automation";
+      summary: string;
+      mutations: readonly CapturedBatchMutation[];
+    }>;
+  }
+  | { route: "batch.undo"; payload: Readonly<{ id: string }> }
+  | { route: "row.restore"; payload: Readonly<{ table: string; id: string }> }
+  | { route: "schema.removeColumn"; payload: Readonly<{ table: string; column: string }> }
   | { route: "setting.set"; payload: Readonly<{ key: string; value: JsonValue }> }
   | { route: "setting.delete"; payload: Readonly<{ key: string }> }
   | {
@@ -126,6 +164,12 @@ function captureExactFields(
   return Object.freeze(output);
 }
 
+function exactKeys(input: unknown, allowed: readonly string[]): Readonly<Record<string, unknown>> {
+  if (typeof input !== "object" || input === null || Array.isArray(input))
+    throw new Error("invalid record");
+  return captureExactFields(input, allowed);
+}
+
 function captureMutationEnvelope(input: unknown): Readonly<{
   requestId: unknown;
   route: unknown;
@@ -166,10 +210,27 @@ const CAPTURE_ENCODER = new TextEncoder();
 
 type CaptureBudget = { nodes: number; bytes: number };
 
-function consumeCaptureBytes(budget: CaptureBudget, bytes: number): void {
+function consumeCaptureBytes(
+  budget: CaptureBudget,
+  bytes: number,
+  subject: "payload" | "binary payload" = "payload",
+): void {
   budget.bytes += bytes;
   if (!Number.isSafeInteger(budget.bytes) || budget.bytes > MAX_CAPTURE_BYTES)
-    throw unavailable("production mutation payload exceeds limits");
+    throw unavailable(`production mutation ${subject} exceeds aggregate limits`);
+}
+
+function chargeCaptureBytes(byteLength: number, budget: CaptureBudget): void {
+  consumeCaptureBytes(budget, byteLength);
+}
+
+function chargeCaptureText(value: string, budget: CaptureBudget, framingBytes = 0): void {
+  consumeCaptureBytes(budget, CAPTURE_ENCODER.encode(value).byteLength + framingBytes);
+}
+
+function chargeRecordFrame(keys: readonly string[], budget: CaptureBudget): void {
+  chargeCaptureBytes(2 + Math.max(0, keys.length - 1), budget);
+  for (const key of keys) chargeCaptureText(key, budget, 3);
 }
 
 function captureJsonValue(
@@ -240,11 +301,95 @@ function captureJsonValue(
   }
 }
 
-function captureJsonRecord(input: unknown): Readonly<JsonRecord> {
-  const captured = captureJsonValue(input, new WeakSet());
+function captureExactDataFields(
+  input: unknown,
+  allowed: readonly string[],
+): Record<string, unknown> {
+  if (typeof input !== "object" || input === null || Array.isArray(input)
+      || (Reflect.getPrototypeOf(input) !== Object.prototype
+        && Reflect.getPrototypeOf(input) !== null)) throw new Error();
+  const keys = Reflect.ownKeys(input);
+  if (keys.length !== allowed.length || keys.some(key =>
+    typeof key !== "string" || !allowed.includes(key))) throw new Error();
+  const output: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const key of allowed) {
+    const descriptor = Reflect.getOwnPropertyDescriptor(input, key);
+    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) throw new Error();
+    output[key] = descriptor.value;
+  }
+  return output;
+}
+
+function captureBinary(input: unknown, budget: CaptureBudget): CapturedBinary {
+  let source: Uint8Array;
+  if (input instanceof ArrayBuffer && Reflect.getPrototypeOf(input) === ArrayBuffer.prototype) {
+    source = new Uint8Array(input);
+  } else if (input instanceof Uint8Array
+      && Reflect.getPrototypeOf(input) === Uint8Array.prototype) {
+    source = input;
+  } else {
+    throw new Error();
+  }
+  const byteLength = source.byteLength;
+  consumeCaptureBytes(budget, byteLength, "binary payload");
+  const bytes = new Uint8Array(byteLength);
+  bytes.set(source);
+  return Object.freeze({
+    byteLength,
+    sha256: sha256HexSync(bytes),
+    bytes,
+  });
+}
+
+function captureJsonRecord(
+  input: unknown,
+  budget: CaptureBudget = { nodes: 0, bytes: 0 },
+): Readonly<JsonRecord> {
+  const captured = captureJsonValue(input, new WeakSet(), 0, budget);
   if (typeof captured !== "object" || captured === null || Array.isArray(captured))
     throw new Error("expected record");
   return captured;
+}
+
+function capturedJsonRecord(input: JsonValue | undefined): Readonly<JsonRecord> {
+  if (typeof input !== "object" || input === null || Array.isArray(input))
+    throw new Error("expected record");
+  return input;
+}
+
+function captureBatchMutations(
+  input: unknown,
+  budget: CaptureBudget,
+): readonly CapturedBatchMutation[] {
+  const captured = captureJsonValue(input, new WeakSet(), 0, budget);
+  if (!Array.isArray(captured) || captured.length < 1 || captured.length > 500)
+    throw unavailable("production batch must contain 1 to 500 mutations");
+  const output: CapturedBatchMutation[] = [];
+  for (let index = 0; index < captured.length; index++) {
+    const mutation = capturedJsonRecord(captured[index]);
+    const kind = mutation.kind;
+    if (kind === "insert") {
+      const fields = captureExactDataFields(mutation, ["kind", "table", "row"]);
+      if (typeof fields.table !== "string") throw new Error();
+      output.push(Object.freeze({
+        kind, table: fields.table, row: capturedJsonRecord(fields.row as JsonValue),
+      }));
+    } else if (kind === "update") {
+      const fields = captureExactDataFields(mutation, ["kind", "table", "id", "patch"]);
+      if (typeof fields.table !== "string" || typeof fields.id !== "string") throw new Error();
+      output.push(Object.freeze({
+        kind, table: fields.table, id: fields.id,
+        patch: capturedJsonRecord(fields.patch as JsonValue),
+      }));
+    } else if (kind === "soft_delete" || kind === "restore") {
+      const fields = captureExactDataFields(mutation, ["kind", "table", "id"]);
+      if (typeof fields.table !== "string" || typeof fields.id !== "string") throw new Error();
+      output.push(Object.freeze({ kind, table: fields.table, id: fields.id }));
+    } else {
+      throw new Error();
+    }
+  }
+  return Object.freeze(output);
 }
 
 function captureMutation(input: unknown): CapturedProductionMutation {
@@ -257,35 +402,43 @@ function captureMutation(input: unknown): CapturedProductionMutation {
         || typeof payload !== "object" || payload === null || Array.isArray(payload)) throw new Error();
     switch (route) {
       case "store.insert": {
-        const p = captureExactFields(payload, ["table", "row"]);
-        const table = p.table;
-        const row = p.row;
+        const fields = exactKeys(payload, ["table", "row"]);
+        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
+        chargeRecordFrame(["table", "row"], budget);
+        const table = captureJsonValue(fields.table, new WeakSet(), 0, budget);
+        const row = fields.row;
         if (typeof table !== "string") throw new Error();
         return Object.freeze({ requestId, route, payload: Object.freeze({
-          table, row: captureJsonRecord(row),
+          table, row: captureJsonRecord(row, budget),
         }) });
       }
       case "store.update": {
-        const p = captureExactFields(payload, ["table", "id", "patch"]);
-        const table = p.table;
-        const id = p.id;
-        const patch = p.patch;
+        const fields = exactKeys(payload, ["table", "id", "patch"]);
+        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
+        chargeRecordFrame(["table", "id", "patch"], budget);
+        const table = captureJsonValue(fields.table, new WeakSet(), 0, budget);
+        const id = captureJsonValue(fields.id, new WeakSet(), 0, budget);
+        const patch = fields.patch;
         if (typeof table !== "string" || typeof id !== "string") throw new Error();
         return Object.freeze({ requestId, route, payload: Object.freeze({
-          table, id, patch: captureJsonRecord(patch),
+          table, id, patch: captureJsonRecord(patch, budget),
         }) });
       }
       case "store.softDelete": {
-        const p = captureExactFields(payload, ["table", "id"]);
-        const table = p.table;
-        const id = p.id;
+        const fields = exactKeys(payload, ["table", "id"]);
+        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
+        chargeRecordFrame(["table", "id"], budget);
+        const table = captureJsonValue(fields.table, new WeakSet(), 0, budget);
+        const id = captureJsonValue(fields.id, new WeakSet(), 0, budget);
         if (typeof table !== "string" || typeof id !== "string") throw new Error();
         return Object.freeze({ requestId, route, payload: Object.freeze({ table, id }) });
       }
       case "store.commit": {
-        const p = captureExactFields(payload, ["plan"]);
+        const fields = exactKeys(payload, ["plan"]);
+        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
+        chargeRecordFrame(["plan"], budget);
         return Object.freeze({ requestId, route, payload: Object.freeze({
-          plan: captureJsonRecord(p.plan),
+          plan: captureJsonRecord(fields.plan, budget),
         }) });
       }
       case "starter.seed":
@@ -294,35 +447,124 @@ function captureMutation(input: unknown): CapturedProductionMutation {
           route,
           payload: captureStarterSeedBundle(payload),
         });
+      case "attachment.add": {
+        const fields = captureExactDataFields(
+          payload, ["table", "rowId", "field", "name", "mime", "bytes"],
+        );
+        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
+        chargeRecordFrame(["table", "rowId", "field", "name", "mime", "bytes"], budget);
+        const table = captureJsonValue(fields.table, new WeakSet(), 0, budget);
+        const rowId = captureJsonValue(fields.rowId, new WeakSet(), 0, budget);
+        const field = captureJsonValue(fields.field, new WeakSet(), 0, budget);
+        const name = captureJsonValue(fields.name, new WeakSet(), 0, budget);
+        const mime = captureJsonValue(fields.mime, new WeakSet(), 0, budget);
+        if (typeof table !== "string" || typeof rowId !== "string"
+            || typeof field !== "string" || typeof name !== "string"
+            || typeof mime !== "string") throw new Error();
+        return Object.freeze({ requestId, route, payload: Object.freeze({
+          table, rowId, field, name, mime,
+          bytes: captureBinary(fields.bytes, budget),
+        }) });
+      }
+      case "attachment.remove": {
+        const fields = captureExactDataFields(
+          payload, ["table", "rowId", "field", "id"],
+        );
+        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
+        chargeRecordFrame(["table", "rowId", "field", "id"], budget);
+        const table = captureJsonValue(fields.table, new WeakSet(), 0, budget);
+        const rowId = captureJsonValue(fields.rowId, new WeakSet(), 0, budget);
+        const field = captureJsonValue(fields.field, new WeakSet(), 0, budget);
+        const id = captureJsonValue(fields.id, new WeakSet(), 0, budget);
+        if (typeof table !== "string" || typeof rowId !== "string"
+            || typeof field !== "string" || typeof id !== "string") throw new Error();
+        return Object.freeze({
+          requestId, route, payload: Object.freeze({ table, rowId, field, id }),
+        });
+      }
+      case "attachment.purge": {
+        captureExactDataFields(payload, []);
+        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
+        chargeRecordFrame([], budget);
+        return Object.freeze({ requestId, route, payload: Object.freeze({}) });
+      }
+      case "batch.apply": {
+        const fields = exactKeys(payload, ["source", "summary", "mutations"]);
+        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
+        chargeRecordFrame(["source", "summary", "mutations"], budget);
+        const source = captureJsonValue(fields.source, new WeakSet(), 0, budget);
+        const summary = captureJsonValue(fields.summary, new WeakSet(), 0, budget);
+        if ((source !== "user" && source !== "automation") || typeof summary !== "string")
+          throw new Error();
+        return Object.freeze({ requestId, route, payload: Object.freeze({
+          source,
+          summary,
+          mutations: captureBatchMutations(fields.mutations, budget),
+        }) });
+      }
+      case "batch.undo": {
+        const fields = exactKeys(payload, ["id"]);
+        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
+        chargeRecordFrame(["id"], budget);
+        const id = captureJsonValue(fields.id, new WeakSet(), 0, budget);
+        if (typeof id !== "string") throw new Error();
+        return Object.freeze({ requestId, route, payload: Object.freeze({ id }) });
+      }
+      case "row.restore": {
+        const fields = exactKeys(payload, ["table", "id"]);
+        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
+        chargeRecordFrame(["table", "id"], budget);
+        const table = captureJsonValue(fields.table, new WeakSet(), 0, budget);
+        const id = captureJsonValue(fields.id, new WeakSet(), 0, budget);
+        if (typeof table !== "string" || typeof id !== "string") throw new Error();
+        return Object.freeze({ requestId, route, payload: Object.freeze({ table, id }) });
+      }
+      case "schema.removeColumn": {
+        const fields = exactKeys(payload, ["table", "column"]);
+        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
+        chargeRecordFrame(["table", "column"], budget);
+        const table = captureJsonValue(fields.table, new WeakSet(), 0, budget);
+        const column = captureJsonValue(fields.column, new WeakSet(), 0, budget);
+        if (typeof table !== "string" || typeof column !== "string") throw new Error();
+        return Object.freeze({ requestId, route, payload: Object.freeze({ table, column }) });
+      }
       case "setting.set": {
-        const p = captureExactFields(payload, ["key", "value"]);
-        const key = p.key;
-        const value = p.value;
+        const fields = exactKeys(payload, ["key", "value"]);
+        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
+        chargeRecordFrame(["key", "value"], budget);
+        const key = captureJsonValue(fields.key, new WeakSet(), 0, budget);
+        const value = fields.value;
         if (typeof key !== "string") throw new Error();
         assertSettingKeyAvailable(key);
         return Object.freeze({ requestId, route, payload: Object.freeze({
-          key, value: captureJsonValue(value, new WeakSet()),
+          key, value: captureJsonValue(value, new WeakSet(), 0, budget),
         }) });
       }
       case "setting.delete": {
-        const p = captureExactFields(payload, ["key"]);
-        const key = p.key;
+        const fields = exactKeys(payload, ["key"]);
+        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
+        chargeRecordFrame(["key"], budget);
+        const key = captureJsonValue(fields.key, new WeakSet(), 0, budget);
         if (typeof key !== "string") throw new Error();
         assertSettingKeyAvailable(key);
         return Object.freeze({ requestId, route, payload: Object.freeze({ key }) });
       }
       case "setting.compareAndSet": {
-        const p = captureExactFields(payload, ["key", "expectedRevision", "value"]);
-        const key = p.key;
-        const expectedRevision = p.expectedRevision;
-        const value = p.value;
+        const fields = exactKeys(payload, ["key", "expectedRevision", "value"]);
+        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
+        chargeRecordFrame(["key", "expectedRevision", "value"], budget);
+        const key = captureJsonValue(fields.key, new WeakSet(), 0, budget);
+        const expectedRevision = captureJsonValue(
+          fields.expectedRevision, new WeakSet(), 0, budget,
+        );
+        const value = fields.value;
         if (typeof key !== "string" || !Number.isSafeInteger(expectedRevision)
             || (expectedRevision as number) < 0) throw new Error();
         assertSettingKeyAvailable(key);
         return Object.freeze({ requestId, route, payload: Object.freeze({
           key,
           expectedRevision: expectedRevision as number,
-          value: captureJsonValue(value, new WeakSet()),
+          value: captureJsonValue(value, new WeakSet(), 0, budget),
         }) });
       }
       default:
@@ -352,6 +594,23 @@ function stableJson(input: JsonValue): string {
 }
 
 function requestFingerprint(expected: TargetEvidence, request: CapturedProductionMutation): string {
+  const fingerprintRequest: JsonValue = request.route === "attachment.add"
+    ? {
+      requestId: request.requestId,
+      route: request.route,
+      payload: {
+        table: request.payload.table,
+        rowId: request.payload.rowId,
+        field: request.payload.field,
+        name: request.payload.name,
+        mime: request.payload.mime,
+        bytes: {
+          byteLength: request.payload.bytes.byteLength,
+          sha256: request.payload.bytes.sha256,
+        },
+      },
+    }
+    : request as unknown as JsonValue;
   const payload: JsonValue = {
     schema: 1,
     expectedTarget: {
@@ -362,7 +621,7 @@ function requestFingerprint(expected: TargetEvidence, request: CapturedProductio
       digestSchema: expected.digestSchema,
       stateSha256: expected.stateSha256,
     },
-    request: request as unknown as JsonValue,
+    request: fingerprintRequest,
   };
   return `sha256:${sha256HexSync(new TextEncoder().encode(stableJson(payload)))}`;
 }
@@ -424,6 +683,13 @@ const STORE_INSERT: ClayStore["insert"] = ClayStore.prototype.insert;
 const STORE_UPDATE: ClayStore["update"] = ClayStore.prototype.update;
 const STORE_SOFT_DELETE: ClayStore["softDelete"] = ClayStore.prototype.softDelete;
 const STORE_COMMIT: ClayStore["commit"] = ClayStore.prototype.commit;
+const STORE_REMOVE_ATTACHMENT: ClayStore["removeAttachment"] = ClayStore.prototype.removeAttachment;
+const STORE_PURGE_ATTACHMENTS: ClayStore["purgeDeletedAttachments"] =
+  ClayStore.prototype.purgeDeletedAttachments;
+const STORE_APPLY_BATCH: ClayStore["applyBatch"] = ClayStore.prototype.applyBatch;
+const STORE_UNDO_BATCH: ClayStore["undoBatch"] = ClayStore.prototype.undoBatch;
+const STORE_RESTORE_ROW: ClayStore["restoreRow"] = ClayStore.prototype.restoreRow;
+const STORE_REGISTRY_SNAPSHOT: ClayStore["registrySnapshot"] = ClayStore.prototype.registrySnapshot;
 const STORE_GET_SETTING: ClayStore["getSetting"] = ClayStore.prototype.getSetting;
 const STORE_SET_SETTING: ClayStore["setSetting"] = ClayStore.prototype.setSetting;
 const STORE_DELETE_SETTING: ClayStore["deleteSetting"] = ClayStore.prototype.deleteSetting;
@@ -459,6 +725,60 @@ function executeCapturedMutation(
       if (starterSeedInstant === null)
         throw invalid("trusted starter seed instant is unavailable");
       return executeCapturedStarterSeed(store, request.payload, starterSeedInstant);
+    case "attachment.add":
+      return captureJsonValue(executeCapturedAttachmentAdd(store, {
+        table: request.payload.table,
+        rowId: request.payload.rowId,
+        field: request.payload.field,
+        name: request.payload.name,
+        mime: request.payload.mime,
+        bytes: new Uint8Array(request.payload.bytes.bytes),
+      }, request.payload.bytes.sha256), new WeakSet());
+    case "attachment.remove":
+      STORE_REMOVE_ATTACHMENT.call(
+        store,
+        request.payload.table,
+        request.payload.rowId,
+        request.payload.field,
+        request.payload.id,
+      );
+      return null;
+    case "attachment.purge":
+      if (starterSeedInstant === null)
+        throw invalid("trusted attachment purge instant is unavailable");
+      return captureJsonValue(STORE_PURGE_ATTACHMENTS.call(
+        store, new Date(starterSeedInstant), 30,
+      ), new WeakSet());
+    case "batch.apply":
+      return captureJsonValue(STORE_APPLY_BATCH.call(store, {
+        source: request.payload.source,
+        summary: request.payload.summary,
+        mutations: request.payload.mutations as unknown as
+          Parameters<ClayStore["applyBatch"]>[0]["mutations"],
+      }), new WeakSet());
+    case "batch.undo":
+      return captureJsonValue(STORE_UNDO_BATCH.call(store, request.payload.id), new WeakSet());
+    case "row.restore":
+      return captureJsonValue(STORE_RESTORE_ROW.call(
+        store, request.payload.table, request.payload.id,
+      ), new WeakSet());
+    case "schema.removeColumn": {
+      const table = request.payload.table;
+      const column = request.payload.column;
+      STORE_COMMIT.call(store, {
+        intent: `remove ${table}.${column}`,
+        summary: `Removed “${column}” from ${table}; its data is retained.`,
+        semanticOrigin: "direct",
+        migration: {
+          operations: [{ op: "hide_column", table, column }],
+          inverse: [{ op: "unhide_column", table, column }],
+        },
+        panels: [],
+        diff: [{ kind: "change_field", detail: `${column} hidden on ${table}` }],
+      });
+      const registryJson = JSON.stringify([...STORE_REGISTRY_SNAPSHOT.call(store).values()]);
+      return captureJsonValue(JSON.parse(registryJson) as unknown, new WeakSet());
+    }
     case "setting.set":
       STORE_SET_SETTING.call(store, request.payload.key, request.payload.value);
       return null;
@@ -695,6 +1015,7 @@ export class ProductionMutationCoordinator {
     if (durable) return durable;
     this.#ensureWriteFence();
     const starterSeedInstant = request.route === "starter.seed"
+        || request.route === "attachment.purge"
       ? trustedInstant(this.#clock).instant : null;
 
     const expected = copyTarget(this.#target);

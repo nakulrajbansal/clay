@@ -37,9 +37,11 @@ function clayStorePublicWriterNames(text: string): Set<string> {
   const methods = new Map<string, ts.MethodDeclaration>();
   const publicMethods = new Set<string>();
   for (const member of clayStore.members) {
-    if (!ts.isMethodDeclaration(member) || !member.body || !ts.isIdentifier(member.name)) continue;
+    if (!ts.isMethodDeclaration(member) || !member.body
+        || (!ts.isIdentifier(member.name) && !ts.isPrivateIdentifier(member.name))) continue;
     methods.set(member.name.text, member);
-    if (!member.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.PrivateKeyword))
+    if (ts.isIdentifier(member.name)
+        && !member.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.PrivateKeyword))
       publicMethods.add(member.name.text);
   }
 
@@ -177,6 +179,29 @@ describe("production mutation route census", () => {
     expect(body).not.toContain("failClosedMutation(");
     expect(worker).toContain('route: "starter.seed"');
     expect(worker).toContain("const requestId = authorityRequestId(req)");
+  });
+
+  it("routes data lifecycle commands through authority without an ambient Store", () => {
+    const worker = source("packages/shell/src/worker/db-worker.ts");
+    const routes = [
+      "addAttachment", "removeAttachment", "purgeDeletedAttachments",
+      "applyBatch", "undoBatch", "restoreRow", "removeColumn",
+    ] as const;
+    for (const name of routes) {
+      expect(DB_WORKER_ROUTE_CENSUS[name])
+        .toEqual({ enforcement: "authority", mutates: "live" });
+      const body = caseBody(worker, name);
+      expect(body, name).toContain(`runAuthorityMutation("${name}"`);
+      expect(body, name).not.toContain("failClosedMutation(");
+      expect(body, name).not.toContain("mustStore()");
+    }
+    expect(worker).toContain('route: "attachment.add"');
+    expect(worker).toContain('route: "attachment.remove"');
+    expect(worker).toContain('route: "attachment.purge"');
+    expect(worker).toContain('route: "batch.apply"');
+    expect(worker).toContain('route: "batch.undo"');
+    expect(worker).toContain('route: "row.restore"');
+    expect(worker).toContain('route: "schema.removeColumn"');
   });
 
   it("keeps StoreRpc and Bridge writes on the authority-backed port", () => {
