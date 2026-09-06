@@ -14,8 +14,8 @@ import {
 import { WorkerClient } from "./worker-client";
 import type { IntentOutcome, PreviewInfo } from "../worker/db-worker";
 import type { StarterShellId } from "../shells/seed";
-import { ConversationRail, pruneFeedAfterVersion, type FeedItem } from "./ConversationRail";
-import { Onboarding } from "./Onboarding";
+import { pruneFeedAfterVersion, type FeedItem } from "./feed";
+
 import { TimeSlider } from "./TimeSlider";
 import { AppSwitcher } from "./AppSwitcher";
 import {
@@ -41,6 +41,9 @@ import { useWorkspaceMode, type WorkspaceMode } from "./workspace-mode";
 type Phase = "loading" | "onboarding" | "main" | "error";
 
 const DataView = lazy(() => import("./DataView").then(module => ({ default: module.DataView })));
+const Onboarding = lazy(() => import("./Onboarding").then(module => ({ default: module.Onboarding })));
+const ConversationRail = lazy(() => import("./ConversationRail")
+  .then(module => ({ default: module.ConversationRail })));
 const CommandPalette = lazy(() => import("./CommandPalette")
   .then(module => ({ default: module.CommandPalette })));
 const AutomationCenter = lazy(() => import("./AutomationCenter")
@@ -50,6 +53,8 @@ const PanelFrame = lazy(() => import("./PanelFrame").then(module => ({ default: 
 const ShapeMapView = lazy(() => import("./ShapeMapView").then(module => ({ default: module.ShapeMapView })));
 const PrivateMetricsView = lazy(() => import("./PrivateMetricsView")
   .then(module => ({ default: module.PrivateMetricsView })));
+const RecoveryCenter = lazy(() => import("./RecoveryCenter")
+  .then(module => ({ default: module.RecoveryCenter })));
 
 function SurfaceFallback({ label, modal = false }: {
   label: string; modal?: boolean;
@@ -195,6 +200,7 @@ export function App(): React.JSX.Element {
   const [showHistory, setShowHistory] = useState(false);
   const [showShapeMap, setShowShapeMap] = useState(false);
   const [showPrivateMetrics, setShowPrivateMetrics] = useState(false);
+  const [showRecoveryCenter, setShowRecoveryCenter] = useState(false);
   const [privateMetricsSummary, setPrivateMetricsSummary] = useState<PrivateMetricsSummary | null>(null);
   const [railOpen, setRailOpen] = useState<boolean>(() => {
     try { return localStorage.getItem("clay_reshape_open") !== "false"; }
@@ -512,7 +518,7 @@ export function App(): React.JSX.Element {
     const entry = apps.find(a => a.id === id);
     if (!(await askConfirm(
       `Delete “${entry?.name ?? "this app"}” and all of its data? `
-      + "This cannot be undone. (Export a .clay backup first if unsure.)"))) return;
+      + "This cannot be undone. (Export a portable .clay copy first if unsure.)"))) return;
     removeApp(id);
     try { await client().deleteApp(id); } catch { /* files may already be gone */ }
     reloadApp();
@@ -672,31 +678,13 @@ export function App(): React.JSX.Element {
     const days = (Date.now() - last) / 86400000;
     if (history.length > 2 && days > 7) {
       pushToast(
-        last === 0 ? "Your data lives only in this browser — keep a backup file"
-          : `Last backup ${Math.floor(days)} days ago`,
-        "default", { label: "Export now", run: () => void exportArchive() });
+        last === 0 ? "Your data lives only in this browser — export a portable copy"
+          : `Last portable export ${Math.floor(days)} days ago`,
+        "default", { label: "Export a copy", run: () => void exportArchive() });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, history.length]);
 
-  const importArchive = async (file: File): Promise<void> => {
-    if (!(await askConfirm(
-      `Replace this app with the contents of "${file.name}"? `
-      + `Your current data will be overwritten — export a backup first if unsure.`))) return;
-    try {
-      const result = await client().importArchive(await file.arrayBuffer());
-      if (result.invalidPanels.length > 0) {
-        window.alert(
-          `Imported, but ${result.invalidPanels.length} panel(s) failed validation `
-          + `and were flagged: ${result.invalidPanels.join(", ")} (G15).`);
-      }
-      recordPrivateMetric({ type: "backup_finished", action: "import", result: "success" });
-      window.location.reload();
-    } catch (e) {
-      recordPrivateMetric({ type: "backup_finished", action: "import", result: "failed" });
-      pushToast(e instanceof Error ? e.message : String(e), "danger");
-    }
-  };
 
   const copyDiagnostics = async (): Promise<void> => {
     const log = await client().debugLog();
@@ -1084,11 +1072,13 @@ export function App(): React.JSX.Element {
     </>);
   if (phase === "onboarding")
     return (
-      <Onboarding
-        onPick={id => void pickShell(id)}
-        busy={busy}
-        onCancel={listApps().length > 0 ? () => setPhase("main") : undefined}
-      />
+      <Suspense fallback={<div className="boot">Opening setup…</div>}>
+        <Onboarding
+          onPick={id => void pickShell(id)}
+          busy={busy}
+          onCancel={listApps().length > 0 ? () => setPhase("main") : undefined}
+        />
+      </Suspense>
     );
 
   // Direct manipulation (B4): drag a panel by its grip to rearrange. Each
@@ -1389,6 +1379,7 @@ export function App(): React.JSX.Element {
         onToggleRail={toggleRail}
         version={head}
         persistent={persistent}
+        onOpenRecovery={() => setShowRecoveryCenter(true)}
         themes={THEMES}
         themeId={themeId}
         onSelectTheme={selectTheme}
@@ -1401,15 +1392,31 @@ export function App(): React.JSX.Element {
         workspaceMode={workspaceMode}
         onWorkspaceModeChange={chooseWorkspaceMode}
       />
+      {showRecoveryCenter ? (
+        <LazySurfaceBoundary label="Recovery Center" modal>
+          <Suspense fallback={<SurfaceFallback label="Recovery Center" modal />}>
+            <RecoveryCenter
+              appName={apps.find(app => app.id === currentId)?.name ?? "This app"}
+              authoritativeAppInstanceId={null}
+              opfsAvailable={persistent}
+              backupTarget={null}
+              lastVerifiedBackup={null}
+              failures={[]}
+              history={[]}
+              onClose={() => setShowRecoveryCenter(false)}
+            />
+          </Suspense>
+        </LazySurfaceBoundary>
+      ) : null}
       {!persistent ? (
         <div className="banner">
           <span>
             Your data isn’t saving on this device right now. If Clay is open in
-            another tab, close it and retry. Otherwise export a backup to be safe.
+            another tab, close it and retry. Otherwise export a portable copy before closing this tab.
           </span>
           <span className="banner-actions">
             <button className="link" onClick={reloadApp}>Retry</button>
-            <button className="link" onClick={() => void exportArchive()}>Export backup</button>
+            <button className="link" onClick={() => void exportArchive()}>Export a copy</button>
           </span>
         </div>
       ) : null}
@@ -1543,7 +1550,8 @@ export function App(): React.JSX.Element {
         </Suspense>
         </LazySurfaceBoundary>
       ) : null}
-      {workspaceMode === "customize" && railOpen ? <ConversationRail
+      {workspaceMode === "customize" && railOpen ? <Suspense fallback={<SurfaceFallback label="reshape tools" />}>
+        <ConversationRail
         feed={feed}
         preview={preview}
         busy={busy || scrub !== null}
@@ -1572,7 +1580,7 @@ export function App(): React.JSX.Element {
         onRemoveSamples={() => void removeSamples()}
         onReset={() => void resetApp()}
         onExport={() => void exportArchive()}
-        onImport={file => void importArchive(file)}
+
         onPurgeAttachments={async () => {
           const result = await client().purgeDeletedAttachments();
           pushToast(result.files === 0 ? "No removed files are old enough to clean up"
@@ -1580,7 +1588,8 @@ export function App(): React.JSX.Element {
         }}
         onCopyDiagnostics={() => void copyDiagnostics()}
         onOpenPrivateMetrics={() => void openPrivateMetrics()}
-      /> : null}
+        />
+      </Suspense> : null}
       </div>
       {showShapeMap ? (
         <LazySurfaceBoundary label="shape map" modal>

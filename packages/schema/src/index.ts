@@ -99,6 +99,8 @@ export const ProtectionReasonCode = z.enum([
   "store_unavailable", "expected_store_failure", "temporary_ineligible",
   "temporary_choice_required", "persistence_unconfirmed", "checkpoint_missing",
   "checkpoint_stale", "checkpoint_invalid", "generation_not_selected",
+  "adapter_uncertified", "target_unconfigured", "permission_required",
+  "target_unreachable", "backup_stale", "backup_invalid", "stale_write_epoch",
 ]);
 export type ProtectionReasonCode = z.infer<typeof ProtectionReasonCode>;
 const NeedsProtectionReason = z.enum([

@@ -893,3 +893,55 @@ ADR-049 (2026-09-04) Catalog schema 1 proceeds; raw SQLite-pair target digests a
   real-OPFS catalog-first integration, complete route fencing, reservation semantics,
   concurrency, archive-format gate, performance matrix, and release-bound crash/reopen
   evidence pass.
+
+### ADR-050 — Release B2 external-backup mechanics are certification-gated and fail closed (2026-09-05)
+STATUS: accepted
+DECISION: Automatic external backup uses a separate `@clay/schema/backup` contract surface.
+Every run binds a fresh worker-owned candidate to the complete selected catalog tuple
+(`authorityIncarnationId`, `catalogGeneration`, `writeEpoch`, selected app and generation,
+and existing `TargetEvidenceV1`) plus the existing `WriteFenceV1`. The contract accepts
+only format-5 metadata; that metadata is not proof that the supplied bytes are an
+authenticated format-5 archive. Production may publish no backup until the archive lane
+supplies those bytes and the isolated validator authenticates them.
+Backup target, certification, run, record, publication, stage, and result objects are
+strict and bounded. A backup target is bound to the exact app instance. Manual download
+has a disjoint contract and is always `unverified`.
+
+The Chromium directory adapter is behind the kernel's narrow exact-file interface. It
+is unavailable unless File System Access support, secure top-level context, a host-injected
+atomic exclusive-create primitive, and a currently valid passing restart certification
+exactly match the injected release, build, implementation, runtime, matrix, and suite
+binding. Standard browser globals remain unavailable because `getFileHandle({create:true})`
+can open a file that appeared after an absence check; no lookup-then-create sequence may
+truncate a colliding file. Directory selection and `requestPermission({mode:'readwrite'})`
+exist only on explicitly gesture-named calls.
+Unattended calls reacquire the structured-cloned handle from an injected IndexedDB-like
+store and only query permission. Permission is queried immediately before each external
+create, writable creation, write, close, read, and exact owned rotation deletion. Paths
+are never accepted.
+
+Execution clones the worker bytes at entry, creates a never-reused generated filename,
+closes, reacquires, checks length and SHA-256, and requires an injected isolated archive
+stage result for the exact target. It rereads the complete selected tuple immediately
+before an idempotent authority publication callback. A validated but stale or
+unpublished candidate is historical only. Authority-selected exact owned records are
+rotated in returned order only after a valid publication receipt; no directory scan or
+prefix deletion exists. Scheduled execution has no prompt-capable dependency, and no
+backup module performs network I/O or content logging.
+
+The Recovery Center may truthfully show OPFS-only custody, an external target, the last
+verified copy, closed failure reasons, bounded verified history, and retry/folder actions.
+Its restore entry accepts only a strict worker-issued authenticated-format-5 grant whose
+mode is `new_app_only` and whose destination differs from the preserved app. It reparses
+the grant and rechecks the exact open app immediately before invoking restore. Without
+that grant and callback the controls remain disabled. No replace-current callback exists.
+
+This slice does not wire a production snapshot producer, catalog authority, isolated
+format-5 byte authentication, scheduling, retention selection, certification artifact
+loading, Recovery Center history/failure persistence, or worker-owned fresh-app restore.
+The production shell therefore reports only OPFS custody, exposes no verified external
+copy, and keeps folder backup and restore disabled rather than simulating success.
+CONSEQUENCE: B2's filesystem, orchestration, and fail-closed UI mechanics can integrate
+without widening production authority. Until the named archive/worker dependencies land
+and the full certification matrix passes, automatic backup and restore remain unavailable
+rather than simulated.

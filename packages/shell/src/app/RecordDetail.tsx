@@ -293,7 +293,7 @@ export function RecordDetail(props: {
         name: file.name, mime: file.type, bytes: await file.arrayBuffer(),
       });
       await reload(); props.onWrite(props.table.name);
-      props.onInfo(`Added ${file.name}. It is included in Clay backups.`);
+      props.onInfo(`Added ${file.name}. It is included in portable .clay exports.`);
     } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
     finally { setSaving(null); }
   };
@@ -445,7 +445,7 @@ export function RecordDetail(props: {
                         event.currentTarget.value = "";
                       }} />
                   </label>
-                  <small className="record-file-limit">Up to 10 MB each · included in .clay backups</small>
+                  <small className="record-file-limit">Up to 10 MB each · included in portable .clay exports</small>
                 </div>
               );
               return (
