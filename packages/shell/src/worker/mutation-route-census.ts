@@ -13,6 +13,7 @@ export type MutationRouteEnforcement =
   | "shadow"
   | "boot"
   | "authority"
+  | "planner-authority"
   | "authority-store-port"
   | "unavailable";
 
@@ -48,8 +49,8 @@ export const DB_WORKER_ROUTE_CENSUS = Object.freeze({
   makeLatest: route("authority", "live"),
   registryTables: route("read", "none"),
   storePort: route("authority-store-port", "live"),
-  intent: route("unavailable", "live"),
-  repairPanel: route("unavailable", "live"),
+  intent: route("planner-authority", "live"),
+  repairPanel: route("planner-authority", "live"),
   revertPanel: route("authority", "live"),
   renamePanel: route("authority", "live"),
   addAttachment: route("authority", "live"),
@@ -80,8 +81,8 @@ export const DB_WORKER_ROUTE_CENSUS = Object.freeze({
   renameColumn: route("authority", "live"),
   removeColumn: route("authority", "live"),
   removePanel: route("authority", "live"),
-  keep: route("unavailable", "live"),
-  discard: route("unavailable", "live"),
+  keep: route("planner-authority", "live"),
+  discard: route("planner-authority", "live"),
   removeSamples: route("unavailable", "live"),
   fillSamples: route("unavailable", "live"),
   sampleCount: route("read", "none"),
@@ -131,6 +132,7 @@ export const CLAY_STORE_WRITER_CENSUS = Object.freeze({
   deleteSetting: "authority",
   scrubLegacyCredentialSettings: "unavailable",
   commit: "unavailable",
+  commitPreparedMutation: "unavailable",
   commitLayout: "authority",
   renamePanel: "authority",
   removePanel: "authority",

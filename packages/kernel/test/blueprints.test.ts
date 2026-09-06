@@ -3,7 +3,8 @@
 // contract (the model writes one line; the kernel writes the module).
 import { describe, expect, it } from "vitest";
 import {
-  BLUEPRINT_KINDS, ClayStore, MutationPipeline, deriveInverse,
+  BLUEPRINT_KINDS, ClayStore, MutationPipeline, createInProcessPlannerMutationAuthority,
+  deriveInverse,
   expandBlueprint, parseBlueprintDirective, validateMutationPlan,
   type MigrationPlanT, type PlannerResult,
 } from "../src/index";
@@ -135,14 +136,16 @@ describe("pipeline blueprint integration (ADR-029)", () => {
         raw: "raw" }),
       requestRepair: async (): Promise<PlannerResult> => { throw new Error("no repair expected"); },
     };
-    const result = await new MutationPipeline(store, planner).run("show requests");
+    const authority = createInProcessPlannerMutationAuthority(store);
+    const result = await new MutationPipeline(authority, planner).run("show requests");
     expect(result.status).toBe("preview");
     if (result.status === "preview") {
       const panel = result.preview.plan.panels[0]!;
       expect(panel.code).toContain("clay.db.watch");
       expect(panel.code).not.toContain("#blueprint");
       expect(panel.declared_queries).toEqual([{ from: "requests" }]);
-      result.preview.discard();
+      await authority.discard(`req_${"b".repeat(26)}`, result.preview.command);
+      result.preview.shadow.close();
     }
     store.close();
   });
@@ -161,10 +164,14 @@ describe("pipeline blueprint integration (ADR-029)", () => {
           raw: "raw2" };
       },
     };
-    const result = await new MutationPipeline(store, planner).run("show requests");
+    const authority = createInProcessPlannerMutationAuthority(store);
+    const result = await new MutationPipeline(authority, planner).run("show requests");
     expect(result.status).toBe("preview");
     expect(repairs[0]!.join(" ")).toContain("unknown table 'ghost'");
-    if (result.status === "preview") result.preview.discard();
+    if (result.status === "preview") {
+      await authority.discard(`req_${"c".repeat(26)}`, result.preview.command);
+      result.preview.shadow.close();
+    }
     store.close();
   });
 });

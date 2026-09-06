@@ -29,6 +29,10 @@ import {
   type ProductionMutationTestFailure,
   type ProductionMutationResult,
 } from "./production-mutation-coordinator";
+import {
+  createStoreBackedPlannerMutationAuthority,
+  type PlannerMutationAuthority,
+} from "./planner-authority";
 import { StateMerkleIndex } from "./state-merkle-index";
 import { ClayStore } from "./store";
 import { TargetCommitCoordinator } from "./target-commit-coordinator";
@@ -407,6 +411,7 @@ export class ProductionStoreAuthority {
   readonly #reader: ProductionStoreReader;
   readonly #boot: ProductionBootInfo;
   readonly #coordinator: ProductionMutationCoordinator;
+  readonly #plannerMutations: PlannerMutationAuthority;
 
   private constructor(
     session: LiveWriteSession,
@@ -430,6 +435,42 @@ export class ProductionStoreAuthority {
       leaseTtlMs,
       () => Date.now(),
     );
+    this.#plannerMutations = createStoreBackedPlannerMutationAuthority(store, {
+      beginAttempt: async intent => {
+        const committed = await this.#coordinator.execute({
+          requestId: this.#coordinator.mintRequestId(),
+          route: "planner.begin",
+          payload: { intent },
+        });
+        if (typeof committed.result !== "string")
+          throw new ClayError("E_INTERNAL", "planner attempt start returned an invalid result");
+        return committed.result;
+      },
+      finalizeAttempt: async (attemptId, outcome, errorCode) => {
+        await this.#coordinator.execute({
+          requestId: this.#coordinator.mintRequestId(),
+          route: "planner.finalize",
+          payload: { attemptId, outcome, errorCode: errorCode ?? null },
+        });
+      },
+      keep: async (requestId, command) => {
+        const committed = await this.#coordinator.execute({
+          requestId,
+          route: "planner.keep",
+          payload: command,
+        });
+        if (typeof committed.result !== "number" || !Number.isSafeInteger(committed.result))
+          throw new ClayError("E_INTERNAL", "planner Keep returned an invalid result");
+        return committed.result;
+      },
+      discard: async (requestId, command) => {
+        await this.#coordinator.execute({
+          requestId,
+          route: "planner.discard",
+          payload: command,
+        });
+      },
+    });
     TEST_COORDINATORS.set(this, this.#coordinator);
   }
 
@@ -842,6 +883,10 @@ export class ProductionStoreAuthority {
 
   readStore(): ProductionStoreReader {
     return this.#reader;
+  }
+
+  plannerMutations(): PlannerMutationAuthority {
+    return this.#plannerMutations;
   }
 
   query(...args: Parameters<ClayStore["query"]>): ReturnType<ClayStore["query"]> {

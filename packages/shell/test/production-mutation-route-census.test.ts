@@ -104,7 +104,7 @@ describe("production mutation route census", () => {
         .filter(method => body.includes(`.${method}(`));
       if (directStoreWriters.length > 0) {
         expect(
-          ["boot", "authority", "authority-store-port", "unavailable"],
+          ["boot", "authority", "planner-authority", "authority-store-port", "unavailable"],
           `${name} reaches Store writers ${directStoreWriters.join(", ")} without a fence`,
         ).toContain(classification.enforcement);
       }
@@ -115,6 +115,12 @@ describe("production mutation route census", () => {
       }
       if (classification.enforcement === "authority")
         expect(body, `${name} must use ProductionStoreAuthority`).toContain(`runAuthorityMutation("${name}"`);
+      if (classification.enforcement === "planner-authority") {
+        const expected = name === "keep" ? "keepPendingPreview("
+          : name === "discard" ? "discardPendingPreview(" : "runPipelineText(";
+        expect(body, `${name} must use bounded planner authority`).toContain(expected);
+        expect(body).not.toContain("failClosedMutation(");
+      }
       if (classification.enforcement === "authority-store-port")
         expect(body, `${name} must serve the authority adapter`).toContain("serveProductionStore(");
     }
@@ -252,14 +258,44 @@ describe("production mutation route census", () => {
     expect(dataView).toContain("worker.addRelationColumn(selected, column as never)");
   });
 
-  it("classifies preview discard as unavailable live mutation until attempt finalization is routed", () => {
+  it("routes preview discard through durable authority and closes shadow separately", () => {
     const census = DB_WORKER_ROUTE_CENSUS.discard;
     const worker = source("packages/shell/src/worker/db-worker.ts");
-    expect(census).toEqual({ enforcement: "unavailable", mutates: "live" });
+    expect(census).toEqual({ enforcement: "planner-authority", mutates: "live" });
     const start = worker.indexOf('case "discard"');
     const end = worker.indexOf('case "removeSamples"', start);
-    expect(worker.slice(start, end)).toContain("failClosedMutation(req.op)");
-    expect(worker.slice(start, end)).not.toContain("dropPending");
+    expect(worker.slice(start, end)).toContain("discardPendingPreview(req)");
+    expect(worker).toContain("await planner.discard(requestId, current.preview.command)");
+    expect(worker).toContain("current.preview.shadow.close()");
+    const discardHelper = worker.slice(worker.indexOf("async function discardPendingPreview"),
+      worker.indexOf("function serveProductionStore"));
+    expect(discardHelper.indexOf("await planner.discard(requestId, current.preview.command)"))
+      .toBeLessThan(discardHelper.indexOf("current.preview.shadow.close()"));
+  });
+
+  it("keeps a failed durable Discard retryable with the prepared command and shadow", () => {
+    const worker = source("packages/shell/src/worker/db-worker.ts");
+    const discardHelper = worker.slice(worker.indexOf("async function discardPendingPreview"),
+      worker.indexOf("function serveProductionStore"));
+    expect(discardHelper).toContain("} catch (error) {");
+    expect(discardHelper).toContain('if (pending === current) current.decision = "open"');
+    expect(discardHelper).not.toContain("} finally {");
+    expect(discardHelper.indexOf("await planner.discard(requestId, current.preview.command)"))
+      .toBeLessThan(discardHelper.indexOf("current.preview.shadow.close()"));
+  });
+
+  it("keeps the UI protocol while removing raw preview and live Store capabilities", () => {
+    const worker = source("packages/shell/src/worker/db-worker.ts");
+    expect(worker).not.toContain("PreviewHandle");
+    expect(worker).not.toContain("InProcessAsyncStore");
+    expect(worker).not.toContain("let store: ClayStore");
+    expect(worker).toContain("type PreparedMutationPreview");
+    expect(worker).toContain("plannerMutations()");
+    expect(worker).toContain('import("@clay/kernel/planner-pipeline")');
+    expect(worker).toContain('import("@clay/mutation")');
+    expect(worker).toContain("summary: result.preview.plan.summary");
+    expect(worker).toContain("return { version }");
+    expect(worker).toContain("return null");
   });
 
   it("routes starter seed through a static bundle with the stable worker request identity", () => {

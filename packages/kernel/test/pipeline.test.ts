@@ -5,8 +5,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
-  ClayError, ClayStore, MutationPipeline, deriveInverse,
-  type MigrationPlanT, type Planner, type PlannerResult, type Query,
+  ClayError, ClayStore, MutationPipeline, createInProcessPlannerMutationAuthority, deriveInverse,
+  type MigrationPlanT, type Planner, type PlannerResult, type PreparedMutationPreview, type Query,
 } from "../src/index";
 
 // ---------- starter shells (G9) ----------
@@ -132,6 +132,28 @@ class ScriptedPlanner implements Planner {
 }
 
 const INTENT = "add a priority field to tasks and show it as a colored badge";
+const DECISION_REQUEST = `req_${"p".repeat(26)}`;
+
+function pipelineFor(
+  store: ClayStore,
+  planner: Planner,
+  options: ConstructorParameters<typeof MutationPipeline>[2] = {},
+): MutationPipeline {
+  return new MutationPipeline(createInProcessPlannerMutationAuthority(store), planner, options);
+}
+
+async function keepPreview(store: ClayStore, preview: PreparedMutationPreview): Promise<number> {
+  const version = await createInProcessPlannerMutationAuthority(store)
+    .keep(DECISION_REQUEST, preview.command);
+  preview.shadow.close();
+  return version;
+}
+
+async function discardPreview(store: ClayStore, preview: PreparedMutationPreview): Promise<void> {
+  await createInProcessPlannerMutationAuthority(store)
+    .discard(DECISION_REQUEST, preview.command);
+  preview.shadow.close();
+}
 
 describe("W2 EXIT: the priority sentence commits on all three shells", () => {
   for (const shell of seedableShells) {
@@ -139,7 +161,7 @@ describe("W2 EXIT: the priority sentence commits on all three shells", () => {
       const { store, table, panelId } = await seedShellStore(shell);
       const columns = shell.registry[0]!.columns.map(c => c.name);
       const planner = new ScriptedPlanner([priorityPlan(table, panelId, columns)]);
-      const pipeline = new MutationPipeline(store, planner);
+      const pipeline = pipelineFor(store, planner);
 
       const result = await pipeline.run(INTENT);
       if (result.status !== "preview") throw new Error(JSON.stringify(result));
@@ -151,7 +173,7 @@ describe("W2 EXIT: the priority sentence commits on all three shells", () => {
         .toThrowError(ClayError);
 
       // S6 keep: atomic commit + panel swap on the live store
-      const version = result.preview.keep();
+      const version = await keepPreview(store, result.preview);
       expect(version).toBe(2);
       expect(store.query({ from: table }).map(r => r.priority))
         .toEqual(["medium", "medium", "medium"]);
@@ -170,7 +192,7 @@ it("uses byte-identical semantic assignments in preview and Keep", async () => {
   const { store, table, panelId } = await seedShellStore(shell);
   try {
     const columns = shell.registry[0]!.columns.map(column => column.name);
-    const pipeline = new MutationPipeline(
+    const pipeline = pipelineFor(
       store,
       new ScriptedPlanner([priorityPlan(table, panelId, columns)]),
     );
@@ -178,7 +200,7 @@ it("uses byte-identical semantic assignments in preview and Keep", async () => {
     if (result.status !== "preview") throw new Error(JSON.stringify(result));
     const shadowField = result.preview.shadow.semanticSchemaTrace().fields
       .find(field => field.fieldName === "priority")!;
-    result.preview.keep();
+    await keepPreview(store, result.preview);
     const liveField = store.semanticSchemaTrace().fields
       .find(field => field.fieldName === "priority")!;
     expect(liveField.fieldId).toBe(shadowField.fieldId);
@@ -192,9 +214,9 @@ describe("pipeline stages", () => {
     const { store, table, panelId } = await seedShellStore(tracker());
     const planner = new ScriptedPlanner([
       priorityPlan(table, panelId, tracker().registry[0]!.columns.map(c => c.name))]);
-    const result = await new MutationPipeline(store, planner).run(INTENT);
+    const result = await pipelineFor(store, planner).run(INTENT);
     if (result.status !== "preview") throw new Error("expected preview");
-    result.preview.discard();
+    await discardPreview(store, result.preview);
     expect(store.headVersion()).toBe(1);
     expect(() => store.query({ from: table, select: ["priority"] })).toThrowError(ClayError);
     // and the store still accepts future commits
@@ -208,14 +230,16 @@ describe("pipeline stages", () => {
     const planner = new ScriptedPlanner([
       priorityPlan(table, panelId, tracker().registry[0]!.columns.map(c => c.name)),
     ]);
-    const result = await new MutationPipeline(store, planner).run(INTENT);
+    const result = await pipelineFor(store, planner).run(INTENT);
     if (result.status !== "preview") throw new Error("expected preview");
 
     store.renamePanel(panelId, "Changed after preview");
 
-    expect(() => result.preview.keep()).toThrow(/changed while this preview was open/i);
+    await expect(createInProcessPlannerMutationAuthority(store)
+      .keep(DECISION_REQUEST, result.preview.command))
+      .rejects.toThrow(/changed while.*preview/i);
     expect(store.headVersion()).toBe(2);
-    result.preview.discard();
+    await discardPreview(store, result.preview);
     store.close();
   });
 
@@ -224,7 +248,7 @@ describe("pipeline stages", () => {
     const planner = new ScriptedPlanner([
       priorityPlan(table, panelId, tracker().registry[0]!.columns.map(c => c.name)),
     ]);
-    const pipeline = new MutationPipeline(store, planner, {
+    const pipeline = pipelineFor(store, planner, {
       smokeTest: async () => { store.renamePanel(panelId, "Concurrent shape change"); },
     });
 
@@ -245,11 +269,11 @@ describe("pipeline stages", () => {
   clay.db.query({ from: "items", select: ["owner"] });
 }`;   // undeclared query shape -> V4
     const planner = new ScriptedPlanner([bad as Record<string, unknown>, good]);
-    const result = await new MutationPipeline(store, planner).run(INTENT);
+    const result = await pipelineFor(store, planner).run(INTENT);
     expect(result.status).toBe("preview");
     if (result.status === "preview") {
       expect(result.repaired).toBe(true);
-      result.preview.discard();
+      await discardPreview(store, result.preview);
     }
     expect(planner.repairCalls).toHaveLength(1);
     expect(planner.repairCalls[0]!.join(" ")).toContain("V4");
@@ -268,11 +292,11 @@ describe("pipeline stages", () => {
       { op: "drop_column_if_added_by_this", table, column: "wrong" },
     ];
     const planner = new ScriptedPlanner([plan]);
-    const result = await new MutationPipeline(store, planner).run(INTENT);
+    const result = await pipelineFor(store, planner).run(INTENT);
     expect(result.status).toBe("preview");
     expect(planner.repairCalls).toHaveLength(0);
     if (result.status === "preview") {
-      const version = result.preview.keep();
+      const version = await keepPreview(store, result.preview);
       // and the normalized inverse actually rolls back: scrub to v1
       store.rollbackTo(version - 1);
       expect(() => store.query({ from: table, select: ["priority"] }))
@@ -289,13 +313,13 @@ describe("pipeline stages", () => {
     // vague note in the diff
     plan.user_facing_diff = [{ kind: "add_field", detail: "priority added" }];
     const planner = new ScriptedPlanner([plan]);
-    const result = await new MutationPipeline(store, planner).run(INTENT);
+    const result = await pipelineFor(store, planner).run(INTENT);
     expect(result.status).toBe("preview");
     expect(planner.repairCalls).toHaveLength(0);
     if (result.status === "preview") {
       const kinds = result.preview.plan.user_facing_diff.map(d => d.kind);
       expect(kinds).toContain("change_panel");   // synthesized for the replace
-      result.preview.discard();
+      await discardPreview(store, result.preview);
     }
     store.close();
   });
@@ -315,7 +339,7 @@ describe("pipeline stages", () => {
     bad.migration.operations.length = 1;
     bad.panels[0]!.declared_queries = [{ from: "ghost_table" }];
     const planner = new ScriptedPlanner([bad as unknown as Record<string, unknown>, good]);
-    const result = await new MutationPipeline(store, planner).run(INTENT);
+    const result = await pipelineFor(store, planner).run(INTENT);
     expect(result.status).toBe("preview");
     expect(planner.repairCalls).toHaveLength(1);
     const reasons = planner.repairCalls[0]!;
@@ -333,7 +357,7 @@ describe("pipeline stages", () => {
   clay.db.query({ from: ${JSON.stringify(table)}, select: ["owner"] });
 }`;
     const planner = new ScriptedPlanner([bad, JSON.parse(JSON.stringify(bad)) as Record<string, unknown>]);
-    const result = await new MutationPipeline(store, planner).run(INTENT);
+    const result = await pipelineFor(store, planner).run(INTENT);
     expect(result).toMatchObject({
       status: "failed", stage: "validate", repaired: true,
     });
@@ -349,7 +373,7 @@ describe("pipeline stages", () => {
       clarifying_question: "Priority on which table?", assumptions: [],
       migration: null, panels: [], remove_panels: [], confidence: 0.3,
     }]);
-    const result = await new MutationPipeline(store, planner).run(INTENT);
+    const result = await pipelineFor(store, planner).run(INTENT);
     expect(result).toMatchObject({
       status: "clarify", question: "Priority on which table?", repaired: false,
     });
@@ -369,7 +393,7 @@ describe("pipeline stages", () => {
       clarifying_question: "Which view should change?", assumptions: [],
       migration: null, panels: [], remove_panels: [], confidence: 0.3,
     };
-    const result = await new MutationPipeline(
+    const result = await pipelineFor(
       store, new ScriptedPlanner([bad, clarification]),
     ).run(INTENT);
     expect(result).toMatchObject({
@@ -384,7 +408,7 @@ describe("pipeline stages", () => {
     const plan = priorityPlan(table, panelId, cols);
     const planner = new ScriptedPlanner([plan, JSON.parse(JSON.stringify(plan)) as Record<string, unknown>]);
     let smokes = 0;
-    const pipeline = new MutationPipeline(store, planner, {
+    const pipeline = pipelineFor(store, planner, {
       smokeTest: async () => {
         smokes++;
         if (smokes === 1) throw new ClayError("E_INTERNAL", "render timeout");
@@ -394,14 +418,14 @@ describe("pipeline stages", () => {
     expect(result.status).toBe("preview");
     if (result.status === "preview") {
       expect(result.repaired).toBe(true);
-      result.preview.discard();
+      await discardPreview(store, result.preview);
     }
     expect(planner.repairCalls[0]!.join(" ")).toContain("render timeout");
 
     // and when the smoke keeps failing, the attempt fails visibly
     const { store: store2 } = await seedShellStore(tracker());
     const planner2 = new ScriptedPlanner([plan, plan]);
-    const pipeline2 = new MutationPipeline(store2, planner2, {
+    const pipeline2 = pipelineFor(store2, planner2, {
       smokeTest: async () => { throw new ClayError("E_INTERNAL", "still broken"); },
     });
     expect(await pipeline2.run(INTENT)).toMatchObject({ status: "failed", stage: "dry_run" });
@@ -414,8 +438,8 @@ describe("pipeline stages", () => {
     const cols = tracker().registry[0]!.columns.map(c => c.name);
     // a kept mutation
     const good = new ScriptedPlanner([priorityPlan(table, panelId, cols)]);
-    const r1 = await new MutationPipeline(store, good).run(INTENT);
-    if (r1.status === "preview") r1.preview.keep();
+    const r1 = await pipelineFor(store, good).run(INTENT);
+    if (r1.status === "preview") await keepPreview(store, r1.preview);
     // a discarded one
     const good2 = new ScriptedPlanner([{
       ...priorityPlan(table, panelId, cols),
@@ -426,14 +450,14 @@ describe("pipeline stages", () => {
         code: "export default function(clay){ clay.ui.render(h(EmptyState,{label:\"x\"})); }" }],
       user_facing_diff: [{ kind: "add_panel", detail: "extra" }],
     }]);
-    const r2 = await new MutationPipeline(store, good2).run("add an extra panel");
-    if (r2.status === "preview") r2.preview.discard();
+    const r2 = await pipelineFor(store, good2).run("add an extra panel");
+    if (r2.status === "preview") await discardPreview(store, r2.preview);
     // a clarify
     const clar = new ScriptedPlanner([{
       api: 1, summary: "", user_facing_diff: [], clarifying_question: "Which?",
       assumptions: [], migration: null, panels: [], remove_panels: [], confidence: 0.3,
     }]);
-    await new MutationPipeline(store, clar).run("do something");
+    await pipelineFor(store, clar).run("do something");
 
     const stats = store.attemptStats();
     expect(stats.kept).toBe(1);
@@ -444,7 +468,7 @@ describe("pipeline stages", () => {
 
   it("S1 context carries shapes + intent, never rows (ADR-009)", async () => {
     const { store } = await seedShellStore(tracker());
-    const ctx = new MutationPipeline(store, new ScriptedPlanner([])).buildContext(INTENT);
+    const ctx = pipelineFor(store, new ScriptedPlanner([])).buildContext(INTENT);
     expect(ctx.registry).toHaveLength(1);
     expect(ctx.panels).toHaveLength(1);
     expect(ctx.recentSummaries[0]).toContain("Creates the tracker shell.");
@@ -454,7 +478,7 @@ describe("pipeline stages", () => {
 
   it("S1 includes panel CODE when the intent names its TABLE (modify quality)", async () => {
     const { store, panelId, table } = await seedShellStore(tracker());   // items_table over "items"
-    const pipeline = new MutationPipeline(store, new ScriptedPlanner([]));
+    const pipeline = pipelineFor(store, new ScriptedPlanner([]));
 
     // intent names the table, not the panel id/title -> code must still ship
     const byTable = pipeline.buildContext(`add a priority column to the ${table} table`);

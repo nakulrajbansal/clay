@@ -8,6 +8,7 @@ import {
   analyzeManifest,
   assertBuildFresh,
   assertWithinBudget,
+  collectAssetJavaScriptClosure,
   measureFiles,
   mergeFiles,
 } from "./bundle-budget-lib.mjs";
@@ -161,6 +162,25 @@ const databaseWorkerFile = oneAsset(/^db-worker-[^.]+\.js$/, "database worker");
 const workerAuthorityFile = oneAsset(
   /^worker-authority-[^.]+\.js$/, "worker authority",
 );
+const plannerPipelineFile = oneAsset(
+  /^planner-pipeline-entry-[^.]+\.js$/, "planner pipeline",
+);
+const plannerAuthorityFile = oneAsset(
+  /^planner-authority-[^.]+\.js$/, "planner authority",
+);
+const databaseWorkerClosureFiles = await collectAssetJavaScriptClosure(
+  distRoot,
+  databaseWorkerFile,
+);
+for (const [file, label] of [
+  [workerAuthorityFile, "worker authority"],
+  [plannerPipelineFile, "planner pipeline"],
+  [plannerAuthorityFile, "planner authority"],
+]) {
+  if (!databaseWorkerClosureFiles.includes(file)) {
+    throw new Error(`database worker JavaScript closure: missing ${label} chunk ${file}`);
+  }
+}
 await check(
   "database worker",
   [databaseWorkerFile],
@@ -172,9 +192,14 @@ await check(
   { raw: 240_000, gzip: 60_000 },
 );
 await check(
-  "database worker authority closure",
-  [databaseWorkerFile, workerAuthorityFile],
-  { raw: 950_000, gzip: 255_000 },
+  "planner dynamic chunks",
+  [plannerPipelineFile, plannerAuthorityFile],
+  { raw: 30_000, gzip: 10_000 },
+);
+await check(
+  "database worker JavaScript closure",
+  databaseWorkerClosureFiles,
+  { raw: 1_010_000, gzip: 280_000 },
 );
 
 const sqliteSupportFiles = [
@@ -206,7 +231,7 @@ await check(
 );
 
 const browserRuntimeMeasured = await measureFiles(distRoot,
-  mergeFiles(analysis.totalShellJsFiles, [databaseWorkerFile, workerAuthorityFile], sqliteSupportFiles,
+  mergeFiles(analysis.totalShellJsFiles, databaseWorkerClosureFiles, sqliteSupportFiles,
     [wasmFile], cssFiles));
 printAndAssert("complete browser runtime payload", {
   files: [...browserRuntimeMeasured.files, ...panelRuntimeMeasured.files],

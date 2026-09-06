@@ -9,6 +9,7 @@ import {
   analyzeManifest,
   assertBuildFresh,
   assertWithinBudget,
+  collectAssetJavaScriptClosure,
   collectShellJsFiles,
   collectStaticClosure,
   findEntry,
@@ -65,6 +66,38 @@ test("collectStaticClosure recursively includes static imports", () => {
       "assets/shared.js",
     ],
   });
+});
+
+test("collectAssetJavaScriptClosure follows static and dynamic worker chunks once", async t => {
+  const root = await mkdtemp(join(tmpdir(), "clay-worker-closure-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, "assets"));
+  await writeFile(
+    join(root, "assets", "worker.js"),
+    'import "./shared.js"; void import("./worker-authority.js");',
+  );
+  await writeFile(
+    join(root, "assets", "worker-authority.js"),
+    'import "./shared.js"; void import("./planner.js");',
+  );
+  await writeFile(
+    join(root, "assets", "planner.js"),
+    'import "./worker.js"; export const planner = true;',
+  );
+  await writeFile(
+    join(root, "assets", "shared.js"),
+    "export const shared = true;",
+  );
+
+  assert.deepEqual(
+    await collectAssetJavaScriptClosure(root, "assets/worker.js"),
+    [
+      "assets/planner.js",
+      "assets/shared.js",
+      "assets/worker-authority.js",
+      "assets/worker.js",
+    ],
+  );
 });
 
 test("collectShellJsFiles includes every manifest shell chunk once", () => {
@@ -278,9 +311,15 @@ test("assertWithinBudget rejects a closure over either byte limit", () => {
   );
 });
 
-test("production budget counts the lazy worker authority in its closure and runtime", async () => {
+test("production budget gates the transitive worker authority and planner closure", async () => {
   const source = await readFile(new URL("bundle-budget.mjs", import.meta.url), "utf8");
-  assert.match(source, /worker-authority/);
-  assert.match(source, /database worker authority closure/);
-  assert.match(source, /\[databaseWorkerFile, workerAuthorityFile\]/);
+  assert.match(source, /collectAssetJavaScriptClosure/);
+  assert.match(source, /worker-authority-/);
+  assert.match(source, /planner-pipeline-entry-/);
+  assert.match(source, /planner-authority-/);
+  assert.match(source, /database worker JavaScript closure/);
+  assert.match(
+    source,
+    /mergeFiles\(analysis\.totalShellJsFiles, databaseWorkerClosureFiles,/,
+  );
 });

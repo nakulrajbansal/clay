@@ -23,6 +23,14 @@ import {
   type CapturedCoreMutation,
 } from "./production-core-routes";
 import {
+  capturePlannerAttemptFinalization,
+  capturePlannerAttemptStart,
+  capturePreparedMutationCommand,
+  type PlannerAttemptFinalization,
+  type PreparedMutationCommand,
+} from "./planner-command";
+import { executePreparedPlannerKeep } from "./planner-authority";
+import {
   readProductionRequestReceipt,
   writeProductionRequestReceipt,
 } from "./production-request-journal";
@@ -35,7 +43,10 @@ import {
 import { sha256HexSync } from "./state-digest";
 import { stateLeafHashV1 } from "./state-merkle";
 import type { StateMerkleChange } from "./state-merkle-index";
-import { ClayStore, executeCapturedAttachmentAdd } from "./store";
+import {
+  ClayStore,
+  executeCapturedAttachmentAdd,
+} from "./store";
 import { TargetAuthorityStore } from "./target-authority";
 
 type JsonValue = null | boolean | number | string | JsonValue[] | JsonRecord;
@@ -62,6 +73,10 @@ type CapturedProductionMutation = CapturedCoreMutation | Readonly<{
   }
   | { route: "store.softDelete"; payload: Readonly<{ table: string; id: string }> }
   | { route: "store.commit"; payload: Readonly<{ plan: Readonly<JsonRecord> }> }
+  | { route: "planner.begin"; payload: Readonly<{ intent: string }> }
+  | { route: "planner.finalize"; payload: PlannerAttemptFinalization }
+  | { route: "planner.discard"; payload: PreparedMutationCommand }
+  | { route: "planner.keep"; payload: PreparedMutationCommand }
   | { route: "starter.seed"; payload: CapturedStarterSeedBundle }
   | {
     route: "attachment.add";
@@ -465,6 +480,16 @@ function captureMutation(input: unknown): CapturedProductionMutation {
     if (typeof requestId !== "string" || !/^req_[a-z2-7]{26}$/.test(requestId)
         || typeof route !== "string"
         || typeof payload !== "object" || payload === null || Array.isArray(payload)) throw new Error();
+    if (route === "planner.begin")
+      return Object.freeze({ requestId, route, payload: capturePlannerAttemptStart(payload) });
+    if (route === "planner.finalize")
+      return Object.freeze({
+        requestId, route, payload: capturePlannerAttemptFinalization(payload),
+      });
+    if (route === "planner.discard")
+      return Object.freeze({ requestId, route, payload: capturePreparedMutationCommand(payload) });
+    if (route === "planner.keep")
+      return Object.freeze({ requestId, route, payload: capturePreparedMutationCommand(payload) });
     switch (route) {
       case "store.insert": {
         const fields = exactKeys(payload, ["table", "row"]);
@@ -869,6 +894,10 @@ const STORE_APPLY_BATCH: ClayStore["applyBatch"] = ClayStore.prototype.applyBatc
 const STORE_UNDO_BATCH: ClayStore["undoBatch"] = ClayStore.prototype.undoBatch;
 const STORE_RESTORE_ROW: ClayStore["restoreRow"] = ClayStore.prototype.restoreRow;
 const STORE_REGISTRY_SNAPSHOT: ClayStore["registrySnapshot"] = ClayStore.prototype.registrySnapshot;
+const STORE_BEGIN_ATTEMPT: ClayStore["beginAttempt"] = ClayStore.prototype.beginAttempt;
+const STORE_FINISH_ATTEMPT: ClayStore["finishAttempt"] = ClayStore.prototype.finishAttempt;
+const STORE_RELOAD_AFTER_ROLLBACK: ClayStore["reloadRegistryAfterRollback"] =
+  ClayStore.prototype.reloadRegistryAfterRollback;
 const STORE_GET_SETTING: ClayStore["getSetting"] = ClayStore.prototype.getSetting;
 const STORE_SET_SETTING: ClayStore["setSetting"] = ClayStore.prototype.setSetting;
 const STORE_DELETE_SETTING: ClayStore["deleteSetting"] = ClayStore.prototype.deleteSetting;
@@ -902,6 +931,27 @@ function executeCapturedMutation(
         store,
         request.payload.plan as unknown as Parameters<ClayStore["commit"]>[0],
       );
+    case "planner.begin":
+      return STORE_BEGIN_ATTEMPT.call(store, request.payload.intent);
+    case "planner.finalize":
+      STORE_FINISH_ATTEMPT.call(
+        store,
+        request.payload.attemptId,
+        request.payload.outcome,
+        request.payload.errorCode,
+      );
+      return null;
+    case "planner.discard":
+      STORE_FINISH_ATTEMPT.call(
+        store,
+        request.payload.attemptId,
+        "discarded",
+        null,
+        request.payload.intent,
+      );
+      return null;
+    case "planner.keep":
+      return executePreparedPlannerKeep(store, request.payload);
     case "starter.seed":
       if (executionInstant === null)
         throw invalid("trusted starter seed instant is unavailable");
@@ -1843,6 +1893,12 @@ export class ProductionMutationCoordinator {
       };
     } catch (error) {
       if (error instanceof SimulatedInvocationCrash) throw error;
+      try {
+        STORE_RELOAD_AFTER_ROLLBACK.call(this.#store);
+      } catch {
+        this.#poisoned = true;
+        throw invalid("production Store could not refresh after transaction rollback");
+      }
       if (reservedCatalogGeneration !== null && prepared !== null) {
         try {
           this.#recordAbandonment(

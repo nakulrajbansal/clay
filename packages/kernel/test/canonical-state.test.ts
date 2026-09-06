@@ -387,6 +387,7 @@ describe("canonical target-state enumeration", () => {
   it("preserves semantic user index leaves through archive reconstruction", async () => {
     const { store } = await fixture();
     let imported: ClayStore | undefined;
+    let importedDriver: DbDriver | undefined;
     try {
       const addIndex: ForwardOpT[] = [{ op: "add_index", table: "projects", column: "name" }];
       store.commit({
@@ -400,7 +401,11 @@ describe("canonical target-state enumeration", () => {
         intent: "rename fixture", summary: "Renames the indexed field before export.",
         migration: { operations: rename, inverse: deriveInverse(rename, store.registrySnapshot()) },
       });
-      imported = (await ClayStore.importArchive(await store.exportArchive("canonical-index"))).store;
+      importedDriver = await openMemoryDriver();
+      imported = (await ClayStore.importArchive(
+        await store.exportArchive("canonical-index"),
+        async () => importedDriver!,
+      )).store;
       const registry = imported.validationRegistrySnapshot();
       const table = registry.get("projects")!;
       const field = table.columns.find(column => column.name === "title")!;
@@ -417,7 +422,8 @@ describe("canonical target-state enumeration", () => {
         driver.close();
       }
     } finally {
-      imported?.close();
+      if (imported) imported.close();
+      else importedDriver?.close();
       store.close();
     }
   });

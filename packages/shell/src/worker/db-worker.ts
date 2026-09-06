@@ -4,8 +4,9 @@
 // serveStore RPC ports for the Bridge's AsyncStore (live and shadow).
 // Records never leave this worker except over those ports to the Bridge.
 import {
-  InProcessAsyncStore, portFromMessagePort, serveStore,
-  type DebugEvent, type LivePanel, type PanelProvenance, type PreviewHandle,
+  portFromMessagePort, serveStore,
+  type DebugEvent, type LivePanel, type PanelProvenance,
+  type PreparedMutationCommand, type PreparedMutationPreview,
 } from "@clay/kernel";
 import { ClayError } from "@clay/kernel/errors";
 import type {
@@ -42,7 +43,16 @@ let authority: ProductionStoreAuthority | null = null;
 let authorityBoot: Promise<ProductionStoreAuthority> | null = null;
 let store: ProductionStoreReader | null = null;
 let persistent = false;
-let pending: PreviewHandle | null = null;
+type PendingPreview = {
+  preview: PreparedMutationPreview;
+  decision: "open" | "keeping" | "discarding";
+};
+type SettledDecision =
+  | { kind: "keep"; requestId: string; command: PreparedMutationCommand; version: number }
+  | { kind: "discard"; requestId: string; command: PreparedMutationCommand };
+let pending: PendingPreview | null = null;
+let settledDecision: SettledDecision | null = null;
+let pipelineRun: Promise<IntentOutcome> | null = null;
 // Device-global model access (B1): set by the main thread from localStorage,
 // shared across every app, never persisted in an app DB.
 type ModelProviderId = "clay" | "openai" | "anthropic" | "codex";
@@ -223,9 +233,159 @@ async function runAuthorityMutation(
   })).result;
 }
 
+async function executePipelineText(text: string): Promise<IntentOutcome> {
+  if (pending)
+    throw new ClayError("E_CONFLICT", "Finish the current preview before reshaping again");
+  if (!text.trim() || text.length > 500)
+    throw new ClayError("E_VALIDATION", "reshape intent must be 1–500 characters");
+  const apiKey = modelAccess.apiKey;
+  const endpoint = modelAccess.backendUrl;
+  if (!apiKey && !endpoint) {
+    return {
+      status: "failed",
+      stage: "plan",
+      reasons: ["No model connection. Add an API key or connect a backend in Settings."],
+      repaired: false,
+    };
+  }
+
+  // The planner and prompt corpus stay outside the worker's boot closure.
+  // Vite emits this cold reshaping path as separate worker chunks.
+  const [{ MutationPipeline }, { MutationClient }] = await Promise.all([
+    import("@clay/kernel/planner-pipeline"),
+    import("@clay/mutation"),
+  ]);
+  const transport = apiKey
+    ? { mode: "byo" as const, apiKey }
+    : {
+      mode: "hosted" as const,
+      endpoint: (() => {
+        if (!endpoint) throw new ClayError("E_INTERNAL", "model endpoint disappeared");
+        return endpoint;
+      })(),
+      ...(modelAccess.session ? { session: modelAccess.session } : {}),
+    };
+  const client = new MutationClient(transport, { modelRepair: true });
+  const events: DebugEvent[] = [];
+  const result = await new MutationPipeline(
+    mustAuthority().plannerMutations(),
+    client,
+    { onDebug: event => events.push(event) },
+  ).run(text);
+  recordTrace({ at: new Date().toISOString(), intent: text, events });
+
+  if (result.status === "clarify") {
+    return {
+      status: "clarify",
+      question: result.question,
+      repaired: result.repaired,
+    };
+  }
+  if (result.status === "failed") {
+    return {
+      status: "failed",
+      stage: result.stage,
+      reasons: result.reasons,
+      repaired: result.repaired,
+    };
+  }
+  pending = { preview: result.preview, decision: "open" };
+  settledDecision = null;
+  return {
+    status: "preview",
+    preview: {
+      summary: result.preview.plan.summary,
+      diff: result.preview.plan.user_facing_diff,
+      panels: result.preview.plan.panels.map(panel => ({
+        panel_id: panel.panel_id,
+        version: result.preview.version,
+        title: panel.title,
+        placement: panel.placement,
+        code: panel.code,
+        declared_queries: panel.declared_queries,
+        declared_writes: panel.declared_writes,
+      })),
+      removePanels: result.preview.plan.remove_panels,
+      version: result.preview.version,
+      repaired: result.repaired,
+    },
+  };
+}
+
+async function runPipelineText(text: string): Promise<IntentOutcome> {
+  if (pipelineRun)
+    throw new ClayError("E_CONFLICT", "A reshape is already being prepared");
+  const current = executePipelineText(text);
+  pipelineRun = current;
+  try {
+    return await current;
+  } finally {
+    if (pipelineRun === current) pipelineRun = null;
+  }
+}
+
+function openPendingPreview(decision: "keeping" | "discarding"): PendingPreview {
+  const current = pending;
+  if (!current) throw new ClayError("E_CONFLICT", "no preview is open");
+  if (current.decision !== "open")
+    throw new ClayError("E_CONFLICT", "a preview decision is already in progress");
+  current.decision = decision;
+  return current;
+}
+
+async function keepPendingPreview(req: Request): Promise<{ version: number }> {
+  const planner = mustAuthority().plannerMutations();
+  if (!pending && req.requestId && settledDecision?.kind === "keep"
+      && settledDecision.requestId === req.requestId) {
+    const version = await planner.keep(req.requestId, settledDecision.command);
+    return { version };
+  }
+  const current = openPendingPreview("keeping");
+  const requestId = authorityRequestId(req);
+  try {
+    const version = await planner.keep(requestId, current.preview.command);
+    current.preview.shadow.close();
+    if (pending === current) pending = null;
+    settledDecision = {
+      kind: "keep", requestId, command: current.preview.command, version,
+    };
+    try {
+      if (typeof navigator !== "undefined" && navigator.storage?.persist)
+        persistent = await navigator.storage.persist();
+    } catch { /* persistence request is best-effort */ }
+    return { version };
+  } catch (error) {
+    if (pending === current) current.decision = "open";
+    throw error;
+  }
+}
+
+async function discardPendingPreview(req: Request): Promise<null> {
+  const planner = mustAuthority().plannerMutations();
+  if (!pending && req.requestId && settledDecision?.kind === "discard"
+      && settledDecision.requestId === req.requestId) {
+    await planner.discard(req.requestId, settledDecision.command);
+    return null;
+  }
+  const current = openPendingPreview("discarding");
+  const requestId = authorityRequestId(req);
+  try {
+    await planner.discard(requestId, current.preview.command);
+    settledDecision = {
+      kind: "discard", requestId, command: current.preview.command,
+    };
+    current.preview.shadow.close();
+    if (pending === current) pending = null;
+    return null;
+  } catch (error) {
+    if (pending === current) current.decision = "open";
+    throw error;
+  }
+}
+
 function serveProductionStore(target: "live" | "shadow", port: MessagePort): void {
   const endpoint = target === "shadow"
-    ? pending?.shadow ? new InProcessAsyncStore(pending.shadow) : null
+    ? pending?.preview.shadow.asyncStore() ?? null
     : mustAuthority().asyncStore();
   if (!endpoint) throw new ClayError("E_CATALOG_UNAVAILABLE", "no shadow store is open");
   port.start?.();
@@ -301,8 +461,17 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       return null;
     }
     case "intent":
-    case "repairPanel":
-      return failClosedMutation(req.op);
+      return runPipelineText(String(p.text ?? ""));
+    case "repairPanel": {
+      const panelId = String(p.panelId ?? "");
+      const panel = mustStore().livePanels().find(candidate => candidate.panel_id === panelId);
+      if (!panel) throw new ClayError("E_VALIDATION", `unknown panel '${panelId}'`);
+      const error = String(p.error ?? "").slice(0, 300);
+      return runPipelineText(
+        `Repair panel "${panel.title}" (${panel.panel_id}) after this runtime error: ${error}`
+          .slice(0, 500),
+      );
+    }
     case "revertPanel":
       return runAuthorityMutation("revertPanel", rawPayload, req);
     case "renamePanel":
@@ -370,9 +539,9 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "removePanel":
       return runAuthorityMutation("removePanel", rawPayload, req);
     case "keep":
-      return failClosedMutation(req.op);
+      return keepPendingPreview(req);
     case "discard":
-      return failClosedMutation(req.op);
+      return discardPendingPreview(req);
     case "removeSamples":
       return failClosedMutation(req.op);
     case "fillSamples":

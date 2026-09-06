@@ -7,3 +7,4 @@ export {
   type ProductionStoreReader,
 } from "./production-authority";
 export type { ProductionMutationResult } from "./production-mutation-coordinator";
+export type { PlannerMutationAuthority } from "./planner-authority";

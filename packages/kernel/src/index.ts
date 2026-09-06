@@ -60,10 +60,15 @@ export {
   type PrivateMetricEvent, type PrivateMetricsSummary, type Rate,
 } from "./private-metrics";
 export {
-  MutationPipeline, defaultSmokeTest,
+  MutationPipeline, createInProcessPlannerMutationAuthority, defaultSmokeTest,
   type AttemptResult, type DebugEvent, type Planner, type PlannerContext,
-  type PlannerResult, type PreviewHandle, type SmokeTest,
+  type PlannerMutationAuthority, type PlannerResult, type PreparedMutationPreview,
+  type PreviewShadow, type SmokeTest,
 } from "./pipeline";
+export type {
+  PreparedMutationBase, PreparedMutationCommand,
+  PreparedSemanticAssignmentsDataV1, PreparedSemanticIdEntry,
+} from "./planner-command";
 export { Observer, type Suggestion, type UsageEvent } from "./observe";
 export {
   MetricsCollector, classifyDiffKind,

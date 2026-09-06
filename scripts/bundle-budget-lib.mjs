@@ -1,6 +1,12 @@
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { createRequire } from "node:module";
+import { join, posix } from "node:path";
 import { gzipSync } from "node:zlib";
+
+const requireFromKernel = createRequire(
+  new URL("../packages/kernel/package.json", import.meta.url),
+);
+const { parse } = requireFromKernel("acorn");
 
 export function findEntry(manifest) {
   const entries = Object.entries(manifest)
@@ -35,6 +41,64 @@ export function collectStaticClosure(manifest, rootKey) {
     keys: [...keys].sort(),
     files: [...files].sort(),
   };
+}
+
+function importedJavaScriptSpecifiers(source) {
+  const root = parse(source, {
+    ecmaVersion: "latest",
+    sourceType: "module",
+    allowHashBang: true,
+  });
+  const specifiers = new Set();
+  const pending = [root];
+
+  while (pending.length > 0) {
+    const node = pending.pop();
+    if (!node || typeof node !== "object") continue;
+    if ((node.type === "ImportDeclaration"
+        || node.type === "ExportNamedDeclaration"
+        || node.type === "ExportAllDeclaration")
+        && typeof node.source?.value === "string") {
+      specifiers.add(node.source.value);
+    } else if (node.type === "ImportExpression"
+        && typeof node.source?.value === "string") {
+      specifiers.add(node.source.value);
+    }
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) pending.push(...value);
+      else if (value && typeof value === "object") pending.push(value);
+    }
+  }
+
+  return [...specifiers].sort();
+}
+
+function resolveImportedJavaScript(importer, specifier) {
+  if (!specifier.startsWith("./") && !specifier.startsWith("../")) return null;
+  const path = specifier.replace(/[?#].*$/, "");
+  if (!path.endsWith(".js")) return null;
+  const resolved = posix.normalize(posix.join(posix.dirname(importer), path));
+  if (resolved === ".." || resolved.startsWith("../") || posix.isAbsolute(resolved)) {
+    throw new Error(`bundle asset: import ${specifier} escapes the artifact root`);
+  }
+  return resolved;
+}
+
+export async function collectAssetJavaScriptClosure(root, rootFile) {
+  const files = new Set();
+
+  async function visit(file) {
+    if (files.has(file)) return;
+    files.add(file);
+    const source = await readFile(join(root, file), "utf8");
+    for (const specifier of importedJavaScriptSpecifiers(source)) {
+      const importedFile = resolveImportedJavaScript(file, specifier);
+      if (importedFile) await visit(importedFile);
+    }
+  }
+
+  await visit(rootFile.replaceAll("\\", "/"));
+  return [...files].sort();
 }
 
 const WORKER_ASSET = /(?:^|\/)(?:db-worker|sqlite3-worker1|sqlite3-opfs-async-proxy)-[^/]+\.js$/;

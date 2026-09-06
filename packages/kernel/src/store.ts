@@ -1049,7 +1049,12 @@ export class ClayStore {
         const to = relationship.kind === "contains"
           ? relationship.toFieldId
           : relationship.kind === "derived_from" ? relationship.toFieldId : relationship.toTableId;
-        relationships.set(relationKey(relationship.kind, from, to), relationship.relationshipId);
+        const via = relationship.kind === "references"
+          ? `\u0000${relationship.viaFieldId}` : "";
+        relationships.set(
+          `${relationKey(relationship.kind, from, to)}${via}`,
+          relationship.relationshipId,
+        );
       }
     }
     return {
@@ -1611,10 +1616,67 @@ export class ClayStore {
     return id;
   }
 
-  finishAttempt(id: string, outcome: string, errorCode: string | null = null): void {
+  #assertPendingAttempt(id: string, expectedIntent?: string): void {
+    const rows = this.#driver.select(
+      "SELECT intent_text, outcome FROM sys.attempts WHERE id = ?",
+      [id],
+    );
+    const row = rows[0];
+    if (rows.length !== 1 || !row || row.outcome !== "pending")
+      throw new ClayError("E_CONFLICT", "planner attempt is missing or already finalized");
+    if (expectedIntent !== undefined && row.intent_text !== expectedIntent)
+      throw new ClayError("E_CONFLICT", "planner attempt does not match the prepared intent");
+  }
+
+  #finishAttempt(
+    id: string,
+    outcome: string,
+    errorCode: string | null = null,
+    expectedIntent?: string,
+  ): void {
+    this.#assertPendingAttempt(id, expectedIntent);
     this.#driver.exec(
-      "UPDATE sys.attempts SET outcome = ?, error_code = ? WHERE id = ?",
+      "UPDATE sys.attempts SET outcome = ?, error_code = ? WHERE id = ? AND outcome = 'pending'",
       [outcome, errorCode, id]);
+    const rows = this.#driver.select(
+      "SELECT outcome, error_code FROM sys.attempts WHERE id = ?",
+      [id],
+    );
+    const row = rows[0];
+    if (rows.length !== 1 || !row || row.outcome !== outcome
+        || (row.error_code ?? null) !== errorCode)
+      throw new ClayError("E_INTERNAL", "planner attempt finalization failed read-back");
+  }
+
+  finishAttempt(
+    id: string,
+    outcome: string,
+    errorCode: string | null = null,
+    expectedIntent?: string,
+  ): void {
+    this.#finishAttempt(id, outcome, errorCode, expectedIntent);
+  }
+
+  /** Commit shape and mark its planner attempt kept inside one Store transaction.
+   * Production authority wraps this in the same physical publication transaction. */
+  commitPreparedMutation(input: CommitInput, attemptId: string): number {
+    try {
+      return this.#driver.tx(() => {
+        this.#assertPendingAttempt(attemptId, input.intent);
+        const version = PRODUCTION_STORE_PRIMITIVES.commit.call(this, input);
+        this.#finishAttempt(attemptId, "kept", null, input.intent);
+        return version;
+      });
+    } catch (error) {
+      this.loadRegistry();
+      throw error;
+    }
+  }
+
+  /** Rehydrate the registry after an enclosing physical transaction rolls back
+   * after a nested Store operation had already updated its in-memory projection. */
+  reloadRegistryAfterRollback(): void {
+    this.loadRegistry();
   }
 
   /** Independent full copy for the S4 shadow dry-run (doc 05 §1). */

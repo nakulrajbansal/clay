@@ -7,6 +7,7 @@
     ".": "./src/index.ts",
     "./expr": "./src/expr.ts",
     "./errors": "./src/errors.ts",
+    "./planner-pipeline": "./src/planner-pipeline-entry.ts",
     "./worker-authority": "./src/worker-authority.ts"
   },
   "scripts": {
