@@ -23,6 +23,7 @@
     "verify:product": "pnpm verify:shape-map && pnpm verify:change-contract && pnpm verify:providers && pnpm verify:lazy-boundaries && pnpm verify:operations && pnpm verify:workspace-mode",
     "verify:browsers": "node scripts/browsers.mjs",
     "verify:multi-app": "node scripts/multi-app-archive.mjs",
+    "verify:release-c-parser": "node scripts/release-c-parser-harness/run.mjs",
     "regression": "pnpm --filter @clay/mutation regression"
   },
   "devDependencies": {

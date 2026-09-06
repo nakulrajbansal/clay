@@ -150,7 +150,7 @@ describe("Daily Workbench UI", () => {
       getSetting: async () => undefined, compareAndSetSetting: async () => ({ ok: true }),
     } as unknown as WorkerClient;
     const { unmount } = await mount(<DataView store={store} worker={worker}
-      onClose={() => undefined} onImport={() => undefined}
+      onClose={() => undefined}
       onError={message => { throw new Error(message); }}
       onInfo={() => undefined} onWrite={() => undefined} />);
     await waitFor(() => [...document.body.querySelectorAll<HTMLButtonElement>(".dataview-tables button")]
@@ -189,7 +189,7 @@ describe("Daily Workbench UI", () => {
     } as unknown as WorkerClient;
     const { container, unmount } = await mount(<DataView
       worker={worker} store={new InProcessAsyncStore(store)} initialTable="tasks"
-      onImport={() => undefined} onWrite={() => undefined} onClose={() => undefined}
+      onWrite={() => undefined} onClose={() => undefined}
       onError={message => { throw new Error(message); }}
       onInfo={message => { if (message.startsWith("Archived")) archivedResolve(); }}
       onSchemaChange={() => undefined} onRecovery={() => undefined}
@@ -197,8 +197,8 @@ describe("Daily Workbench UI", () => {
     await waitFor(() => document.body.textContent?.includes("Second") ?? false);
     await act(async () => { await initialized; });
     const importInput = document.body.querySelector<HTMLInputElement>(
-      '.dataview-import input[type="file"]')!;
-    expect(importInput.style.display).not.toBe("none");
+      '.dataview-import input[type="file"]');
+    expect(importInput).toBeNull();
     expect(document.body.querySelector('button[aria-label="Sort by title"]')).not.toBeNull();
     expect(document.body.querySelector('button[aria-label="Rename title column"]')).not.toBeNull();
     const editable = document.body.querySelector<HTMLTableCellElement>("td.cell-editable")!;
@@ -251,7 +251,7 @@ describe("Daily Workbench UI", () => {
     } as unknown as WorkerClient;
     const { unmount } = await mount(<DataView worker={worker}
       store={new InProcessAsyncStore(store)} initialTable="tasks"
-      onImport={() => undefined} onWrite={() => addedResolve()} onClose={() => undefined}
+      onWrite={() => addedResolve()} onClose={() => undefined}
       onError={message => { throw new Error(message); }} onInfo={() => undefined} />);
     await waitFor(() => document.body.querySelector('.dataview-new input[aria-label="title"]') !== null);
     const input = document.body.querySelector<HTMLInputElement>('.dataview-new input[aria-label="title"]')!;
@@ -277,7 +277,7 @@ describe("Daily Workbench UI", () => {
     let closes = 0;
     const { unmount } = await mount(<DataView worker={worker}
       store={new InProcessAsyncStore(store)} initialTable="tasks"
-      onImport={() => undefined} onWrite={() => undefined} onClose={() => { closes++; }}
+      onWrite={() => undefined} onClose={() => { closes++; }}
       onError={message => { throw new Error(message); }} onInfo={() => undefined} />);
     await waitFor(() => document.body.querySelector('button[aria-label="Rename title column"]') !== null);
     await act(async () => { await initialized; });

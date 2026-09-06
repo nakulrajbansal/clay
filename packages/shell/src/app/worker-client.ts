@@ -183,10 +183,6 @@ export class WorkerClient {
   forkApp(newAppId: string): Promise<null> { return this.call("forkApp", { newAppId }); }
   status(): Promise<StatusInfo> { return this.call("status"); }
   seed(shellId: string): Promise<null> { return this.call("seed", { shellId }); }
-  importTable(payload: { table: string; columns: unknown[]; rows: unknown[] }):
-    Promise<{ table: string; imported: number; columns: number }> {
-    return this.call("importTable", payload);
-  }
   panels(): Promise<LivePanel[]> { return this.call("panels"); }
   panelProvenance(): Promise<PanelProvenance[]> { return this.call("panelProvenance"); }
   semanticTrace(): Promise<SemanticSchemaTraceV1> { return this.call("semanticTrace"); }

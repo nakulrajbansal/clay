@@ -107,7 +107,6 @@ export function DataView(props: {
   initialTable?: string | null;
   initialRecordId?: string | null;
   onWrite: (table: string) => void;
-  onImport: (file: File) => void;
   onClose: () => void;
   returnFocusRef?: RefObject<HTMLElement | null>;
   onError: (msg: string) => void;
@@ -579,12 +578,6 @@ export function DataView(props: {
               Clear samples ({samples})
             </button>
           ) : null}
-          <label className="dataview-import file-label" title="Add a CSV or JSON file as a new table">
-            ⬆ Import file
-            <input className="visually-hidden-file" type="file" aria-label="Import CSV or JSON"
-              accept=".csv,.tsv,.txt,.json"
-              onChange={e => { const f = e.target.files?.[0]; if (f) props.onImport(f); e.target.value = ""; }} />
-          </label>
           {table ? (
             <button
               className="dataview-import"
@@ -1035,13 +1028,9 @@ export function DataView(props: {
       ) : (
         <div className="dataview-empty">
           <p>No data yet.</p>
-          <p className="dataview-empty-sub">Import a spreadsheet, or describe an app and Clay creates the tables for you.</p>
-          <label className="empty-upload file-label">
-            ⬆ Upload a spreadsheet (CSV or JSON)
-            <input className="visually-hidden-file" type="file"
-              aria-label="Upload a CSV or JSON spreadsheet" accept=".csv,.tsv,.txt,.json"
-              onChange={e => { const f = e.target.files?.[0]; if (f) props.onImport(f); e.target.value = ""; }} />
-          </label>
+          <p className="dataview-empty-sub">
+            Describe the records you need and Clay will propose the tables for review.
+          </p>
         </div>
       )}
       {detail && detailTable ? (

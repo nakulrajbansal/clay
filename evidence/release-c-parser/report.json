@@ -1,0 +1,98 @@
+{
+  "schema": 1,
+  "verdict": "RELEASE_C_PARSER_FOUNDATION_VALIDATED",
+  "releaseCertificate": false,
+  "shippingEnabled": false,
+  "browser": "149.0.7827.55",
+  "sourceSha256": {
+    "runner": "7636e19cc17369ba19e235787a1a9239c251ea4f1f0f4558d94ab104b9febcd2",
+    "controller": "e1cacf447f3f02f32bf9a195f479a3bc6eaa8db6c293524d55f278e0153f1786",
+    "main": "40c3c25b52719c7fd9dda658a391fcf0d8d060dedac2c9ae5535859fd7657836",
+    "viteConfig": "b5e1e70047069d7620e26cdc3277a7a5c764beceea47d219a092d3365741cd53",
+    "worker": "203d4188d24b8f27e74fbfd82e16322147f5287833ade01a28f50805dfe9f333",
+    "workerRuntime": "defc5364890549b4c975aa031eefe93a9bf4c477516eac1490bae9f6458e5d63",
+    "workerClient": "22c15324faae6e74a9d1ebc8e79e79a391de21d8f9c1799e3b90524a5f0fbd9b",
+    "csvParser": "022a8dcf3688dbc5741ae10a17809c3c9ec6f8288da99475d1475227aef61062",
+    "sessions": "dfbfe48976192e3345d254e7a7bb4388e607fe1ae3014adf6e1813d16d754fee",
+    "contracts": "b82121cd2353951ba510bb7a9f5e6d1b033f3fc8fa23a6d6075d2af426eecfd3",
+    "grammar": "3ff792145d3bd75fb75325c36920b647c30a44b15376c3ad72303adc86e65031",
+    "lockfile": "cc82f58b5c64ee5fa839f8fb1483ac5b3df4b5d5d4e5b31a998f419c3d4c3a3e"
+  },
+  "assertions": {
+    "csvExact": true,
+    "pasteExact": true,
+    "formulasAndHtmlInert": true,
+    "sessionsDisposed": true,
+    "sourceKindsExact": true,
+    "sourceDigestsBound": true,
+    "noPersistentBrowserState": true,
+    "localOriginOnly": true,
+    "noConsoleErrors": true
+  },
+  "csv": {
+    "descriptor": {
+      "appInstanceId": "app_aaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kind": "csv",
+      "sourceDigest": "sha256:5ae95b1de4c64c9a142768b6d0d7e7ae98004da235363132e6d691bbad621cf9",
+      "totalRows": 4
+    },
+    "rows": [
+      [
+        "Name",
+        "Payload"
+      ],
+      [
+        "formula",
+        "=1+1"
+      ],
+      [
+        "html",
+        "<script>globalThis.pwned=true</script>"
+      ],
+      [
+        "quoted",
+        "a,b"
+      ]
+    ],
+    "disposed": true
+  },
+  "paste": {
+    "descriptor": {
+      "appInstanceId": "app_aaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kind": "paste",
+      "sourceDigest": "sha256:f6ac362a68df393320cf3333d8a19d4d09f79b5b875638a3e707fbc1bba5bc2d",
+      "totalRows": 3
+    },
+    "rows": [
+      [
+        "Name",
+        "Status"
+      ],
+      [
+        "Alpha",
+        "Open"
+      ],
+      [
+        "Beta",
+        "Done"
+      ]
+    ],
+    "disposed": true
+  },
+  "browserState": {
+    "pwned": false,
+    "localStorage": 0,
+    "sessionStorage": 0,
+    "caches": 0,
+    "indexedDatabases": 0
+  },
+  "externalRequests": [],
+  "consoleErrors": [],
+  "failures": [],
+  "limitations": [
+    "This validates the local CSV/paste parser foundation only.",
+    "The production import entrypoint remains disabled.",
+    "XLSX remains unavailable until a separately reviewed parser is approved.",
+    "This does not certify migration writes, backup preconditions, or Release C."
+  ]
+}
