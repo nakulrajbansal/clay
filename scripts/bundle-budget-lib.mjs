@@ -131,6 +131,113 @@ export async function measureFiles(root, files) {
   };
 }
 
+function normalizeEmittedJsFile(file) {
+  if (typeof file !== "string" || file.includes("\\") || file.includes("?")
+      || file.includes("#") || posix.isAbsolute(file))
+    throw new Error("worker module graph: invalid emitted JavaScript path");
+  const normalized = posix.normalize(file);
+  if (normalized === "." || normalized === ".." || normalized.startsWith("../")
+      || !normalized.endsWith(".js"))
+    throw new Error("worker module graph: emitted dependency is not a local JavaScript asset");
+  return normalized;
+}
+
+function resolveEmittedJsImport(fromFile, specifier) {
+  if (!specifier.startsWith("./") && !specifier.startsWith("../"))
+    throw new Error(`worker module graph: unbundled import '${specifier}' in ${fromFile}`);
+  return normalizeEmittedJsFile(posix.join(posix.dirname(fromFile), specifier));
+}
+
+function parseEmittedJsImports(source, file) {
+  let parsed;
+  try {
+    parsed = parse(source, {
+      ecmaVersion: "latest",
+      sourceType: "module",
+      allowHashBang: true,
+    });
+  } catch {
+    throw new Error(`worker module graph: ${file} is not parseable JavaScript`);
+  }
+  const imports = new Set();
+  const dynamicImports = new Set();
+  const pending = [parsed];
+  while (pending.length > 0) {
+    const node = pending.pop();
+    if (!node || typeof node !== "object") continue;
+    if (node.type === "ImportDeclaration") {
+      if (typeof node.source?.value !== "string")
+        throw new Error(`worker module graph: invalid static import in ${file}`);
+      imports.add(resolveEmittedJsImport(file, node.source.value));
+    } else if ((node.type === "ExportNamedDeclaration"
+        || node.type === "ExportAllDeclaration") && node.source !== null) {
+      if (typeof node.source?.value !== "string")
+        throw new Error(`worker module graph: invalid static import in ${file}`);
+      imports.add(resolveEmittedJsImport(file, node.source.value));
+    } else if (node.type === "ImportExpression") {
+      if (typeof node.source?.value !== "string")
+        throw new Error(`worker module graph: non-literal dynamic import in ${file}`);
+      dynamicImports.add(resolveEmittedJsImport(file, node.source.value));
+    }
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) pending.push(...value);
+      else if (value && typeof value === "object") pending.push(value);
+    }
+  }
+  return {
+    imports: [...imports].sort(),
+    dynamicImports: [...dynamicImports].sort(),
+  };
+}
+
+export function collectEmittedJsClosure(graph, roots, includeDynamic = true) {
+  const pending = roots.map(normalizeEmittedJsFile);
+  const closure = new Set();
+  while (pending.length > 0) {
+    const file = pending.pop();
+    if (closure.has(file)) continue;
+    const record = graph.records.get(file);
+    if (!record)
+      throw new Error(`worker module graph: missing emitted dependency ${file}`);
+    closure.add(file);
+    pending.push(...record.imports);
+    if (includeDynamic) pending.push(...record.dynamicImports);
+  }
+  return [...closure].sort();
+}
+
+/**
+ * Parse emitted worker ESM rather than guessing hashed chunk names from Vite's
+ * application manifest, which intentionally omits worker subgraphs.
+ */
+export async function analyzeEmittedJsGraph(root, entryFile) {
+  const entry = normalizeEmittedJsFile(entryFile);
+  const records = new Map();
+  const dynamicEntries = new Set();
+  const pending = [entry];
+  while (pending.length > 0) {
+    const file = pending.pop();
+    if (records.has(file)) continue;
+    let source;
+    try {
+      source = await readFile(join(root, ...file.split("/")), "utf8");
+    } catch {
+      throw new Error(`worker module graph: missing emitted dependency ${file}`);
+    }
+    const record = parseEmittedJsImports(source, file);
+    records.set(file, record);
+    for (const dependency of record.dynamicImports) dynamicEntries.add(dependency);
+    pending.push(...record.imports, ...record.dynamicImports);
+  }
+  const graph = { entryFile: entry, records };
+  return {
+    ...graph,
+    staticClosure: collectEmittedJsClosure(graph, [entry], false),
+    dynamicEntries: [...dynamicEntries].sort(),
+    completeClosure: collectEmittedJsClosure(graph, [entry], true),
+  };
+}
+
 export function assertWithinBudget(label, measured, limits) {
   if (measured.raw > limits.raw || measured.gzip > limits.gzip) {
     throw new Error(

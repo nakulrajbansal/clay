@@ -5,10 +5,12 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  analyzeEmittedJsGraph,
   analyzeManifest,
   assertBuildFresh,
   assertWithinBudget,
   collectAssetJavaScriptClosure,
+  collectEmittedJsClosure,
   measureFiles,
   mergeFiles,
 } from "./bundle-budget-lib.mjs";
@@ -168,6 +170,9 @@ const plannerPipelineFile = oneAsset(
 const plannerAuthorityFile = oneAsset(
   /^planner-authority-[^.]+\.js$/, "planner authority",
 );
+const appLifecycleFile = oneAsset(
+  /^production-app-lifecycle-[^.]+\.js$/, "production app lifecycle",
+);
 const databaseWorkerClosureFiles = await collectAssetJavaScriptClosure(
   distRoot,
   databaseWorkerFile,
@@ -176,11 +181,40 @@ for (const [file, label] of [
   [workerAuthorityFile, "worker authority"],
   [plannerPipelineFile, "planner pipeline"],
   [plannerAuthorityFile, "planner authority"],
+  [appLifecycleFile, "production app lifecycle"],
 ]) {
   if (!databaseWorkerClosureFiles.includes(file)) {
     throw new Error(`database worker JavaScript closure: missing ${label} chunk ${file}`);
   }
 }
+const workerGraph = await analyzeEmittedJsGraph(distRoot, databaseWorkerFile);
+if (JSON.stringify(workerGraph.completeClosure) !== JSON.stringify(databaseWorkerClosureFiles))
+  throw new Error("database worker: emitted graph analyzers disagree on the complete closure");
+if (!workerGraph.records.get(databaseWorkerFile)?.dynamicImports.includes(workerAuthorityFile))
+  throw new Error("database worker: worker authority is not a direct dynamic dependency");
+if (!workerGraph.records.get(workerAuthorityFile)?.dynamicImports.includes(appLifecycleFile))
+  throw new Error("worker authority: app lifecycle is not a direct dynamic dependency");
+for (const [file, label] of [
+  [workerAuthorityFile, "worker authority"],
+  [plannerPipelineFile, "planner pipeline"],
+  [plannerAuthorityFile, "planner authority"],
+  [appLifecycleFile, "production app lifecycle"],
+]) {
+  if (workerGraph.staticClosure.includes(file))
+    throw new Error(`database worker: ${label} leaked into the initial static closure`);
+}
+const authorityStaticClosure = collectEmittedJsClosure(
+  workerGraph, [workerAuthorityFile], false,
+);
+const authorityLoaded = new Set(mergeFiles(workerGraph.staticClosure, authorityStaticClosure));
+const authorityLazyClosure = authorityStaticClosure.filter(file =>
+  !workerGraph.staticClosure.includes(file));
+const lifecycleLazyClosure = collectEmittedJsClosure(
+  workerGraph, [appLifecycleFile], false,
+).filter(file => !authorityLoaded.has(file));
+if (!authorityLazyClosure.includes(workerAuthorityFile)
+    || !lifecycleLazyClosure.includes(appLifecycleFile))
+  throw new Error("database worker: semantic lazy closures are incomplete");
 await check(
   "database worker",
   [databaseWorkerFile],
@@ -194,6 +228,11 @@ await check(
 await check(
   "planner dynamic chunks",
   [plannerPipelineFile, plannerAuthorityFile],
+  { raw: 30_000, gzip: 10_000 },
+);
+await check(
+  "app lifecycle lazy closure",
+  lifecycleLazyClosure,
   { raw: 30_000, gzip: 10_000 },
 );
 await check(

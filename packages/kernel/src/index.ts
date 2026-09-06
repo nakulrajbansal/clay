@@ -21,8 +21,8 @@ export {
   type Registry, type RelationFieldSpec, type RollupFieldSpec,
 } from "./registry";
 export {
-  copyDatabase, createSystemTables, deleteAppStorage, openBrowserDriver,
-  openDriverFromBytes, openMemoryDriver, wipeBrowserStorage,
+  copyDatabase, createSystemTables, openBrowserDriver,
+  openDriverFromBytes, openMemoryDriver,
   type DatabaseCopyShape, type DbDriver, type SqlRow, type SqlValue,
 } from "./db";
 export { crc32, zipRead, zipWrite, type ZipEntry } from "./zip";

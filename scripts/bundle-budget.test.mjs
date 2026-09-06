@@ -6,12 +6,14 @@ import test from "node:test";
 import { gzipSync } from "node:zlib";
 
 import {
+  analyzeEmittedJsGraph,
   analyzeManifest,
   assertBuildFresh,
   assertWithinBudget,
   collectAssetJavaScriptClosure,
   collectShellJsFiles,
   collectStaticClosure,
+  collectEmittedJsClosure,
   findEntry,
   measureFiles,
   mergeFiles,
@@ -322,4 +324,59 @@ test("production budget gates the transitive worker authority and planner closur
     source,
     /mergeFiles\(analysis\.totalShellJsFiles, databaseWorkerClosureFiles,/,
   );
+});
+
+test("emitted worker analysis follows every static and dynamic dependency transitively", async t => {
+  const root = await mkdtemp(join(tmpdir(), "clay-worker-graph-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, "assets"));
+  await writeFile(join(root, "assets", "db-worker.js"), [
+    'import "./shared.js";',
+    'void import("./worker-authority.js");',
+  ].join("\n"));
+  await writeFile(join(root, "assets", "shared.js"), "export const shared = true;\n");
+  await writeFile(join(root, "assets", "worker-authority.js"), [
+    'export { shared } from "./shared.js";',
+    'void import("./production-app-lifecycle.js");',
+  ].join("\n"));
+  await writeFile(join(root, "assets", "production-app-lifecycle.js"),
+    'import "./worker-authority.js"; export const lifecycle = true;\n');
+
+  const graph = await analyzeEmittedJsGraph(root, "assets/db-worker.js");
+  assert.deepEqual(graph.staticClosure, [
+    "assets/db-worker.js",
+    "assets/shared.js",
+  ]);
+  assert.deepEqual(graph.dynamicEntries, [
+    "assets/production-app-lifecycle.js",
+    "assets/worker-authority.js",
+  ]);
+  assert.deepEqual(graph.completeClosure, [
+    "assets/db-worker.js",
+    "assets/production-app-lifecycle.js",
+    "assets/shared.js",
+    "assets/worker-authority.js",
+  ]);
+  assert.deepEqual(
+    collectEmittedJsClosure(graph, ["assets/worker-authority.js"], false),
+    ["assets/shared.js", "assets/worker-authority.js"],
+  );
+});
+
+test("emitted worker analysis fails closed on a non-literal dynamic import", async t => {
+  const root = await mkdtemp(join(tmpdir(), "clay-worker-graph-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(join(root, "db-worker.js"), "const path = './hidden.js'; import(path);\n");
+  await assert.rejects(
+    analyzeEmittedJsGraph(root, "db-worker.js"),
+    /non-literal dynamic import/,
+  );
+});
+
+test("production budget measures the complete transitive worker closure", async () => {
+  const source = await readFile(new URL("bundle-budget.mjs", import.meta.url), "utf8");
+  assert.match(source, /analyzeEmittedJsGraph/);
+  assert.match(source, /database worker JavaScript closure/);
+  assert.match(source, /workerGraph\.completeClosure/);
+  assert.match(source, /production-app-lifecycle/);
 });

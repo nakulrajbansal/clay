@@ -20,6 +20,7 @@ import {
 import { ClayError } from "./errors";
 import {
   createLiveWriteGuard,
+  type LiveWriteAuthority,
   type LiveWriteSession,
 } from "./live-write-guard";
 import {
@@ -385,6 +386,26 @@ const TEST_COORDINATORS = new WeakMap<
   ProductionStoreAuthority, ProductionMutationCoordinator
 >();
 
+export type ProductionLifecycleContext = Readonly<{
+  driver: DbDriver;
+  writeAuthority: LiveWriteAuthority;
+  store: ClayStore;
+  leaseTtlMs: number;
+}>;
+
+const PRODUCTION_LIFECYCLE_CONTEXTS = new WeakMap<
+  ProductionStoreAuthority,
+  ProductionLifecycleContext
+>();
+
+export function productionLifecycleContext(
+  authority: ProductionStoreAuthority,
+): ProductionLifecycleContext {
+  const context = PRODUCTION_LIFECYCLE_CONTEXTS.get(authority);
+  if (!context) throw invalid("production lifecycle context is unavailable");
+  return context;
+}
+
 function bootInfoFromCatalog(
   store: ClayStore,
   catalog: ReturnType<DeviceCatalog["snapshot"]>,
@@ -415,6 +436,7 @@ export class ProductionStoreAuthority {
   readonly #coordinator: ProductionMutationCoordinator;
   readonly #plannerMutations: PlannerMutationAuthority;
 
+
   private constructor(
     session: LiveWriteSession,
     store: ClayStore,
@@ -427,6 +449,7 @@ export class ProductionStoreAuthority {
     this.#store = store;
     this.#reader = createStoreReader(store);
     this.#boot = boot;
+
     this.#coordinator = new ProductionMutationCoordinator(
       session.driver,
       session.authority,
@@ -474,10 +497,17 @@ export class ProductionStoreAuthority {
       },
     });
     TEST_COORDINATORS.set(this, this.#coordinator);
+    PRODUCTION_LIFECYCLE_CONTEXTS.set(this, Object.freeze({
+      driver: session.driver,
+      writeAuthority: session.authority,
+      store,
+      leaseTtlMs,
+    }));
   }
 
   static async bootBrowser(input: unknown): Promise<ProductionStoreAuthority> {
     const bootInput = captureBrowserBootInput(input);
+    await (await import("./production-app-lifecycle")).reconcilePendingBrowserLifecycle();
     let inventory = await browserDurableInventory();
     if (inventory.state !== "complete")
       throw invalid(`durable namespace inventory is ${inventory.reason}`);
@@ -515,32 +545,7 @@ export class ProductionStoreAuthority {
             throw invalid("requested app conflicts with the durable bootstrap selection");
           resumeBootstrap = true;
         } else {
-          let selected = catalog.selectedTargetStorage();
-          if (bootInput.requestedAppId !== null) {
-            const desired = catalog.activeTargetStorageInventory().find(item =>
-              item.target.appInstanceId === bootInput.requestedAppId
-              || item.storageKey === bootInput.requestedAppId);
-            if (!desired) throw invalid("requested app is not in the authoritative catalog");
-            if (desired.target.appInstanceId !== selected.target.appInstanceId) {
-              const beforeLease = catalog.snapshot();
-              const fence = probeSession.authority.run(() => catalog.acquireWriteLease({
-                expectedAuthorityIncarnationId: beforeLease.authorityIncarnationId,
-                expectedCatalogGeneration: beforeLease.catalogGeneration,
-                expectedWriteEpoch: beforeLease.writeEpoch,
-                releaseId,
-                nowMs,
-                ttlMs: leaseTtlMs,
-              }));
-              probeSession.authority.run(() => catalog.selectApp({
-                expectedCatalogGeneration: catalog.snapshot().catalogGeneration,
-                appInstanceId: desired.target.appInstanceId,
-                operationId: mintProductionAuthorityId("op"),
-                fence,
-                nowMs,
-              }));
-              selected = catalog.selectedTargetStorage();
-            }
-          }
+          const selected = catalog.selectedTargetStorage();
           storageKey = resolveCatalogInventory(
             catalog.snapshot(), catalog.activeTargetStorageInventory(),
             selected.storageKey, inventory,
@@ -921,6 +926,11 @@ export class ProductionStoreAuthority {
 
   createRequestId(): string {
     return this.#coordinator.mintRequestId();
+  }
+
+  executeAppLifecycle(input: unknown): Promise<ProductionStoreAuthority> {
+    return import("./production-app-lifecycle").then(module =>
+      module.executeProductionAppLifecycle(this, input));
   }
 
   /** Package-private diagnostics used by worker-boundary certification tests. */

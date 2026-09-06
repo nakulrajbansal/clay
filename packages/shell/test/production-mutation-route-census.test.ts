@@ -113,8 +113,11 @@ describe("production mutation route census", () => {
         expect(body).not.toContain("p.appId");
         expect(body).not.toContain("openBrowserDriver(");
       }
-      if (classification.enforcement === "authority")
-        expect(body, `${name} must use ProductionStoreAuthority`).toContain(`runAuthorityMutation("${name}"`);
+      if (classification.enforcement === "authority") {
+        const executor = classification.mutates === "lifecycle"
+          ? `runAppLifecycle("${name}"` : `runAuthorityMutation("${name}"`;
+        expect(body, `${name} must use ProductionStoreAuthority`).toContain(executor);
+      }
       if (classification.enforcement === "planner-authority") {
         const expected = name === "keep" ? "keepPendingPreview("
           : name === "discard" ? "discardPendingPreview(" : "runPipelineText(";
@@ -142,25 +145,26 @@ describe("production mutation route census", () => {
       exports: Record<string, string>;
     };
     expect(driver).toContain("pool.getFileNames()");
-    expect(driver).toContain("classifyDurableFileInventory(names)");
+    expect(driver).toContain("classifyDurableFileInventory(await browserDurableFileNames())");
     expect(driver).toContain("AS sys");
     expect(driver).toContain("AS catalog");
     expect(guard).toContain("export function createLiveWriteGuard");
     expect(guard).not.toContain("export class LiveWriteGuard");
     expect(authority.indexOf("browserDurableInventory()"))
       .toBeLessThan(authority.indexOf("openBrowserProductionTarget(namespace)"));
-    expect(authority).toContain("let selected = catalog.selectedTargetStorage()");
+    expect(authority).toContain("const selected = catalog.selectedTargetStorage()");
+    expect(authority).not.toContain("desired.target.appInstanceId !== selected.target.appInstanceId");
     expect(authority).toContain("selected.storageKey");
     expect(publicIndex).not.toContain("ProductionStoreAuthority");
     expect(publicIndex).not.toContain("ProductionMutationCoordinator");
     expect(kernelPackage.exports["./worker-authority"])
       .toBe("./src/worker-authority.ts");
-    expect(worker).toContain('from "@clay/kernel/worker-authority"');
+    expect(worker).toMatch(/import type \{[\s\S]*?\} from "@clay\/kernel\/worker-authority"/);
     expect(worker).toContain('await import("@clay/kernel/worker-authority")');
-    expect(worker).toContain("import type {");
     expect(worker).toContain("let store: ProductionStoreReader | null = null");
     expect(worker).toContain("store = authority.readStore()");
     expect(worker).toContain("return bootProductionAuthority(p)");
+    expect(worker).toContain("try { target.close(); } catch");
     expect(authority).toContain("static async bootBrowser(input");
     expect(authority).toContain("captureBrowserBootInput(input)");
     expect(worker).not.toContain("authority.store");
@@ -271,6 +275,19 @@ describe("production mutation route census", () => {
       worker.indexOf("function serveProductionStore"));
     expect(discardHelper.indexOf("await planner.discard(requestId, current.preview.command)"))
       .toBeLessThan(discardHelper.indexOf("current.preview.shadow.close()"));
+  });
+
+  it("keeps preview ownership stable when an app lifecycle route is attempted", () => {
+    const worker = source("packages/shell/src/worker/db-worker.ts");
+    const start = worker.indexOf("async function runAppLifecycle(");
+    const end = worker.indexOf("function serveProductionStore(", start);
+    const lifecycle = worker.slice(start, end);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    expect(lifecycle).toContain("if (pending !== null)");
+    expect(lifecycle.indexOf("if (pending !== null)"))
+      .toBeLessThan(lifecycle.indexOf("authority = null"));
+    expect(lifecycle).not.toContain("pending = null");
   });
 
   it("keeps a failed durable Discard retryable with the prepared command and shadow", () => {

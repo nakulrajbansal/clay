@@ -399,6 +399,85 @@ async function discardPendingPreview(req: Request): Promise<null> {
   }
 }
 
+function captureLifecyclePayload(
+  payload: Record<string, unknown>,
+  keys: readonly string[],
+): Record<string, unknown> {
+  const actual = Reflect.ownKeys(payload);
+  if (actual.some(key => typeof key !== "string") || actual.length !== keys.length
+      || (actual as string[]).slice().sort().some((key, index) =>
+        key !== [...keys].sort()[index]))
+    throw new ClayError("E_CATALOG_UNAVAILABLE", "lifecycle payload has unknown fields");
+  const captured: Record<string, unknown> = {};
+  for (const key of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(payload, key);
+    if (!descriptor || !("value" in descriptor) || descriptor.enumerable !== true)
+      throw new ClayError("E_CATALOG_UNAVAILABLE", "lifecycle payload field is not plain data");
+    captured[key] = descriptor.value;
+  }
+  return captured;
+}
+
+async function runAppLifecycle(
+  route: "createApp" | "forkApp" | "switchApp" | "renameApp" | "deleteApp" | "reset",
+  payload: Record<string, unknown>,
+  req: Request,
+): Promise<unknown> {
+  if (pending !== null)
+    throw new ClayError("E_CONFLICT", "keep or discard the open preview before changing apps");
+  const target = mustAuthority();
+  const requestId = authorityRequestId(req);
+  let captured: Record<string, unknown>;
+  if (route === "createApp") captured = {
+    kind: "create", requestId,
+    ...captureLifecyclePayload(payload, ["displayName", "shellId"]),
+  };
+  else if (route === "forkApp") {
+    captureLifecyclePayload(payload, []);
+    captured = { kind: "fork", requestId };
+  } else if (route === "switchApp") captured = {
+    kind: "switch", requestId,
+    ...captureLifecyclePayload(payload, ["appInstanceId"]),
+  };
+  else if (route === "renameApp") captured = {
+    kind: "rename", requestId,
+    ...captureLifecyclePayload(payload, ["appInstanceId", "displayName", "shellId"]),
+  };
+  else if (route === "deleteApp") captured = {
+    kind: "delete", requestId,
+    ...captureLifecyclePayload(payload, ["appInstanceId"]),
+  };
+  else {
+    captureLifecyclePayload(payload, []);
+    captured = { kind: "reset", requestId };
+  }
+  // Drop the stale authority before a topology-changing command; a failed
+  // lifecycle is recovered from the durable catalog on the next boot.
+  authority = null;
+  store = null;
+  authorityBoot = null;
+  let next: ProductionStoreAuthority | null = null;
+  try {
+    next = await target.executeAppLifecycle(captured);
+    authority = next;
+    store = next.readStore();
+    persistent = true;
+    const info = next.bootInfo();
+    return {
+      persistent: info.persistent,
+      seeded: info.seeded,
+      shellId: info.shellId,
+      selectedAppInstanceId: info.selectedAppInstanceId,
+      catalogGeneration: info.catalogGeneration,
+      apps: info.apps,
+    };
+  } catch (error) {
+    try { next?.close(); } catch { /* partially reopened authority */ }
+    try { target.close(); } catch { /* lifecycle may already have closed it */ }
+    throw error;
+  }
+}
+
 function serveProductionStore(target: "live" | "shadow", port: MessagePort): void {
   const endpoint = target === "shadow"
     ? pending?.preview.shadow.asyncStore() ?? null
@@ -434,9 +513,16 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       };
       return null;
     }
+    case "createApp":
+      return runAppLifecycle("createApp", p, req);
     case "forkApp":
+      return runAppLifecycle("forkApp", p, req);
+    case "switchApp":
+      return runAppLifecycle("switchApp", p, req);
+    case "renameApp":
+      return runAppLifecycle("renameApp", p, req);
     case "deleteApp":
-      return failClosedMutation(req.op);
+      return runAppLifecycle("deleteApp", p, req);
     case "importTable":
       return runAuthorityMutation("importTable", p, req);
     case "seed":
@@ -578,6 +664,7 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "acceptSuggestion":
       return runAuthorityMutation("acceptSuggestion", p, req);
     case "reset":
+      return runAppLifecycle("reset", p, req);
     case "exportArchive":
     case "importArchive":
       return failClosedMutation(req.op);
@@ -650,11 +737,14 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
   }
 }
 
+let commandTail: Promise<void> = Promise.resolve();
+
 self.onmessage = (ev: MessageEvent): void => {
   const req = ev.data as Request;
-  void (async () => {
+  const ports = [...ev.ports];
+  commandTail = commandTail.then(async () => {
     try {
-      const result = await handle(req, ev.ports);
+      const result = await handle(req, ports);
       const transfer: Transferable[] = [];
       if (result && typeof result === "object" && "bytes" in result) {
         const bytes = (result as { bytes?: unknown }).bytes;
@@ -672,5 +762,5 @@ self.onmessage = (ev: MessageEvent): void => {
         },
       });
     }
-  })();
+  });
 };

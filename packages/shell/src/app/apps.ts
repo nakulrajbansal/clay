@@ -37,65 +37,8 @@ export function replaceAppCache(apps: readonly AppEntry[], selectedId: string): 
   setCurrentApp(selectedId);
 }
 
-export function setCurrentApp(id: string): void {
+function setCurrentApp(id: string): void {
   localStorage.setItem(CURRENT_KEY, id);
-}
-
-function uuid(): string {
-  return (crypto.randomUUID?.() ?? `app-${Date.now()}-${Math.random().toString(36).slice(2)}`)
-    .replace(/[^a-zA-Z0-9_-]/g, "");
-}
-
-/** Create a new app entry and make it current. Returns it (unseeded). The
- * first app uses the legacy "default" id (files /user.db) so a brand-new
- * user and an existing single-app user share one storage layout. */
-export function createApp(name: string, shellId: string): AppEntry {
-  const id = listApps().length === 0 ? "default" : uuid();
-  const entry: AppEntry = { id, name, shellId };
-  saveApps([...listApps(), entry]);
-  setCurrentApp(entry.id);
-  return entry;
-}
-
-/** Register a forked copy with a fresh id and make it current. Always a uuid
- * (a fork is never the first app), so its OPFS files are its own. */
-export function addForkEntry(name: string, shellId: string): AppEntry {
-  const entry: AppEntry = { id: uuid(), name, shellId };
-  saveApps([...listApps(), entry]);
-  setCurrentApp(entry.id);
-  return entry;
-}
-
-export function renameApp(id: string, name: string): void {
-  saveApps(listApps().map(a => (a.id === id ? { ...a, name } : a)));
-}
-
-/** Remove an app from the registry. Returns the id to switch to (another
- * app), or null if none remain. Does NOT delete OPFS files — the caller
- * asks the worker to do that. */
-export function removeApp(id: string): string | null {
-  const remaining = listApps().filter(a => a.id !== id);
-  saveApps(remaining);
-  if (currentAppId() === id) {
-    const next = remaining[0]?.id ?? null;
-    if (next) setCurrentApp(next);
-    else localStorage.removeItem(CURRENT_KEY);
-    return next;
-  }
-  return currentAppId();
-}
-
-/**
- * Migration for existing single-app users: if there's persisted data under
- * the legacy files but no registry yet, adopt it as the "default" app so it
- * appears in the switcher instead of vanishing.
- */
-export function ensureLegacyAdopted(seeded: boolean, shellId: string | null): void {
-  if (listApps().length > 0) return;
-  if (!seeded) return;
-  const entry: AppEntry = { id: "default", name: shellName(shellId), shellId: shellId ?? "tracker" };
-  saveApps([entry]);
-  setCurrentApp("default");
 }
 
 export function shellName(shellId: string | null): string {

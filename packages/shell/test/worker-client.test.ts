@@ -58,6 +58,37 @@ describe("WorkerClient boot boundary", () => {
   });
 });
 
+describe("WorkerClient lifecycle boundary", () => {
+  it("routes every app lifecycle action through the worker and validates canonical projections", async () => {
+    const appId = `app_${"a".repeat(26)}`;
+    const bootInfo = {
+      persistent: true, seeded: false, shellId: null,
+      selectedAppInstanceId: appId, catalogGeneration: "9",
+      apps: [{ id: appId, name: "Projects", shellId: "tracker" }],
+    };
+    const { client, posted } = harness(() => bootInfo);
+
+    await client.createApp("Inventory", "inventory");
+    await client.forkApp();
+    await client.switchApp(appId);
+    await client.renameApp(appId, "Renamed");
+    await client.deleteApp(appId);
+    await client.resetApp();
+
+    expect(posted.map(message => message.op)).toEqual([
+      "createApp", "forkApp", "switchApp", "renameApp", "deleteApp", "reset",
+    ]);
+    expect(posted.map(message => message.payload)).toEqual([
+      { displayName: "Inventory", shellId: "inventory" },
+      {},
+      { appInstanceId: appId },
+      { appInstanceId: appId, displayName: "Renamed", shellId: null },
+      { appInstanceId: appId },
+      {},
+    ]);
+  });
+});
+
 describe("WorkerClient files and automation boundaries", () => {
   it("transfers file bytes and exposes only bounded workflow commands", async () => {
     const { client, posted, transfers } = harness();

@@ -170,6 +170,54 @@ export const AppCatalogSnapshotV1 = z.object({
 });
 export type AppCatalogSnapshotV1 = z.infer<typeof AppCatalogSnapshotV1>;
 
+const LifecycleJobId = z.string().regex(/^job_[a-z2-7]{26}$/);
+const LifecycleStorageKey = z.string().regex(/^(?:ns_[a-z2-7]{26}|[a-zA-Z0-9_][a-zA-Z0-9_-]{0,79})$/);
+export const LifecyclePhysicalTargetV1 = z.object({
+  appInstanceId: AppInstanceId,
+  generationId: GenerationId,
+  namespaceId: NamespaceId,
+  storageKey: LifecycleStorageKey,
+  userFile: z.string().min(1).max(128),
+  systemFile: z.string().min(1).max(128),
+  storageKind: z.enum(["legacy", "generation"]),
+  displayName: CatalogDisplayName,
+  shellId: CatalogShellId,
+}).strict().superRefine((value, context) => {
+  const generation = value.storageKey === value.namespaceId
+    && value.userFile === `/${value.namespaceId}-user.db`
+    && value.systemFile === `/${value.namespaceId}-system.db`;
+  const legacy = value.storageKey === "default"
+    ? value.userFile === "/user.db" && value.systemFile === "/system.db"
+    : value.userFile === `/app-${value.storageKey}-user.db`
+      && value.systemFile === `/app-${value.storageKey}-system.db`;
+  if ((value.storageKind === "generation" && !generation)
+      || (value.storageKind === "legacy" && !legacy))
+    context.addIssue({ code: "custom", message: "lifecycle physical target is not canonical" });
+});
+export type LifecyclePhysicalTargetV1 = z.infer<typeof LifecyclePhysicalTargetV1>;
+
+export const PendingTargetLifecycleJobV1 = z.object({
+  schema: z.literal(1),
+  kind: z.enum(["create", "fork", "reset", "cleanup"]),
+  jobId: LifecycleJobId,
+  authorityIncarnationId: AuthorityIncarnationId,
+  operationId: OperationId,
+  requestSha256: Sha256,
+  declaredCatalogGeneration: UInt64Decimal,
+  expectedTarget: TargetEvidenceV1,
+  target: LifecyclePhysicalTargetV1,
+  createdAt: CanonicalInstant,
+}).strict().superRefine((value, context) => {
+  if (value.declaredCatalogGeneration === "0")
+    context.addIssue({ code: "custom", message: "lifecycle declaration generation cannot be zero" });
+  if (value.kind !== "cleanup" && value.target.storageKind !== "generation")
+    context.addIssue({ code: "custom", message: "new lifecycle targets must use generation storage" });
+  if (value.target.appInstanceId === value.expectedTarget.appInstanceId
+      || value.target.generationId === value.expectedTarget.activeGenerationId)
+    context.addIssue({ code: "custom", message: "created app target must have fresh identity" });
+});
+export type PendingTargetLifecycleJobV1 = z.infer<typeof PendingTargetLifecycleJobV1>;
+
 export const CatalogCasPublicationV1 = z.object({
   schema: z.literal(1),
   authorityIncarnationId: AuthorityIncarnationId,
@@ -192,6 +240,8 @@ export const CatalogGenerationEventV1 = z.object({
   eventKind: z.enum([
     "app_seed", "lease_issued", "revision_reserved", "revision_committed",
     "revision_abandoned", "recovery_takeover", "app_selected", "app_metadata",
+    "app_create_declared", "app_fork_declared", "app_reset_declared",
+    "app_deleted", "lifecycle_cleaned",
   ]),
   appInstanceId: AppInstanceId.nullable(),
   operationId: OperationId.nullable(),

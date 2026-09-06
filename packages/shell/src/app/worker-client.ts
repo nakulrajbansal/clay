@@ -180,8 +180,28 @@ export class WorkerClient {
         ? { providerToken: access.providerToken } : {}),
     });
   }
-  deleteApp(appId: string): Promise<null> { return this.call("deleteApp", { appId }); }
-  forkApp(newAppId: string): Promise<null> { return this.call("forkApp", { newAppId }); }
+  async createApp(displayName: string, shellId: string): Promise<BootInfo> {
+    return parseBootInfo(await this.call<unknown>("createApp", { displayName, shellId }));
+  }
+  async forkApp(): Promise<BootInfo> {
+    return parseBootInfo(await this.call<unknown>("forkApp", {}));
+  }
+  async switchApp(appInstanceId: string): Promise<BootInfo> {
+    return parseBootInfo(await this.call<unknown>("switchApp", { appInstanceId }));
+  }
+  async renameApp(
+    appInstanceId: string, displayName: string, shellId: string | null = null,
+  ): Promise<BootInfo> {
+    return parseBootInfo(await this.call<unknown>(
+      "renameApp", { appInstanceId, displayName, shellId },
+    ));
+  }
+  async deleteApp(appInstanceId: string): Promise<BootInfo> {
+    return parseBootInfo(await this.call<unknown>("deleteApp", { appInstanceId }));
+  }
+  async resetApp(): Promise<BootInfo> {
+    return parseBootInfo(await this.call<unknown>("reset", {}));
+  }
   status(): Promise<StatusInfo> { return this.call("status"); }
   seed(shellId: string): Promise<null> { return this.call("seed", { shellId }); }
   importTable(payload: { table: string; columns: unknown[]; rows: unknown[] }):
@@ -324,7 +344,7 @@ export class WorkerClient {
   }> { return this.call("removeSamples", {}); }
   fillSamples(): Promise<{ added: number; tables: number }> { return this.call("fillSamples"); }
   sampleCount(): Promise<number> { return this.call("sampleCount"); }
-  reset(): Promise<null> { return this.call("reset"); }
+  reset(): Promise<BootInfo> { return this.resetApp(); }
   registryTables(): Promise<RegTable[]> { return this.call("registryTables"); }
   restoreRow(table: string, id: string): Promise<Record<string, unknown>> {
     return this.call("restoreRow", { table, id });

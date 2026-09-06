@@ -1,89 +1,58 @@
 // @vitest-environment jsdom
-// The multi-app registry (G4): create/switch/remove semantics over
-// localStorage, including the legacy-adoption path for existing single-app
-// users and the "first app uses the default id" rule (preserves /user.db).
+// localStorage is a replace-only presentation cache. Durable app identity,
+// selection, metadata, tombstones, and lifecycle live in the DB worker catalog.
 import { beforeEach, describe, expect, it } from "vitest";
+import * as appsModule from "../src/app/apps";
 import {
-  createApp, currentApp, currentAppId, ensureLegacyAdopted, listApps,
-  removeApp, renameApp, replaceAppCache, setCurrentApp, shellName,
+  currentApp, currentAppId, deriveAppName, listApps, replaceAppCache, shellName,
 } from "../src/app/apps";
 
 beforeEach(() => localStorage.clear());
 
-describe("app registry", () => {
-  it("starts empty", () => {
+const canonical = [
+  { id: `app_${"a".repeat(26)}`, name: "Projects", shellId: "tracker" },
+  { id: `app_${"b".repeat(26)}`, name: "Inventory", shellId: "inventory" },
+];
+
+describe("worker-owned app projection cache", () => {
+  it("starts empty and exposes no local lifecycle mutators", () => {
     expect(listApps()).toEqual([]);
     expect(currentAppId()).toBeNull();
+    for (const unsafe of [
+      "createApp", "addForkEntry", "renameApp", "removeApp",
+      "setCurrentApp", "ensureLegacyAdopted",
+    ]) expect(appsModule).not.toHaveProperty(unsafe);
   });
 
-  it("the first app uses the legacy 'default' id; more get unique ids", () => {
-    const a = createApp("Tracker", "tracker");
-    expect(a.id).toBe("default");
-    expect(currentAppId()).toBe("default");
-    const b = createApp("Sales CRM", "crm");
-    expect(b.id).not.toBe("default");
-    expect(listApps().map(x => x.name)).toEqual(["Tracker", "Sales CRM"]);
-    expect(currentApp()?.id).toBe(b.id);   // new app becomes current
-  });
+  it("atomically replaces stale presentation state from a canonical worker projection", () => {
+    localStorage.setItem("clay_apps", JSON.stringify([
+      { id: "default", name: "Stale", shellId: "tracker" },
+    ]));
+    localStorage.setItem("clay_current_app", "default");
 
-  it("switch + rename", () => {
-    createApp("Tracker", "tracker");
-    const b = createApp("CRM", "crm");
-    setCurrentApp("default");
-    expect(currentApp()?.name).toBe("Tracker");
-    renameApp(b.id, "Pipeline");
-    setCurrentApp(b.id);
-    expect(currentApp()?.name).toBe("Pipeline");
-  });
-
-  it("removing the current app switches to another; removing the last clears current", () => {
-    createApp("Tracker", "tracker");       // default
-    const b = createApp("CRM", "crm");      // current
-    const next = removeApp(b.id);
-    expect(next).toBe("default");
-    expect(currentAppId()).toBe("default");
-    expect(listApps().map(a => a.id)).toEqual(["default"]);
-    const none = removeApp("default");
-    expect(none).toBeNull();
-    expect(currentAppId()).toBeNull();
-    expect(listApps()).toEqual([]);
-  });
-
-  it("removing a non-current app leaves current unchanged", () => {
-    createApp("Tracker", "tracker");        // default, current
-    const b = createApp("CRM", "crm");      // current now b
-    setCurrentApp("default");
-    const stay = removeApp(b.id);
-    expect(stay).toBe("default");
-    expect(currentAppId()).toBe("default");
-  });
-
-  it("ensureLegacyAdopted adopts existing data as 'default' only when the registry is empty", () => {
-    ensureLegacyAdopted(true, "small_business");
-    expect(listApps()).toEqual([{ id: "default", name: "Small Business", shellId: "small_business" }]);
-    expect(currentAppId()).toBe("default");
-    // idempotent — does not duplicate
-    ensureLegacyAdopted(true, "crm");
-    expect(listApps()).toHaveLength(1);
-  });
-
-  it("ensureLegacyAdopted does nothing when unseeded", () => {
-    ensureLegacyAdopted(false, null);
-    expect(listApps()).toEqual([]);
-  });
-
-  it("replaces stale presentation state from a canonical worker projection", () => {
-    createApp("Old local name", "tracker");
-    const canonical = [
-      { id: `app_${"a".repeat(26)}`, name: "Projects", shellId: "tracker" },
-      { id: `app_${"b".repeat(26)}`, name: "Inventory", shellId: "inventory" },
-    ];
     replaceAppCache(canonical, canonical[1]!.id);
+
     expect(listApps()).toEqual(canonical);
     expect(currentAppId()).toBe(canonical[1]!.id);
+    expect(currentApp()).toEqual(canonical[1]);
   });
 
-  it("shellName maps ids to friendly names", () => {
+  it("rejects an inconsistent projection without replacing the old cache", () => {
+    replaceAppCache(canonical, canonical[0]!.id);
+    expect(() => replaceAppCache(canonical, `app_${"c".repeat(26)}`))
+      .toThrow("does not contain selected app");
+    expect(listApps()).toEqual(canonical);
+    expect(currentAppId()).toBe(canonical[0]!.id);
+  });
+
+  it("treats malformed cached JSON as an empty, non-authoritative hint", () => {
+    localStorage.setItem("clay_apps", "not json");
+    localStorage.setItem("clay_current_app", "made-up-selection");
+    expect(listApps()).toEqual([]);
+    expect(currentApp()).toBeNull();
+  });
+
+  it("maps shell ids to friendly presentation names", () => {
     expect(shellName("crm")).toBe("Sales CRM");
     expect(shellName("financials")).toBe("Bookkeeping");
     expect(shellName(null)).toBe("My app");
@@ -91,8 +60,7 @@ describe("app registry", () => {
 });
 
 describe("deriveAppName (blank apps earn their name from the first build)", () => {
-  it("extracts the head noun phrase from a plan summary", async () => {
-    const { deriveAppName } = await import("../src/app/apps");
+  it("extracts the head noun phrase from a plan summary", () => {
     expect(deriveAppName("Creates a Portfolio Dashboard with a projects table and a status board."))
       .toBe("Portfolio Dashboard");
     expect(deriveAppName("Builds a customer feedback tracker with a summary strip."))

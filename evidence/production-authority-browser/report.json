@@ -1,31 +1,48 @@
 {
   "schema": 1,
-  "verdict": "PRODUCTION_BOOT_SLICE_VALIDATED",
+  "verdict": "PRODUCTION_LIFECYCLE_SLICE_VALIDATED",
   "releaseCertificate": false,
+  "generatedAt": "2026-09-06T17:11:25.793Z",
   "browser": "149.0.7827.55",
+  "testedSourceTree": "1778917256d788462ae816e682594f43c39880c2",
+  "renderedSourceTree": "1778917256d788462ae816e682594f43c39880c2",
+  "sourceTreeAfterRun": "1778917256d788462ae816e682594f43c39880c2",
   "sourceSha256": {
-    "runner": "9523b966c2c8aa569ae442acb8a6f45288fd1d3f8ae65f2e2fd8cd25f55732d3",
-    "controller": "b2bb09d1806829e9121266c0605ea18fbd7ed4f62bc56e37d4065e9135b8f6c9",
-    "viteConfig": "cb6c67254bc1e04409000b228f8fd947350eda32a2cb3b14d7f18193b096104c",
-    "worker": "63bb3b9b976638ed956ea0cfdaeeda52fea9dfc6cd44c8223b99e1d4815149ca",
-    "authority": "eba46254fe1e3fc595c3c486adce39a59e1551f24c7e253037deeb00bbef4775",
-    "catalog": "ba19b7bf62af2920428538d2e2a2ac02e6194ed4ab30c219959050e34438bb55",
-    "coordinator": "a341ebd31efac415195a9228fe2462da3275218e403cf99010e8e2cd1fa46103",
-    "requestJournal": "e0f5e8c12379025e4f78ee5bcec7d49665743b9392452b8b41b98715df0dc5a9",
-    "store": "228c4fcab6c8a2e82ba161063ccdf3160b155cbd7fc49626d271a052f0d40794",
-    "db": "c02b20f73fdf67aebc6fdc021840ab688983247d120962cdea86f4c487fac7af",
+    "runner": "5b64c222bd642ad5a4a21a8afbc9ebbb9f9b01d52b386de776cd5003f141c46c",
+    "controller": "4a357d6556fa471441a1b2b11a81f8bfd1caa339710b8f49488194b1920dd0bf",
+    "viteConfig": "0d2daa6f6b55895be16d06700f5fbfd64532b667078178e3632b562aaf4f46b3",
+    "worker": "8f468d08026b1829e090d831715507d7d73666750a8aa615803ab6554c2a7abd",
+    "schemaCatalog": "fe29aae6bc97256d3f932bb8a3a531402240abc8d1eeec853dd6e6b1b1334667",
+    "generationCopy": "851f16dd2460cfed2ade882dd4a930dc6caeaabe20f3a308bd4cf43f68f3ce51",
+    "lifecycleRequest": "f1042dd3874a6ee4a5e623291c3835f7dccf8cb40daee6bfb116e5a36fd77f6b",
+    "lifecycle": "45f4f661d35b8b08ffa44f12d186b7082c53022828a4db989b6e7a7c0d4ff9e6",
+    "authority": "986ebf5d678c954f5574255eeb07bea351a3c82dc3bba5e6ba046ef3fc3058fb",
+    "catalog": "8fa267e71b38edd52077d10027ca0c69067141a7fe09049d678844bee8cc8011",
+    "coordinator": "e3ff16fa2042671bf043c9f17a30856ca1d121c1b511b7c299dc9455af32a5e2",
+    "requestJournal": "36d5add21b5b2218d85bdacb46c930ff3134944cd9a7afeecaf4a8e3a9cea881",
+    "store": "2c235d7cbf2028e9ed9706ac19680efc95dbb155dc7a48426ee4efe16b51486b",
+    "db": "c707bc46af839578c5c4fed13d5914c76ee89a1c5548cdf05f0f8ea3ae189776",
     "inventory": "a1a0308ad07089a42e855efc6eee84d21a6912d8020fa6598268cbd73d3d1964",
     "targetAuthority": "b9eb47be5a13da4f6bd69b9b254f67102cebc5cb4cd3f7bfe887495c2b55cd77",
     "merkle": "e43eefdfd525da8262e8e2dac383d6f9b88d89be56a7ea979973c8e8987c89ef",
-    "schemaCatalog": "fe7fe9b1b6b59a7958484d3cbd6ea4d966848a345fb5131fc1eca819a30b28ec",
     "lockfile": "cc82f58b5c64ee5fa839f8fb1483ac5b3df4b5d5d4e5b31a998f419c3d4c3a3e"
   },
   "cases": {
+    "sourceTreeBound": true,
     "emptyCatalogAttachmentRecovery": true,
     "twoLegacyNamespaces": true,
     "interruptedAfterOneAtomicAdoption": true,
     "freshWorkerResume": true,
-    "catalogCanonicalSwitch": true
+    "catalogCanonicalSwitch": true,
+    "localCacheIsProjectionOnly": true,
+    "canonicalForkWithoutSourceMutation": true,
+    "workerOwnedCreate": true,
+    "workerOwnedRename": true,
+    "deterministicDeleteFallback": true,
+    "freshGenerationReset": true,
+    "declaredPartialTargetCrashResume": true,
+    "tombstoneCleanupCrashResume": true,
+    "exactDurableInventory": true
   },
   "emptySeeded": {
     "state": "complete",
@@ -69,16 +86,16 @@
       "seeded": true,
       "shellId": "inventory",
       "adopted": true,
-      "selectedAppInstanceId": "app_5lsknt5zalolan2zvcndt26yp2",
+      "selectedAppInstanceId": "app_wazzbxhlqrebwqic23ybzf47r2",
       "catalogGeneration": "4",
       "apps": [
         {
-          "id": "app_5k66kephypofhlkxo5j5o47txh",
+          "id": "app_2czyzs7l3yg75nkw3xkgy6jmjk",
           "name": "Projects",
           "shellId": "tracker"
         },
         {
-          "id": "app_5lsknt5zalolan2zvcndt26yp2",
+          "id": "app_wazzbxhlqrebwqic23ybzf47r2",
           "name": "Field Service",
           "shellId": "inventory"
         }
@@ -86,63 +103,63 @@
     },
     "rows": [
       {
-        "id": "01a07533-f286-7e74-9a01-309d3dbd36c7",
-        "created_at": "2026-09-06T05:32:13.830Z",
-        "updated_at": "2026-09-06T05:32:13.830Z",
+        "id": "01a077b3-d3c9-74de-b9da-d7dc53a19919",
+        "created_at": "2026-09-06T17:11:09.001Z",
+        "updated_at": "2026-09-06T17:11:09.001Z",
         "name": "Field row"
       }
     ],
     "evidence": {
       "catalog": {
         "schema": 1,
-        "authorityIncarnationId": "auth_b5ozaxnq3yn26ityxi4mmgjsjt",
+        "authorityIncarnationId": "auth_gzabamxyiytbaz4ktr7dzpjpj7",
         "catalogGeneration": "4",
-        "selectedAppInstanceId": "app_5lsknt5zalolan2zvcndt26yp2",
+        "selectedAppInstanceId": "app_wazzbxhlqrebwqic23ybzf47r2",
         "entries": [
           {
-            "appInstanceId": "app_5k66kephypofhlkxo5j5o47txh",
+            "appInstanceId": "app_2czyzs7l3yg75nkw3xkgy6jmjk",
             "displayName": "Projects",
             "shellId": "tracker",
-            "activeGenerationId": "gen_ftr7zhv3yz7jhqush23uwk5zyc",
-            "journalGenesisGenerationId": "gen_ftr7zhv3yz7jhqush23uwk5zyc",
+            "activeGenerationId": "gen_luxvfia4scxbb5bgf5y5vbsejh",
+            "journalGenesisGenerationId": "gen_luxvfia4scxbb5bgf5y5vbsejh",
             "journalGenesisLineageEpoch": "0",
             "journalGenesisProtectionRevision": "0",
-            "journalGenesisStateSha256": "sha256:6bff743f037b40daccd4a55ba0ff13c31fca5910407640b2c22e55418cea48ad",
+            "journalGenesisStateSha256": "sha256:c731551d27e3abaa755ac35dd74daddc26cd0e335b06f83510c32f03af9cccf2",
             "currentLineageEpoch": "0",
             "lineageEpochHighWater": "0",
             "currentProtectionRevision": "0",
             "revisionHighWater": "0",
             "digestSchema": 1,
-            "stateSha256": "sha256:6bff743f037b40daccd4a55ba0ff13c31fca5910407640b2c22e55418cea48ad",
+            "stateSha256": "sha256:c731551d27e3abaa755ac35dd74daddc26cd0e335b06f83510c32f03af9cccf2",
             "tombstoned": false
           },
           {
-            "appInstanceId": "app_5lsknt5zalolan2zvcndt26yp2",
+            "appInstanceId": "app_wazzbxhlqrebwqic23ybzf47r2",
             "displayName": "Field Service",
             "shellId": "inventory",
-            "activeGenerationId": "gen_g4ho2lg2firpbhyz2pgkhixooz",
-            "journalGenesisGenerationId": "gen_g4ho2lg2firpbhyz2pgkhixooz",
+            "activeGenerationId": "gen_trfyxaaklwjwsz7vamkbm3sqze",
+            "journalGenesisGenerationId": "gen_trfyxaaklwjwsz7vamkbm3sqze",
             "journalGenesisLineageEpoch": "0",
             "journalGenesisProtectionRevision": "0",
-            "journalGenesisStateSha256": "sha256:987fcd1d7710b22c0ace9637eb9d7fc4d21458a9eaf0836bc675492533f870a2",
+            "journalGenesisStateSha256": "sha256:c7e6a7dbfff9487eabe4f29ce121d60af147c9a1b91c538657d0a5eeaec1c3e5",
             "currentLineageEpoch": "0",
             "lineageEpochHighWater": "0",
             "currentProtectionRevision": "0",
             "revisionHighWater": "0",
             "digestSchema": 1,
-            "stateSha256": "sha256:987fcd1d7710b22c0ace9637eb9d7fc4d21458a9eaf0836bc675492533f870a2",
+            "stateSha256": "sha256:c7e6a7dbfff9487eabe4f29ce121d60af147c9a1b91c538657d0a5eeaec1c3e5",
             "tombstoned": false
           }
         ],
         "writeEpoch": "2"
       },
       "target": {
-        "appInstanceId": "app_5lsknt5zalolan2zvcndt26yp2",
-        "activeGenerationId": "gen_g4ho2lg2firpbhyz2pgkhixooz",
+        "appInstanceId": "app_wazzbxhlqrebwqic23ybzf47r2",
+        "activeGenerationId": "gen_trfyxaaklwjwsz7vamkbm3sqze",
         "lineageEpoch": "0",
         "protectionRevision": "0",
         "digestSchema": 1,
-        "stateSha256": "sha256:987fcd1d7710b22c0ace9637eb9d7fc4d21458a9eaf0836bc675492533f870a2"
+        "stateSha256": "sha256:c7e6a7dbfff9487eabe4f29ce121d60af147c9a1b91c538657d0a5eeaec1c3e5"
       },
       "targetReservations": [],
       "catalogReservations": []
@@ -177,80 +194,80 @@
       "seeded": true,
       "shellId": "inventory",
       "adopted": true,
-      "selectedAppInstanceId": "app_5rgfdlev555dzghvmxf5le3axv",
+      "selectedAppInstanceId": "app_sfk75a4xlrvhia45io2soiohby",
       "catalogGeneration": "4",
       "apps": [
         {
-          "id": "app_5rgfdlev555dzghvmxf5le3axv",
-          "name": "Field Service",
-          "shellId": "inventory"
-        },
-        {
-          "id": "app_t354i3hxfs2bc3be7wizzr2vvn",
+          "id": "app_hiaiudi6w5vvh4ssnq4g3kw4n7",
           "name": "Projects",
           "shellId": "tracker"
+        },
+        {
+          "id": "app_sfk75a4xlrvhia45io2soiohby",
+          "name": "Field Service",
+          "shellId": "inventory"
         }
       ]
     },
     "rows": [
       {
-        "id": "01a07533-fa0d-7390-b118-e391138067fc",
-        "created_at": "2026-09-06T05:32:15.757Z",
-        "updated_at": "2026-09-06T05:32:15.757Z",
+        "id": "01a077b3-dbc2-7e83-a82f-c54caf84abc1",
+        "created_at": "2026-09-06T17:11:11.042Z",
+        "updated_at": "2026-09-06T17:11:11.042Z",
         "name": "Field row"
       }
     ],
     "evidence": {
       "catalog": {
         "schema": 1,
-        "authorityIncarnationId": "auth_hdheo7ktfjuohvpyjqn26khqfa",
+        "authorityIncarnationId": "auth_gree3okrzptn6esdij4ed7xnht",
         "catalogGeneration": "4",
-        "selectedAppInstanceId": "app_5rgfdlev555dzghvmxf5le3axv",
+        "selectedAppInstanceId": "app_sfk75a4xlrvhia45io2soiohby",
         "entries": [
           {
-            "appInstanceId": "app_5rgfdlev555dzghvmxf5le3axv",
-            "displayName": "Field Service",
-            "shellId": "inventory",
-            "activeGenerationId": "gen_qzwnhhvqghttpuzgobsiv53rp7",
-            "journalGenesisGenerationId": "gen_qzwnhhvqghttpuzgobsiv53rp7",
+            "appInstanceId": "app_hiaiudi6w5vvh4ssnq4g3kw4n7",
+            "displayName": "Projects",
+            "shellId": "tracker",
+            "activeGenerationId": "gen_h4bylhf53nmjyvtip2toy4btqe",
+            "journalGenesisGenerationId": "gen_h4bylhf53nmjyvtip2toy4btqe",
             "journalGenesisLineageEpoch": "0",
             "journalGenesisProtectionRevision": "0",
-            "journalGenesisStateSha256": "sha256:c14999873b1057a2f06ad7ad151c7e727625d0517419421b48208e8dead4bf9e",
+            "journalGenesisStateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
             "currentLineageEpoch": "0",
             "lineageEpochHighWater": "0",
             "currentProtectionRevision": "0",
             "revisionHighWater": "0",
             "digestSchema": 1,
-            "stateSha256": "sha256:c14999873b1057a2f06ad7ad151c7e727625d0517419421b48208e8dead4bf9e",
+            "stateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
             "tombstoned": false
           },
           {
-            "appInstanceId": "app_t354i3hxfs2bc3be7wizzr2vvn",
-            "displayName": "Projects",
-            "shellId": "tracker",
-            "activeGenerationId": "gen_zstwzbjbtokvdpoag263h6rkew",
-            "journalGenesisGenerationId": "gen_zstwzbjbtokvdpoag263h6rkew",
+            "appInstanceId": "app_sfk75a4xlrvhia45io2soiohby",
+            "displayName": "Field Service",
+            "shellId": "inventory",
+            "activeGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
+            "journalGenesisGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
             "journalGenesisLineageEpoch": "0",
             "journalGenesisProtectionRevision": "0",
-            "journalGenesisStateSha256": "sha256:42f68168b6f7854ea2f637548bf39e347a25e0f4c5c73fa595315c2d5be38d3b",
+            "journalGenesisStateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce",
             "currentLineageEpoch": "0",
             "lineageEpochHighWater": "0",
             "currentProtectionRevision": "0",
             "revisionHighWater": "0",
             "digestSchema": 1,
-            "stateSha256": "sha256:42f68168b6f7854ea2f637548bf39e347a25e0f4c5c73fa595315c2d5be38d3b",
+            "stateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce",
             "tombstoned": false
           }
         ],
         "writeEpoch": "2"
       },
       "target": {
-        "appInstanceId": "app_5rgfdlev555dzghvmxf5le3axv",
-        "activeGenerationId": "gen_qzwnhhvqghttpuzgobsiv53rp7",
+        "appInstanceId": "app_sfk75a4xlrvhia45io2soiohby",
+        "activeGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
         "lineageEpoch": "0",
         "protectionRevision": "0",
         "digestSchema": 1,
-        "stateSha256": "sha256:c14999873b1057a2f06ad7ad151c7e727625d0517419421b48208e8dead4bf9e"
+        "stateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce"
       },
       "targetReservations": [],
       "catalogReservations": []
@@ -262,86 +279,84 @@
       "seeded": true,
       "shellId": "tracker",
       "adopted": false,
-      "selectedAppInstanceId": "app_t354i3hxfs2bc3be7wizzr2vvn",
-      "catalogGeneration": "7",
+      "selectedAppInstanceId": "app_hiaiudi6w5vvh4ssnq4g3kw4n7",
+      "catalogGeneration": "8",
       "apps": [
         {
-          "id": "app_5rgfdlev555dzghvmxf5le3axv",
-          "name": "Field Service",
-          "shellId": "inventory"
-        },
-        {
-          "id": "app_t354i3hxfs2bc3be7wizzr2vvn",
+          "id": "app_hiaiudi6w5vvh4ssnq4g3kw4n7",
           "name": "Projects",
           "shellId": "tracker"
+        },
+        {
+          "id": "app_sfk75a4xlrvhia45io2soiohby",
+          "name": "Field Service",
+          "shellId": "inventory"
         }
       ]
     },
     "rows": [
       {
-        "id": "01a07533-f934-7937-8a10-74adf71e05d8",
-        "created_at": "2026-09-06T05:32:15.540Z",
-        "updated_at": "2026-09-06T05:32:15.540Z",
+        "id": "01a077b3-dae2-7837-a471-4c3d071032ad",
+        "created_at": "2026-09-06T17:11:10.818Z",
+        "updated_at": "2026-09-06T17:11:10.818Z",
         "name": "Projects row"
       }
     ],
     "evidence": {
       "catalog": {
         "schema": 1,
-        "authorityIncarnationId": "auth_hdheo7ktfjuohvpyjqn26khqfa",
-        "catalogGeneration": "7",
-        "selectedAppInstanceId": "app_t354i3hxfs2bc3be7wizzr2vvn",
+        "authorityIncarnationId": "auth_gree3okrzptn6esdij4ed7xnht",
+        "catalogGeneration": "8",
+        "selectedAppInstanceId": "app_hiaiudi6w5vvh4ssnq4g3kw4n7",
         "entries": [
           {
-            "appInstanceId": "app_5rgfdlev555dzghvmxf5le3axv",
-            "displayName": "Field Service",
-            "shellId": "inventory",
-            "activeGenerationId": "gen_qzwnhhvqghttpuzgobsiv53rp7",
-            "journalGenesisGenerationId": "gen_qzwnhhvqghttpuzgobsiv53rp7",
+            "appInstanceId": "app_hiaiudi6w5vvh4ssnq4g3kw4n7",
+            "displayName": "Projects",
+            "shellId": "tracker",
+            "activeGenerationId": "gen_h4bylhf53nmjyvtip2toy4btqe",
+            "journalGenesisGenerationId": "gen_h4bylhf53nmjyvtip2toy4btqe",
             "journalGenesisLineageEpoch": "0",
             "journalGenesisProtectionRevision": "0",
-            "journalGenesisStateSha256": "sha256:c14999873b1057a2f06ad7ad151c7e727625d0517419421b48208e8dead4bf9e",
+            "journalGenesisStateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
             "currentLineageEpoch": "0",
             "lineageEpochHighWater": "0",
             "currentProtectionRevision": "0",
             "revisionHighWater": "0",
             "digestSchema": 1,
-            "stateSha256": "sha256:c14999873b1057a2f06ad7ad151c7e727625d0517419421b48208e8dead4bf9e",
+            "stateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
             "tombstoned": false
           },
           {
-            "appInstanceId": "app_t354i3hxfs2bc3be7wizzr2vvn",
-            "displayName": "Projects",
-            "shellId": "tracker",
-            "activeGenerationId": "gen_zstwzbjbtokvdpoag263h6rkew",
-            "journalGenesisGenerationId": "gen_zstwzbjbtokvdpoag263h6rkew",
+            "appInstanceId": "app_sfk75a4xlrvhia45io2soiohby",
+            "displayName": "Field Service",
+            "shellId": "inventory",
+            "activeGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
+            "journalGenesisGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
             "journalGenesisLineageEpoch": "0",
             "journalGenesisProtectionRevision": "0",
-            "journalGenesisStateSha256": "sha256:42f68168b6f7854ea2f637548bf39e347a25e0f4c5c73fa595315c2d5be38d3b",
+            "journalGenesisStateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce",
             "currentLineageEpoch": "0",
             "lineageEpochHighWater": "0",
             "currentProtectionRevision": "0",
             "revisionHighWater": "0",
             "digestSchema": 1,
-            "stateSha256": "sha256:42f68168b6f7854ea2f637548bf39e347a25e0f4c5c73fa595315c2d5be38d3b",
+            "stateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce",
             "tombstoned": false
           }
         ],
-        "writeEpoch": "4"
+        "writeEpoch": "5"
       },
       "target": {
-        "appInstanceId": "app_t354i3hxfs2bc3be7wizzr2vvn",
-        "activeGenerationId": "gen_zstwzbjbtokvdpoag263h6rkew",
+        "appInstanceId": "app_hiaiudi6w5vvh4ssnq4g3kw4n7",
+        "activeGenerationId": "gen_h4bylhf53nmjyvtip2toy4btqe",
         "lineageEpoch": "0",
         "protectionRevision": "0",
         "digestSchema": 1,
-        "stateSha256": "sha256:42f68168b6f7854ea2f637548bf39e347a25e0f4c5c73fa595315c2d5be38d3b"
+        "stateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900"
       },
       "targetReservations": [],
       "catalogReservations": []
-    }
-  },
-  "final": {
+    },
     "inventory": {
       "state": "complete",
       "catalogPresent": true,
@@ -360,74 +375,1585 @@
         }
       ]
     },
+    "fileNames": [
+      "/app-field-system.db",
+      "/app-field-user.db",
+      "/clay-device-catalog-v1.db",
+      "/system.db",
+      "/user.db"
+    ]
+  },
+  "forked": {
+    "boot": {
+      "persistent": true,
+      "seeded": true,
+      "shellId": "tracker",
+      "adopted": false,
+      "selectedAppInstanceId": "app_rkbqjvyihejup76zkokregn2v2",
+      "catalogGeneration": "14",
+      "apps": [
+        {
+          "id": "app_hiaiudi6w5vvh4ssnq4g3kw4n7",
+          "name": "Projects",
+          "shellId": "tracker"
+        },
+        {
+          "id": "app_rkbqjvyihejup76zkokregn2v2",
+          "name": "Projects (copy)",
+          "shellId": "tracker"
+        },
+        {
+          "id": "app_sfk75a4xlrvhia45io2soiohby",
+          "name": "Field Service",
+          "shellId": "inventory"
+        }
+      ]
+    },
+    "rows": [
+      {
+        "id": "01a077b3-dae2-7837-a471-4c3d071032ad",
+        "created_at": "2026-09-06T17:11:10.818Z",
+        "updated_at": "2026-09-06T17:11:10.818Z",
+        "name": "Projects row"
+      }
+    ],
+    "evidence": {
+      "catalog": {
+        "schema": 1,
+        "authorityIncarnationId": "auth_gree3okrzptn6esdij4ed7xnht",
+        "catalogGeneration": "14",
+        "selectedAppInstanceId": "app_rkbqjvyihejup76zkokregn2v2",
+        "entries": [
+          {
+            "appInstanceId": "app_hiaiudi6w5vvh4ssnq4g3kw4n7",
+            "displayName": "Projects",
+            "shellId": "tracker",
+            "activeGenerationId": "gen_h4bylhf53nmjyvtip2toy4btqe",
+            "journalGenesisGenerationId": "gen_h4bylhf53nmjyvtip2toy4btqe",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "tombstoned": false
+          },
+          {
+            "appInstanceId": "app_rkbqjvyihejup76zkokregn2v2",
+            "displayName": "Projects (copy)",
+            "shellId": "tracker",
+            "activeGenerationId": "gen_s2allmlsuck55qimca5amkv34f",
+            "journalGenesisGenerationId": "gen_s2allmlsuck55qimca5amkv34f",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "tombstoned": false
+          },
+          {
+            "appInstanceId": "app_sfk75a4xlrvhia45io2soiohby",
+            "displayName": "Field Service",
+            "shellId": "inventory",
+            "activeGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
+            "journalGenesisGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce",
+            "tombstoned": false
+          }
+        ],
+        "writeEpoch": "9"
+      },
+      "target": {
+        "appInstanceId": "app_rkbqjvyihejup76zkokregn2v2",
+        "activeGenerationId": "gen_s2allmlsuck55qimca5amkv34f",
+        "lineageEpoch": "0",
+        "protectionRevision": "0",
+        "digestSchema": 1,
+        "stateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900"
+      },
+      "targetReservations": [],
+      "catalogReservations": []
+    },
+    "inventory": {
+      "state": "complete",
+      "catalogPresent": true,
+      "namespaces": [
+        {
+          "storageKey": "default",
+          "userFile": "/user.db",
+          "systemFile": "/system.db",
+          "kind": "legacy"
+        },
+        {
+          "storageKey": "field",
+          "userFile": "/app-field-user.db",
+          "systemFile": "/app-field-system.db",
+          "kind": "legacy"
+        },
+        {
+          "storageKey": "ns_4rvkzhj3ymxbq7xlezmzoihhep",
+          "userFile": "/ns_4rvkzhj3ymxbq7xlezmzoihhep-user.db",
+          "systemFile": "/ns_4rvkzhj3ymxbq7xlezmzoihhep-system.db",
+          "kind": "generation"
+        }
+      ]
+    },
+    "fileNames": [
+      "/app-field-system.db",
+      "/app-field-user.db",
+      "/clay-device-catalog-v1.db",
+      "/ns_4rvkzhj3ymxbq7xlezmzoihhep-system.db",
+      "/ns_4rvkzhj3ymxbq7xlezmzoihhep-user.db",
+      "/system.db",
+      "/user.db"
+    ]
+  },
+  "sourceAfterFork": {
+    "boot": {
+      "persistent": true,
+      "seeded": true,
+      "shellId": "tracker",
+      "adopted": false,
+      "selectedAppInstanceId": "app_hiaiudi6w5vvh4ssnq4g3kw4n7",
+      "catalogGeneration": "18",
+      "apps": [
+        {
+          "id": "app_hiaiudi6w5vvh4ssnq4g3kw4n7",
+          "name": "Projects",
+          "shellId": "tracker"
+        },
+        {
+          "id": "app_rkbqjvyihejup76zkokregn2v2",
+          "name": "Projects (copy)",
+          "shellId": "tracker"
+        },
+        {
+          "id": "app_sfk75a4xlrvhia45io2soiohby",
+          "name": "Field Service",
+          "shellId": "inventory"
+        }
+      ]
+    },
+    "rows": [
+      {
+        "id": "01a077b3-dae2-7837-a471-4c3d071032ad",
+        "created_at": "2026-09-06T17:11:10.818Z",
+        "updated_at": "2026-09-06T17:11:10.818Z",
+        "name": "Projects row"
+      }
+    ],
+    "evidence": {
+      "catalog": {
+        "schema": 1,
+        "authorityIncarnationId": "auth_gree3okrzptn6esdij4ed7xnht",
+        "catalogGeneration": "18",
+        "selectedAppInstanceId": "app_hiaiudi6w5vvh4ssnq4g3kw4n7",
+        "entries": [
+          {
+            "appInstanceId": "app_hiaiudi6w5vvh4ssnq4g3kw4n7",
+            "displayName": "Projects",
+            "shellId": "tracker",
+            "activeGenerationId": "gen_h4bylhf53nmjyvtip2toy4btqe",
+            "journalGenesisGenerationId": "gen_h4bylhf53nmjyvtip2toy4btqe",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "tombstoned": false
+          },
+          {
+            "appInstanceId": "app_rkbqjvyihejup76zkokregn2v2",
+            "displayName": "Projects (copy)",
+            "shellId": "tracker",
+            "activeGenerationId": "gen_s2allmlsuck55qimca5amkv34f",
+            "journalGenesisGenerationId": "gen_s2allmlsuck55qimca5amkv34f",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "tombstoned": false
+          },
+          {
+            "appInstanceId": "app_sfk75a4xlrvhia45io2soiohby",
+            "displayName": "Field Service",
+            "shellId": "inventory",
+            "activeGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
+            "journalGenesisGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce",
+            "tombstoned": false
+          }
+        ],
+        "writeEpoch": "12"
+      },
+      "target": {
+        "appInstanceId": "app_hiaiudi6w5vvh4ssnq4g3kw4n7",
+        "activeGenerationId": "gen_h4bylhf53nmjyvtip2toy4btqe",
+        "lineageEpoch": "0",
+        "protectionRevision": "0",
+        "digestSchema": 1,
+        "stateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900"
+      },
+      "targetReservations": [],
+      "catalogReservations": []
+    },
+    "inventory": {
+      "state": "complete",
+      "catalogPresent": true,
+      "namespaces": [
+        {
+          "storageKey": "default",
+          "userFile": "/user.db",
+          "systemFile": "/system.db",
+          "kind": "legacy"
+        },
+        {
+          "storageKey": "field",
+          "userFile": "/app-field-user.db",
+          "systemFile": "/app-field-system.db",
+          "kind": "legacy"
+        },
+        {
+          "storageKey": "ns_4rvkzhj3ymxbq7xlezmzoihhep",
+          "userFile": "/ns_4rvkzhj3ymxbq7xlezmzoihhep-user.db",
+          "systemFile": "/ns_4rvkzhj3ymxbq7xlezmzoihhep-system.db",
+          "kind": "generation"
+        }
+      ]
+    },
+    "fileNames": [
+      "/app-field-system.db",
+      "/app-field-user.db",
+      "/clay-device-catalog-v1.db",
+      "/ns_4rvkzhj3ymxbq7xlezmzoihhep-system.db",
+      "/ns_4rvkzhj3ymxbq7xlezmzoihhep-user.db",
+      "/system.db",
+      "/user.db"
+    ]
+  },
+  "returnedToFork": {
+    "boot": {
+      "persistent": true,
+      "seeded": true,
+      "shellId": "tracker",
+      "adopted": false,
+      "selectedAppInstanceId": "app_rkbqjvyihejup76zkokregn2v2",
+      "catalogGeneration": "22",
+      "apps": [
+        {
+          "id": "app_hiaiudi6w5vvh4ssnq4g3kw4n7",
+          "name": "Projects",
+          "shellId": "tracker"
+        },
+        {
+          "id": "app_rkbqjvyihejup76zkokregn2v2",
+          "name": "Projects (copy)",
+          "shellId": "tracker"
+        },
+        {
+          "id": "app_sfk75a4xlrvhia45io2soiohby",
+          "name": "Field Service",
+          "shellId": "inventory"
+        }
+      ]
+    },
+    "rows": [
+      {
+        "id": "01a077b3-dae2-7837-a471-4c3d071032ad",
+        "created_at": "2026-09-06T17:11:10.818Z",
+        "updated_at": "2026-09-06T17:11:10.818Z",
+        "name": "Projects row"
+      }
+    ],
+    "evidence": {
+      "catalog": {
+        "schema": 1,
+        "authorityIncarnationId": "auth_gree3okrzptn6esdij4ed7xnht",
+        "catalogGeneration": "22",
+        "selectedAppInstanceId": "app_rkbqjvyihejup76zkokregn2v2",
+        "entries": [
+          {
+            "appInstanceId": "app_hiaiudi6w5vvh4ssnq4g3kw4n7",
+            "displayName": "Projects",
+            "shellId": "tracker",
+            "activeGenerationId": "gen_h4bylhf53nmjyvtip2toy4btqe",
+            "journalGenesisGenerationId": "gen_h4bylhf53nmjyvtip2toy4btqe",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "tombstoned": false
+          },
+          {
+            "appInstanceId": "app_rkbqjvyihejup76zkokregn2v2",
+            "displayName": "Projects (copy)",
+            "shellId": "tracker",
+            "activeGenerationId": "gen_s2allmlsuck55qimca5amkv34f",
+            "journalGenesisGenerationId": "gen_s2allmlsuck55qimca5amkv34f",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "tombstoned": false
+          },
+          {
+            "appInstanceId": "app_sfk75a4xlrvhia45io2soiohby",
+            "displayName": "Field Service",
+            "shellId": "inventory",
+            "activeGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
+            "journalGenesisGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce",
+            "tombstoned": false
+          }
+        ],
+        "writeEpoch": "15"
+      },
+      "target": {
+        "appInstanceId": "app_rkbqjvyihejup76zkokregn2v2",
+        "activeGenerationId": "gen_s2allmlsuck55qimca5amkv34f",
+        "lineageEpoch": "0",
+        "protectionRevision": "0",
+        "digestSchema": 1,
+        "stateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900"
+      },
+      "targetReservations": [],
+      "catalogReservations": []
+    },
+    "inventory": {
+      "state": "complete",
+      "catalogPresent": true,
+      "namespaces": [
+        {
+          "storageKey": "default",
+          "userFile": "/user.db",
+          "systemFile": "/system.db",
+          "kind": "legacy"
+        },
+        {
+          "storageKey": "field",
+          "userFile": "/app-field-user.db",
+          "systemFile": "/app-field-system.db",
+          "kind": "legacy"
+        },
+        {
+          "storageKey": "ns_4rvkzhj3ymxbq7xlezmzoihhep",
+          "userFile": "/ns_4rvkzhj3ymxbq7xlezmzoihhep-user.db",
+          "systemFile": "/ns_4rvkzhj3ymxbq7xlezmzoihhep-system.db",
+          "kind": "generation"
+        }
+      ]
+    },
+    "fileNames": [
+      "/app-field-system.db",
+      "/app-field-user.db",
+      "/clay-device-catalog-v1.db",
+      "/ns_4rvkzhj3ymxbq7xlezmzoihhep-system.db",
+      "/ns_4rvkzhj3ymxbq7xlezmzoihhep-user.db",
+      "/system.db",
+      "/user.db"
+    ]
+  },
+  "renamed": {
+    "boot": {
+      "persistent": true,
+      "seeded": true,
+      "shellId": "tracker",
+      "adopted": false,
+      "selectedAppInstanceId": "app_rkbqjvyihejup76zkokregn2v2",
+      "catalogGeneration": "26",
+      "apps": [
+        {
+          "id": "app_hiaiudi6w5vvh4ssnq4g3kw4n7",
+          "name": "Projects",
+          "shellId": "tracker"
+        },
+        {
+          "id": "app_rkbqjvyihejup76zkokregn2v2",
+          "name": "Projects Explorer",
+          "shellId": "tracker"
+        },
+        {
+          "id": "app_sfk75a4xlrvhia45io2soiohby",
+          "name": "Field Service",
+          "shellId": "inventory"
+        }
+      ]
+    },
+    "rows": [
+      {
+        "id": "01a077b3-dae2-7837-a471-4c3d071032ad",
+        "created_at": "2026-09-06T17:11:10.818Z",
+        "updated_at": "2026-09-06T17:11:10.818Z",
+        "name": "Projects row"
+      }
+    ],
+    "evidence": {
+      "catalog": {
+        "schema": 1,
+        "authorityIncarnationId": "auth_gree3okrzptn6esdij4ed7xnht",
+        "catalogGeneration": "26",
+        "selectedAppInstanceId": "app_rkbqjvyihejup76zkokregn2v2",
+        "entries": [
+          {
+            "appInstanceId": "app_hiaiudi6w5vvh4ssnq4g3kw4n7",
+            "displayName": "Projects",
+            "shellId": "tracker",
+            "activeGenerationId": "gen_h4bylhf53nmjyvtip2toy4btqe",
+            "journalGenesisGenerationId": "gen_h4bylhf53nmjyvtip2toy4btqe",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "tombstoned": false
+          },
+          {
+            "appInstanceId": "app_rkbqjvyihejup76zkokregn2v2",
+            "displayName": "Projects Explorer",
+            "shellId": "tracker",
+            "activeGenerationId": "gen_s2allmlsuck55qimca5amkv34f",
+            "journalGenesisGenerationId": "gen_s2allmlsuck55qimca5amkv34f",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "tombstoned": false
+          },
+          {
+            "appInstanceId": "app_sfk75a4xlrvhia45io2soiohby",
+            "displayName": "Field Service",
+            "shellId": "inventory",
+            "activeGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
+            "journalGenesisGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce",
+            "tombstoned": false
+          }
+        ],
+        "writeEpoch": "18"
+      },
+      "target": {
+        "appInstanceId": "app_rkbqjvyihejup76zkokregn2v2",
+        "activeGenerationId": "gen_s2allmlsuck55qimca5amkv34f",
+        "lineageEpoch": "0",
+        "protectionRevision": "0",
+        "digestSchema": 1,
+        "stateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900"
+      },
+      "targetReservations": [],
+      "catalogReservations": []
+    },
+    "inventory": {
+      "state": "complete",
+      "catalogPresent": true,
+      "namespaces": [
+        {
+          "storageKey": "default",
+          "userFile": "/user.db",
+          "systemFile": "/system.db",
+          "kind": "legacy"
+        },
+        {
+          "storageKey": "field",
+          "userFile": "/app-field-user.db",
+          "systemFile": "/app-field-system.db",
+          "kind": "legacy"
+        },
+        {
+          "storageKey": "ns_4rvkzhj3ymxbq7xlezmzoihhep",
+          "userFile": "/ns_4rvkzhj3ymxbq7xlezmzoihhep-user.db",
+          "systemFile": "/ns_4rvkzhj3ymxbq7xlezmzoihhep-system.db",
+          "kind": "generation"
+        }
+      ]
+    },
+    "fileNames": [
+      "/app-field-system.db",
+      "/app-field-user.db",
+      "/clay-device-catalog-v1.db",
+      "/ns_4rvkzhj3ymxbq7xlezmzoihhep-system.db",
+      "/ns_4rvkzhj3ymxbq7xlezmzoihhep-user.db",
+      "/system.db",
+      "/user.db"
+    ]
+  },
+  "created": {
+    "boot": {
+      "persistent": true,
+      "seeded": false,
+      "shellId": null,
+      "adopted": false,
+      "selectedAppInstanceId": "app_dndaizzzu43ss4a6a23ns66v5u",
+      "catalogGeneration": "31",
+      "apps": [
+        {
+          "id": "app_dndaizzzu43ss4a6a23ns66v5u",
+          "name": "Scratch",
+          "shellId": "blank"
+        },
+        {
+          "id": "app_hiaiudi6w5vvh4ssnq4g3kw4n7",
+          "name": "Projects",
+          "shellId": "tracker"
+        },
+        {
+          "id": "app_rkbqjvyihejup76zkokregn2v2",
+          "name": "Projects Explorer",
+          "shellId": "tracker"
+        },
+        {
+          "id": "app_sfk75a4xlrvhia45io2soiohby",
+          "name": "Field Service",
+          "shellId": "inventory"
+        }
+      ]
+    },
+    "rows": [],
+    "evidence": {
+      "catalog": {
+        "schema": 1,
+        "authorityIncarnationId": "auth_gree3okrzptn6esdij4ed7xnht",
+        "catalogGeneration": "31",
+        "selectedAppInstanceId": "app_dndaizzzu43ss4a6a23ns66v5u",
+        "entries": [
+          {
+            "appInstanceId": "app_dndaizzzu43ss4a6a23ns66v5u",
+            "displayName": "Scratch",
+            "shellId": "blank",
+            "activeGenerationId": "gen_cclq7hsiesii63n4zv4jzd6dmm",
+            "journalGenesisGenerationId": "gen_cclq7hsiesii63n4zv4jzd6dmm",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:37093a6fdce1bed26643830c8b3ee4c22ea26635708842eb9d48d51ba79ea93e",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:37093a6fdce1bed26643830c8b3ee4c22ea26635708842eb9d48d51ba79ea93e",
+            "tombstoned": false
+          },
+          {
+            "appInstanceId": "app_hiaiudi6w5vvh4ssnq4g3kw4n7",
+            "displayName": "Projects",
+            "shellId": "tracker",
+            "activeGenerationId": "gen_h4bylhf53nmjyvtip2toy4btqe",
+            "journalGenesisGenerationId": "gen_h4bylhf53nmjyvtip2toy4btqe",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "tombstoned": false
+          },
+          {
+            "appInstanceId": "app_rkbqjvyihejup76zkokregn2v2",
+            "displayName": "Projects Explorer",
+            "shellId": "tracker",
+            "activeGenerationId": "gen_s2allmlsuck55qimca5amkv34f",
+            "journalGenesisGenerationId": "gen_s2allmlsuck55qimca5amkv34f",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "tombstoned": false
+          },
+          {
+            "appInstanceId": "app_sfk75a4xlrvhia45io2soiohby",
+            "displayName": "Field Service",
+            "shellId": "inventory",
+            "activeGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
+            "journalGenesisGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce",
+            "tombstoned": false
+          }
+        ],
+        "writeEpoch": "21"
+      },
+      "target": {
+        "appInstanceId": "app_dndaizzzu43ss4a6a23ns66v5u",
+        "activeGenerationId": "gen_cclq7hsiesii63n4zv4jzd6dmm",
+        "lineageEpoch": "0",
+        "protectionRevision": "0",
+        "digestSchema": 1,
+        "stateSha256": "sha256:37093a6fdce1bed26643830c8b3ee4c22ea26635708842eb9d48d51ba79ea93e"
+      },
+      "targetReservations": [],
+      "catalogReservations": []
+    },
+    "inventory": {
+      "state": "complete",
+      "catalogPresent": true,
+      "namespaces": [
+        {
+          "storageKey": "default",
+          "userFile": "/user.db",
+          "systemFile": "/system.db",
+          "kind": "legacy"
+        },
+        {
+          "storageKey": "field",
+          "userFile": "/app-field-user.db",
+          "systemFile": "/app-field-system.db",
+          "kind": "legacy"
+        },
+        {
+          "storageKey": "ns_4rvkzhj3ymxbq7xlezmzoihhep",
+          "userFile": "/ns_4rvkzhj3ymxbq7xlezmzoihhep-user.db",
+          "systemFile": "/ns_4rvkzhj3ymxbq7xlezmzoihhep-system.db",
+          "kind": "generation"
+        },
+        {
+          "storageKey": "ns_zpg2isyqjh5sbaxohfh3mk3ehz",
+          "userFile": "/ns_zpg2isyqjh5sbaxohfh3mk3ehz-user.db",
+          "systemFile": "/ns_zpg2isyqjh5sbaxohfh3mk3ehz-system.db",
+          "kind": "generation"
+        }
+      ]
+    },
+    "fileNames": [
+      "/app-field-system.db",
+      "/app-field-user.db",
+      "/clay-device-catalog-v1.db",
+      "/ns_4rvkzhj3ymxbq7xlezmzoihhep-system.db",
+      "/ns_4rvkzhj3ymxbq7xlezmzoihhep-user.db",
+      "/ns_zpg2isyqjh5sbaxohfh3mk3ehz-system.db",
+      "/ns_zpg2isyqjh5sbaxohfh3mk3ehz-user.db",
+      "/system.db",
+      "/user.db"
+    ]
+  },
+  "deleted": {
+    "boot": {
+      "persistent": true,
+      "seeded": true,
+      "shellId": "tracker",
+      "adopted": false,
+      "selectedAppInstanceId": "app_hiaiudi6w5vvh4ssnq4g3kw4n7",
+      "catalogGeneration": "38",
+      "apps": [
+        {
+          "id": "app_hiaiudi6w5vvh4ssnq4g3kw4n7",
+          "name": "Projects",
+          "shellId": "tracker"
+        },
+        {
+          "id": "app_rkbqjvyihejup76zkokregn2v2",
+          "name": "Projects Explorer",
+          "shellId": "tracker"
+        },
+        {
+          "id": "app_sfk75a4xlrvhia45io2soiohby",
+          "name": "Field Service",
+          "shellId": "inventory"
+        }
+      ]
+    },
+    "rows": [
+      {
+        "id": "01a077b3-dae2-7837-a471-4c3d071032ad",
+        "created_at": "2026-09-06T17:11:10.818Z",
+        "updated_at": "2026-09-06T17:11:10.818Z",
+        "name": "Projects row"
+      }
+    ],
+    "evidence": {
+      "catalog": {
+        "schema": 1,
+        "authorityIncarnationId": "auth_gree3okrzptn6esdij4ed7xnht",
+        "catalogGeneration": "38",
+        "selectedAppInstanceId": "app_hiaiudi6w5vvh4ssnq4g3kw4n7",
+        "entries": [
+          {
+            "appInstanceId": "app_hiaiudi6w5vvh4ssnq4g3kw4n7",
+            "displayName": "Projects",
+            "shellId": "tracker",
+            "activeGenerationId": "gen_h4bylhf53nmjyvtip2toy4btqe",
+            "journalGenesisGenerationId": "gen_h4bylhf53nmjyvtip2toy4btqe",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "tombstoned": false
+          },
+          {
+            "appInstanceId": "app_rkbqjvyihejup76zkokregn2v2",
+            "displayName": "Projects Explorer",
+            "shellId": "tracker",
+            "activeGenerationId": "gen_s2allmlsuck55qimca5amkv34f",
+            "journalGenesisGenerationId": "gen_s2allmlsuck55qimca5amkv34f",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "tombstoned": false
+          },
+          {
+            "appInstanceId": "app_sfk75a4xlrvhia45io2soiohby",
+            "displayName": "Field Service",
+            "shellId": "inventory",
+            "activeGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
+            "journalGenesisGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce",
+            "tombstoned": false
+          }
+        ],
+        "writeEpoch": "25"
+      },
+      "target": {
+        "appInstanceId": "app_hiaiudi6w5vvh4ssnq4g3kw4n7",
+        "activeGenerationId": "gen_h4bylhf53nmjyvtip2toy4btqe",
+        "lineageEpoch": "0",
+        "protectionRevision": "0",
+        "digestSchema": 1,
+        "stateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900"
+      },
+      "targetReservations": [],
+      "catalogReservations": []
+    },
+    "inventory": {
+      "state": "complete",
+      "catalogPresent": true,
+      "namespaces": [
+        {
+          "storageKey": "default",
+          "userFile": "/user.db",
+          "systemFile": "/system.db",
+          "kind": "legacy"
+        },
+        {
+          "storageKey": "field",
+          "userFile": "/app-field-user.db",
+          "systemFile": "/app-field-system.db",
+          "kind": "legacy"
+        },
+        {
+          "storageKey": "ns_4rvkzhj3ymxbq7xlezmzoihhep",
+          "userFile": "/ns_4rvkzhj3ymxbq7xlezmzoihhep-user.db",
+          "systemFile": "/ns_4rvkzhj3ymxbq7xlezmzoihhep-system.db",
+          "kind": "generation"
+        }
+      ]
+    },
+    "fileNames": [
+      "/app-field-system.db",
+      "/app-field-user.db",
+      "/clay-device-catalog-v1.db",
+      "/ns_4rvkzhj3ymxbq7xlezmzoihhep-system.db",
+      "/ns_4rvkzhj3ymxbq7xlezmzoihhep-user.db",
+      "/system.db",
+      "/user.db"
+    ]
+  },
+  "resetApp": {
+    "boot": {
+      "persistent": true,
+      "seeded": false,
+      "shellId": null,
+      "adopted": false,
+      "selectedAppInstanceId": "app_q4m45gjriizivsxbg6y77qumhs",
+      "catalogGeneration": "46",
+      "apps": [
+        {
+          "id": "app_q4m45gjriizivsxbg6y77qumhs",
+          "name": "Projects",
+          "shellId": "tracker"
+        },
+        {
+          "id": "app_rkbqjvyihejup76zkokregn2v2",
+          "name": "Projects Explorer",
+          "shellId": "tracker"
+        },
+        {
+          "id": "app_sfk75a4xlrvhia45io2soiohby",
+          "name": "Field Service",
+          "shellId": "inventory"
+        }
+      ]
+    },
+    "rows": [],
+    "evidence": {
+      "catalog": {
+        "schema": 1,
+        "authorityIncarnationId": "auth_gree3okrzptn6esdij4ed7xnht",
+        "catalogGeneration": "46",
+        "selectedAppInstanceId": "app_q4m45gjriizivsxbg6y77qumhs",
+        "entries": [
+          {
+            "appInstanceId": "app_q4m45gjriizivsxbg6y77qumhs",
+            "displayName": "Projects",
+            "shellId": "tracker",
+            "activeGenerationId": "gen_u7lxlw4yes3tbwl6t6zfljtoep",
+            "journalGenesisGenerationId": "gen_u7lxlw4yes3tbwl6t6zfljtoep",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:37093a6fdce1bed26643830c8b3ee4c22ea26635708842eb9d48d51ba79ea93e",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:37093a6fdce1bed26643830c8b3ee4c22ea26635708842eb9d48d51ba79ea93e",
+            "tombstoned": false
+          },
+          {
+            "appInstanceId": "app_rkbqjvyihejup76zkokregn2v2",
+            "displayName": "Projects Explorer",
+            "shellId": "tracker",
+            "activeGenerationId": "gen_s2allmlsuck55qimca5amkv34f",
+            "journalGenesisGenerationId": "gen_s2allmlsuck55qimca5amkv34f",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "tombstoned": false
+          },
+          {
+            "appInstanceId": "app_sfk75a4xlrvhia45io2soiohby",
+            "displayName": "Field Service",
+            "shellId": "inventory",
+            "activeGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
+            "journalGenesisGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce",
+            "tombstoned": false
+          }
+        ],
+        "writeEpoch": "29"
+      },
+      "target": {
+        "appInstanceId": "app_q4m45gjriizivsxbg6y77qumhs",
+        "activeGenerationId": "gen_u7lxlw4yes3tbwl6t6zfljtoep",
+        "lineageEpoch": "0",
+        "protectionRevision": "0",
+        "digestSchema": 1,
+        "stateSha256": "sha256:37093a6fdce1bed26643830c8b3ee4c22ea26635708842eb9d48d51ba79ea93e"
+      },
+      "targetReservations": [],
+      "catalogReservations": []
+    },
+    "inventory": {
+      "state": "complete",
+      "catalogPresent": true,
+      "namespaces": [
+        {
+          "storageKey": "field",
+          "userFile": "/app-field-user.db",
+          "systemFile": "/app-field-system.db",
+          "kind": "legacy"
+        },
+        {
+          "storageKey": "ns_4rvkzhj3ymxbq7xlezmzoihhep",
+          "userFile": "/ns_4rvkzhj3ymxbq7xlezmzoihhep-user.db",
+          "systemFile": "/ns_4rvkzhj3ymxbq7xlezmzoihhep-system.db",
+          "kind": "generation"
+        },
+        {
+          "storageKey": "ns_yfowebpxmu32dkplo44eotdgor",
+          "userFile": "/ns_yfowebpxmu32dkplo44eotdgor-user.db",
+          "systemFile": "/ns_yfowebpxmu32dkplo44eotdgor-system.db",
+          "kind": "generation"
+        }
+      ]
+    },
+    "fileNames": [
+      "/app-field-system.db",
+      "/app-field-user.db",
+      "/clay-device-catalog-v1.db",
+      "/ns_4rvkzhj3ymxbq7xlezmzoihhep-system.db",
+      "/ns_4rvkzhj3ymxbq7xlezmzoihhep-user.db",
+      "/ns_yfowebpxmu32dkplo44eotdgor-system.db",
+      "/ns_yfowebpxmu32dkplo44eotdgor-user.db"
+    ]
+  },
+  "pendingCreate": {
+    "job": {
+      "schema": 1,
+      "kind": "create",
+      "jobId": "job_a3e5n7zl6wbnpyxbmiqjqzuzui",
+      "authorityIncarnationId": "auth_gree3okrzptn6esdij4ed7xnht",
+      "operationId": "op_a3e5n7zl6wbnpyxbmiqjqzuzui",
+      "requestSha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "declaredCatalogGeneration": "48",
+      "expectedTarget": {
+        "appInstanceId": "app_q4m45gjriizivsxbg6y77qumhs",
+        "activeGenerationId": "gen_u7lxlw4yes3tbwl6t6zfljtoep",
+        "lineageEpoch": "0",
+        "protectionRevision": "0",
+        "digestSchema": 1,
+        "stateSha256": "sha256:37093a6fdce1bed26643830c8b3ee4c22ea26635708842eb9d48d51ba79ea93e"
+      },
+      "target": {
+        "appInstanceId": "app_my4p6ldo4xwrlpe472gvh7fkuh",
+        "generationId": "gen_5yqp7vf5dtrdnzi2ifxqauvlvx",
+        "namespaceId": "ns_lis6ywipbi6p7weemtvvlx5pqv",
+        "storageKey": "ns_lis6ywipbi6p7weemtvvlx5pqv",
+        "userFile": "/ns_lis6ywipbi6p7weemtvvlx5pqv-user.db",
+        "systemFile": "/ns_lis6ywipbi6p7weemtvvlx5pqv-system.db",
+        "storageKind": "generation",
+        "displayName": "Recovered Create",
+        "shellId": "blank"
+      },
+      "createdAt": "2026-09-06T17:11:22.799Z"
+    },
+    "inventory": {
+      "state": "complete",
+      "catalogPresent": true,
+      "namespaces": [
+        {
+          "storageKey": "field",
+          "userFile": "/app-field-user.db",
+          "systemFile": "/app-field-system.db",
+          "kind": "legacy"
+        },
+        {
+          "storageKey": "ns_4rvkzhj3ymxbq7xlezmzoihhep",
+          "userFile": "/ns_4rvkzhj3ymxbq7xlezmzoihhep-user.db",
+          "systemFile": "/ns_4rvkzhj3ymxbq7xlezmzoihhep-system.db",
+          "kind": "generation"
+        },
+        {
+          "storageKey": "ns_yfowebpxmu32dkplo44eotdgor",
+          "userFile": "/ns_yfowebpxmu32dkplo44eotdgor-user.db",
+          "systemFile": "/ns_yfowebpxmu32dkplo44eotdgor-system.db",
+          "kind": "generation"
+        }
+      ]
+    }
+  },
+  "partialPendingTarget": {
+    "inventory": {
+      "state": "complete",
+      "catalogPresent": true,
+      "namespaces": [
+        {
+          "storageKey": "field",
+          "userFile": "/app-field-user.db",
+          "systemFile": "/app-field-system.db",
+          "kind": "legacy"
+        },
+        {
+          "storageKey": "ns_4rvkzhj3ymxbq7xlezmzoihhep",
+          "userFile": "/ns_4rvkzhj3ymxbq7xlezmzoihhep-user.db",
+          "systemFile": "/ns_4rvkzhj3ymxbq7xlezmzoihhep-system.db",
+          "kind": "generation"
+        },
+        {
+          "storageKey": "ns_lis6ywipbi6p7weemtvvlx5pqv",
+          "userFile": "/ns_lis6ywipbi6p7weemtvvlx5pqv-user.db",
+          "systemFile": "/ns_lis6ywipbi6p7weemtvvlx5pqv-system.db",
+          "kind": "generation"
+        },
+        {
+          "storageKey": "ns_yfowebpxmu32dkplo44eotdgor",
+          "userFile": "/ns_yfowebpxmu32dkplo44eotdgor-user.db",
+          "systemFile": "/ns_yfowebpxmu32dkplo44eotdgor-system.db",
+          "kind": "generation"
+        }
+      ]
+    },
+    "fileNames": [
+      "/app-field-system.db",
+      "/app-field-user.db",
+      "/clay-device-catalog-v1.db",
+      "/ns_4rvkzhj3ymxbq7xlezmzoihhep-system.db",
+      "/ns_4rvkzhj3ymxbq7xlezmzoihhep-user.db",
+      "/ns_lis6ywipbi6p7weemtvvlx5pqv-system.db",
+      "/ns_lis6ywipbi6p7weemtvvlx5pqv-user.db",
+      "/ns_yfowebpxmu32dkplo44eotdgor-system.db",
+      "/ns_yfowebpxmu32dkplo44eotdgor-user.db"
+    ]
+  },
+  "recoveredCreate": {
+    "boot": {
+      "persistent": true,
+      "seeded": false,
+      "shellId": null,
+      "adopted": false,
+      "selectedAppInstanceId": "app_my4p6ldo4xwrlpe472gvh7fkuh",
+      "catalogGeneration": "51",
+      "apps": [
+        {
+          "id": "app_my4p6ldo4xwrlpe472gvh7fkuh",
+          "name": "Recovered Create",
+          "shellId": "blank"
+        },
+        {
+          "id": "app_q4m45gjriizivsxbg6y77qumhs",
+          "name": "Projects",
+          "shellId": "tracker"
+        },
+        {
+          "id": "app_rkbqjvyihejup76zkokregn2v2",
+          "name": "Projects Explorer",
+          "shellId": "tracker"
+        },
+        {
+          "id": "app_sfk75a4xlrvhia45io2soiohby",
+          "name": "Field Service",
+          "shellId": "inventory"
+        }
+      ]
+    },
+    "rows": [],
+    "evidence": {
+      "catalog": {
+        "schema": 1,
+        "authorityIncarnationId": "auth_gree3okrzptn6esdij4ed7xnht",
+        "catalogGeneration": "51",
+        "selectedAppInstanceId": "app_my4p6ldo4xwrlpe472gvh7fkuh",
+        "entries": [
+          {
+            "appInstanceId": "app_my4p6ldo4xwrlpe472gvh7fkuh",
+            "displayName": "Recovered Create",
+            "shellId": "blank",
+            "activeGenerationId": "gen_5yqp7vf5dtrdnzi2ifxqauvlvx",
+            "journalGenesisGenerationId": "gen_5yqp7vf5dtrdnzi2ifxqauvlvx",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:37093a6fdce1bed26643830c8b3ee4c22ea26635708842eb9d48d51ba79ea93e",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:37093a6fdce1bed26643830c8b3ee4c22ea26635708842eb9d48d51ba79ea93e",
+            "tombstoned": false
+          },
+          {
+            "appInstanceId": "app_q4m45gjriizivsxbg6y77qumhs",
+            "displayName": "Projects",
+            "shellId": "tracker",
+            "activeGenerationId": "gen_u7lxlw4yes3tbwl6t6zfljtoep",
+            "journalGenesisGenerationId": "gen_u7lxlw4yes3tbwl6t6zfljtoep",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:37093a6fdce1bed26643830c8b3ee4c22ea26635708842eb9d48d51ba79ea93e",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:37093a6fdce1bed26643830c8b3ee4c22ea26635708842eb9d48d51ba79ea93e",
+            "tombstoned": false
+          },
+          {
+            "appInstanceId": "app_rkbqjvyihejup76zkokregn2v2",
+            "displayName": "Projects Explorer",
+            "shellId": "tracker",
+            "activeGenerationId": "gen_s2allmlsuck55qimca5amkv34f",
+            "journalGenesisGenerationId": "gen_s2allmlsuck55qimca5amkv34f",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "tombstoned": false
+          },
+          {
+            "appInstanceId": "app_sfk75a4xlrvhia45io2soiohby",
+            "displayName": "Field Service",
+            "shellId": "inventory",
+            "activeGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
+            "journalGenesisGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce",
+            "tombstoned": false
+          }
+        ],
+        "writeEpoch": "32"
+      },
+      "target": {
+        "appInstanceId": "app_my4p6ldo4xwrlpe472gvh7fkuh",
+        "activeGenerationId": "gen_5yqp7vf5dtrdnzi2ifxqauvlvx",
+        "lineageEpoch": "0",
+        "protectionRevision": "0",
+        "digestSchema": 1,
+        "stateSha256": "sha256:37093a6fdce1bed26643830c8b3ee4c22ea26635708842eb9d48d51ba79ea93e"
+      },
+      "targetReservations": [],
+      "catalogReservations": []
+    }
+  },
+  "pendingDelete": {
+    "deleted": {
+      "snapshot": {
+        "schema": 1,
+        "authorityIncarnationId": "auth_gree3okrzptn6esdij4ed7xnht",
+        "catalogGeneration": "54",
+        "selectedAppInstanceId": "app_q4m45gjriizivsxbg6y77qumhs",
+        "entries": [
+          {
+            "appInstanceId": "app_q4m45gjriizivsxbg6y77qumhs",
+            "displayName": "Projects",
+            "shellId": "tracker",
+            "activeGenerationId": "gen_u7lxlw4yes3tbwl6t6zfljtoep",
+            "journalGenesisGenerationId": "gen_u7lxlw4yes3tbwl6t6zfljtoep",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:37093a6fdce1bed26643830c8b3ee4c22ea26635708842eb9d48d51ba79ea93e",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:37093a6fdce1bed26643830c8b3ee4c22ea26635708842eb9d48d51ba79ea93e",
+            "tombstoned": false
+          },
+          {
+            "appInstanceId": "app_rkbqjvyihejup76zkokregn2v2",
+            "displayName": "Projects Explorer",
+            "shellId": "tracker",
+            "activeGenerationId": "gen_s2allmlsuck55qimca5amkv34f",
+            "journalGenesisGenerationId": "gen_s2allmlsuck55qimca5amkv34f",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "tombstoned": false
+          },
+          {
+            "appInstanceId": "app_sfk75a4xlrvhia45io2soiohby",
+            "displayName": "Field Service",
+            "shellId": "inventory",
+            "activeGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
+            "journalGenesisGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce",
+            "tombstoned": false
+          }
+        ],
+        "writeEpoch": "33"
+      },
+      "cleanupJob": {
+        "schema": 1,
+        "kind": "cleanup",
+        "jobId": "job_eaz3qkkt6hw5akgl7oqhmalzr7",
+        "authorityIncarnationId": "auth_gree3okrzptn6esdij4ed7xnht",
+        "operationId": "op_eaz3qkkt6hw5akgl7oqhmalzr7",
+        "requestSha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "declaredCatalogGeneration": "54",
+        "expectedTarget": {
+          "appInstanceId": "app_q4m45gjriizivsxbg6y77qumhs",
+          "activeGenerationId": "gen_u7lxlw4yes3tbwl6t6zfljtoep",
+          "lineageEpoch": "0",
+          "protectionRevision": "0",
+          "digestSchema": 1,
+          "stateSha256": "sha256:37093a6fdce1bed26643830c8b3ee4c22ea26635708842eb9d48d51ba79ea93e"
+        },
+        "target": {
+          "appInstanceId": "app_my4p6ldo4xwrlpe472gvh7fkuh",
+          "generationId": "gen_5yqp7vf5dtrdnzi2ifxqauvlvx",
+          "namespaceId": "ns_lis6ywipbi6p7weemtvvlx5pqv",
+          "storageKey": "ns_lis6ywipbi6p7weemtvvlx5pqv",
+          "userFile": "/ns_lis6ywipbi6p7weemtvvlx5pqv-user.db",
+          "systemFile": "/ns_lis6ywipbi6p7weemtvvlx5pqv-system.db",
+          "storageKind": "generation",
+          "displayName": "Recovered Create",
+          "shellId": "blank"
+        },
+        "createdAt": "2026-09-06T17:11:24.606Z"
+      }
+    },
+    "inventory": {
+      "state": "complete",
+      "catalogPresent": true,
+      "namespaces": [
+        {
+          "storageKey": "field",
+          "userFile": "/app-field-user.db",
+          "systemFile": "/app-field-system.db",
+          "kind": "legacy"
+        },
+        {
+          "storageKey": "ns_4rvkzhj3ymxbq7xlezmzoihhep",
+          "userFile": "/ns_4rvkzhj3ymxbq7xlezmzoihhep-user.db",
+          "systemFile": "/ns_4rvkzhj3ymxbq7xlezmzoihhep-system.db",
+          "kind": "generation"
+        },
+        {
+          "storageKey": "ns_lis6ywipbi6p7weemtvvlx5pqv",
+          "userFile": "/ns_lis6ywipbi6p7weemtvvlx5pqv-user.db",
+          "systemFile": "/ns_lis6ywipbi6p7weemtvvlx5pqv-system.db",
+          "kind": "generation"
+        },
+        {
+          "storageKey": "ns_yfowebpxmu32dkplo44eotdgor",
+          "userFile": "/ns_yfowebpxmu32dkplo44eotdgor-user.db",
+          "systemFile": "/ns_yfowebpxmu32dkplo44eotdgor-system.db",
+          "kind": "generation"
+        }
+      ]
+    }
+  },
+  "recoveredDelete": {
+    "boot": {
+      "persistent": true,
+      "seeded": false,
+      "shellId": null,
+      "adopted": false,
+      "selectedAppInstanceId": "app_q4m45gjriizivsxbg6y77qumhs",
+      "catalogGeneration": "57",
+      "apps": [
+        {
+          "id": "app_q4m45gjriizivsxbg6y77qumhs",
+          "name": "Projects",
+          "shellId": "tracker"
+        },
+        {
+          "id": "app_rkbqjvyihejup76zkokregn2v2",
+          "name": "Projects Explorer",
+          "shellId": "tracker"
+        },
+        {
+          "id": "app_sfk75a4xlrvhia45io2soiohby",
+          "name": "Field Service",
+          "shellId": "inventory"
+        }
+      ]
+    },
+    "rows": [],
+    "evidence": {
+      "catalog": {
+        "schema": 1,
+        "authorityIncarnationId": "auth_gree3okrzptn6esdij4ed7xnht",
+        "catalogGeneration": "57",
+        "selectedAppInstanceId": "app_q4m45gjriizivsxbg6y77qumhs",
+        "entries": [
+          {
+            "appInstanceId": "app_q4m45gjriizivsxbg6y77qumhs",
+            "displayName": "Projects",
+            "shellId": "tracker",
+            "activeGenerationId": "gen_u7lxlw4yes3tbwl6t6zfljtoep",
+            "journalGenesisGenerationId": "gen_u7lxlw4yes3tbwl6t6zfljtoep",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:37093a6fdce1bed26643830c8b3ee4c22ea26635708842eb9d48d51ba79ea93e",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:37093a6fdce1bed26643830c8b3ee4c22ea26635708842eb9d48d51ba79ea93e",
+            "tombstoned": false
+          },
+          {
+            "appInstanceId": "app_rkbqjvyihejup76zkokregn2v2",
+            "displayName": "Projects Explorer",
+            "shellId": "tracker",
+            "activeGenerationId": "gen_s2allmlsuck55qimca5amkv34f",
+            "journalGenesisGenerationId": "gen_s2allmlsuck55qimca5amkv34f",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+            "tombstoned": false
+          },
+          {
+            "appInstanceId": "app_sfk75a4xlrvhia45io2soiohby",
+            "displayName": "Field Service",
+            "shellId": "inventory",
+            "activeGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
+            "journalGenesisGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
+            "journalGenesisLineageEpoch": "0",
+            "journalGenesisProtectionRevision": "0",
+            "journalGenesisStateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce",
+            "currentLineageEpoch": "0",
+            "lineageEpochHighWater": "0",
+            "currentProtectionRevision": "0",
+            "revisionHighWater": "0",
+            "digestSchema": 1,
+            "stateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce",
+            "tombstoned": false
+          }
+        ],
+        "writeEpoch": "35"
+      },
+      "target": {
+        "appInstanceId": "app_q4m45gjriizivsxbg6y77qumhs",
+        "activeGenerationId": "gen_u7lxlw4yes3tbwl6t6zfljtoep",
+        "lineageEpoch": "0",
+        "protectionRevision": "0",
+        "digestSchema": 1,
+        "stateSha256": "sha256:37093a6fdce1bed26643830c8b3ee4c22ea26635708842eb9d48d51ba79ea93e"
+      },
+      "targetReservations": [],
+      "catalogReservations": []
+    }
+  },
+  "final": {
+    "inventory": {
+      "state": "complete",
+      "catalogPresent": true,
+      "namespaces": [
+        {
+          "storageKey": "field",
+          "userFile": "/app-field-user.db",
+          "systemFile": "/app-field-system.db",
+          "kind": "legacy"
+        },
+        {
+          "storageKey": "ns_4rvkzhj3ymxbq7xlezmzoihhep",
+          "userFile": "/ns_4rvkzhj3ymxbq7xlezmzoihhep-user.db",
+          "systemFile": "/ns_4rvkzhj3ymxbq7xlezmzoihhep-system.db",
+          "kind": "generation"
+        },
+        {
+          "storageKey": "ns_yfowebpxmu32dkplo44eotdgor",
+          "userFile": "/ns_yfowebpxmu32dkplo44eotdgor-user.db",
+          "systemFile": "/ns_yfowebpxmu32dkplo44eotdgor-system.db",
+          "kind": "generation"
+        }
+      ]
+    },
+    "fileNames": [
+      "/app-field-system.db",
+      "/app-field-user.db",
+      "/clay-device-catalog-v1.db",
+      "/ns_4rvkzhj3ymxbq7xlezmzoihhep-system.db",
+      "/ns_4rvkzhj3ymxbq7xlezmzoihhep-user.db",
+      "/ns_yfowebpxmu32dkplo44eotdgor-system.db",
+      "/ns_yfowebpxmu32dkplo44eotdgor-user.db"
+    ],
     "catalog": {
       "schema": 1,
-      "authorityIncarnationId": "auth_hdheo7ktfjuohvpyjqn26khqfa",
-      "catalogGeneration": "7",
-      "selectedAppInstanceId": "app_t354i3hxfs2bc3be7wizzr2vvn",
+      "authorityIncarnationId": "auth_gree3okrzptn6esdij4ed7xnht",
+      "catalogGeneration": "57",
+      "selectedAppInstanceId": "app_q4m45gjriizivsxbg6y77qumhs",
       "entries": [
         {
-          "appInstanceId": "app_5rgfdlev555dzghvmxf5le3axv",
-          "displayName": "Field Service",
-          "shellId": "inventory",
-          "activeGenerationId": "gen_qzwnhhvqghttpuzgobsiv53rp7",
-          "journalGenesisGenerationId": "gen_qzwnhhvqghttpuzgobsiv53rp7",
+          "appInstanceId": "app_q4m45gjriizivsxbg6y77qumhs",
+          "displayName": "Projects",
+          "shellId": "tracker",
+          "activeGenerationId": "gen_u7lxlw4yes3tbwl6t6zfljtoep",
+          "journalGenesisGenerationId": "gen_u7lxlw4yes3tbwl6t6zfljtoep",
           "journalGenesisLineageEpoch": "0",
           "journalGenesisProtectionRevision": "0",
-          "journalGenesisStateSha256": "sha256:c14999873b1057a2f06ad7ad151c7e727625d0517419421b48208e8dead4bf9e",
+          "journalGenesisStateSha256": "sha256:37093a6fdce1bed26643830c8b3ee4c22ea26635708842eb9d48d51ba79ea93e",
           "currentLineageEpoch": "0",
           "lineageEpochHighWater": "0",
           "currentProtectionRevision": "0",
           "revisionHighWater": "0",
           "digestSchema": 1,
-          "stateSha256": "sha256:c14999873b1057a2f06ad7ad151c7e727625d0517419421b48208e8dead4bf9e",
+          "stateSha256": "sha256:37093a6fdce1bed26643830c8b3ee4c22ea26635708842eb9d48d51ba79ea93e",
           "tombstoned": false
         },
         {
-          "appInstanceId": "app_t354i3hxfs2bc3be7wizzr2vvn",
-          "displayName": "Projects",
+          "appInstanceId": "app_rkbqjvyihejup76zkokregn2v2",
+          "displayName": "Projects Explorer",
           "shellId": "tracker",
-          "activeGenerationId": "gen_zstwzbjbtokvdpoag263h6rkew",
-          "journalGenesisGenerationId": "gen_zstwzbjbtokvdpoag263h6rkew",
+          "activeGenerationId": "gen_s2allmlsuck55qimca5amkv34f",
+          "journalGenesisGenerationId": "gen_s2allmlsuck55qimca5amkv34f",
           "journalGenesisLineageEpoch": "0",
           "journalGenesisProtectionRevision": "0",
-          "journalGenesisStateSha256": "sha256:42f68168b6f7854ea2f637548bf39e347a25e0f4c5c73fa595315c2d5be38d3b",
+          "journalGenesisStateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
           "currentLineageEpoch": "0",
           "lineageEpochHighWater": "0",
           "currentProtectionRevision": "0",
           "revisionHighWater": "0",
           "digestSchema": 1,
-          "stateSha256": "sha256:42f68168b6f7854ea2f637548bf39e347a25e0f4c5c73fa595315c2d5be38d3b",
+          "stateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900",
+          "tombstoned": false
+        },
+        {
+          "appInstanceId": "app_sfk75a4xlrvhia45io2soiohby",
+          "displayName": "Field Service",
+          "shellId": "inventory",
+          "activeGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
+          "journalGenesisGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
+          "journalGenesisLineageEpoch": "0",
+          "journalGenesisProtectionRevision": "0",
+          "journalGenesisStateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce",
+          "currentLineageEpoch": "0",
+          "lineageEpochHighWater": "0",
+          "currentProtectionRevision": "0",
+          "revisionHighWater": "0",
+          "digestSchema": 1,
+          "stateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce",
           "tombstoned": false
         }
       ],
-      "writeEpoch": "4"
+      "writeEpoch": "35"
     },
     "manifest": [],
+    "lifecycleJobs": [],
     "activeStorage": [
       {
         "target": {
-          "appInstanceId": "app_5rgfdlev555dzghvmxf5le3axv",
-          "activeGenerationId": "gen_qzwnhhvqghttpuzgobsiv53rp7",
+          "appInstanceId": "app_q4m45gjriizivsxbg6y77qumhs",
+          "activeGenerationId": "gen_u7lxlw4yes3tbwl6t6zfljtoep",
           "lineageEpoch": "0",
           "protectionRevision": "0",
           "digestSchema": 1,
-          "stateSha256": "sha256:c14999873b1057a2f06ad7ad151c7e727625d0517419421b48208e8dead4bf9e"
+          "stateSha256": "sha256:37093a6fdce1bed26643830c8b3ee4c22ea26635708842eb9d48d51ba79ea93e"
         },
-        "namespaceId": "ns_k3detjxkcz5yj6r2txxjeufck3",
-        "storageKey": "field"
+        "namespaceId": "ns_yfowebpxmu32dkplo44eotdgor",
+        "storageKey": "ns_yfowebpxmu32dkplo44eotdgor"
       },
       {
         "target": {
-          "appInstanceId": "app_t354i3hxfs2bc3be7wizzr2vvn",
-          "activeGenerationId": "gen_zstwzbjbtokvdpoag263h6rkew",
+          "appInstanceId": "app_rkbqjvyihejup76zkokregn2v2",
+          "activeGenerationId": "gen_s2allmlsuck55qimca5amkv34f",
           "lineageEpoch": "0",
           "protectionRevision": "0",
           "digestSchema": 1,
-          "stateSha256": "sha256:42f68168b6f7854ea2f637548bf39e347a25e0f4c5c73fa595315c2d5be38d3b"
+          "stateSha256": "sha256:a9d5b8c25bee1031217f452bf87cf23de67121b8d9406a49599476f3cc056900"
         },
-        "namespaceId": "ns_gje3dbfiuxpbkogmjqgzbnal4x",
-        "storageKey": "default"
+        "namespaceId": "ns_4rvkzhj3ymxbq7xlezmzoihhep",
+        "storageKey": "ns_4rvkzhj3ymxbq7xlezmzoihhep"
+      },
+      {
+        "target": {
+          "appInstanceId": "app_sfk75a4xlrvhia45io2soiohby",
+          "activeGenerationId": "gen_mwgaic5qsrd5sbxy7yzuvgteuy",
+          "lineageEpoch": "0",
+          "protectionRevision": "0",
+          "digestSchema": 1,
+          "stateSha256": "sha256:9fff0878ac3fc8045149b65c51c0f11e54e4a87c152709b2f2f61ea6a332d7ce"
+        },
+        "namespaceId": "ns_3ytvjw5mocxfmccj55p25atqjd",
+        "storageKey": "field"
       }
     ]
   },
@@ -435,7 +1961,8 @@
   "consoleErrors": [],
   "limitations": [
     "Chromium OPFS only; other durable runtimes remain uncertified.",
-    "The interruption is between committed adoption transactions, not during native SQLite COMMIT.",
-    "This certifies catalog-first boot/adoption/switch only, not complete production write routing or Release B."
+    "Injected crashes are process-boundary gaps between committed catalog/physical phases, not during native SQLite COMMIT.",
+    "Archive export/import/createImportedApp remain fail-closed and require archive-format-5 authority evidence, staged validation, and worker-owned target reconstruction.",
+    "This is a production-browser lifecycle slice, not a Release B certificate."
   ]
 }

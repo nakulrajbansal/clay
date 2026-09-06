@@ -18,8 +18,8 @@ import { Onboarding } from "./Onboarding";
 import { TimeSlider } from "./TimeSlider";
 import { AppSwitcher } from "./AppSwitcher";
 import {
-  addForkEntry, createApp, currentApp, currentAppId, deriveAppName, listApps,
-  removeApp, renameApp, replaceAppCache, setCurrentApp, shellName, type AppEntry,
+  currentApp, currentAppId, deriveAppName, listApps,
+  replaceAppCache, shellName, type AppEntry,
 } from "./apps";
 import {
   THEMES, applyThemeToRoot, getThemeId, panelThemeCss, setThemeId as saveThemeId, themeById,
@@ -64,20 +64,6 @@ function durationBucket(ms: number): "under_3m" | "3_to_10m" | "10_to_30m" | "ov
   return "over_30m";
 }
 
-async function wipeOpfsWithoutWorker(): Promise<void> {
-  type IterableDirectory = {
-    entries: () => AsyncIterableIterator<[string, unknown]>;
-    removeEntry: (name: string, options?: { recursive?: boolean }) => Promise<void>;
-  };
-  const storage = navigator.storage;
-  const getDirectory = (storage as unknown as {
-    getDirectory?: () => Promise<IterableDirectory>;
-  }).getDirectory;
-  if (!getDirectory) return;
-  const root = await getDirectory.call(storage);
-  for await (const [name] of root.entries())
-    await root.removeEntry(name, { recursive: true });
-}
 
 async function prepareWorkerModelAccess(
   access: ReturnType<typeof getActiveModelAccess>,
@@ -150,6 +136,7 @@ function makeBridge(client: WorkerClient, target: "live" | "shadow",
 
 export function App(): React.JSX.Element {
   const workerRef = useRef<WorkerClient | null>(null);
+  const onboardingCreatesApp = useRef(false);
   const appReadyAt = useRef(Date.now());
   const activationRecorded = useRef(false);
   const firstKeepAt = useRef<number | null>(null);
@@ -394,7 +381,8 @@ export function App(): React.JSX.Element {
           appCache: cache,
         }), 20_000, "Opening the app");
         replaceAppCache(boot.apps, boot.selectedAppInstanceId);
-        const activeApp = boot.apps.find(app => app.id === boot.selectedAppInstanceId)!;
+        setApps(boot.apps);
+        setCurrentId(boot.selectedAppInstanceId);
         setPersistent(boot.persistent);
 
         // Device-global model access (B1): migrate any legacy per-app key up
@@ -425,17 +413,10 @@ export function App(): React.JSX.Element {
         setHasKey(hasModelAccess());
 
         if (!boot.seeded) {
-          if (cache.length > 0) {
-            // a freshly created additional app pending its first seed
-            await withTimeout(wc.seed(activeApp.shellId as StarterShellId),
-              20_000, "Setting up the app");
-          } else {
-            setPhase("onboarding");         // first run ever — pick a template
-            return;
-          }
+          onboardingCreatesApp.current = false;
+          setPhase("onboarding");
+          return;
         }
-        setApps(boot.apps);
-        setCurrentId(boot.selectedAppInstanceId);
         setLiveBridge(makeBridge(wc, "live", pushToast, recordFault, askConfirm,
           (table, id) => openRecordRef.current(table, id)));
         const [bootPanels, bootHistory, bootTables, bootSuggestions, bootProvenance,
@@ -468,24 +449,27 @@ export function App(): React.JSX.Element {
 
   const pickShell = async (id: StarterShellId): Promise<void> => {
     setBusy(true);
-    const first = listApps().length === 0;
-    createApp(shellName(id), id);
-    if (first) {
-      // the worker already holds this app's (empty, "default") files open
-      await client().seed(id);
-      setApps(listApps());
-      setCurrentId(currentApp()?.id ?? null);
-      setLiveBridge(makeBridge(client(), "live", pushToast, recordFault, askConfirm,
-        (table, id) => openRecordRef.current(table, id)));
-      await refreshPanels();
-      setFeed([{ kind: "info", text: "Your app is ready. Describe any change to reshape it." }]);
-      setBusy(false);
-      setPhase("main");
-      recordPrivateMetric({ type: "app_ready", entry: "new_starter" });
-    } else {
-      // an additional app: reboot so the worker opens its own files, then seed
+    try {
+      const projection = onboardingCreatesApp.current
+        ? await withTimeout(client().createApp(shellName(id), id),
+          20_000, "Creating the app")
+        : await withTimeout(client().renameApp(
+          currentId ?? projectionAppId(), shellName(id), id,
+        ), 20_000, "Preparing the app");
+      replaceAppCache(projection.apps, projection.selectedAppInstanceId);
+      await withTimeout(client().seed(id), 20_000, "Setting up the app");
       reloadApp();
+    } catch (error) {
+      pushToast(error instanceof Error ? error.message : "Couldn’t create this app.", "danger");
+      setBusy(false);
     }
+  };
+
+  const projectionAppId = (): string => {
+    const selected = currentId ?? currentAppId();
+    if (!selected || !/^app_[a-z2-7]{26}$/.test(selected))
+      throw new Error("authoritative app selection is unavailable");
+    return selected;
   };
 
   // Reload after terminating the worker so the next one can re-acquire the
@@ -494,31 +478,53 @@ export function App(): React.JSX.Element {
     try { workerRef.current?.terminate(); } catch { /* ignore */ }
     setTimeout(() => window.location.reload(), 150);
   };
-  const switchApp = (id: string): void => { setCurrentApp(id); reloadApp(); };
-  const newApp = (): void => setPhase("onboarding");
-  // B5 fork-and-explore: duplicate the current app (data + history + panels)
-  // into a new one, then switch to it — experiment freely without risking the
-  // original. Uses the validated .clay export/import path in the worker.
-  const forkApp = async (): Promise<void> => {
-    const cur = currentApp();
-    const entry = addForkEntry(`${cur?.name ?? "My app"} (copy)`, cur?.shellId ?? "blank");
+  const switchApp = async (id: string): Promise<void> => {
     try {
-      await withTimeout(client().forkApp(entry.id), 20000, "Duplicating the app");
-    } catch {
-      removeApp(entry.id);
-      pushToast("Couldn’t duplicate this app.", "danger");
-      return;
+      const projection = await withTimeout(client().switchApp(id), 20_000, "Switching apps");
+      replaceAppCache(projection.apps, projection.selectedAppInstanceId);
+      reloadApp();
+    } catch (error) {
+      pushToast(error instanceof Error ? error.message : "Couldn’t switch apps.", "danger");
     }
-    reloadApp();   // boot the fork (its OPFS files are now populated)
+  };
+  const newApp = (): void => {
+    onboardingCreatesApp.current = true;
+    setPhase("onboarding");
+  };
+  // B5 fork-and-explore: the worker copies canonical state into a fresh,
+  // catalog-declared physical generation before selecting it.
+  const forkApp = async (): Promise<void> => {
+    try {
+      const projection = await withTimeout(client().forkApp(), 20_000, "Duplicating the app");
+      replaceAppCache(projection.apps, projection.selectedAppInstanceId);
+      reloadApp();
+    } catch (error) {
+      pushToast(error instanceof Error ? error.message : "Couldn’t duplicate this app.", "danger");
+    }
   };
   const deleteApp = async (id: string): Promise<void> => {
     const entry = apps.find(a => a.id === id);
     if (!(await askConfirm(
-      `Delete “${entry?.name ?? "this app"}” and all of its data? `
-      + "This cannot be undone. (Export a .clay backup first if unsure.)"))) return;
-    removeApp(id);
-    try { await client().deleteApp(id); } catch { /* files may already be gone */ }
-    reloadApp();
+      `Delete “${entry?.name ?? "this app"}” and all of its data? This cannot be undone.`))) return;
+    try {
+      const projection = await withTimeout(client().deleteApp(id), 20_000, "Deleting the app");
+      replaceAppCache(projection.apps, projection.selectedAppInstanceId);
+      reloadApp();
+    } catch (error) {
+      pushToast(error instanceof Error ? error.message : "Couldn’t delete this app.", "danger");
+    }
+  };
+  const renameAppEntry = async (id: string, displayName: string): Promise<void> => {
+    try {
+      const projection = await withTimeout(
+        client().renameApp(id, displayName), 20_000, "Renaming the app",
+      );
+      replaceAppCache(projection.apps, projection.selectedAppInstanceId);
+      setApps(projection.apps);
+      reloadApp();
+    } catch (error) {
+      pushToast(error instanceof Error ? error.message : "Couldn’t rename this app.", "danger");
+    }
   };
 
   const handleOutcome = (outcome: IntentOutcome): void => {
@@ -792,10 +798,7 @@ export function App(): React.JSX.Element {
     const current = currentApp();
     if (current && current.name === "My app") {
       const derived = deriveAppName(preview.summary);
-      if (derived) {
-        renameApp(current.id, derived);
-        setApps(listApps());
-      }
+      if (derived) await renameAppEntry(current.id, derived);
     }
     // Rewind through the same confirmed path as History. If later versions
     // exist when this toast is clicked, they are named before truncation.
@@ -996,22 +999,18 @@ export function App(): React.JSX.Element {
 
   const resetApp = async (): Promise<void> => {
     if (!(await askConfirm(
-      "Erase EVERYTHING and start over? All apps and their data are deleted. "
-      + "This is the one action Clay cannot undo."))) return;
+      "Reset this app and start over? Clay will create a fresh generation, "
+      + "then retire this app’s current data. This cannot be undone."))) return;
     try {
       if (!workerRef.current) throw new Error("worker unavailable");
-      await withTimeout(workerRef.current.reset(), 5_000, "Erasing local data");
-    } catch {
-      try {
-        await wipeOpfsWithoutWorker();
-      } catch (error) {
-        setBootError(`Could not erase local data: ${error instanceof Error ? error.message : String(error)}`);
-        return;
-      }
+      const projection = await withTimeout(
+        workerRef.current.resetApp(), 20_000, "Resetting the app",
+      );
+      replaceAppCache(projection.apps, projection.selectedAppInstanceId);
+      reloadApp();
+    } catch (error) {
+      setBootError(`Could not reset this app: ${error instanceof Error ? error.message : String(error)}`);
     }
-    try { localStorage.removeItem("clay_apps"); localStorage.removeItem("clay_current_app"); }
-    catch { /* ignore */ }
-    window.location.reload();
   };
 
   const removeSamples = async (): Promise<void> => {
@@ -1385,7 +1384,7 @@ export function App(): React.JSX.Element {
         onSwitch={switchApp}
         onNew={newApp}
         onFork={() => void forkApp()}
-        onRename={(id, name) => { renameApp(id, name); setApps(listApps()); }}
+        onRename={(id, name) => { void renameAppEntry(id, name); }}
         onDelete={id => void deleteApp(id)}
         onOpenSearch={() => setShowCommandPalette(true)}
         onOpenAutomations={() => setShowAutomations(true)}
