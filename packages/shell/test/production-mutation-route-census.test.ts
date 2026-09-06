@@ -387,6 +387,7 @@ describe("production mutation route census", () => {
     expect(worker).toContain('route: "samples.fill"');
     expect(caseBody(worker, "removeSamples"))
       .toContain('runAuthorityMutation("removeSamples", p, req)');
+    expect(caseBody(worker, "removeSamples")).not.toContain("req.payload");
     expect(worker.slice(
       worker.indexOf('if (route === "removeSamples")'),
       worker.indexOf('if (route === "fillSamples")'),

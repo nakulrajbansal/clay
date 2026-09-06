@@ -176,6 +176,9 @@ async function runAuthorityMutation(
     route: "samples.fill",
     payload,
   })).result;
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload))
+    throw new ClayError("E_TARGET_AUTHORITY_INVALID", "worker mutation payload is invalid");
+  const captured = payload as Record<string, unknown>;
   if (route === "commitLayout") return (await target.executeMutation({
     requestId,
     route: "store.commit",
@@ -184,7 +187,7 @@ async function runAuthorityMutation(
       summary: "Saved layout changes.",
       semanticOrigin: "direct",
       migration: null,
-      panels: (payload as Record<string, unknown>).layout,
+      panels: captured.layout,
       diff: [],
     } },
   })).result;

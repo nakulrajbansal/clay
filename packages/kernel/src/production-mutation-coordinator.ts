@@ -35,6 +35,22 @@ import {
   writeProductionRequestReceipt,
 } from "./production-request-journal";
 import {
+  productionOperationIdV1,
+  productionOperationIdV2,
+} from "./production-operation-id";
+import {
+  assertCommittedReceiptReservationBinding,
+  assertLiveSampleProvenance,
+} from "./sample-provenance-proof";
+import {
+  assertExactSampleProvenance,
+  decodeProductionResponse,
+  encodeProductionResponse,
+  isSampleProducingRoute,
+  type ProductionResponseJson as JsonValue,
+  type SampleProvenanceCoordinate,
+} from "./production-response-envelope";
+import {
   captureTableImport,
   executeCapturedTableImport,
   type CapturedTableImport,
@@ -63,7 +79,6 @@ import {
 } from "./store";
 import { TargetAuthorityStore } from "./target-authority";
 
-type JsonValue = null | boolean | number | string | JsonValue[] | JsonRecord;
 type JsonRecord = { [key: string]: JsonValue };
 type CapturedBinary = Readonly<{
   byteLength: number;
@@ -147,6 +162,11 @@ type CapturedOperationalMetricMutation = Readonly<{
   | { route: "clearPrivateMetrics"; payload: Readonly<JsonRecord> }
 )>;
 
+type CapturedMutationExecution = Readonly<{
+  result: JsonValue;
+  sampleProvenance?: readonly SampleProvenanceCoordinate[];
+}>;
+
 export type ProductionMutationResult = {
   requestId: string;
   operationId: string;
@@ -185,8 +205,8 @@ function copyTarget(input: TargetEvidence): TargetEvidence {
 }
 
 function assertSettingKeyAvailable(key: string): void {
-  if (key === "shell_id")
-    throw invalid("reserved setting 'shell_id' may only be changed by starter activation");
+  if (key === "shell_id" || key === "sample_rows" || key === "sample_provenance_v1")
+    throw invalid(`reserved setting '${key}' may only be changed by its trusted authority`);
 }
 
 function selectedCatalogShell(
@@ -800,6 +820,12 @@ function captureOperationalMetricMutation(input: unknown): CapturedOperationalMe
   }
 }
 
+function assertCapturedMutationBytes(request: CapturedProductionMutation): void {
+  const serialized = JSON.stringify(request);
+  if (CAPTURE_ENCODER.encode(serialized).byteLength > MAX_CAPTURE_BYTES)
+    throw invalid("production mutation request exceeds 2,000,000 UTF-8 bytes");
+}
+
 type FixedOperationalMutation = CapturedOperationalMetricMutation;
 
 function requestFingerprint(expected: TargetEvidence, request: CapturedProductionMutation): string {
@@ -870,16 +896,6 @@ export function mintProductionAuthorityId(prefix: AuthorityIdPrefix): string {
   return id;
 }
 
-function operationIdForRequest(authorityIncarnationId: string, requestId: string): string {
-  const digest = sha256HexSync(new TextEncoder().encode(
-    `clay-production-operation-v1\u0000${authorityIncarnationId}\u0000${requestId}`,
-  ));
-  const bytes = new Uint8Array(32);
-  for (let index = 0; index < bytes.length; index++)
-    bytes[index] = Number.parseInt(digest.slice(index * 2, index * 2 + 2), 16);
-  return OperationId.parse(encodeAuthorityId("op", bytes));
-}
-
 function operationIdForOperationalMetric(
   authorityIncarnationId: string,
   requestId: string,
@@ -919,38 +935,66 @@ const STORE_RELOAD_AFTER_ROLLBACK: ClayStore["reloadRegistryAfterRollback"] =
 const STORE_GET_SETTING: ClayStore["getSetting"] = ClayStore.prototype.getSetting;
 const STORE_SET_SETTING: ClayStore["setSetting"] = ClayStore.prototype.setSetting;
 const STORE_DELETE_SETTING: ClayStore["deleteSetting"] = ClayStore.prototype.deleteSetting;
+const STORE_SAMPLE_PROVENANCE: ClayStore["sampleRowProvenance"] =
+  ClayStore.prototype.sampleRowProvenance;
+
+function sampleProvenanceCoordinates(
+  store: ClayStore,
+  operationId: string,
+): SampleProvenanceCoordinate[] {
+  return STORE_SAMPLE_PROVENANCE.call(store)
+    .filter(entry => entry.operationId === operationId)
+    .map(entry => Object.freeze({ tableId: entry.tableId, rowId: entry.rowId }));
+}
+
+function capturedExecution(
+  result: JsonValue,
+  sampleProvenance?: readonly SampleProvenanceCoordinate[],
+): CapturedMutationExecution {
+  return Object.freeze({
+    result,
+    ...(sampleProvenance === undefined ? {} : { sampleProvenance }),
+  });
+}
+
+function usesSampleProvenance(route: string): boolean {
+  return isSampleProducingRoute(route) || route === "samples.remove";
+}
 
 function executeCapturedMutation(
   store: ClayStore,
   request: CapturedProductionMutation,
   executionInstant: string | null,
-): JsonValue {
+  operationId: string,
+): CapturedMutationExecution {
   if (isCapturedCoreMutation(request))
-    return captureJsonValue(executeCapturedCoreMutation(store, request), new WeakSet());
+    return capturedExecution(captureJsonValue(
+      executeCapturedCoreMutation(store, request), new WeakSet(),
+    ));
   switch (request.route) {
     case "store.insert":
-      return captureJsonValue(STORE_INSERT.call(
+      return capturedExecution(captureJsonValue(STORE_INSERT.call(
         store,
         request.payload.table,
         request.payload.row as Record<string, unknown>,
-      ), new WeakSet());
+      ), new WeakSet()));
     case "store.update":
-      return captureJsonValue(STORE_UPDATE.call(
+      return capturedExecution(captureJsonValue(STORE_UPDATE.call(
         store,
         request.payload.table,
         request.payload.id,
         request.payload.patch as Record<string, unknown>,
-      ), new WeakSet());
+      ), new WeakSet()));
     case "store.softDelete":
       STORE_SOFT_DELETE.call(store, request.payload.table, request.payload.id);
-      return null;
+      return capturedExecution(null);
     case "store.commit":
-      return STORE_COMMIT.call(
+      return capturedExecution(STORE_COMMIT.call(
         store,
         request.payload.plan as unknown as Parameters<ClayStore["commit"]>[0],
-      );
+      ));
     case "planner.begin":
-      return STORE_BEGIN_ATTEMPT.call(store, request.payload.intent);
+      return capturedExecution(STORE_BEGIN_ATTEMPT.call(store, request.payload.intent));
     case "planner.finalize":
       STORE_FINISH_ATTEMPT.call(
         store,
@@ -958,7 +1002,7 @@ function executeCapturedMutation(
         request.payload.outcome,
         request.payload.errorCode,
       );
-      return null;
+      return capturedExecution(null);
     case "planner.discard":
       STORE_FINISH_ATTEMPT.call(
         store,
@@ -967,32 +1011,60 @@ function executeCapturedMutation(
         null,
         request.payload.intent,
       );
-      return null;
+      return capturedExecution(null);
     case "planner.keep":
-      return executePreparedPlannerKeep(store, request.payload);
+      return capturedExecution(executePreparedPlannerKeep(store, request.payload));
     case "table.import":
-      return captureJsonValue(
+      return capturedExecution(captureJsonValue(
         executeCapturedTableImport(store, request.payload), new WeakSet(),
-      );
+      ));
     case "samples.remove":
-      return captureJsonValue(executeCapturedSampleRemoval(store), new WeakSet());
+      return capturedExecution(captureJsonValue(
+        executeCapturedSampleRemoval(store), new WeakSet(),
+      ));
     case "samples.fill":
-      return captureJsonValue(
-        executeCapturedSampleFill(store, request.payload), new WeakSet(),
-      );
+      if (sampleProvenanceCoordinates(store, operationId).length !== 0)
+        throw invalid("sample fill operation provenance already exists");
+      {
+        const outcome = executeCapturedSampleFill(store, request.payload, operationId);
+        const expected = request.payload.tables.reduce(
+          (total, table) => total + table.rows.length, 0,
+        );
+        const persisted = sampleProvenanceCoordinates(store, operationId);
+        assertExactSampleProvenance(
+          outcome.sampleProvenance, persisted, expected, "sample fill operation",
+        );
+        return capturedExecution(
+          captureJsonValue(outcome.result, new WeakSet()), outcome.sampleProvenance,
+        );
+      }
     case "starter.seed":
       if (executionInstant === null)
         throw invalid("trusted starter seed instant is unavailable");
-      return executeCapturedStarterSeed(store, request.payload, executionInstant);
+      if (sampleProvenanceCoordinates(store, operationId).length !== 0)
+        throw invalid("starter seed operation provenance already exists");
+      {
+        const outcome = executeCapturedStarterSeed(
+          store, request.payload, executionInstant, operationId,
+        );
+        const expected = request.payload.tables.reduce(
+          (total, table) => total + table.sampleRows.length, 0,
+        );
+        const persisted = sampleProvenanceCoordinates(store, operationId);
+        assertExactSampleProvenance(
+          outcome.sampleProvenance, persisted, expected, "starter seed operation",
+        );
+        return capturedExecution(outcome.result, outcome.sampleProvenance);
+      }
     case "attachment.add":
-      return captureJsonValue(executeCapturedAttachmentAdd(store, {
+      return capturedExecution(captureJsonValue(executeCapturedAttachmentAdd(store, {
         table: request.payload.table,
         rowId: request.payload.rowId,
         field: request.payload.field,
         name: request.payload.name,
         mime: request.payload.mime,
         bytes: new Uint8Array(request.payload.bytes.bytes),
-      }, request.payload.bytes.sha256), new WeakSet());
+      }, request.payload.bytes.sha256), new WeakSet()));
     case "attachment.remove":
       STORE_REMOVE_ATTACHMENT.call(
         store,
@@ -1001,26 +1073,28 @@ function executeCapturedMutation(
         request.payload.field,
         request.payload.id,
       );
-      return null;
+      return capturedExecution(null);
     case "attachment.purge":
       if (executionInstant === null)
         throw invalid("trusted attachment purge instant is unavailable");
-      return captureJsonValue(STORE_PURGE_ATTACHMENTS.call(
+      return capturedExecution(captureJsonValue(STORE_PURGE_ATTACHMENTS.call(
         store, new Date(executionInstant), 30,
-      ), new WeakSet());
+      ), new WeakSet()));
     case "batch.apply":
-      return captureJsonValue(STORE_APPLY_BATCH.call(store, {
+      return capturedExecution(captureJsonValue(STORE_APPLY_BATCH.call(store, {
         source: request.payload.source,
         summary: request.payload.summary,
         mutations: request.payload.mutations as unknown as
           Parameters<ClayStore["applyBatch"]>[0]["mutations"],
-      }), new WeakSet());
+      }), new WeakSet()));
     case "batch.undo":
-      return captureJsonValue(STORE_UNDO_BATCH.call(store, request.payload.id), new WeakSet());
+      return capturedExecution(captureJsonValue(
+        STORE_UNDO_BATCH.call(store, request.payload.id), new WeakSet(),
+      ));
     case "row.restore":
-      return captureJsonValue(STORE_RESTORE_ROW.call(
+      return capturedExecution(captureJsonValue(STORE_RESTORE_ROW.call(
         store, request.payload.table, request.payload.id,
-      ), new WeakSet());
+      ), new WeakSet()));
     case "schema.removeColumn": {
       const table = request.payload.table;
       const column = request.payload.column;
@@ -1036,23 +1110,29 @@ function executeCapturedMutation(
         diff: [{ kind: "change_field", detail: `${column} hidden on ${table}` }],
       });
       const registryJson = JSON.stringify([...STORE_REGISTRY_SNAPSHOT.call(store).values()]);
-      return captureJsonValue(JSON.parse(registryJson) as unknown, new WeakSet());
+      return capturedExecution(captureJsonValue(
+        JSON.parse(registryJson) as unknown, new WeakSet(),
+      ));
     }
     case "setting.set":
       STORE_SET_SETTING.call(store, request.payload.key, request.payload.value);
-      return null;
+      return capturedExecution(null);
     case "setting.delete":
       STORE_DELETE_SETTING.call(store, request.payload.key);
-      return null;
+      return capturedExecution(null);
     case "setting.compareAndSet": {
       const current: unknown = STORE_GET_SETTING.call(store, request.payload.key);
       const revision = current && typeof current === "object"
         && Number.isSafeInteger((current as { revision?: unknown }).revision)
         ? Number((current as { revision: number }).revision) : 0;
       if (revision !== request.payload.expectedRevision)
-        return captureJsonValue({ ok: false, current: current ?? null }, new WeakSet());
+        return capturedExecution(captureJsonValue(
+          { ok: false, current: current ?? null }, new WeakSet(),
+        ));
       STORE_SET_SETTING.call(store, request.payload.key, request.payload.value);
-      return captureJsonValue({ ok: true, current: request.payload.value }, new WeakSet());
+      return capturedExecution(captureJsonValue(
+        { ok: true, current: request.payload.value }, new WeakSet(),
+      ));
     }
     case "upsertAutomation":
     case "deleteAutomation":
@@ -1063,9 +1143,9 @@ function executeCapturedMutation(
     case "recordUsage":
     case "acceptSuggestion":
     case "dismissSuggestion":
-      return captureJsonValue(executeAutomationObserverAuthorityRoute(
+      return capturedExecution(captureJsonValue(executeAutomationObserverAuthorityRoute(
         store, request.route, request.payload, executionInstant,
-      ), new WeakSet());
+      ), new WeakSet()));
   }
 }
 
@@ -1080,33 +1160,6 @@ function executeCapturedOperationalMetricMutation(
 
 function copyResult(input: JsonValue): JsonValue {
   return captureJsonValue(input, new WeakSet());
-}
-
-const MAX_RESULT_BYTES = 2_000_000;
-
-function canonicalResultValue(value: JsonValue): JsonValue {
-  if (Array.isArray(value)) return value.map(item => canonicalResultValue(item));
-  if (value !== null && typeof value === "object") {
-    const output: JsonRecord = {};
-    for (const key of Object.keys(value).sort()) output[key] = canonicalResultValue(value[key]!);
-    return output;
-  }
-  return value;
-}
-
-function encodeResult(result: JsonValue): { json: string; sha256: string } {
-  const json = JSON.stringify(canonicalResultValue(result));
-  const bytes = new TextEncoder().encode(json);
-  if (bytes.byteLength > MAX_RESULT_BYTES)
-    throw invalid("production mutation result exceeds the durable evidence limit");
-  return { json, sha256: `sha256:${sha256HexSync(bytes)}` };
-}
-
-function decodeResult(json: string): JsonValue {
-  let parsed: unknown;
-  try { parsed = JSON.parse(json); }
-  catch { throw invalid("production mutation result JSON is invalid"); }
-  return captureJsonValue(parsed, new WeakSet());
 }
 
 function preparedReceipt(
@@ -1254,6 +1307,7 @@ export class ProductionMutationCoordinator {
       return Promise.reject(invalid("production authority is poisoned; reopen for reservation recovery"));
     // Capture before queueing: caller-owned accessors and arrays are never retained.
     const captured = captureMutation(input);
+    assertCapturedMutationBytes(captured);
     const run = this.#tail.then(() => this.#executeCaptured(captured));
     this.#tail = run.then(() => undefined, () => undefined);
     return run;
@@ -1330,6 +1384,9 @@ export class ProductionMutationCoordinator {
       ? trustedInstant(this.#clock).instant : null;
 
     const expected = copyTarget(this.#target);
+    const operationId = productionOperationIdV2(
+      this.#fence.authorityIncarnationId, request.requestId, request.route,
+    );
     const expectedCatalogGeneration = this.#catalogGeneration;
     const catalogBefore = DeviceCatalog.openExisting(this.#driver);
     if (catalogBefore.snapshot().catalogGeneration !== expectedCatalogGeneration
@@ -1341,6 +1398,8 @@ export class ProductionMutationCoordinator {
     );
     if (liveBefore.stateSha256 !== expected.stateSha256)
       throw invalid("production mutation prestate is not canonical");
+    const sampleLedgerCertificate = usesSampleProvenance(request.route)
+      ? assertLiveSampleProvenance(this.#driver, this.#store, expected) : null;
 
     const shadowDriver = await this.#driver.snapshot();
     let shadow: ClayStore | null = null;
@@ -1353,9 +1412,23 @@ export class ProductionMutationCoordinator {
       );
       if (shadowBefore.stateSha256 !== liveBefore.stateSha256)
         throw invalid("production mutation snapshot is not canonical");
-      const preparedResult = executeCapturedMutation(shadow, request, executionInstant);
-      if (isThenable(preparedResult)) throw invalid("production mutation must be synchronous");
-      shadowResult = copyResult(preparedResult);
+      if (sampleLedgerCertificate !== null) {
+        const shadowLedger = STORE_SAMPLE_PROVENANCE.call(shadow).map(entry => ({
+          tableId: entry.tableId,
+          rowId: entry.rowId,
+          operationId: entry.operationId,
+        }));
+        if (JSON.stringify(shadowLedger) !== JSON.stringify(sampleLedgerCertificate))
+          throw invalid("production mutation sample proof changed in shadow capture");
+      }
+      const preparedExecution = executeCapturedMutation(
+        shadow, request, executionInstant, operationId,
+      );
+      if (isThenable(preparedExecution)) throw invalid("production mutation must be synchronous");
+      shadowResult = copyResult(preparedExecution.result);
+      encodeProductionResponse(
+        request.route, shadowResult, preparedExecution.sampleProvenance,
+      );
       const shadowAfter = enumerateCanonicalStateV1(
         shadowDriver, shadow.validationRegistrySnapshot(),
       );
@@ -1372,7 +1445,7 @@ export class ProductionMutationCoordinator {
         request, expected, expectedCatalogGeneration, shadowResult,
       );
     return this.#executeMeaningful(
-      request, expected, expectedCatalogGeneration, executionInstant,
+      request, expected, expectedCatalogGeneration, executionInstant, operationId,
     );
   }
 
@@ -1452,10 +1525,14 @@ export class ProductionMutationCoordinator {
     const fingerprint = requestFingerprint(expected, request);
     if (fingerprint !== persisted.requestSha256)
       throw invalid("production request identity was reused for another mutation");
-    const expectedOperation = operationIdForRequest(
+    const expectedOperationV1 = productionOperationIdV1(
       this.#fence.authorityIncarnationId, request.requestId,
     );
-    if (persisted.operationId !== expectedOperation)
+    const expectedOperationV2 = productionOperationIdV2(
+      this.#fence.authorityIncarnationId, request.requestId, request.route,
+    );
+    if (persisted.operationId !== expectedOperationV1
+        && persisted.operationId !== expectedOperationV2)
       throw invalid("production request receipt operation identity is invalid");
     if (persisted.state === "prepared")
       throw invalid("prepared production request requires explicit recovery");
@@ -1464,6 +1541,15 @@ export class ProductionMutationCoordinator {
     if (persisted.resultingProtectionRevision === null
         || persisted.resultingStateSha256 === null || persisted.responseJson === null)
       throw invalid("terminal production request receipt is incomplete");
+    const decodedResponse = decodeProductionResponse(persisted.responseJson);
+    if (decodedResponse.kind === "envelope") {
+      if (decodedResponse.route !== request.route
+          || persisted.operationId !== expectedOperationV2)
+        throw invalid("production request response route binding is invalid");
+    } else if (persisted.operationId !== expectedOperationV1) {
+      throw invalid("legacy production response operation identity is invalid");
+    }
+    const response = decodedResponse.result;
     const resulting = copyTarget({
       appInstanceId: persisted.appInstanceId,
       activeGenerationId: persisted.activeGenerationId,
@@ -1473,7 +1559,8 @@ export class ProductionMutationCoordinator {
       stateSha256: persisted.resultingStateSha256,
     });
     const catalog = DeviceCatalog.openExisting(this.#driver);
-    const current = TargetAuthorityStore.open(this.#driver).evidence();
+    const targetAuthority = TargetAuthorityStore.open(this.#driver);
+    const current = targetAuthority.evidence();
     const canonical = enumerateCanonicalStateV1(
       this.#driver, this.#store.validationRegistrySnapshot(),
     );
@@ -1484,11 +1571,17 @@ export class ProductionMutationCoordinator {
         || catalog.snapshot().catalogGeneration !== this.#catalogGeneration
         || canonical.stateSha256 !== resulting.stateSha256)
       throw invalid("production request receipt failed current-state read-back");
+    if (persisted.state === "committed") {
+      assertCommittedReceiptReservationBinding(
+        persisted, targetAuthority.reservations(), catalog.revisionReservations(),
+      );
+    }
+    if (decodedResponse.kind === "envelope" && usesSampleProvenance(request.route))
+      assertLiveSampleProvenance(this.#driver, this.#store, resulting);
     if (request.route === "starter.seed"
         && (selectedCatalogShell(catalog, resulting) !== request.payload.shellId
           || STORE_GET_SETTING.call(this.#store, "shell_id") !== request.payload.shellId))
       throw invalid("production starter seed shell metadata failed replay read-back");
-    const response = decodeResult(persisted.responseJson);
     if (persisted.state === "failed") {
       const message = response !== null && !Array.isArray(response)
         && typeof response === "object" && typeof response.message === "string"
@@ -1506,21 +1599,25 @@ export class ProductionMutationCoordinator {
   }
 
   #durableReplay(request: CapturedProductionMutation): ProductionMutationResult | null {
-    const operationId = operationIdForRequest(
-      this.#fence.authorityIncarnationId, request.requestId,
-    );
+    const operationIds = new Set([
+      productionOperationIdV2(
+        this.#fence.authorityIncarnationId, request.requestId, request.route,
+      ),
+      productionOperationIdV1(this.#fence.authorityIncarnationId, request.requestId),
+    ]);
     const catalog = DeviceCatalog.openExisting(this.#driver);
     const target = TargetAuthorityStore.open(this.#driver);
     const targetRows = target.reservations()
-      .filter(candidate => candidate.operationId === operationId);
+      .filter(candidate => operationIds.has(candidate.operationId));
     const catalogRows = catalog.revisionReservations()
-      .filter(candidate => candidate.operationId === operationId);
+      .filter(candidate => operationIds.has(candidate.operationId));
     if (targetRows.length === 0 && catalogRows.length === 0) return null;
     if (targetRows.length !== 1 || catalogRows.length !== 1)
       throw invalid("production request has incomplete mirrored journal evidence");
     const targetRow = targetRows[0]!;
     const catalogRow = catalogRows[0]!;
-    if (targetRow.revision !== catalogRow.revision
+    if (targetRow.operationId !== catalogRow.operationId
+        || targetRow.revision !== catalogRow.revision
         || targetRow.requestSha256 !== catalogRow.requestSha256
         || targetRow.expectedProtectionRevision !== catalogRow.expectedProtectionRevision
         || targetRow.expectedStateSha256 !== catalogRow.expectedStateSha256)
@@ -1575,11 +1672,13 @@ export class ProductionMutationCoordinator {
     expectedCatalogGeneration: string,
     result: JsonValue,
   ): ProductionMutationResult {
-    const operationId = operationIdForRequest(
-      this.#fence.authorityIncarnationId, request.requestId,
+    const operationId = productionOperationIdV2(
+      this.#fence.authorityIncarnationId, request.requestId, request.route,
     );
     const fingerprint = requestFingerprint(expected, request);
-    const encoded = encodeResult(result);
+    const encoded = encodeProductionResponse(
+      request.route, result, isSampleProducingRoute(request.route) ? [] : undefined,
+    );
     this.#writeAuthority.run(() => {
       const at = trustedInstant(this.#clock);
       const catalog = DeviceCatalog.openExisting(this.#driver);
@@ -1710,14 +1809,13 @@ export class ProductionMutationCoordinator {
     expected: TargetEvidence,
     expectedCatalogGeneration: string,
     executionInstant: string | null,
+    operationId: string,
   ): ProductionMutationResult {
-    const operationId = operationIdForRequest(
-      this.#fence.authorityIncarnationId, request.requestId,
-    );
     const fingerprint = requestFingerprint(expected, request);
     let reservedCatalogGeneration: string | null = null;
     let prepared: ProductionRequestReceipt | null = null;
     let result: JsonValue = null;
+    let resultSampleProvenance: readonly SampleProvenanceCoordinate[] | undefined;
     let liveTransactionAttempted = false;
     try {
       const reservation = this.#writeAuthority.run(() => {
@@ -1823,8 +1921,12 @@ export class ProductionMutationCoordinator {
         );
         if (before.stateSha256 !== expected.stateSha256)
           throw invalid("production mutation prestate changed before commit");
-        result = executeCapturedMutation(this.#store, request, executionInstant);
-        if (isThenable(result)) throw invalid("production mutation must be synchronous");
+        const execution = executeCapturedMutation(
+          this.#store, request, executionInstant, operationId,
+        );
+        if (isThenable(execution)) throw invalid("production mutation must be synchronous");
+        result = execution.result;
+        resultSampleProvenance = execution.sampleProvenance;
         if (TEST_FAILURE.get(this) === "after_live_mutation") {
           TEST_FAILURE.delete(this);
           throw invalid("injected failure after live mutation");
@@ -1848,7 +1950,9 @@ export class ProductionMutationCoordinator {
         const changes = canonicalChanges(before, after);
         if (changes.length === 0)
           throw invalid("meaningful production mutation became a no-op");
-        const encodedResult = encodeResult(result);
+        const encodedResult = encodeProductionResponse(
+          request.route, result, resultSampleProvenance,
+        );
         const committedTarget = target.commitReservedProtectionRevision({
           operationId,
           expectedTarget: expected,
@@ -1880,6 +1984,8 @@ export class ProductionMutationCoordinator {
           encodedResult.json,
           "invoked",
         );
+        if (usesSampleProvenance(request.route))
+          assertLiveSampleProvenance(this.#driver, this.#store, committedTarget);
         const targetRow = target.reservations()
           .find(candidate => candidate.operationId === operationId);
         const catalogRow = catalog.revisionReservations()
@@ -1935,6 +2041,7 @@ export class ProductionMutationCoordinator {
           this.#recordAbandonment(
             operationId,
             request.requestId,
+            request.route,
             fingerprint,
             expected,
             reservedCatalogGeneration,
@@ -1960,6 +2067,7 @@ export class ProductionMutationCoordinator {
   #recordAbandonment(
     operationId: string,
     requestId: string,
+    route: string,
     fingerprint: string,
     expected: TargetEvidence,
     reservedCatalogGeneration: string,
@@ -1973,7 +2081,9 @@ export class ProductionMutationCoordinator {
         message: error instanceof Error
           ? error.message.slice(0, 1_000) : "production mutation failed",
       };
-      const encoded = encodeResult(failure);
+      const encoded = encodeProductionResponse(
+        route, failure, isSampleProducingRoute(route) ? [] : undefined,
+      );
       const at = trustedInstant(this.#clock);
       this.#writeAuthority.run(() => {
         const catalog = DeviceCatalog.openExisting(this.#driver);

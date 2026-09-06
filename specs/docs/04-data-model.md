@@ -315,3 +315,44 @@ Attachments are capped at 10 MB each, 20 per field, 200 MB active bytes, and
 the trusted cleanup action may purge only old and currently unreferenced blobs.
 Executable and active-content file types are rejected, and common binary formats
 must match their declared signatures.
+
+Sample provenance is an authority-owned logical ledger stored under the reserved
+`sys.settings` key `sample_provenance_v1`. Its closed value is
+`{schema:1,entries:[{tableId,rowId,operationId}]}`. Entries use stable semantic
+table identity, exact row identity, and the same trusted operation identity as the
+committing request. They remain after soft deletion so restore cannot reclassify a
+sample as owner-created data. Generic setting set, delete, and compare-and-set
+routes cannot address either `sample_provenance_v1` or the legacy `sample_rows`
+key. Every fill, removal, and count validates the complete retained ledger and
+requires each coordinate to resolve to exactly one physical UUIDv7 row, including
+rows behind inactive schema. Seed and fill executors carry coordinates directly
+from pinned insert results and exact-set compare them with the ledger inside the
+same physical transaction. Terminal receipts persist a canonical coordinator-owned
+response envelope with an explicit non-JSON `clay-response-v1:<route>\n` prefix,
+the captured route repeated inside the canonical body, the unchanged public result,
+and an exact coordinate sidecar for `starter.seed` and `samples.fill`. New operation
+IDs use the version-2 domain over authority incarnation, request ID, and captured
+route; provenance proof recomputes that binding, so changing one producer route into
+another cannot retain the same operation identity. Version-1 operation IDs and raw
+unprefixed JSON remain eligible only for ordinary exact-current retry and never
+certify provenance. Receipt-first replay of a committed result also requires exact
+matching target and catalog reservations before returning it. Provenance is trusted
+only when producer membership is derived independently from each request ID and
+version-2 operation ID, the stored envelope route agrees with that identity, and the
+union of coordinates from all committed producer envelopes equals the complete ledger
+bidirectionally. Exactly one matching target receipt, catalog receipt mirror, target
+revision reservation, and catalog revision reservation must agree on operation,
+request digest, target, revision, and resulting state. Live proof scans only bounded,
+fixed-size receipt identity metadata for the current app generation and lineage, then
+loads bodies only for independently identified producers. It refuses more than
+100,000 current-target committed receipt identities, 10,001 producer receipts, or
+8,000,000 aggregate producer-response bytes; receipt and reservation joins are
+map-indexed rather than quadratic. Internal consistency proof does not authenticate a
+wholesale coherent rewrite of every unsigned store and digest, so protected backup
+claims additionally require authenticated outer format-5 bytes. The older
+name-keyed `sample_rows` value has no independent origin evidence and therefore
+blocks production sample actions rather than being silently migrated or trusted.
+Format-5 export/import must apply this same historical proof.
+Restore-as-new with nonempty provenance remains rejected before opening a fresh
+target until the worker-owned lifecycle can perform private chunked provenance
+rebind operations under fresh target and catalog authority.

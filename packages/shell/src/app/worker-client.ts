@@ -321,7 +321,7 @@ export class WorkerClient {
   removeSamples(): Promise<{
     affected: number;
     recovery: { kind: "soft_delete"; recoverable: number };
-  }> { return this.call("removeSamples"); }
+  }> { return this.call("removeSamples", {}); }
   fillSamples(): Promise<{ added: number; tables: number }> { return this.call("fillSamples"); }
   sampleCount(): Promise<number> { return this.call("sampleCount"); }
   reset(): Promise<null> { return this.call("reset"); }

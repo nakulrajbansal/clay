@@ -33,6 +33,7 @@ import {
   createStoreBackedPlannerMutationAuthority,
   type PlannerMutationAuthority,
 } from "./planner-authority";
+import { assertLiveSampleProvenance } from "./sample-provenance-proof";
 import { activeSampleRowCount } from "./production-samples";
 import { StateMerkleIndex } from "./state-merkle-index";
 import { ClayStore } from "./store";
@@ -903,6 +904,9 @@ export class ProductionStoreAuthority {
   }
 
   sampleRowCount(): number {
+    assertLiveSampleProvenance(
+      this.#driver, this.#store, TargetAuthorityStore.open(this.#driver).evidence(),
+    );
     return activeSampleRowCount(this.#store);
   }
 

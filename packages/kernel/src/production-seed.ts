@@ -1,7 +1,12 @@
 import { expandBlueprint, parseBlueprintDirective } from "./blueprints";
 import { ClayError } from "./errors";
 import { deriveInverse, type MigrationPlanT } from "./migrate";
-import { ClayStore, type PanelBlobInput } from "./store";
+import type { SampleProvenanceCoordinate } from "./production-response-envelope";
+import {
+  ClayStore,
+  type PanelBlobInput,
+  type SampleRowProvenanceEntry,
+} from "./store";
 
 type SeedJsonValue = null | boolean | number | string | SeedJsonValue[] | SeedJsonRecord;
 type SeedJsonRecord = { [key: string]: SeedJsonValue };
@@ -43,6 +48,10 @@ export type CapturedStarterSeedBundle = Readonly<{
 }>;
 
 export type StarterSeedCatalogMetadata = Readonly<{ shellId: string }>;
+export type StarterSeedExecutionOutcome = Readonly<{
+  result: null;
+  sampleProvenance: readonly SampleProvenanceCoordinate[];
+}>;
 
 /** Metadata which must ride the authority's revision publication atomically. */
 export function starterSeedCatalogMetadata(
@@ -53,8 +62,8 @@ export function starterSeedCatalogMetadata(
 
 const MAX_CAPTURE_DEPTH = 32;
 const MAX_CAPTURE_NODES = 100_000;
-const MAX_CAPTURE_UNITS = 1_000_000;
-const MAX_CAPTURE_STRING = 750_000;
+const MAX_CAPTURE_UNITS = 2_000_000;
+const MAX_CAPTURE_STRING = 1_000_000;
 const MAX_CAPTURE_ARRAY = 10_000;
 const MAX_CAPTURE_KEYS = 256;
 const MAX_CAPTURE_KEY_LENGTH = 128;
@@ -385,6 +394,10 @@ const STORE_COMMIT: ClayStore["commit"] = ClayStore.prototype.commit;
 const STORE_INSERT: ClayStore["insert"] = ClayStore.prototype.insert;
 const STORE_SET_SETTING: ClayStore["setSetting"] = ClayStore.prototype.setSetting;
 const STORE_REGISTRY_SNAPSHOT: ClayStore["registrySnapshot"] = ClayStore.prototype.registrySnapshot;
+const STORE_VALIDATION_REGISTRY_SNAPSHOT: ClayStore["validationRegistrySnapshot"] =
+  ClayStore.prototype.validationRegistrySnapshot;
+const STORE_RECORD_SAMPLE_PROVENANCE: ClayStore["recordSampleRowProvenance"] =
+  ClayStore.prototype.recordSampleRowProvenance;
 const DERIVE_INVERSE: typeof deriveInverse = deriveInverse;
 const PARSE_BLUEPRINT: typeof parseBlueprintDirective = parseBlueprintDirective;
 const EXPAND_BLUEPRINT: typeof expandBlueprint = expandBlueprint;
@@ -432,7 +445,8 @@ export function executeCapturedStarterSeed(
   store: ClayStore,
   bundle: CapturedStarterSeedBundle,
   seedInstant: string,
-): null {
+  operationId: string,
+): StarterSeedExecutionOutcome {
   for (let start = 0; start < bundle.tables.length; start += 3) {
     const operations: MigrationPlanT["operations"] = [];
     const names: string[] = [];
@@ -469,6 +483,7 @@ export function executeCapturedStarterSeed(
   // The registry is intentionally sampled only after every schema group has
   // landed, so directive expansion sees the complete post-schema registry.
   const registry = STORE_REGISTRY_SNAPSHOT.call(store);
+  const authorityRegistry = STORE_VALIDATION_REGISTRY_SNAPSHOT.call(store);
   const panels: PanelBlobInput[] = [];
   for (let index = 0; index < bundle.panels.length; index++) {
     const panel = bundle.panels[index]!;
@@ -504,21 +519,36 @@ export function executeCapturedStarterSeed(
     diff: blank ? [] : [{ kind: "add_panel", detail: `${bundle.shellName} starter panels` }],
   });
 
-  const sampleIds: Record<string, string[]> = {};
+  const sampleEntries: SampleRowProvenanceEntry[] = [];
   for (let tableIndex = 0; tableIndex < bundle.tables.length; tableIndex++) {
     const table = bundle.tables[tableIndex]!;
-    const ids: string[] = [];
+    const tableId = authorityRegistry.get(table.name)?.semantic?.tableId;
+    if (!tableId) throw invalid("starter sample table identity is unavailable");
     for (let rowIndex = 0; rowIndex < table.sampleRows.length; rowIndex++) {
       const inserted = STORE_INSERT.call(
         store,
         table.name,
         materializeSampleRow(table, table.sampleRows[rowIndex]!, seedInstant),
       );
-      ids.push(String(inserted.id));
+      sampleEntries.push(Object.freeze({
+        tableId,
+        rowId: String(inserted.id),
+        operationId,
+      }));
     }
-    sampleIds[table.name] = ids;
   }
-  STORE_SET_SETTING.call(store, "sample_rows", sampleIds);
+  if (sampleEntries.length > 0)
+    STORE_RECORD_SAMPLE_PROVENANCE.call(store, sampleEntries);
   STORE_SET_SETTING.call(store, "shell_id", bundle.shellId);
-  return null;
+  const sampleProvenance = sampleEntries
+    .map(entry => Object.freeze({ tableId: entry.tableId, rowId: entry.rowId }))
+    .sort((left, right) => {
+      const leftKey = `${left.tableId}\u0000${left.rowId}`;
+      const rightKey = `${right.tableId}\u0000${right.rowId}`;
+      return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+    });
+  return Object.freeze({
+    result: null,
+    sampleProvenance: Object.freeze(sampleProvenance),
+  });
 }

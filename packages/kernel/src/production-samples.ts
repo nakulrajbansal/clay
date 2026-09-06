@@ -1,10 +1,20 @@
 import { ClayError } from "./errors";
-import { ClayStore } from "./store";
+import type { SampleProvenanceCoordinate } from "./production-response-envelope";
+import {
+  ClayStore,
+  type SampleRowProvenanceEntry,
+  type SampleRowProvenanceState,
+} from "./store";
 
 export type SampleRowProvenance = Readonly<Record<string, readonly string[]>>;
 export type SampleRemovalResult = Readonly<{
   affected: number;
   recovery: Readonly<{ kind: "soft_delete"; recoverable: number }>;
+}>;
+export type SampleFillResult = Readonly<{ added: number; tables: number }>;
+export type SampleFillExecutionOutcome = Readonly<{
+  result: SampleFillResult;
+  sampleProvenance: readonly SampleProvenanceCoordinate[];
 }>;
 type SampleValue = null | boolean | number | string;
 type CapturedSampleFillTable = Readonly<{
@@ -209,52 +219,47 @@ export function captureSampleRowProvenance(
 }
 
 const STORE_GET_SETTING: ClayStore["getSetting"] = ClayStore.prototype.getSetting;
-const STORE_REGISTRY: ClayStore["registrySnapshot"] = ClayStore.prototype.registrySnapshot;
 const STORE_VALIDATION_REGISTRY: ClayStore["validationRegistrySnapshot"] =
   ClayStore.prototype.validationRegistrySnapshot;
-const STORE_QUERY: ClayStore["query"] = ClayStore.prototype.query;
 const STORE_SOFT_DELETE: ClayStore["softDelete"] = ClayStore.prototype.softDelete;
 const STORE_INSERT: ClayStore["insert"] = ClayStore.prototype.insert;
-const STORE_SET_SETTING: ClayStore["setSetting"] = ClayStore.prototype.setSetting;
+const STORE_PROVENANCE: ClayStore["sampleRowProvenance"] =
+  ClayStore.prototype.sampleRowProvenance;
+const STORE_PROVENANCE_STATE: ClayStore["sampleRowProvenanceState"] =
+  ClayStore.prototype.sampleRowProvenanceState;
+const STORE_RECORD_PROVENANCE: ClayStore["recordSampleRowProvenance"] =
+  ClayStore.prototype.recordSampleRowProvenance;
 
-function rowState(store: ClayStore, table: string, id: string): "active" | "deleted" {
-  const rows = STORE_QUERY.call(store, {
-    from: table,
-    where: [{ field: "id", op: "eq", value: id }],
-    includeDeleted: true,
-    limit: 1,
-  });
-  const row = rows[0];
-  if (!row) throw invalid("sample row provenance references a missing row");
-  return row.deleted_at == null ? "active" : "deleted";
+function verifiedProvenance(store: ClayStore): SampleRowProvenanceState[] {
+  if (STORE_GET_SETTING.call(store, "sample_rows") !== undefined)
+    throw invalid("legacy sample provenance is unauthenticated");
+  return STORE_PROVENANCE.call(store).map(entry =>
+    STORE_PROVENANCE_STATE.call(store, entry));
 }
 
 export function readSampleRowProvenance(store: ClayStore): SampleRowProvenance {
-  const registry = STORE_VALIDATION_REGISTRY.call(store);
-  return captureSampleRowProvenance(
-    STORE_GET_SETTING.call(store, "sample_rows"), new Set(registry.keys()),
-  );
+  const result: Record<string, string[]> = Object.create(null) as Record<string, string[]>;
+  for (const entry of verifiedProvenance(store)) {
+    const ids = result[entry.tableName] ?? [];
+    ids.push(entry.rowId);
+    result[entry.tableName] = ids;
+  }
+  for (const key of Object.keys(result)) Object.freeze(result[key]!);
+  return Object.freeze(result);
 }
 
 /** Run only in a disposable stage or the guarded physical commit transaction. */
 export function executeCapturedSampleRemoval(store: ClayStore): SampleRemovalResult {
-  const provenance = readSampleRowProvenance(store);
-  const activeRegistry = STORE_REGISTRY.call(store);
+  const provenance = verifiedProvenance(store);
   let affected = 0;
   let recoverable = 0;
-  const tables = Object.keys(provenance);
-  for (let tableIndex = 0; tableIndex < tables.length; tableIndex++) {
-    const table = tables[tableIndex]!;
-    if (!activeRegistry.has(table)) continue;
-    const ids = provenance[table]!;
-    for (let rowIndex = 0; rowIndex < ids.length; rowIndex++) {
-      const id = ids[rowIndex]!;
-      if (rowState(store, table, id) === "active") {
-        STORE_SOFT_DELETE.call(store, table, id);
-        affected += 1;
-      }
-      recoverable += 1;
+  for (let index = 0; index < provenance.length; index++) {
+    const entry = provenance[index]!;
+    if (entry.tableActive && entry.rowState === "active") {
+      STORE_SOFT_DELETE.call(store, entry.tableName, entry.rowId);
+      affected += 1;
     }
+    recoverable += 1;
   }
   return Object.freeze({
     affected,
@@ -266,53 +271,51 @@ export function executeCapturedSampleRemoval(store: ClayStore): SampleRemovalRes
 export function executeCapturedSampleFill(
   store: ClayStore,
   input: CapturedSampleFill,
-): Readonly<{ added: number; tables: number }> {
-  const existing = readSampleRowProvenance(store);
-  const marker: Record<string, string[]> = {};
-  const existingTables = Object.keys(existing);
-  for (let index = 0; index < existingTables.length; index++) {
-    const table = existingTables[index]!;
-    marker[table] = [...existing[table]!];
-  }
-  const registry = STORE_REGISTRY.call(store);
+  operationId: string,
+): SampleFillExecutionOutcome {
+  verifiedProvenance(store);
+  const registry = STORE_VALIDATION_REGISTRY.call(store);
+  const additions: SampleRowProvenanceEntry[] = [];
   let added = 0;
   let tables = 0;
   for (let tableIndex = 0; tableIndex < input.tables.length; tableIndex++) {
     const candidate = input.tables[tableIndex]!;
-    if (!registry.has(candidate.table))
+    const table = registry.get(candidate.table);
+    if (!table || !table.semantic)
       throw invalid("sample fill request references an unknown table");
-    const ids = marker[candidate.table] ?? [];
     let tableAdded = 0;
     for (let rowIndex = 0; rowIndex < candidate.rows.length; rowIndex++) {
       const inserted = STORE_INSERT.call(
         store, candidate.table, candidate.rows[rowIndex] as Record<string, unknown>,
       );
-      ids.push(String(inserted.id));
+      additions.push(Object.freeze({
+        tableId: table.semantic.tableId,
+        rowId: String(inserted.id),
+        operationId,
+      }));
       added += 1;
       tableAdded += 1;
     }
     if (tableAdded > 0) {
-      marker[candidate.table] = ids;
       tables += 1;
     }
   }
-  if (added > 0) STORE_SET_SETTING.call(store, "sample_rows", marker);
-  return Object.freeze({ added, tables });
+  if (additions.length > 0) STORE_RECORD_PROVENANCE.call(store, additions);
+  const sampleProvenance = additions
+    .map(entry => Object.freeze({ tableId: entry.tableId, rowId: entry.rowId }))
+    .sort((left, right) => {
+      const leftKey = `${left.tableId}\u0000${left.rowId}`;
+      const rightKey = `${right.tableId}\u0000${right.rowId}`;
+      return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+    });
+  return Object.freeze({
+    result: Object.freeze({ added, tables }),
+    sampleProvenance: Object.freeze(sampleProvenance),
+  });
 }
 
 /** Count active marked samples while retaining deleted-row provenance. */
 export function activeSampleRowCount(store: ClayStore): number {
-  const provenance = readSampleRowProvenance(store);
-  const activeRegistry = STORE_REGISTRY.call(store);
-  let active = 0;
-  const tables = Object.keys(provenance);
-  for (let tableIndex = 0; tableIndex < tables.length; tableIndex++) {
-    const table = tables[tableIndex]!;
-    if (!activeRegistry.has(table)) continue;
-    const ids = provenance[table]!;
-    for (let rowIndex = 0; rowIndex < ids.length; rowIndex++) {
-      if (rowState(store, table, ids[rowIndex]!) === "active") active += 1;
-    }
-  }
-  return active;
+  return verifiedProvenance(store).filter(entry =>
+    entry.tableActive && entry.rowState === "active").length;
 }
