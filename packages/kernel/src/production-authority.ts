@@ -144,7 +144,7 @@ type ProductionStoreReaderMethod =
   | "fieldProvenance" | "getSetting" | "globalSearch" | "headVersion" | "history"
   | "listAutomations" | "listNotifications" | "livePanels" | "operationBatches"
   | "panelProvenance" | "previewRelationConversion"
-  | "privateMetricsSummary" | "query" | "readAttachment" | "registrySnapshot"
+  | "privateMetricsSummary" | "query" | "queryBounded" | "readAttachment" | "registrySnapshot"
   | "restorableRows" | "rowHistory" | "semanticSchemaTrace" | "simulateAutomation"
   | "suggestions";
 
@@ -171,6 +171,7 @@ const PINNED_READS = Object.freeze({
   previewRelationConversion: ClayStore.prototype.previewRelationConversion,
   privateMetricsSummary: ClayStore.prototype.privateMetricsSummary,
   query: ClayStore.prototype.query,
+  queryBounded: ClayStore.prototype.queryBounded,
   readAttachment: ClayStore.prototype.readAttachment,
   registrySnapshot: ClayStore.prototype.registrySnapshot,
   restorableRows: ClayStore.prototype.restorableRows,
@@ -200,6 +201,7 @@ function createStoreReader(store: ClayStore): ProductionStoreReader {
     previewRelationConversion: PINNED_READS.previewRelationConversion.bind(store),
     privateMetricsSummary: PINNED_READS.privateMetricsSummary.bind(store),
     query: PINNED_READS.query.bind(store),
+    queryBounded: PINNED_READS.queryBounded.bind(store),
     readAttachment: PINNED_READS.readAttachment.bind(store),
     registrySnapshot: PINNED_READS.registrySnapshot.bind(store),
     restorableRows: PINNED_READS.restorableRows.bind(store),

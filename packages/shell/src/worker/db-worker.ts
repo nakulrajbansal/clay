@@ -7,6 +7,7 @@ import {
   InProcessAsyncStore, portFromMessagePort, serveStore,
   type DebugEvent, type LivePanel, type PanelProvenance, type PreviewHandle,
 } from "@clay/kernel";
+import { projectPlaintextV1Cooperative, type ProjectionRequestV1 } from "@clay/kernel/projection";
 import { ClayError } from "@clay/kernel/errors";
 import type {
   ProductionStoreAuthority,
@@ -56,6 +57,8 @@ let modelAccess: {
 // worker console (visible in DevTools).
 type TraceEntry = { at: string; intent: string; events: DebugEvent[] };
 const traceLog: TraceEntry[] = [];
+const activeProjections = new Set<number>();
+const cancelledProjections = new Set<number>();
 const TRACE_CAP = 25;
 
 function recordTrace(entry: TraceEntry): void {
@@ -222,6 +225,23 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       return failClosedMutation(req.op);
     case "registryTables":
       return [...mustStore().registrySnapshot().values()];
+    case "projectPlaintextV1":
+      activeProjections.add(req.id);
+      try {
+        return await projectPlaintextV1Cooperative(mustStore(), p as ProjectionRequestV1, {
+          isCancelled: () => cancelledProjections.has(req.id),
+        });
+      } finally {
+        activeProjections.delete(req.id);
+        cancelledProjections.delete(req.id);
+      }
+    case "cancelProjectionV1": {
+      const targetId = Number(p.targetId);
+      if (!Number.isSafeInteger(targetId) || targetId < 1)
+        throw new ClayError("E_VALIDATION", "projection cancellation target is invalid");
+      if (activeProjections.has(targetId)) cancelledProjections.add(targetId);
+      return null;
+    }
     case "storePort": {
       const port = ports[0];
       if (!port) throw new Error("storePort needs a transferred port");
@@ -389,11 +409,15 @@ self.onmessage = (ev: MessageEvent): void => {
     try {
       const result = await handle(req, ev.ports);
       const transfer: Transferable[] = [];
-      if (result && typeof result === "object" && "bytes" in result) {
-        const bytes = (result as { bytes?: unknown }).bytes;
-        if (bytes instanceof ArrayBuffer) transfer.push(bytes);
-        else if (bytes instanceof Uint8Array && bytes.buffer instanceof ArrayBuffer)
-          transfer.push(bytes.buffer);
+      const transferred = new Set<ArrayBuffer>();
+      const addTransfer = (value: unknown): void => {
+        const buffer = value instanceof ArrayBuffer ? value
+          : value instanceof Uint8Array && value.buffer instanceof ArrayBuffer ? value.buffer : null;
+        if (buffer && !transferred.has(buffer)) { transferred.add(buffer); transfer.push(buffer); }
+      };
+      if (result && typeof result === "object") {
+        const bytes = result as { bytes?: unknown; plaintext?: unknown; csv?: unknown };
+        addTransfer(bytes.bytes); addTransfer(bytes.plaintext); addTransfer(bytes.csv);
       }
       (self as unknown as Worker).postMessage({ id: req.id, ok: true, result }, transfer);
     } catch (e) {

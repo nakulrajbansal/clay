@@ -89,8 +89,10 @@ export function ModalDialog(props: {
       }
       const target = props.returnFocusRef?.current ?? previousFocus.current;
       const top = modalLayers.at(-1);
-      if (top) focusDialog(top.dialog);
-      else target?.focus();
+      if (top) {
+        if (target && top.dialog.contains(target)) target.focus();
+        if (document.activeElement !== target) focusDialog(top.dialog);
+      } else target?.focus();
     };
   }, []);
 

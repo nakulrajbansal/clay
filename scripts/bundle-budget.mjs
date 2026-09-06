@@ -8,6 +8,7 @@ import {
   analyzeManifest,
   assertBuildFresh,
   assertWithinBudget,
+  collectEmittedRuntimeFiles,
   measureFiles,
   mergeFiles,
 } from "./bundle-budget-lib.mjs";
@@ -66,6 +67,7 @@ const panelBoundary = await exists(join(sourceRoot, "PanelCanvas.tsx"))
 const expectedLazyChunks = [
   panelBoundary,
   { label: "DataView", source: "src/app/DataView.tsx" },
+  { label: "ExportDialog", source: "src/app/ExportDialog.tsx" },
   { label: "RecordDetail", source: "src/app/RecordDetail.tsx" },
   { label: "RelationConversionDialog", source: "src/app/RelationConversionDialog.tsx" },
   { label: "CommandPalette", source: "src/app/CommandPalette.tsx" },
@@ -115,6 +117,7 @@ const panelLimits = { raw: 135_000, gzip: 35_000 };
 const optionalLimits = { raw: 45_000, gzip: 14_000 };
 const nestedLimits = new Map([
   ["RecordDetail", { raw: 50_000, gzip: 16_000 }],
+  ["ExportDialog", { raw: 24_000, gzip: 8_000 }],
 ]);
 const totalShellLimits = { raw: 980_000, gzip: 290_000 };
 
@@ -204,9 +207,9 @@ await check(
   { raw: 82_000, gzip: 17_000 },
 );
 
-const browserRuntimeMeasured = await measureFiles(distRoot,
-  mergeFiles(analysis.totalShellJsFiles, [databaseWorkerFile, workerAuthorityFile], sqliteSupportFiles,
-    [wasmFile], cssFiles));
+const browserRuntimeMeasured = await measureFiles(
+  distRoot, await collectEmittedRuntimeFiles(distRoot),
+);
 printAndAssert("complete browser runtime payload", {
   files: [...browserRuntimeMeasured.files, ...panelRuntimeMeasured.files],
   raw: browserRuntimeMeasured.raw + panelRuntimeMeasured.raw,

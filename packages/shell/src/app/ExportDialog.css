@@ -1,0 +1,33 @@
+.export-manifest dd {
+  margin: 0;
+}
+
+.projection-print-document {
+  margin: 0 24px 16px;
+  color: #172033;
+  background: #fff;
+}
+
+@media print {
+  @page { margin: 12mm; }
+  body > * { visibility: hidden !important; }
+  body > .export-dialog-backdrop {
+    position: static;
+    display: block;
+    visibility: visible;
+    background: none;
+  }
+  .export-dialog {
+    max-height: none;
+    overflow: visible;
+  }
+  .export-dialog > :not(.projection-print-document) { display: none; }
+  .projection-print-document,
+  .projection-print-document * { visibility: visible; }
+  .projection-table-scroll { overflow: visible; }
+  .projection-print-document thead { display: table-header-group; }
+  .projection-print-document tr { break-inside: avoid; }
+  .projection-print-document th { position: static; }
+  .projection-empty-marker,
+  .projection-csv-safety-note { display: none !important; }
+}

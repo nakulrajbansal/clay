@@ -7,6 +7,7 @@ export type ClayErrorCode =
   | "E_TYPE"
   | "E_EXPR"
   | "E_CONFLICT"
+  | "E_CANCELLED"
   | "E_CATALOG_UNAVAILABLE"
   | "E_CATALOG_CONFLICT"
   | "E_STATE_DIGEST_INVALID"

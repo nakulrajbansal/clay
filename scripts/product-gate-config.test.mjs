@@ -37,7 +37,9 @@ test("every actual aggregate product gate uses the shared origin resolver", asyn
     assert.equal(typeof command, "string", `${gate} must be a package script`);
     const scriptPath = command.match(/^node (scripts\/[a-z0-9-]+\.mjs)(?: [a-zA-Z0-9/._-]+)*$/)?.[1];
     assert.ok(scriptPath, `${gate} must execute exactly one browser script`);
-    const source = await readFile(new URL(scriptPath, root), "utf8");
+    const browserScriptPath = gate === "verify:local-export"
+      ? "scripts/local-export-evidence.mjs" : scriptPath;
+    const source = await readFile(new URL(browserScriptPath, root), "utf8");
     assert.match(source,
       /import\s*\{[^}]*\bproductGateUrl\b[^}]*\}\s*from "\.\/product-gate-url\.mjs";/s,
       `${gate} must import the shared resolver`);
@@ -66,6 +68,63 @@ test("workspace evidence installs navigation and exact-request guards", async ()
   assert.match(source, /buildDigest, expectedBuildDigest/);
 });
 
+test("local-export release entrypoint owns an isolated clean-HEAD certificate lifecycle", async () => {
+  assert.equal(packageJson.scripts["verify:local-export"],
+    "node scripts/verify-local-export.mjs");
+  const wrapper = await readFile(new URL("scripts/verify-local-export.mjs", root), "utf8");
+  assert.match(wrapper, /deriveCleanHeadSource\(/);
+  assert.match(wrapper, /git[\s\S]*worktree[\s\S]*add[\s\S]*--detach/);
+  assert.match(wrapper, /assertExactCleanSource\(/);
+  assert.match(wrapper, /--offline/);
+  assert.match(wrapper, /--frozen-lockfile/);
+  assert.match(wrapper, /--strictPort/);
+  assert.match(wrapper, /4173[\s\S]*4174[\s\S]*4175/);
+  assert.match(wrapper, /resolveEvidenceOutput/);
+  assert.match(wrapper, /createCertificateEnvironment\(/);
+  assert.doesNotMatch(wrapper, /const env\s*=\s*\{\s*\.\.\.process\.env/s,
+    "the certificate must not inherit arbitrary build-affecting environment");
+  assert.match(wrapper,
+    /options\.manualScreenReader[\s\S]*isInside\(repoRoot, options\.manualScreenReader\)/,
+    "manual evidence input must actually be external to the authoritative source");
+  assert.match(wrapper, /finally\s*\{/);
+  assert.match(wrapper, /const cleanupFailures = \[\]/);
+  assert.match(wrapper, /worktree[\s\S]*remove[\s\S]*worktree[\s\S]*prune/);
+  assert.match(wrapper,
+    /cleanup\("remove isolated temporary directory"[\s\S]*rm\(temporaryRoot, \{ recursive: true, force: true \}\)/);
+  assert.match(wrapper, /local-export-browser-benchmark-evidence\.mjs/);
+  assert.match(wrapper, /local-export-evidence\.mjs/);
+  assert.doesNotMatch(packageJson.scripts["verify:local-export"], /local-export-evidence\.mjs/,
+    "the direct browser runtime must not be the package release entrypoint");
+});
+
+test("local-export browser evidence observes real dialog states and doubles every rendered text node", async () => {
+  const source = await readFile(new URL("scripts/local-export-evidence.mjs", root), "utf8");
+  const harness = await readFile(new URL(
+    "packages/shell/test/browser/projection-benchmark-owner.tsx", root,
+  ), "utf8");
+  const browserBenchmark = await readFile(new URL(
+    "scripts/local-export-browser-benchmark.mjs", root,
+  ), "utf8");
+  assert.match(source, /schema: "LocalExportEvidenceManifestV2"/);
+  assert.match(source, /writeReleaseEvidenceDirectory\(dirname\(outDir\), report, benchmarkEvidence\)/);
+  assert.doesNotMatch(source, /schema: "LocalExportEvidenceManifestV1"/);
+  assert.match(source, /runExportDialogStateEvidence\(/);
+  assert.match(source, /summarizeExportDialogStateEvidence\(/);
+  assert.doesNotMatch(source, /states:\s*\["loading", "success", "error"\]/);
+  assert.match(harness, /openState/);
+  assert.doesNotMatch(browserBenchmark, /data-export-state/,
+    "browser evidence must identify loading, success, and error through semantic DOM state");
+  assert.match(harness, /"loading"\s*\|\s*"success"\s*\|\s*"error"/);
+  assert.match(source, /NodeFilter\.SHOW_TEXT/);
+  assert.match(source, /computed-font-size-per-rendered-text-node/);
+  assert.match(source, /style\.setProperty\("font-size"/);
+  assert.match(source, /renderedTextNodes/);
+  assert.match(source, /targetReachability/);
+  assert.doesNotMatch(source,
+    /document\.documentElement\.style\.setProperty\("font-size", "200%", "important"\)/);
+  assert.doesNotMatch(source, /deviceScaleFactor:\s*2/);
+});
+
 test("shared product-gate helpers bind override, final origin, and manifest entry", () => {
   assert.equal(PRODUCT_GATE_ORIGIN, "http://127.0.0.1:4173");
   assert.equal(productGateUrl({}), PRODUCT_GATE_ORIGIN);
@@ -91,6 +150,18 @@ test("origin guard remembers any redirect and requests require the exact origin"
   ), true);
   assert.equal(isExpectedProductGateRequest(
     PRODUCT_GATE_ORIGIN, "http://127.0.0.1:4174/assets/index.js",
+  ), false);
+  assert.equal(isExpectedProductGateRequest(
+    PRODUCT_GATE_ORIGIN, "blob:null/4fe2e861-a6a5-4595-9d43-dfc45d90645d",
+  ), true);
+  assert.equal(isExpectedProductGateRequest(
+    PRODUCT_GATE_ORIGIN, `blob:${PRODUCT_GATE_ORIGIN}/4fe2e861-a6a5-4595-9d43-dfc45d90645d`,
+  ), true);
+  assert.equal(isExpectedProductGateRequest(
+    PRODUCT_GATE_ORIGIN, "blob:https://evil.example/4fe2e861-a6a5-4595-9d43-dfc45d90645d",
+  ), false);
+  assert.equal(isExpectedProductGateRequest(
+    PRODUCT_GATE_ORIGIN, "blob:null/not-a-uuid",
   ), false);
 });
 

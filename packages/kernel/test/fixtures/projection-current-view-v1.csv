@@ -1,0 +1,4 @@
+﻿Title,Notes,Amount,Customer,Double amount,Empty
+Alpha,plain,10,Beta,20,
+'=2+3,"Line 1
+""quoted"", yes",7.5,Acme,15,

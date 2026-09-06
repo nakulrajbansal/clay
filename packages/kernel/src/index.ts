@@ -26,7 +26,7 @@ export {
   type DatabaseCopyShape, type DbDriver, type SqlRow, type SqlValue,
 } from "./db";
 export { crc32, zipRead, zipWrite, type ZipEntry } from "./zip";
-export { compileQuery, runQuery, type CompiledQuery, type QueryRow,
+export { compileQuery, runQuery, type CompiledQuery, type QueryByteBudget, type QueryRow,
   type QueryValue, type RecordLink } from "./query";
 export { coerceValue, nowIso, uuidv7, validateInsert, validatePatch } from "./rows";
 export {

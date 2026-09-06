@@ -38,6 +38,33 @@ it("exposes only the top modal layer to interaction and assistive technology", a
   expect(document.body.querySelector(".modal-backdrop")).toBeNull();
 });
 
+it("restores an explicit trigger inside the newly exposed parent", async () => {
+  function Probe(): React.JSX.Element {
+    const [child, setChild] = useState(false);
+    const trigger = useRef<HTMLButtonElement>(null);
+    return <ModalDialog className="parent-dialog" backdropClassName="modal-backdrop parent-backdrop"
+      ariaLabel="Parent" onClose={() => undefined}>
+      <button>First parent action</button>
+      <button ref={trigger} onClick={() => setChild(true)}>Export trigger</button>
+      {child ? <ModalDialog className="child-dialog" backdropClassName="modal-backdrop child-backdrop"
+        ariaLabel="Child" onClose={() => setChild(false)} returnFocusRef={trigger}>
+        <button>Child action</button>
+      </ModalDialog> : null}
+    </ModalDialog>;
+  }
+  const host = document.createElement("div");
+  document.body.replaceChildren(host);
+  const root = createRoot(host);
+  await act(async () => root.render(<Probe />));
+  const trigger = [...document.body.querySelectorAll<HTMLButtonElement>(".parent-dialog button")]
+    .find(button => button.textContent === "Export trigger")!;
+  await act(async () => trigger.click());
+  const child = document.body.querySelector<HTMLElement>(".child-dialog")!;
+  await act(async () => child.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(document.activeElement).toBe(trigger);
+  await act(async () => root.unmount());
+});
+
 it("returns focus to the newly exposed parent instead of an outside trigger", async () => {
   function Probe(): React.JSX.Element {
     const [child, setChild] = useState(false);

@@ -249,7 +249,7 @@ describe("production Store authority", () => {
         "fieldProvenance", "getSetting", "globalSearch", "headVersion", "history",
         "listAutomations", "listNotifications", "livePanels", "operationBatches",
         "panelProvenance", "previewRelationConversion",
-        "privateMetricsSummary", "query", "readAttachment", "registrySnapshot",
+        "privateMetricsSummary", "query", "queryBounded", "readAttachment", "registrySnapshot",
         "restorableRows", "rowHistory", "semanticSchemaTrace", "simulateAutomation",
         "suggestions",
       ].sort());

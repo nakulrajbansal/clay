@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import test from "node:test";
 import { gzipSync } from "node:zlib";
 
@@ -9,6 +9,7 @@ import {
   analyzeManifest,
   assertBuildFresh,
   assertWithinBudget,
+  collectEmittedRuntimeFiles,
   collectShellJsFiles,
   collectStaticClosure,
   findEntry,
@@ -102,6 +103,94 @@ test("resolveSemanticLazyChunks rejects a missing expected boundary", () => {
     () => resolveSemanticLazyChunks(manifest, expected),
     /missing expected lazy chunk HistoryView \(src\/app\/HistoryView\.tsx\)/,
   );
+});
+
+test("resolveSemanticLazyChunks recognizes a Vite facade by its semantic name", () => {
+  const manifest = {
+    "_DataView-hash.js": {
+      file: "assets/DataView-hash.js",
+      name: "DataView",
+      isDynamicEntry: true,
+    },
+  };
+  assert.equal(resolveSemanticLazyChunks(manifest, [{
+    label: "DataView", source: "src/app/DataView.tsx",
+  }])[0].key, "_DataView-hash.js");
+});
+
+test("analyzeManifest measures a nested lazy boundary after its loaded parent", () => {
+  const manifest = {
+    "index.html": {
+      file: "assets/index.js", isEntry: true,
+      dynamicImports: ["_DataView.js"],
+    },
+    "_DataView.js": {
+      file: "assets/DataView.js", name: "DataView", isDynamicEntry: true,
+      imports: ["index.html"], dynamicImports: ["src/app/ExportDialog.tsx"],
+    },
+    "src/app/ExportDialog.tsx": {
+      file: "assets/ExportDialog.js", src: "src/app/ExportDialog.tsx",
+      isDynamicEntry: true, imports: ["index.html", "_DataView.js"],
+    },
+  };
+  const chunks = analyzeManifest(manifest, { expectedLazyChunks: [
+    { label: "DataView", source: "src/app/DataView.tsx" },
+    { label: "ExportDialog", source: "src/app/ExportDialog.tsx" },
+  ] }).lazyChunks;
+  assert.deepEqual(chunks.find(chunk => chunk.label === "ExportDialog").closure.files,
+    ["assets/ExportDialog.js"]);
+});
+
+test("analyzeManifest carries loaded closures through transitive dynamic ancestry", () => {
+  const manifest = {
+    "index.html": {
+      file: "assets/index.js", isEntry: true, dynamicImports: ["_parent.js"],
+    },
+    "_parent.js": {
+      file: "assets/parent.js", isDynamicEntry: true, imports: ["index.html"],
+      dynamicImports: ["_child.js"],
+    },
+    "_child.js": {
+      file: "assets/child.js", isDynamicEntry: true, imports: ["index.html", "_parent.js"],
+      dynamicImports: ["src/app/ExportDialog.tsx"],
+    },
+    "src/app/ExportDialog.tsx": {
+      file: "assets/ExportDialog.js", src: "src/app/ExportDialog.tsx",
+      isDynamicEntry: true, imports: ["index.html", "_parent.js", "_child.js"],
+    },
+  };
+
+  const [chunk] = analyzeManifest(manifest, { expectedLazyChunks: [
+    { label: "ExportDialog", source: "src/app/ExportDialog.tsx" },
+  ] }).lazyChunks;
+  assert.deepEqual(chunk.closure.files, ["assets/ExportDialog.js"]);
+});
+
+test("analyzeManifest does not subtract a parent absent from another activation path", () => {
+  const manifest = {
+    "index.html": {
+      file: "assets/index.js", isEntry: true, dynamicImports: ["_left.js", "_right.js"],
+    },
+    "_left.js": {
+      file: "assets/left.js", isDynamicEntry: true, imports: ["index.html"],
+      dynamicImports: ["src/app/ExportDialog.tsx"],
+    },
+    "_right.js": {
+      file: "assets/right.js", isDynamicEntry: true, imports: ["index.html"],
+      dynamicImports: ["src/app/ExportDialog.tsx"],
+    },
+    "src/app/ExportDialog.tsx": {
+      file: "assets/ExportDialog.js", src: "src/app/ExportDialog.tsx",
+      isDynamicEntry: true, imports: ["index.html", "_left.js", "_right.js"],
+    },
+  };
+
+  const [chunk] = analyzeManifest(manifest, { expectedLazyChunks: [
+    { label: "ExportDialog", source: "src/app/ExportDialog.tsx" },
+  ] }).lazyChunks;
+  assert.deepEqual(chunk.closure.files, [
+    "assets/ExportDialog.js", "assets/left.js", "assets/right.js",
+  ]);
 });
 
 test("analyzeManifest keeps dynamic chunks outside the entry closure", () => {
@@ -257,6 +346,26 @@ test("measureFiles reports per-file and closure byte totals", async t => {
     raw: app.byteLength + shared.byteLength,
     gzip: gzipSync(app).byteLength + gzipSync(shared).byteLength,
   });
+});
+
+test("complete runtime inventory counts every emitted file except documented build metadata", async t => {
+  const root = await mkdtemp(join(tmpdir(), "clay-runtime-inventory-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, "assets"), { recursive: true });
+  await mkdir(join(root, ".vite"), { recursive: true });
+  await Promise.all([
+    ["index.html", "html"],
+    ["assets/app.js", "js"],
+    ["assets/app.css", "css"],
+    ["assets/font.woff2", "font"],
+    ["assets/logo.svg", "image"],
+    ["assets/unmatched-runtime.bin", "must count"],
+    [".vite/manifest.json", "build metadata"],
+  ].map(([file, contents]) => writeFile(join(root, file), contents)));
+  assert.deepEqual(await collectEmittedRuntimeFiles(`${root}${sep}`), [
+    "assets/app.css", "assets/app.js", "assets/font.woff2", "assets/logo.svg",
+    "assets/unmatched-runtime.bin", "index.html",
+  ]);
 });
 
 test("assertWithinBudget rejects a closure over either byte limit", () => {

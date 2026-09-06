@@ -7,13 +7,18 @@ import {
   lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState,
   type KeyboardEvent as ReactKeyboardEvent, type RefObject,
 } from "react";
+import { applyProjectionViewV1, projectionDisplayTextV1 } from "@clay/kernel/projection";
 import type {
-  AsyncStore, BatchReceipt, Query, QueryRow, QueryValue, RecordLink, RegTable,
+  AsyncStore, BatchReceipt, Query, QueryRow, QueryValue, RegTable,
   SemanticSchemaTraceV1,
 } from "@clay/kernel";
 import type { WorkerClient } from "./worker-client";
 import { loadAllTableRows } from "./paged-query";
 import { ModalDialog } from "./ModalDialog";
+import {
+  buildCurrentViewProjectionScopeV1, buildRecordProjectionScopeV1, localDateAnchorV1,
+  type LocalProjectionScopeV1,
+} from "./projection-scope";
 export { loadAllTableRows } from "./paged-query";
 import {
   createOperationalView, deleteOperationalView, loadOperationalViews,
@@ -25,6 +30,12 @@ import "./Operations.css";
 const RecordDetail = lazy(() => import("./RecordDetail").then(module => ({
   default: module.RecordDetail,
 })));
+const loadExportDialog = () => import("./ExportDialog").then(module => ({
+  default: module.ExportDialog,
+}));
+const ExportDialog = lazy(loadExportDialog);
+// Start the local UI asset fetch with the Data surface, never with export.
+void loadExportDialog();
 const RelationConversionDialog = lazy(() => import("./RelationConversionDialog").then(module => ({
   default: module.RelationConversionDialog,
 })));
@@ -61,16 +72,7 @@ export function reconcileVisibleFieldNames(
   return reconciled;
 }
 
-function displayValue(value: QueryValue | undefined): string {
-  if (value === null || value === undefined) return "";
-  if (Array.isArray(value)) return value.map(displayValue).join(", ");
-  if (typeof value === "object") {
-    const link = value as Partial<RecordLink>;
-    if (typeof link.label === "string") return link.label;
-    return JSON.stringify(value);
-  }
-  return String(value);
-}
+const displayValue = projectionDisplayTextV1;
 
 function accessibleRowLabel(table: RegTable, row: QueryRow): string {
   const column = table.columns.find(candidate => !candidate.hidden && !candidate.inactive
@@ -81,25 +83,6 @@ function accessibleRowLabel(table: RegTable, row: QueryRow): string {
 
 const isDerived = (type: string): boolean =>
   type === "computed" || type === "lookup" || type === "rollup";
-
-function matchesFilter(row: QueryRow, filter: ActiveFilter): boolean {
-  const value = row[filter.field];
-  if (filter.op === "is_null") return value === null || value === undefined;
-  if (filter.op === "not_null") return value !== null && value !== undefined;
-  if (filter.op === "contains") return displayValue(value).toLocaleLowerCase()
-    .includes(String(filter.value ?? "").toLocaleLowerCase());
-  if (filter.op === "eq" || filter.op === "neq") {
-    const matches = displayValue(value) === String(filter.value ?? "");
-    return filter.op === "eq" ? matches : !matches;
-  }
-  if (filter.op === "within_days" || filter.op === "older_than_days") {
-    const date = displayValue(value).slice(0, 10);
-    const now = new Date();
-    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-    return filter.op === "within_days" ? date === today : date !== "" && date < today;
-  }
-  return true;
-}
 
 export function DataView(props: {
   worker: WorkerClient;
@@ -147,6 +130,8 @@ export function DataView(props: {
   const [viewName, setViewName] = useState("");
   const [detailStack, setDetailStack] = useState<{ table: string; id: string }[]>([]);
   const [showRelationDialog, setShowRelationDialog] = useState(false);
+  const [exportScope, setExportScope] = useState<LocalProjectionScopeV1 | null>(null);
+  const exportButtonRef = useRef<HTMLButtonElement>(null);
   const [samples, setSamples] = useState(0);
   // ADR-027: per-record history + local schema edits (no model call)
   const [histFor, setHistFor] = useState<{ id: string;
@@ -522,18 +507,37 @@ export function DataView(props: {
     } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
   };
 
-  const q = search.trim().toLowerCase();
-  let visible = q === "" ? [...rows] : rows.filter(r =>
-    allColumns.some(c => displayValue(r[c.name]).toLowerCase().includes(q)));
-  if (filter) visible = visible.filter(row => matchesFilter(row, filter));
-  if (sort) {
-    visible.sort((left, right) => {
-      const a = displayValue(left[sort.field]);
-      const b = displayValue(right[sort.field]);
-      return (a.localeCompare(b, undefined, { numeric: true }) || 0)
-        * (sort.dir === "asc" ? 1 : -1);
-    });
-  }
+  const openCurrentViewExport = (): void => {
+    if (!table || !semanticTrace) {
+      props.onError("Export is not ready. Reopen Data.");
+      return;
+    }
+    try {
+      setExportScope(buildCurrentViewProjectionScopeV1({
+        trace: semanticTrace, table, columns, search, filter, sort,
+        dateAnchor: localDateAnchorV1(),
+      }));
+    } catch (error) {
+      props.onError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const q = search.trim();
+  const safeFilter = filter ? {
+    field: filter.field, op: filter.op,
+    ...(filter.value !== undefined ? { value: filter.value } : {}),
+  } : null;
+  const visible = applyProjectionViewV1(
+    rows,
+    columns.filter(column => column.type !== "attachment" && column.type !== "json")
+      .map(column => column.name),
+    {
+      search,
+      filter: safeFilter as Parameters<typeof applyProjectionViewV1>[2]["filter"],
+      sort,
+      dateAnchor: localDateAnchorV1(),
+    },
+  );
 
   const focusedGridCell = gridFocus && gridFocus.row < visible.length
       && gridFocus.column < columns.length ? gridFocus : { row: 0, column: 0 };
@@ -585,27 +589,9 @@ export function DataView(props: {
               accept=".csv,.tsv,.txt,.json"
               onChange={e => { const f = e.target.files?.[0]; if (f) props.onImport(f); e.target.value = ""; }} />
           </label>
-          {table ? (
-            <button
-              className="dataview-import"
-              title={`Download “${table.name}” as a spreadsheet — your data is always yours`}
-              onClick={() => {
-                const esc = (v: unknown): string => {
-                  const s = typeof v === "object" && v !== null
-                    ? displayValue(v as QueryValue) : String(v ?? "");
-                  return /[",\n]/.test(s) ? `"${s.replace(/"/g, "\"\"")}"` : s;
-                };
-                const csv = [columns.map(c => esc(c.name)).join(",")]
-                  .concat(rows.map(r => columns.map(c => esc(r[c.name])).join(",")))
-                  .join("\n");
-                const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
-                const a = document.createElement("a");
-                a.href = url; a.download = `${table.name}.csv`; a.click();
-                URL.revokeObjectURL(url);
-                props.onInfo?.(`Downloaded ${rows.length} rows as ${table.name}.csv`);
-              }}
-            >⬇ CSV</button>
-          ) : null}
+          {table ? <button ref={exportButtonRef} className="dataview-import"
+            type="button" aria-label="Preview Print / CSV for current Data view"
+            onClick={openCurrentViewExport}>Print / CSV</button> : null}
           <button className="dataview-close" aria-label="Close data view"
             title="Close (Esc)" onClick={props.onClose}>✕</button>
         </div>
@@ -624,6 +610,7 @@ export function DataView(props: {
             <input
               className="dataview-search"
               type="search"
+              maxLength={512}
               placeholder={`Search ${selected ?? ""}…`}
               value={search}
               onChange={e => { setSearch(e.target.value); setActiveViewId(null); }}
@@ -1044,6 +1031,13 @@ export function DataView(props: {
           </label>
         </div>
       )}
+      {exportScope ? <Suspense fallback={null}><ExportDialog
+          worker={worker}
+          request={exportScope.request}
+          fieldChoices={exportScope.fieldChoices}
+          returnFocusRef={exportScope.request.kind === "current_view" ? exportButtonRef : undefined}
+          onClose={() => setExportScope(null)}
+        /></Suspense> : null}
       {detail && detailTable ? (
         <Suspense fallback={<div className="record-detail-loading" role="status">Loading record…</div>}>
         <RecordDetail
@@ -1062,6 +1056,19 @@ export function DataView(props: {
           }}
           onError={props.onError}
           onInfo={props.onInfo}
+          onExport={() => {
+            if (!semanticTrace) {
+              props.onError("Export is not ready. Reopen Data.");
+              return;
+            }
+            try {
+              setExportScope(buildRecordProjectionScopeV1({
+                trace: semanticTrace, table: detailTable, recordId: detail.id,
+              }));
+            } catch (error) {
+              props.onError(error instanceof Error ? error.message : String(error));
+            }
+          }}
           onConfirm={props.onConfirm}
         />
         </Suspense>

@@ -7,6 +7,7 @@
     ".": "./src/index.ts",
     "./expr": "./src/expr.ts",
     "./errors": "./src/errors.ts",
+    "./projection": "./src/projection.ts",
     "./worker-authority": "./src/worker-authority.ts"
   },
   "scripts": {

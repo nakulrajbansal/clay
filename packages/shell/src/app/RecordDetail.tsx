@@ -137,6 +137,7 @@ export function RecordDetail(props: {
   onWrite: (table: string) => void;
   onError: (message: string) => void;
   onInfo: (message: string) => void;
+  onExport?: () => void;
   onConfirm?: (message: string) => Promise<boolean>;
 }): React.JSX.Element {
   const [row, setRow] = useState<QueryRow | null>(null);
@@ -259,6 +260,7 @@ export function RecordDetail(props: {
     } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
   };
 
+
   const createRelated = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
     if (!creating) return;
@@ -342,6 +344,9 @@ export function RecordDetail(props: {
         : !row ? <div className="record-detail-empty">This record is no longer available.</div> : (
         <>
           <div className="record-detail-actions" aria-label="Record actions">
+            {props.onExport ? <button type="button"
+              aria-label="Preview Print / CSV for this record"
+              onClick={props.onExport}>Print / CSV</button> : null}
             <button onClick={() => void duplicate()}>Duplicate</button>
             <button className="danger" onClick={() => void archive()}>Archive</button>
           </div>

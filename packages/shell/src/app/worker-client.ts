@@ -8,6 +8,11 @@ import type {
   PrivateMetricEvent, PrivateMetricsSummary, RegTable, RelationConversionPreview,
   RelationConversionRequest, RelationConversionResult, SemanticSchemaTraceV1, Suggestion,
 } from "@clay/kernel";
+import {
+  decodeProjectionArtifactV1,
+  type ProjectionArtifactV1,
+  type ProjectionRequestV1,
+} from "@clay/kernel/projection";
 import { ClayError } from "@clay/kernel/errors";
 import type { IntentOutcome } from "../worker/db-worker";
 
@@ -128,7 +133,7 @@ function mintWorkerRequestId(): string {
 export class WorkerClient {
   private nextId = 1;
   private readonly pending = new Map<number, {
-    resolve: (v: unknown) => void; reject: (e: Error) => void;
+    resolve: (v: unknown) => void; reject: (e: Error) => void; cleanup: () => void;
   }>();
 
   constructor(private readonly worker: Worker) {
@@ -140,6 +145,7 @@ export class WorkerClient {
       const entry = this.pending.get(msg.id);
       if (!entry) return;
       this.pending.delete(msg.id);
+      entry.cleanup();
       if (msg.ok) entry.resolve(msg.result);
       else if (typeof msg.error === "object" && msg.error !== null) entry.reject(new ClayError(
         (msg.error.code ?? "E_INTERNAL") as ClayError["code"],
@@ -149,10 +155,29 @@ export class WorkerClient {
     };
   }
 
-  private call<T>(op: string, payload?: Record<string, unknown>, transfer?: Transferable[]): Promise<T> {
+  private call<T>(
+    op: string,
+    payload?: Record<string, unknown>,
+    transfer?: Transferable[],
+    signal?: AbortSignal,
+  ): Promise<T> {
+    if (signal?.aborted)
+      return Promise.reject(new ClayError("E_CANCELLED", "The local export projection was cancelled."));
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
+      const abort = (): void => {
+        if (!this.pending.delete(id)) return;
+        signal?.removeEventListener("abort", abort);
+        const cancelId = this.nextId++;
+        this.worker.postMessage({
+          id: cancelId, requestId: mintWorkerRequestId(), op: "cancelProjectionV1",
+          payload: { targetId: id },
+        });
+        reject(new ClayError("E_CANCELLED", "The local export projection was cancelled."));
+      };
+      const cleanup = (): void => signal?.removeEventListener("abort", abort);
+      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject, cleanup });
+      signal?.addEventListener("abort", abort, { once: true });
       this.worker.postMessage({ id, requestId: mintWorkerRequestId(), op, payload }, transfer ?? []);
     });
   }
@@ -313,6 +338,19 @@ export class WorkerClient {
   sampleCount(): Promise<number> { return this.call("sampleCount"); }
   reset(): Promise<null> { return this.call("reset"); }
   registryTables(): Promise<RegTable[]> { return this.call("registryTables"); }
+  async projectExport(
+    request: ProjectionRequestV1, signal?: AbortSignal,
+  ): Promise<ProjectionArtifactV1> {
+    const transported = await this.call<ProjectionArtifactV1>(
+      "projectPlaintextV1", request, undefined, signal,
+    );
+    const canonicalProjection = decodeProjectionArtifactV1(transported);
+    return Object.freeze({
+      projection: canonicalProjection,
+      plaintext: transported.plaintext.slice(),
+      csv: transported.csv.slice(),
+    });
+  }
   restoreRow(table: string, id: string): Promise<null> {
     return this.call("restoreRow", { table, id });
   }

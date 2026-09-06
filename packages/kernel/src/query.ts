@@ -52,6 +52,15 @@ export type CompiledQuery = {
   boolCols: Set<string>;
   jsonCols: Set<string>;
   relationDisplays: RegColumn[];
+  /** Physical result columns available to the pre-materialization byte guard. */
+  physicalFields: string[] | null;
+};
+
+/** Mutable, invocation-local budget used only by trusted bounded readers. */
+export type QueryByteBudget = {
+  remainingBytes: number;
+  readonly maxRowBytes: number;
+  readonly limitLabel: string;
 };
 
 function fieldKind(t: RegTable, name: string): { computed: boolean; type: ColumnKind } {
@@ -244,7 +253,7 @@ export function compileQuery(reg: Registry, input: QueryT, now: Date): CompiledQ
     return {
       sql, params, table: q.from, computed: [], postWhere: [], postOrWhere: null,
       postOrder: null, finalSelect: [...aliases], limit, postLimit: false,
-      boolCols: new Set(), jsonCols: new Set(), relationDisplays: [],
+      boolCols: new Set(), jsonCols: new Set(), relationDisplays: [], physicalFields: null,
     };
   }
 
@@ -369,6 +378,7 @@ export function compileQuery(reg: Registry, input: QueryT, now: Date): CompiledQ
     finalSelect, limit, postLimit, boolCols, jsonCols,
     relationDisplays: [...relationDisplayNames].map(name => findColumn(t, name))
       .filter((column): column is RegColumn => column?.type === "relation"),
+    physicalFields: [...physNeeded],
   };
 }
 
@@ -396,6 +406,7 @@ function materializeConnected(
   source: RegTable,
   rows: QueryRow[],
   columns: Extract<CompiledComputed, { kind: "connected" }>[],
+  budget?: QueryByteBudget,
 ): void {
   for (const compiled of columns) {
     const definition = compiled.column.lookup ?? compiled.column.rollup;
@@ -411,11 +422,12 @@ function materializeConnected(
       const batch = ids.slice(offset, offset + 400);
       if (batch.length === 0) continue;
       const select = targetFieldName ? `"id", ${qid(targetFieldName)}` : `"id"`;
-      const found = driver.select(
-        `SELECT ${select} FROM ${qid(target.name)} WHERE "deleted_at" IS NULL`
-          + ` AND "id" IN (${batch.map(() => "?").join(", ")})`,
-        batch,
+      const sql = `SELECT ${select} FROM ${qid(target.name)} WHERE "deleted_at" IS NULL`
+        + ` AND "id" IN (${batch.map(() => "?").join(", ")})`;
+      if (budget) preflightQueryBytes(
+        driver, sql, batch, ["id", ...(targetFieldName ? [targetFieldName] : [])], budget,
       );
+      const found = driver.select(sql, batch);
       for (const item of found) byId.set(
         String(item.id),
         targetFieldName ? decodeTargetValue(targetField, item[targetFieldName]) : null,
@@ -457,6 +469,7 @@ function hydrateRelationDisplays(
   registry: Registry,
   rows: QueryRow[],
   columns: RegColumn[],
+  budget?: QueryByteBudget,
 ): void {
   for (const column of columns) {
     const relation = column.relation;
@@ -472,9 +485,12 @@ function hydrateRelationDisplays(
       const batch = ids.slice(offset, offset + 400);
       if (batch.length === 0) continue;
       const select = display ? `"id", ${qid(display.name)}` : `"id"`;
-      for (const item of driver.select(
-        `SELECT ${select} FROM ${qid(target.name)} WHERE "deleted_at" IS NULL`
-          + ` AND "id" IN (${batch.map(() => "?").join(", ")})`, batch)) {
+      const sql = `SELECT ${select} FROM ${qid(target.name)} WHERE "deleted_at" IS NULL`
+        + ` AND "id" IN (${batch.map(() => "?").join(", ")})`;
+      if (budget) preflightQueryBytes(
+        driver, sql, batch, ["id", ...(display ? [display.name] : [])], budget,
+      );
+      for (const item of driver.select(sql, batch)) {
         labels.set(String(item.id), display ? String(item[display.name] ?? "Untitled") : String(item.id));
       }
     }
@@ -553,8 +569,47 @@ export function rowMatchesConditions(
   return conditions.every(condition => evalCond(row, condition, now));
 }
 
-export function runQuery(driver: DbDriver, reg: Registry, q: QueryT, now: Date = new Date()): QueryRow[] {
+function preflightQueryBytes(
+  driver: DbDriver,
+  sql: string,
+  params: SqlValue[],
+  fields: readonly string[],
+  budget: QueryByteBudget,
+): void {
+  if (fields.length === 0)
+    throw new ClayError("E_INTERNAL", "bounded query has no physical fields");
+  const terms = fields.map(field => `COALESCE(length(CAST(${qid(field)} AS BLOB)), 0)`);
+  const rowBytes = terms.join(" + ");
+  const maxCellBytes = `MAX(0, ${terms.join(", ")})`;
+  const result = driver.select(
+    `SELECT COALESCE(SUM(${rowBytes}), 0) AS "total_bytes", `
+      + `COALESCE(MAX(${maxCellBytes}), 0) AS "max_cell_bytes" FROM (${sql}) AS "bounded_rows"`,
+    params,
+  )[0];
+  const total = Number(result?.total_bytes ?? 0);
+  const maxCell = Number(result?.max_cell_bytes ?? 0);
+  if (!Number.isSafeInteger(total) || !Number.isSafeInteger(maxCell) || total < 0 || maxCell < 0)
+    throw new ClayError("E_INTERNAL", "bounded query returned an invalid byte count");
+  if (maxCell > budget.maxRowBytes)
+    throw new ClayError("E_LIMIT", `${budget.limitLabel}; one source cell exceeds the per-row guard`);
+  if (total > budget.remainingBytes)
+    throw new ClayError("E_LIMIT", budget.limitLabel);
+  budget.remainingBytes -= total;
+}
+
+export function runQuery(
+  driver: DbDriver,
+  reg: Registry,
+  q: QueryT,
+  now: Date = new Date(),
+  budget?: QueryByteBudget,
+): QueryRow[] {
   const c = compileQuery(reg, q, now);
+  if (budget) {
+    if (!c.physicalFields)
+      throw new ClayError("E_VALIDATION", "bounded aggregate queries are not supported");
+    preflightQueryBytes(driver, c.sql, c.params, c.physicalFields, budget);
+  }
   let rows: QueryRow[] = driver.select(c.sql, c.params) as QueryRow[];
 
   for (const row of rows) {
@@ -575,8 +630,9 @@ export function runQuery(driver: DbDriver, reg: Registry, q: QueryT, now: Date =
     driver, reg, getTable(reg, c.table), rows,
     c.computed.filter((cc): cc is Extract<CompiledComputed, { kind: "connected" }> =>
       cc.kind === "connected"),
+    budget,
   );
-  hydrateRelationDisplays(driver, reg, rows, c.relationDisplays);
+  hydrateRelationDisplays(driver, reg, rows, c.relationDisplays, budget);
 
   if (c.postWhere.length)
     rows = rows.filter(r => c.postWhere.every(cond => evalCond(r, cond, now)));
