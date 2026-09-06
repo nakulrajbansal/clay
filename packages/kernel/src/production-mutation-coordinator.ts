@@ -40,6 +40,7 @@ import {
   starterSeedCatalogMetadata,
   type CapturedStarterSeedBundle,
 } from "./production-seed";
+import { stableJson } from "./stable-json";
 import { sha256HexSync } from "./state-digest";
 import { stateLeafHashV1 } from "./state-merkle";
 import type { StateMerkleChange } from "./state-merkle-index";
@@ -763,23 +764,6 @@ function captureOperationalMetricMutation(input: unknown): CapturedOperationalMe
     if (error instanceof ClayError) throw error;
     throw invalid("operational metric mutation request is invalid");
   }
-}
-
-function stableJson(input: JsonValue): string {
-  if (input === null || typeof input !== "object") return JSON.stringify(input);
-  if (Array.isArray(input)) {
-    let output = "[";
-    for (let index = 0; index < input.length; index++)
-      output += `${index === 0 ? "" : ","}${stableJson(input[index]!)}`;
-    return `${output}]`;
-  }
-  const keys = Object.keys(input).sort();
-  let output = "{";
-  for (let index = 0; index < keys.length; index++) {
-    const key = keys[index]!;
-    output += `${index === 0 ? "" : ","}${JSON.stringify(key)}:${stableJson(input[key]!)}`;
-  }
-  return `${output}}`;
 }
 
 type FixedOperationalMutation = CapturedOperationalMetricMutation;

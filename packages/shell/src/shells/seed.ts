@@ -6,10 +6,7 @@
 // tables in different ways (a jobs board AND a jobs table AND a dashboard
 // count). Tables are created in commits of <=3 (invariant I5); panels then
 // land in one commit; then sample rows.
-import {
-  ClayStore, deriveInverse, expandBlueprint, parseBlueprintDirective,
-  type MigrationPlanT, type PanelBlobInput,
-} from "@clay/kernel";
+import type { PanelBlobInput } from "@clay/kernel";
 import { SEED_PANELS } from "./seed-panels";
 
 export type StarterShellId =
@@ -54,7 +51,6 @@ const col = (name: string, type: ShellColumn["type"],
 // Keep transport replay-stable across worker reloads: the trusted executor
 // resolves this directive against one instant captured for the authority
 // attempt, rather than baking module-load time into the request fingerprint.
-const RELATIVE_STARTER_DAY = /^@clay\/starter-day:([+-]?\d{1,5})$/;
 const soon = (offsetDays: number): string =>
   `@clay/starter-day:${offsetDays >= 0 ? "+" : ""}${offsetDays}`;
 
@@ -585,12 +581,6 @@ export const STARTER_SHELLS: StarterShell[] = [
   },
 ];
 
-function chunk<T>(arr: T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-  return out;
-}
-
 function copySeedValue(input: unknown): unknown {
   if (input === null || typeof input === "string" || typeof input === "boolean") return input;
   if (typeof input === "number" && Number.isFinite(input)) return input;
@@ -608,27 +598,6 @@ function copySeedValue(input: unknown): unknown {
     return output;
   }
   throw new Error("trusted starter seed contains non-plain data");
-}
-
-function materializeSampleRow(
-  table: ShellTable,
-  row: Record<string, unknown>,
-  seedInstant: string,
-): Record<string, unknown> {
-  const materialized = { ...row };
-  for (const column of table.columns) {
-    if (column.type !== "date") continue;
-    const value = materialized[column.name];
-    if (typeof value !== "string" || !value.startsWith("@clay/starter-day:")) continue;
-    const match = RELATIVE_STARTER_DAY.exec(value);
-    const offset = match ? Number(match[1]) : Number.NaN;
-    if (!Number.isSafeInteger(offset) || Math.abs(offset) > 36_500)
-      throw new Error("starter seed relative date is invalid");
-    const date = new Date(seedInstant);
-    date.setDate(date.getDate() + offset);
-    materialized[column.name] = date.toISOString().slice(0, 10);
-  }
-  return materialized;
 }
 
 /**
@@ -686,65 +655,4 @@ export function createStarterSeedBundle(id: unknown): StarterSeedBundle {
   if (new TextEncoder().encode(JSON.stringify(bundle)).byteLength > 900_000)
     throw new Error("trusted starter seed exceeds aggregate limits");
   return bundle;
-}
-
-export function seedStarterShell(store: ClayStore, id: StarterShellId): void {
-  const bundle = createStarterSeedBundle(id);
-  const seedInstant = new Date().toISOString();
-
-  // Tables in commits of <=3 (invariant I5). Multi-table templates take
-  // more than one commit; that is fine — they land before any panel.
-  for (const group of chunk(bundle.tables, 3)) {
-    const operations: MigrationPlanT["operations"] = group.map(t => ({
-      op: "create_table", table: t.name,
-      columns: t.columns.map(c => ({
-        name: c.name, type: c.type, required: c.required,
-        ...(c.values ? { values: c.values } : {}),
-      })),
-    }));
-    store.commit({
-      intent: "first run", summary: `Sets up ${group.map(t => t.name).join(", ")}.`,
-      semanticOrigin: "seed",
-      migration: { operations, inverse: deriveInverse(operations, store.registrySnapshot()) },
-    });
-  }
-
-  // All panels in one commit (a blank canvas commits an empty first version
-  // so the app is "started" but carries nothing to reshape from).
-  // Panels may be blueprint DIRECTIVES (ADR-029/030): expand them here
-  // against the just-created registry — templates ride the same expansion
-  // path model plans do, so the two can never drift.
-  const isBlank = bundle.tables.length === 0;
-  const panels = bundle.panels.map(p => {
-    const spec = parseBlueprintDirective(p.code);
-    if (spec === null) return p;
-    const ex = expandBlueprint(spec, store.registrySnapshot());
-    return { ...p, code: ex.code,
-      declared_queries: ex.declared_queries as typeof p.declared_queries,
-      declared_writes: ex.declared_writes };
-  });
-  store.commit({
-    intent: "first run",
-    summary: isBlank ? "Starts a blank canvas." : `Creates your ${bundle.shellName} views.`,
-    semanticOrigin: "seed",
-    migration: null, panels,
-    diff: isBlank ? [] : [{ kind: "add_panel", detail: `${bundle.shellName} starter panels` }],
-  });
-
-  // Sample rows, flagged for one-click removal.
-  const sampleIds: Record<string, string[]> = {};
-  for (const t of bundle.tables) {
-    sampleIds[t.name] = t.sampleRows.map(row =>
-      String(store.insert(t.name, materializeSampleRow(t, row, seedInstant)).id));
-  }
-  store.setSetting("sample_rows", sampleIds);
-  store.setSetting("shell_id", bundle.shellId);
-}
-
-/** One-click sample removal (G9): kernel-local, soft-deleted (reversible). */
-export function removeSampleRows(store: ClayStore): void {
-  const marker = store.getSetting<Record<string, string[]>>("sample_rows") ?? {};
-  for (const [table, ids] of Object.entries(marker))
-    for (const id of ids) store.softDelete(table, id);
-  store.setSetting("sample_rows", {});
 }

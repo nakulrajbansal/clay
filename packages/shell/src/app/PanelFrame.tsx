@@ -4,9 +4,8 @@
 // is one transferred MessagePort speaking the Bridge protocol.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import {
-  portFromMessagePort, type Bridge, type LivePanel, type PanelProvenance,
-} from "@clay/kernel";
+import { portFromMessagePort } from "@clay/kernel/shell-runtime";
+import type { Bridge, LivePanel, PanelProvenance } from "@clay/kernel";
 // The fixed bootstrap, built to a single file and inlined (doc 06 §2).
 import runtimeBundle from "@clay/panel-runtime/iframe-bundle?raw";
 

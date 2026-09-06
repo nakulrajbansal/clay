@@ -3,11 +3,11 @@
 // run here. The main thread gets: a command protocol (below) plus
 // serveStore RPC ports for the Bridge's AsyncStore (live and shadow).
 // Records never leave this worker except over those ports to the Bridge.
-import {
-  portFromMessagePort, serveStore,
-  type DebugEvent, type LivePanel, type PanelProvenance,
-  type PreparedMutationCommand, type PreparedMutationPreview,
+import type {
+  DebugEvent, LivePanel, PanelProvenance,
+  PreparedMutationCommand, PreparedMutationPreview,
 } from "@clay/kernel";
+import { portFromMessagePort, serveStore } from "@clay/kernel/worker-rpc";
 import { ClayError } from "@clay/kernel/errors";
 import type {
   ProductionStoreAuthority,
@@ -253,7 +253,7 @@ async function executePipelineText(text: string): Promise<IntentOutcome> {
   // Vite emits this cold reshaping path as separate worker chunks.
   const [{ MutationPipeline }, { MutationClient }] = await Promise.all([
     import("@clay/kernel/planner-pipeline"),
-    import("@clay/mutation"),
+    import("@clay/mutation/client"),
   ]);
   const transport = apiKey
     ? { mode: "byo" as const, apiKey }

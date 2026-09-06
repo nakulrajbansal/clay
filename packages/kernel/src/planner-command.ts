@@ -2,6 +2,7 @@ import { MutationPlan } from "@clay/schema";
 import { ClayError } from "./errors";
 import { cloneFieldSemantic, cloneTableSemantic } from "./registry";
 import { parseFieldId, parseRelationshipId, parseTableId } from "./semantic";
+import { stableJson } from "./stable-json";
 import type {
   FieldId,
   PreparedSemanticAssignmentsV1,
@@ -58,6 +59,8 @@ const MAX_CAPTURE_ARRAY = 20_000;
 const MAX_CAPTURE_RECORD_KEYS = 512;
 const MAX_CAPTURE_KEY_LENGTH = 256;
 const CAPTURE_ENCODER = new TextEncoder();
+const ATTEMPT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const SHAPE_DIGEST = /^sha256:[0-9a-f]{64}$/;
 
 function consumeCaptureBytes(budget: CaptureBudget, bytes: number): void {
   budget.bytes += bytes;
@@ -92,7 +95,7 @@ function captureStrictData(
   }
   if (typeof input === "number") {
     if (!Number.isFinite(input)) throw strictInvalid("prepared command contains a non-finite number");
-    consumeCaptureBytes(budget, CAPTURE_ENCODER.encode(JSON.stringify(input)).byteLength);
+    consumeCaptureBytes(budget, JSON.stringify(input).length);
     return input;
   }
   if (typeof input === "string") {
@@ -139,9 +142,7 @@ function captureStrictData(
       throw new ClayError("E_LIMIT", "prepared command record exceeds limits");
     consumeCaptureBytes(budget, 2 + Math.max(0, keys.length - 1));
     const output: StrictRecord = Object.create(null);
-    for (const key of keys) {
-      if (typeof key !== "string")
-        throw strictInvalid("prepared command symbols are not allowed");
+    for (const key of keys as string[]) {
       const descriptor = Reflect.getOwnPropertyDescriptor(input, key);
       if (!descriptor || !("value" in descriptor) || !descriptor.enumerable)
         throw strictInvalid("prepared command fields must be enumerable data properties");
@@ -182,8 +183,7 @@ function strictRecord(input: StrictData, label: string): StrictRecord {
 
 function exactFields(record: StrictRecord, fields: readonly string[], label: string): void {
   const keys = Object.keys(record);
-  const expected = new Set(fields);
-  if (keys.length !== fields.length || keys.some(key => !expected.has(key)))
+  if (keys.length !== fields.length || fields.some(key => !Object.hasOwn(record, key)))
     throw strictInvalid(`${label} fields are invalid`);
 }
 
@@ -205,21 +205,36 @@ function safeNonnegativeInteger(value: StrictData, label: string): number {
   return value;
 }
 
-function stableData(input: StrictData): string {
-  if (input === null || typeof input !== "object") return JSON.stringify(input);
-  if (Array.isArray(input)) {
-    let output = "[";
-    for (let index = 0; index < input.length; index++)
-      output += `${index === 0 ? "" : ","}${stableData(input[index]!)}`;
-    return `${output}]`;
-  }
-  const keys = Object.keys(input).sort();
-  let output = "{";
-  for (let index = 0; index < keys.length; index++) {
-    const key = keys[index]!;
-    output += `${index === 0 ? "" : ","}${JSON.stringify(key)}:${stableData(input[key]!)}`;
-  }
-  return `${output}}`;
+function captureAttemptId(record: StrictRecord, label: string): string {
+  const attemptId = boundedString(requiredData(record, "attemptId", label), label, 36, 36);
+  if (!ATTEMPT_ID.test(attemptId)) throw strictInvalid(`${label} is invalid`);
+  return attemptId;
+}
+
+function capturePreparedCore(captured: StrictRecord, preview: boolean): PreparedPreviewInput {
+  const attemptLabel = preview ? "prepared preview attempt id" : "prepared attempt id";
+  const baseLabel = preview ? "prepared preview base" : "prepared mutation base";
+  const versionLabel = preview ? "prepared preview base version" : "prepared base version";
+  const digestLabel = preview ? "prepared preview base digest" : "prepared base shape digest";
+  const intentLabel = preview ? "prepared preview intent" : "prepared intent";
+  const planLabel = preview ? "prepared preview plan" : "prepared mutation plan";
+  const attemptId = captureAttemptId(captured, attemptLabel);
+  const baseRecord = strictRecord(requiredData(captured, "base", baseLabel), baseLabel);
+  exactFields(baseRecord, ["version", "shapeSha256"], baseLabel);
+  const base = Object.freeze({
+    version: safeNonnegativeInteger(requiredData(baseRecord, "version", versionLabel), versionLabel),
+    shapeSha256: boundedString(
+      requiredData(baseRecord, "shapeSha256", digestLabel), digestLabel, 71, 71),
+  });
+  if (!SHAPE_DIGEST.test(base.shapeSha256)) throw strictInvalid(`${digestLabel} is invalid`);
+  const intent = boundedString(requiredData(captured, "intent", intentLabel), intentLabel, 1, 500);
+  const capturedPlan = requiredData(captured, "plan", planLabel);
+  const parsedPlan = MutationPlan.safeParse(capturedPlan);
+  if (!parsedPlan.success || parsedPlan.data.clarifying_question !== null)
+    throw strictInvalid(`${planLabel} is invalid`);
+  if (stableJson(capturedPlan) !== stableJson(parsedPlan.data))
+    throw strictInvalid(`${planLabel} has non-canonical fields`);
+  return { attemptId, base, intent, plan: parsedPlan.data };
 }
 
 function parseSemanticEntries<Id extends string>(
@@ -262,36 +277,7 @@ export function capturePreparedMutationCommand(input: unknown): PreparedMutation
   );
   if (requiredData(captured, "schema", "prepared mutation command schema") !== 1)
     throw strictInvalid("prepared mutation command schema is invalid");
-  const attemptId = boundedString(
-    requiredData(captured, "attemptId", "prepared attempt id"),
-    "prepared attempt id", 36, 36,
-  );
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(attemptId))
-    throw strictInvalid("prepared attempt id is invalid");
-  const baseRecord = strictRecord(
-    requiredData(captured, "base", "prepared mutation base"), "prepared mutation base",
-  );
-  exactFields(baseRecord, ["version", "shapeSha256"], "prepared mutation base");
-  const base = Object.freeze({
-    version: safeNonnegativeInteger(
-      requiredData(baseRecord, "version", "prepared base version"), "prepared base version",
-    ),
-    shapeSha256: boundedString(
-      requiredData(baseRecord, "shapeSha256", "prepared base shape digest"),
-      "prepared base shape digest", 71, 71,
-    ),
-  });
-  if (!/^sha256:[0-9a-f]{64}$/.test(base.shapeSha256))
-    throw strictInvalid("prepared base shape digest is invalid");
-  const intent = boundedString(
-    requiredData(captured, "intent", "prepared intent"), "prepared intent", 1, 500,
-  );
-  const capturedPlan = requiredData(captured, "plan", "prepared mutation plan");
-  const parsedPlan = MutationPlan.safeParse(capturedPlan);
-  if (!parsedPlan.success || parsedPlan.data.clarifying_question !== null)
-    throw strictInvalid("prepared mutation plan is invalid");
-  if (stableData(capturedPlan) !== stableData(parsedPlan.data as unknown as StrictData))
-    throw strictInvalid("prepared mutation plan has non-canonical fields");
+  const { attemptId, base, intent, plan } = capturePreparedCore(captured, false);
   const semanticRecord = strictRecord(
     requiredData(captured, "semanticAssignments", "prepared semantic assignments"),
     "prepared semantic assignments",
@@ -332,7 +318,7 @@ export function capturePreparedMutationCommand(input: unknown): PreparedMutation
     attemptId,
     base,
     intent,
-    plan: parsedPlan.data,
+    plan,
     semanticAssignments,
   };
   freezeTree(command);
@@ -342,39 +328,7 @@ export function capturePreparedMutationCommand(input: unknown): PreparedMutation
 export function capturePreparedPreviewInput(input: unknown): PreparedPreviewInput {
   const captured = strictRecord(captureCompleteStrictData(input), "prepared preview request");
   exactFields(captured, ["attemptId", "base", "intent", "plan"], "prepared preview request");
-  const attemptId = boundedString(
-    requiredData(captured, "attemptId", "prepared preview attempt id"),
-    "prepared preview attempt id", 36, 36,
-  );
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(attemptId))
-    throw strictInvalid("prepared preview attempt id is invalid");
-  const baseRecord = strictRecord(
-    requiredData(captured, "base", "prepared preview base"), "prepared preview base",
-  );
-  exactFields(baseRecord, ["version", "shapeSha256"], "prepared preview base");
-  const base = Object.freeze({
-    version: safeNonnegativeInteger(
-      requiredData(baseRecord, "version", "prepared preview base version"),
-      "prepared preview base version",
-    ),
-    shapeSha256: boundedString(
-      requiredData(baseRecord, "shapeSha256", "prepared preview base digest"),
-      "prepared preview base digest", 71, 71,
-    ),
-  });
-  if (!/^sha256:[0-9a-f]{64}$/.test(base.shapeSha256))
-    throw strictInvalid("prepared preview base digest is invalid");
-  const intent = boundedString(
-    requiredData(captured, "intent", "prepared preview intent"),
-    "prepared preview intent", 1, 500,
-  );
-  const capturedPlan = requiredData(captured, "plan", "prepared preview plan");
-  const parsedPlan = MutationPlan.safeParse(capturedPlan);
-  if (!parsedPlan.success || parsedPlan.data.clarifying_question !== null)
-    throw strictInvalid("prepared preview plan is invalid");
-  if (stableData(capturedPlan) !== stableData(parsedPlan.data as unknown as StrictData))
-    throw strictInvalid("prepared preview plan has non-canonical fields");
-  const preview = { attemptId, base, intent, plan: parsedPlan.data };
+  const preview = capturePreparedCore(captured, true);
   freezeTree(preview);
   return preview;
 }
@@ -398,12 +352,7 @@ export function capturePlannerAttemptStart(input: unknown): Readonly<{ intent: s
 export function capturePlannerAttemptFinalization(input: unknown): PlannerAttemptFinalization {
   const record = strictRecord(captureCompleteStrictData(input), "planner attempt finalization");
   exactFields(record, ["attemptId", "outcome", "errorCode"], "planner attempt finalization");
-  const attemptId = boundedString(
-    requiredData(record, "attemptId", "planner attempt id"),
-    "planner attempt id", 36, 36,
-  );
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(attemptId))
-    throw strictInvalid("planner attempt id is invalid");
+  const attemptId = captureAttemptId(record, "planner attempt id");
   const outcome = requiredData(record, "outcome", "planner attempt outcome");
   if (outcome !== "clarify" && outcome !== "failed" && outcome !== "discarded")
     throw strictInvalid("planner attempt outcome is invalid");
@@ -470,6 +419,31 @@ function remappedId<Id extends string>(ids: ReadonlyMap<Id, Id>, id: Id, kind: s
   return remapped;
 }
 
+function remappedIds<Id extends string>(
+  generated: ReadonlyMap<string, Id>,
+  desired: ReadonlyMap<string, Id>,
+  kind: string,
+): ReadonlyMap<Id, Id> {
+  const result = new Map<Id, Id>();
+  for (const [key, generatedId] of generated) {
+    const desiredId = desired.get(key);
+    if (!desiredId)
+      throw new ClayError("E_VALIDATION", `prepared ${kind} assignment is missing '${key}'`);
+    result.set(generatedId, desiredId);
+  }
+  return result;
+}
+
+function assignedRelationship(
+  desired: ReadonlyMap<string, RelationshipId>,
+  key: string,
+): RelationshipId {
+  const id = desired.get(key);
+  if (!id)
+    throw new ClayError("E_VALIDATION", `prepared relationship assignment is missing '${key}'`);
+  return id;
+}
+
 function remapRelationship(
   source: SemanticRelationshipRecordV1,
   tableIds: ReadonlyMap<TableId, TableId>,
@@ -481,27 +455,21 @@ function remapRelationship(
     const fromTableId = remappedId(tableIds, source.fromTableId, "table");
     const toFieldId = remappedId(fieldIds, source.toFieldId, "field");
     const key = `contains\u0000${fromTableId}\u0000${toFieldId}`;
-    const relationshipId = desiredRelationships.get(key);
-    if (!relationshipId)
-      throw new ClayError("E_VALIDATION", `prepared relationship assignment is missing '${key}'`);
+    const relationshipId = assignedRelationship(desiredRelationships, key);
     return { ...source, relationshipId, fromTableId, toFieldId, events };
   }
   if (source.kind === "derived_from") {
     const fromFieldId = remappedId(fieldIds, source.fromFieldId, "field");
     const toFieldId = remappedId(fieldIds, source.toFieldId, "field");
     const key = `derived_from\u0000${fromFieldId}\u0000${toFieldId}`;
-    const relationshipId = desiredRelationships.get(key);
-    if (!relationshipId)
-      throw new ClayError("E_VALIDATION", `prepared relationship assignment is missing '${key}'`);
+    const relationshipId = assignedRelationship(desiredRelationships, key);
     return { ...source, relationshipId, fromFieldId, toFieldId, events };
   }
   const fromTableId = remappedId(tableIds, source.fromTableId, "table");
   const toTableId = remappedId(tableIds, source.toTableId, "table");
   const viaFieldId = remappedId(fieldIds, source.viaFieldId, "field");
   const key = `references\u0000${fromTableId}\u0000${toTableId}\u0000${viaFieldId}`;
-  const relationshipId = desiredRelationships.get(key);
-  if (!relationshipId)
-    throw new ClayError("E_VALIDATION", `prepared relationship assignment is missing '${key}'`);
+  const relationshipId = assignedRelationship(desiredRelationships, key);
   return { ...source, relationshipId, fromTableId, toTableId, viaFieldId, events };
 }
 
@@ -517,18 +485,8 @@ export function materializePreparedSemanticAssignments(
   const fields = exactIds(generated.fields, data.fields, "field");
   const desiredRelationships = listedIds(
     data.relationships, generated.relationships.size, "relationship");
-  const tableIds = new Map<TableId, TableId>();
-  for (const [name, generatedId] of generated.tables) {
-    const desired = tables.get(name);
-    if (!desired) throw new ClayError("E_VALIDATION", `prepared table assignment is missing '${name}'`);
-    tableIds.set(generatedId, desired);
-  }
-  const fieldIds = new Map<FieldId, FieldId>();
-  for (const [key, generatedId] of generated.fields) {
-    const desired = fields.get(key);
-    if (!desired) throw new ClayError("E_VALIDATION", `prepared field assignment is missing '${key}'`);
-    fieldIds.set(generatedId, desired);
-  }
+  const tableIds = remappedIds(generated.tables, tables, "table");
+  const fieldIds = remappedIds(generated.fields, fields, "field");
   const tableSemantics = new Map<string, ReturnType<typeof cloneTableSemantic>>();
   const relationships = new Map<string, RelationshipId>();
   for (const [name, source] of generated.tableSemantics) {

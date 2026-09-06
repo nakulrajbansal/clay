@@ -4,12 +4,11 @@
 // bound to a SECOND Bridge over the shadow store (preview-before-commit).
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import {
-  Bridge, StoreRpcClient, deriveSafeDiffKind, portFromMessagePort,
-  type ClayNotification,
-  type FieldProvenance, type HistoryEntry, type LivePanel, type PanelProvenance,
-  type PrivateMetricEvent, type PrivateMetricsSummary, type RegTable,
-  type SemanticSchemaTraceV1, type Suggestion,
+import { Bridge, StoreRpcClient, deriveSafeDiffKind, portFromMessagePort }
+  from "@clay/kernel/shell-runtime";
+import type {
+  ClayNotification, FieldProvenance, HistoryEntry, LivePanel, PanelProvenance,
+  PrivateMetricEvent, PrivateMetricsSummary, RegTable, SemanticSchemaTraceV1, Suggestion,
 } from "@clay/kernel";
 import { WorkerClient } from "./worker-client";
 import type { IntentOutcome, PreviewInfo } from "../worker/db-worker";

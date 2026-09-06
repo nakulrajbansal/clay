@@ -3,7 +3,7 @@
 // never rows the user added themselves — that asymmetry is the whole point.
 import { describe, expect, it } from "vitest";
 import { ClayStore, deriveInverse, type MigrationPlanT } from "@clay/kernel";
-import { removeSampleRows, seedStarterShell } from "../src/shells/seed";
+import { removeSampleRows, seedStarterShell } from "../src/shells/seed-store";
 import { fillSampleRows, sampleRowCount } from "../src/worker/samples";
 
 async function storeWithProjects(): Promise<ClayStore> {

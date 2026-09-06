@@ -289,10 +289,10 @@ describe("production mutation route census", () => {
     expect(worker).not.toContain("PreviewHandle");
     expect(worker).not.toContain("InProcessAsyncStore");
     expect(worker).not.toContain("let store: ClayStore");
-    expect(worker).toContain("type PreparedMutationPreview");
+    expect(worker).toContain("PreparedMutationPreview");
     expect(worker).toContain("plannerMutations()");
     expect(worker).toContain('import("@clay/kernel/planner-pipeline")');
-    expect(worker).toContain('import("@clay/mutation")');
+    expect(worker).toContain('import("@clay/mutation/client")');
     expect(worker).toContain("summary: result.preview.plan.summary");
     expect(worker).toContain("return { version }");
     expect(worker).toContain("return null");
