@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -355,4 +356,34 @@ test("evidence output cleanup rejects unknown entries and deletes only owned out
   await writeFile(join(root, "release.json"), "old\n");
   await evidenceLib.prepareEvidenceOutput(root);
   assert.deepEqual(await readdir(root), []);
+});
+
+test("PDF content-stream text ends with the exact complete normalized table", () => {
+  const text = "\fReport heading\nTITLE\nBrightLab\nexpansion\nHarbor\nCafe\nsetup\n=1+1\n2026-09-\n10\n";
+  const expected = ["TITLE", "BrightLab expansion", "Harbor Cafe setup", "=1+1", "2026-09-10"];
+  assert.equal(evidenceLib.pdfTextEndsWithExactSequence(text, expected), true);
+  assert.equal(evidenceLib.pdfTextEndsWithExactSequence(text,
+    ["TITLE", "Harbor Cafe setup", "BrightLab expansion", "=1+1", "2026-09-10"]), false);
+  assert.equal(evidenceLib.pdfTextEndsWithExactSequence("\fTITLE\nfoobar\n", ["TITLE", "bar"]), false);
+  assert.equal(evidenceLib.pdfTextEndsWithExactSequence("\fREPORTTITLE\nvalue\n", ["TITLE", "value"]), false);
+  assert.equal(evidenceLib.pdfTextEndsWithExactSequence("\fＴＩＴＬＥ\n", ["TITLE"]), false);
+});
+
+test("preview cleanup settles when termination emits exit synchronously", async () => {
+  class ImmediateExitChild extends EventEmitter {
+    exitCode = null;
+    signals = [];
+    kill(signal) {
+      this.signals.push(signal);
+      this.exitCode = 0;
+      this.emit("exit", 0, signal);
+      return true;
+    }
+  }
+  const child = new ImmediateExitChild();
+  await Promise.race([
+    evidenceLib.stopChildProcess(child, 10),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("cleanup remained unsettled")), 100)),
+  ]);
+  assert.deepEqual(child.signals, ["SIGTERM"]);
 });

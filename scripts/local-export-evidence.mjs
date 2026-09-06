@@ -12,6 +12,7 @@ import { runExportDialogStateEvidence } from "./local-export-browser-benchmark.m
 import {
   assertBenchmarkEvidence, assertExactCleanSource, buildDirectoryDigest,
   deriveCleanHeadSource, ingestManualScreenReaderEvidence, sha256Evidence,
+  pdfTextEndsWithExactSequence,
   summarizeExportDialogStateEvidence, writeReleaseEvidenceDirectory,
 } from "./local-export-evidence-lib.mjs";
 import { LocalExportEvidenceManifestV2 } from "../packages/schema/src/evidence.ts";
@@ -310,15 +311,14 @@ try {
   const printPdfBytes = await readFile(printPdfPath);
   check(printPdfBytes.subarray(0, 5).toString("ascii") === "%PDF-" && printPdfBytes.byteLength > 1_000,
     "desktop: browser print renderer emits a non-empty PDF document");
-  const printText = execFileSync("pdftotext", [printPdfPath, "-"], { encoding: "utf8" });
-  const orderedPrintTokens = [previewHeadings[0], ...previewRows.map(row => row[0])];
-  let printOffset = -1;
-  check(orderedPrintTokens.every(token => {
-    const next = printText.indexOf(token, printOffset + 1);
-    if (next < 0) return false;
-    printOffset = next;
-    return true;
-  }), "desktop: selectable PDF text preserves heading and row reading order", orderedPrintTokens);
+  const printText = execFileSync("pdftotext", ["-enc", "UTF-8", "-raw", printPdfPath, "-"],
+    { encoding: "utf8" });
+  const orderedPrintValues = [
+    ...previewHeadings.map(heading => heading.toLocaleUpperCase("en-US")),
+    ...previewRows.flat(),
+  ];
+  check(pdfTextEndsWithExactSequence(printText, orderedPrintValues),
+    "desktop: selectable PDF text preserves complete table reading order", orderedPrintValues);
   printTextSha256 = sha256Evidence(Buffer.from(printText));
   const printPdf = await artifactDigest("desktop-print.pdf");
   await page.screenshot({ path: join(outDir, "desktop-print-media.png"), fullPage: true });

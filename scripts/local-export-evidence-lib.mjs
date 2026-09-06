@@ -35,6 +35,49 @@ export function sha256Evidence(bytes) {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 }
 
+function normalizedPdfText(value) {
+  return value.replace(/(\p{N})-\s+(?=\p{N})/gu, "$1-").replace(/\s+/gu, " ").trim();
+}
+
+export function pdfTextEndsWithExactSequence(text, values) {
+  const expected = normalizedPdfText(values.filter(value => value !== "").join(" "));
+  const actual = normalizedPdfText(text);
+  if (!expected || !actual.endsWith(expected)) return false;
+  const start = actual.length - expected.length;
+  return start === 0 || actual[start - 1] === " ";
+}
+
+function hasExited(child) {
+  return child.exitCode !== null && child.exitCode !== undefined
+    || child.signalCode !== null && child.signalCode !== undefined;
+}
+
+function waitForChildExit(child, timeoutMs) {
+  if (hasExited(child)) return Promise.resolve(true);
+  return new Promise(resolveExit => {
+    let timer;
+    const finish = exited => {
+      if (timer) clearTimeout(timer);
+      child.off("exit", onExit);
+      resolveExit(exited);
+    };
+    const onExit = () => finish(true);
+    child.once("exit", onExit);
+    if (hasExited(child)) return finish(true);
+    timer = setTimeout(() => finish(false), timeoutMs);
+  });
+}
+
+export async function stopChildProcess(child, graceMs = 3_000) {
+  if (hasExited(child)) return;
+  const gracefulExit = waitForChildExit(child, graceMs);
+  child.kill("SIGTERM");
+  if (await gracefulExit) return;
+  const forcedExit = waitForChildExit(child, graceMs);
+  child.kill("SIGKILL");
+  if (!await forcedExit) throw new Error("preview process did not exit after SIGKILL");
+}
+
 export function assertCleanGitWorktree(directory = process.cwd()) {
   const status = execFileSync("git", ["status", "--porcelain=v1", "--untracked-files=all"], {
     cwd: directory,

@@ -10,6 +10,7 @@ import {
   createCertificateEnvironment,
   deriveCleanHeadSource,
   prepareEvidenceOutput,
+  stopChildProcess,
 } from "./local-export-evidence-lib.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -99,16 +100,6 @@ async function waitForPreview(child, url, logs) {
   throw new Error(`strict preview did not become ready at ${url}`);
 }
 
-async function stopPreview(child) {
-  if (child.exitCode !== null) return;
-  child.kill("SIGTERM");
-  const exited = new Promise(resolveExit => child.once("exit", resolveExit));
-  await Promise.race([exited, new Promise(resolveWait => setTimeout(resolveWait, 3_000))]);
-  if (child.exitCode === null) {
-    child.kill("SIGKILL");
-    await new Promise(resolveExit => child.once("exit", resolveExit));
-  }
-}
 
 async function main() {
   const options = parseArguments(process.argv.slice(2));
@@ -165,7 +156,7 @@ async function main() {
       try { await operation(); }
       catch (error) { cleanupFailures.push(new Error(`${label}: ${String(error)}`)); }
     };
-    if (preview) await cleanup("stop strict preview", () => stopPreview(preview));
+    if (preview) await cleanup("stop strict preview", () => stopChildProcess(preview));
     if (worktreeAdded) {
       await cleanup("verify strict preview source", () =>
         assertExactCleanSource(checkout, source, "strict preview after"));
