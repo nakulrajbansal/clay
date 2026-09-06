@@ -29,6 +29,8 @@ import {
   type ProductionMutationTestFailure,
   type ProductionMutationResult,
 } from "./production-mutation-coordinator";
+import { assertLiveSampleProvenance } from "./sample-provenance-proof";
+import { activeSampleRowCount } from "./production-samples";
 import { StateMerkleIndex } from "./state-merkle-index";
 import { ClayStore, exportStoreArchiveReadOnly } from "./store";
 import { TargetCommitCoordinator } from "./target-commit-coordinator";
@@ -849,6 +851,13 @@ export class ProductionStoreAuthority {
 
   readRowHistoryCount(): number {
     return this.#store.rowHistoryCount();
+  }
+
+  sampleRowCount(): number {
+    assertLiveSampleProvenance(
+      this.#driver, this.#store, TargetAuthorityStore.open(this.#driver).evidence(),
+    );
+    return activeSampleRowCount(this.#store);
   }
 
   executeMutation(input: unknown): Promise<ProductionMutationResult> {

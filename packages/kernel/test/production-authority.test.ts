@@ -5,7 +5,10 @@ import {
   type DbDriver, type ForwardOpT, type MessagePortLike,
 } from "../src/index";
 import { enumerateCanonicalStateV1 } from "../src/canonical-state";
-import { importAuthorityArchive } from "../src/archive-authority";
+import {
+  importAuthorityArchive,
+  restoreAuthorityArchiveAsNew,
+} from "../src/archive-authority";
 import { DeviceCatalog } from "../src/device-catalog";
 import {
   ProductionStoreAuthority,
@@ -13,43 +16,24 @@ import {
   planLegacyBootstrap,
   resolveCatalogInventory,
 } from "../src/production-authority";
+import {
+  productionOperationIdV1,
+  productionOperationIdV2,
+} from "../src/production-operation-id";
 import { sha256HexSync } from "../src/state-digest";
 import { StateMerkleIndex } from "../src/state-merkle-index";
 import { TargetAuthorityStore } from "../src/target-authority";
 
 const opaque = (prefix: string, char: string): string => `${prefix}_${char.repeat(26)}`;
 
-function encodeOperationId(bytes: Uint8Array): string {
-  const alphabet = "abcdefghijklmnopqrstuvwxyz234567";
-  let bits = 0;
-  let value = 0;
-  let encoded = "";
-  for (let index = 0; index < bytes.length && encoded.length < 26; index++) {
-    value = (value << 8) | bytes[index]!;
-    bits += 8;
-    while (bits >= 5 && encoded.length < 26) {
-      bits -= 5;
-      encoded += alphabet[(value >>> bits) & 31];
-      value &= (1 << bits) - 1;
-    }
-  }
-  return `op_${encoded}`;
-}
-
-function operationIdForFixture(driver: DbDriver, requestId: string): string {
+function operationIdForFixture(driver: DbDriver, requestId: string, route: string): string {
   const authorityRows = driver.select(
     "SELECT authority_incarnation_id FROM catalog.catalog_root WHERE singleton = 1",
   );
   if (authorityRows.length !== 1 || typeof authorityRows[0]!.authority_incarnation_id !== "string")
     throw new Error("fixture catalog authority is unavailable");
   const authorityIncarnationId = authorityRows[0]!.authority_incarnation_id;
-  const digest = sha256HexSync(new TextEncoder().encode(
-    `clay-production-operation-v1\u0000${authorityIncarnationId}\u0000${requestId}`,
-  ));
-  const bytes = new Uint8Array(32);
-  for (let index = 0; index < bytes.length; index++)
-    bytes[index] = Number.parseInt(digest.slice(index * 2, index * 2 + 2), 16);
-  return encodeOperationId(bytes);
+  return productionOperationIdV2(authorityIncarnationId, requestId, route);
 }
 
 function sqlLiteral(value: string): string {
@@ -82,7 +66,7 @@ function installStarterProvenanceFixture(driver: DbDriver, operationId: string):
     END`);
 }
 
-type ProvenanceTamper = "table" | "operation" | "shape" | "legacy";
+type ProvenanceTamper = "table" | "operation" | "unrelated" | "omission" | "shape" | "legacy";
 
 function installProvenanceTamperFixture(
   driver: DbDriver,
@@ -112,6 +96,14 @@ function installProvenanceTamperFixture(
         '{"schema":1,"entries":[{"tableId":' || ${canonicalTableId}
         || ',"rowId":' || ${rowId}
         || ',"operationId":"${opaque("op", "z")}"}]}'
+        WHERE key = 'sample_provenance_v1';`;
+      break;
+    case "unrelated":
+      body = `UPDATE settings SET value_json = ${canonicalEntry}
+        WHERE key = 'sample_provenance_v1';`;
+      break;
+    case "omission":
+      body = `UPDATE settings SET value_json = '{"schema":1,"entries":[]}'
         WHERE key = 'sample_provenance_v1';`;
       break;
     case "shape":
@@ -292,11 +284,16 @@ async function openSampleProvenanceFixture(
 ): Promise<SampleProvenanceFixture> {
   const driver = await cataloguedStore();
   const seedRequestId = opaque("req", "r");
-  const expectedOperationId = operationIdForFixture(driver, seedRequestId);
+  const tamperRequestId = opaque("req", "t");
+  const expectedOperationId = operationIdForFixture(driver, seedRequestId, "starter.seed");
+  const unrelatedOperationId = operationIdForFixture(driver, tamperRequestId, "store.update");
   const installTemporaryFixtures = (target: DbDriver): void => {
     installStarterProvenanceFixture(target, expectedOperationId);
     if (tamper !== undefined)
-      installProvenanceTamperFixture(target, tamper, expectedOperationId);
+      installProvenanceTamperFixture(
+        target, tamper,
+        tamper === "unrelated" ? unrelatedOperationId : expectedOperationId,
+      );
   };
   installTemporaryFixtures(driver);
   const mutableDriver = driver as DbDriver & { snapshot: DbDriver["snapshot"] };
@@ -351,8 +348,8 @@ async function openSampleProvenanceFixture(
     if (tamper !== undefined) {
       const project = authority.query({ from: "projects" })[0];
       if (!project) throw new Error("tamper fixture project is unavailable");
-      await authority.executeMutation({
-        requestId: opaque("req", "t"),
+      const tamperMutation = await authority.executeMutation({
+        requestId: tamperRequestId,
         route: "store.update",
         payload: {
           table: "projects",
@@ -360,6 +357,8 @@ async function openSampleProvenanceFixture(
           patch: { name: `Provenance ${tamper}` },
         },
       });
+      if (tamper === "unrelated" && tamperMutation.operationId !== unrelatedOperationId)
+        throw new Error("unrelated fixture operation identity changed");
     }
     return Object.freeze({ authority, ledger });
   } catch (error) {
@@ -552,6 +551,8 @@ describe("production Store authority", () => {
     const invalidCases: readonly (readonly [ProvenanceTamper, RegExp])[] = [
       ["table", /stable table binding/i],
       ["operation", /operation binding/i],
+      ["unrelated", /route|producer|authenticated/i],
+      ["omission", /diverge|authenticated|producer/i],
       ["shape", /malformed|noncanonical/i],
       ["legacy", /legacy sample_rows.*unauthenticated/i],
     ];
@@ -562,6 +563,28 @@ describe("production Store authority", () => {
       } finally {
         fixture.authority.close();
       }
+    }
+  });
+
+  it("rejects sample-bearing restore before opening a fresh target without rebind", async () => {
+    const source = await openSampleProvenanceFixture();
+    try {
+      const archive = await source.authority.exportArchive();
+      let openCalls = 0;
+      await expect(restoreAuthorityArchiveAsNew(archive.bytes, {
+        schema: 1,
+        appInstanceId: opaque("app", "j"),
+        generationId: opaque("gen", "k"),
+        namespaceId: opaque("ns", "m"),
+        operationId: opaque("op", "n"),
+        restoredAt: "2026-09-06T12:00:00.000Z",
+      }, async () => {
+        openCalls++;
+        return openMemoryDriver();
+      })).rejects.toThrow(/sample provenance.*rebind|rebind.*sample provenance/i);
+      expect(openCalls).toBe(0);
+    } finally {
+      source.authority.close();
     }
   });
 
@@ -877,6 +900,42 @@ describe("production Store authority", () => {
     }
   });
 
+  it("replays own __proto__ setting data without changing the result", async () => {
+    const { driver } = await legacyStore();
+    const authority = ProductionStoreAuthority.adoptLegacy(driver, {
+      inventory: legacyInventory,
+      storageKey: "default",
+      displayName: "My app",
+      appInstanceId: opaque("app", "a"),
+      generationId: opaque("gen", "b"),
+      namespaceId: opaque("ns", "c"),
+      adoptionOperationId: opaque("op", "d"),
+      releaseId: opaque("rel", "e"),
+      nowMs: Date.now(),
+      leaseTtlMs: 60_000,
+    });
+    try {
+      const value = Object.create(null) as Record<string, unknown>;
+      value.__proto__ = { retained: true };
+      value.revision = 1;
+      value.safe = 1;
+      const request = {
+        requestId: opaque("req", "l"),
+        route: "setting.compareAndSet",
+        payload: { key: "prototype_data", expectedRevision: 0, value },
+      } as const;
+      const live = await authority.executeMutation(request);
+      const replay = await authority.executeMutation(request);
+      expect(replay).toEqual({ ...live, replayed: true });
+      const current = (replay.result as { current: Record<string, unknown> }).current;
+      expect(Object.getPrototypeOf(current)).toBeNull();
+      expect(Object.hasOwn(current, "__proto__")).toBe(true);
+      expect(current.__proto__).toEqual({ retained: true });
+    } finally {
+      authority.close();
+    }
+  });
+
   it("does not expose mutable target evidence to a caller", async () => {
     const { driver } = await legacyStore();
     const authority = ProductionStoreAuthority.adoptLegacy(driver, {
@@ -950,6 +1009,84 @@ describe("production Store authority", () => {
         replayed: true,
         evidence: first.evidence,
         result: null,
+      });
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("replays an exact-current legacy v1 raw receipt", async () => {
+    const { driver } = await legacyStore();
+    const authority = ProductionStoreAuthority.adoptLegacy(driver, {
+      inventory: legacyInventory,
+      storageKey: "default",
+      displayName: "My app",
+      appInstanceId: opaque("app", "a"),
+      generationId: opaque("gen", "b"),
+      namespaceId: opaque("ns", "c"),
+      adoptionOperationId: opaque("op", "d"),
+      releaseId: opaque("rel", "e"),
+      nowMs: Date.now(),
+      leaseTtlMs: 60_000,
+    });
+    const request = {
+      requestId: opaque("req", "s"),
+      route: "setting.set",
+      payload: { key: "legacy_raw", value: 1 },
+    } as const;
+    const committed = await authority.executeMutation(request);
+    const reopenedDriver = await snapshotAuthorityDriver(driver);
+    authority.close();
+    const root = reopenedDriver.select(
+      "SELECT authority_incarnation_id FROM catalog.catalog_root WHERE singleton=1",
+    )[0]!;
+    const legacyOperationId = productionOperationIdV1(
+      String(root.authority_incarnation_id), request.requestId,
+    );
+    const responseJson = "null";
+    const responseSha256 = `sha256:${sha256HexSync(new TextEncoder().encode(responseJson))}`;
+    reopenedDriver.exec(
+      "INSERT INTO catalog.id_registry(id_value,id_kind,retained_at) VALUES(?,?,?)",
+      [legacyOperationId, "operation", "2026-09-06T00:00:00.000Z"],
+    );
+    reopenedDriver.exec(
+      `UPDATE sys.production_request_receipts
+       SET operation_id=?,response_sha256=?,response_json=? WHERE request_id=?`,
+      [legacyOperationId, responseSha256, responseJson, request.requestId],
+    );
+    reopenedDriver.exec(
+      `UPDATE catalog.production_request_receipts
+       SET operation_id=?,response_sha256=? WHERE request_id=?`,
+      [legacyOperationId, responseSha256, request.requestId],
+    );
+    reopenedDriver.exec(
+      "UPDATE sys.target_revision_reservations SET operation_id=? WHERE operation_id=?",
+      [legacyOperationId, committed.operationId],
+    );
+    reopenedDriver.exec(
+      "UPDATE catalog.revision_reservations SET operation_id=? WHERE operation_id=?",
+      [legacyOperationId, committed.operationId],
+    );
+    reopenedDriver.exec(
+      "UPDATE catalog.catalog_generation_events SET operation_id=? WHERE operation_id=?",
+      [legacyOperationId, committed.operationId],
+    );
+    reopenedDriver.exec(
+      "DELETE FROM catalog.id_registry WHERE id_value=?",
+      [committed.operationId],
+    );
+    const reopened = ProductionStoreAuthority.openExisting(reopenedDriver, {
+      inventory: { ...legacyInventory, catalogPresent: true },
+      storageKey: "default",
+      releaseId: opaque("rel", "f"),
+      nowMs: Date.now(),
+      leaseTtlMs: 60_000,
+    });
+    try {
+      await expect(reopened.executeMutation(request)).resolves.toEqual({
+        ...committed,
+        operationId: legacyOperationId,
+        replayed: true,
       });
     } finally {
       reopened.close();
@@ -1037,6 +1174,49 @@ describe("production Store authority", () => {
       await expect(reopened.executeMutation(request))
         .rejects.toThrow(/receipt mirror is incomplete/i);
       expect(reopened.readSetting("mirrored")).toBe(1);
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("rejects current receipt replay when its target reservation diverges", async () => {
+    const { driver } = await legacyStore();
+    const authority = ProductionStoreAuthority.adoptLegacy(driver, {
+      inventory: legacyInventory,
+      storageKey: "default",
+      displayName: "My app",
+      appInstanceId: opaque("app", "a"),
+      generationId: opaque("gen", "b"),
+      namespaceId: opaque("ns", "c"),
+      adoptionOperationId: opaque("op", "d"),
+      releaseId: opaque("rel", "e"),
+      nowMs: Date.now(),
+      leaseTtlMs: 60_000,
+    });
+    const request = {
+      requestId: opaque("req", "v"),
+      route: "setting.set",
+      payload: { key: "reservation_join", value: 1 },
+    } as const;
+    const committed = await authority.executeMutation(request);
+    const reopenedDriver = await snapshotAuthorityDriver(driver);
+    authority.close();
+    reopenedDriver.exec(
+      `UPDATE sys.target_revision_reservations
+       SET operation_id=?, request_sha256=? WHERE operation_id=?`,
+      [opaque("op", "z"), `sha256:${"f".repeat(64)}`, committed.operationId],
+    );
+    const reopened = ProductionStoreAuthority.openExisting(reopenedDriver, {
+      inventory: { ...legacyInventory, catalogPresent: true },
+      storageKey: "default",
+      releaseId: opaque("rel", "y"),
+      nowMs: Date.now(),
+      leaseTtlMs: 60_000,
+    });
+    try {
+      await expect(reopened.executeMutation(request))
+        .rejects.toThrow(/reservation evidence.*incomplete|reservation.*diverge/i);
+      expect(reopened.readSetting("reservation_join")).toBe(1);
     } finally {
       reopened.close();
     }

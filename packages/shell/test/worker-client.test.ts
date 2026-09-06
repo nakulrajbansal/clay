@@ -100,6 +100,17 @@ describe("WorkerClient files and automation boundaries", () => {
   });
 });
 
+describe("WorkerClient sample boundary", () => {
+  it("posts an explicit empty removal payload", async () => {
+    const { client, posted } = harness();
+    await client.removeSamples();
+    expect(posted).toHaveLength(1);
+    expect(posted[0]?.op).toBe("removeSamples");
+    expect(posted[0]?.payload).toEqual({});
+    expect(Object.hasOwn(posted[0]!, "payload")).toBe(true);
+  });
+});
+
 describe("WorkerClient daily-work boundary", () => {
   it("pins global search, atomic batches, and undo to explicit operations", async () => {
     const { client, posted } = harness();

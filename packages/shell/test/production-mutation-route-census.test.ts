@@ -193,6 +193,33 @@ describe("production mutation route census", () => {
     expect(authority).not.toMatch(/^import .*archive-authority/m);
   });
 
+  it("routes import and sample operations through captured authority commands", () => {
+    const worker = source("packages/shell/src/worker/db-worker.ts");
+    for (const name of ["importTable", "removeSamples", "fillSamples"] as const) {
+      expect(DB_WORKER_ROUTE_CENSUS[name]).toEqual({
+        enforcement: "authority",
+        mutates: "live",
+      });
+      const body = caseBody(worker, name);
+      expect(body).toContain(`runAuthorityMutation("${name}"`);
+      expect(body).not.toContain("failClosedMutation(");
+    }
+    expect(worker).toContain('route: "table.import"');
+    expect(worker).toContain('route: "samples.remove"');
+    expect(worker).toContain('route: "samples.fill"');
+    expect(caseBody(worker, "removeSamples"))
+      .toContain('runAuthorityMutation("removeSamples", p, req)');
+    expect(caseBody(worker, "removeSamples")).not.toContain("req.payload");
+    expect(worker.slice(
+      worker.indexOf('if (route === "removeSamples")'),
+      worker.indexOf('if (route === "fillSamples")'),
+    )).toContain("payload,");
+    expect(caseBody(worker, "fillSamples")).toContain("createSampleFillBundle(mustStore())");
+    expect(caseBody(worker, "sampleCount")).toContain("mustAuthority().sampleRowCount()");
+    expect(worker).not.toContain("fillSampleRows(mustStore())");
+    expect(worker).not.toContain("removeSampleRows(mustStore())");
+  });
+
   it("keeps StoreRpc and Bridge writes on the authority-backed port", () => {
     const rpc = source("packages/kernel/src/asyncstore.ts");
     const bridge = source("packages/kernel/src/bridge.ts");

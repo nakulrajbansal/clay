@@ -32,6 +32,11 @@ import { openDriverFromBytes } from "./db";
 import { DeviceCatalog, expectedCatalogSchemaObjects } from "./device-catalog";
 import { ClayError } from "./errors";
 import type { RegTable, Registry } from "./registry";
+import {
+  assertAuthenticatedSampleProvenance,
+  type SampleProvenanceLedgerEntry,
+} from "./sample-provenance-proof";
+import { isUuidV7 } from "./rows";
 import { isTableId } from "./semantic";
 import { sha256HexSync } from "./state-digest";
 import { StateMerkleIndex } from "./state-merkle-index";
@@ -89,6 +94,19 @@ export function assertArchiveAuthorityCardinality(input: unknown): void {
 
 function invalid(message: string): ClayError {
   return new ClayError("E_VALIDATION", `archive authority evidence is invalid: ${message}`);
+}
+
+const STORE_GET_SETTING: ClayStore["getSetting"] = ClayStore.prototype.getSetting;
+
+function hasNonemptySampleProvenance(store: ClayStore): boolean {
+  const raw = STORE_GET_SETTING.call(store, "sample_provenance_v1");
+  if (raw === undefined) return false;
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw))
+    throw invalid("sample provenance ledger is malformed");
+  const descriptor = Object.getOwnPropertyDescriptor(raw, "entries");
+  if (!descriptor || !("value" in descriptor) || !Array.isArray(descriptor.value))
+    throw invalid("sample provenance ledger is malformed");
+  return descriptor.value.length > 0;
 }
 
 function digest(bytes: Uint8Array): string {
@@ -540,23 +558,26 @@ function validateSampleProvenanceLedger(
   const rows = driver.select(
     "SELECT value_json FROM sys.settings WHERE key = 'sample_provenance_v1'",
   );
-  if (rows.length === 0) return;
-  if (rows.length !== 1 || typeof rows[0]!.value_json !== "string")
-    throw invalid("sample provenance ledger is malformed");
-  const raw = rows[0]!.value_json;
-  if (raw.length > 32 * 1024 * 1024
-      || textEncoder.encode(raw).byteLength > 32 * 1024 * 1024)
-    throw new ClayError("E_LIMIT", "sample provenance ledger exceeds 32 MiB");
-  let parsed: unknown;
-  try { parsed = JSON.parse(raw); }
-  catch { throw invalid("sample provenance ledger is malformed"); }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
-    throw invalid("sample provenance ledger is malformed");
-  const ledger = parsed as Record<string, unknown>;
-  if (Object.keys(ledger).length !== 2 || ledger.schema !== 1
-      || !Array.isArray(ledger.entries) || ledger.entries.length > 100_000
-      || JSON.stringify(parsed) !== raw)
-    throw invalid("sample provenance ledger is malformed or noncanonical");
+  let ledgerEntries: readonly unknown[] = [];
+  if (rows.length !== 0) {
+    if (rows.length !== 1 || typeof rows[0]!.value_json !== "string")
+      throw invalid("sample provenance ledger is malformed");
+    const raw = rows[0]!.value_json;
+    if (raw.length > 32 * 1024 * 1024
+        || textEncoder.encode(raw).byteLength > 32 * 1024 * 1024)
+      throw new ClayError("E_LIMIT", "sample provenance ledger exceeds 32 MiB");
+    let parsed: unknown;
+    try { parsed = JSON.parse(raw); }
+    catch { throw invalid("sample provenance ledger is malformed"); }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+      throw invalid("sample provenance ledger is malformed");
+    const ledger = parsed as Record<string, unknown>;
+    if (Object.keys(ledger).length !== 2 || ledger.schema !== 1
+        || !Array.isArray(ledger.entries) || ledger.entries.length > 100_000
+        || JSON.stringify(parsed) !== raw)
+      throw invalid("sample provenance ledger is malformed or noncanonical");
+    ledgerEntries = ledger.entries;
+  }
 
   const tableByStableId = new Map<string, RegTable>();
   for (const table of registry.values()) {
@@ -566,21 +587,14 @@ function validateSampleProvenanceLedger(
       throw invalid("sample provenance stable table binding is ambiguous");
     tableByStableId.set(tableId, table);
   }
-  const committedReceipts = new Set(evidence.targetAuthority.requestReceipts
-    .filter(item => item.receipt.state === "committed")
-    .map(item => item.receipt.operationId));
-  const committedReservations = new Set(evidence.catalogAuthority.revisionReservations
-    .filter(item => item.appInstanceId === evidence.target.appInstanceId
-      && item.state === "committed")
-    .map(item => item.operationId));
+  const parsedEntries: SampleProvenanceLedgerEntry[] = [];
   let previousCoordinate: string | null = null;
-  for (const rawEntry of ledger.entries) {
+  for (const rawEntry of ledgerEntries) {
     if (typeof rawEntry !== "object" || rawEntry === null || Array.isArray(rawEntry))
       throw invalid("sample provenance ledger entry is malformed");
     const entry = rawEntry as Record<string, unknown>;
     if (Object.keys(entry).length !== 3 || !isTableId(entry.tableId)
-        || typeof entry.rowId !== "string" || entry.rowId.length < 1
-        || entry.rowId.length > 128 || typeof entry.operationId !== "string"
+        || !isUuidV7(entry.rowId) || typeof entry.operationId !== "string"
         || !/^op_[a-z2-7]{26}$/.test(entry.operationId))
       throw invalid("sample provenance ledger entry is malformed");
     const coordinate = `${entry.tableId}\u0000${entry.rowId}`;
@@ -590,15 +604,26 @@ function validateSampleProvenanceLedger(
     const table = tableByStableId.get(entry.tableId);
     if (!table || !/^[a-z_][a-z0-9_]{0,63}$/.test(table.name))
       throw invalid("sample provenance stable table binding is unavailable");
-    if (!committedReceipts.has(entry.operationId)
-        || !committedReservations.has(entry.operationId))
-      throw invalid("sample provenance operation binding is unauthenticated");
     const physical = driver.select(
       `SELECT id FROM "${table.name}" WHERE id = ?`, [entry.rowId],
     );
     if (physical.length !== 1)
       throw invalid("sample provenance stable table binding references a missing row");
+    parsedEntries.push(Object.freeze({
+      tableId: entry.tableId,
+      rowId: entry.rowId,
+      operationId: entry.operationId,
+    }));
   }
+  assertAuthenticatedSampleProvenance({
+    authorityIncarnationId: evidence.catalogAuthority.authorityIncarnationId,
+    target: evidence.target,
+    ledgerEntries: parsedEntries,
+    receipts: evidence.targetAuthority.requestReceipts,
+    catalogReceipts: evidence.catalogAuthority.requestReceipts,
+    targetReservations: evidence.targetAuthority.revisions,
+    catalogReservations: evidence.catalogAuthority.revisionReservations,
+  });
 }
 
 function validateRequestReceipts(evidence: ArchiveAuthorityEvidence): void {
@@ -1327,6 +1352,10 @@ export async function restoreAuthorityArchiveAsNew(
     throw invalid("restore-as-new requires certified format 5 authority evidence");
   }
   const sourceAuthority = validated.authority;
+  if (hasNonemptySampleProvenance(validated.store)) {
+    validated.store.close();
+    throw invalid("sample provenance requires private rebind before restore-as-new");
+  }
   const sourceIds = new Set(sourceAuthority.evidence.catalogAuthority.idRegistry
     .map(entry => entry.idValue));
   if ([identity.appInstanceId, identity.generationId, identity.namespaceId, identity.operationId]
