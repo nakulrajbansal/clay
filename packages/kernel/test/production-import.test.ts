@@ -121,7 +121,10 @@ describe("production table import authority", () => {
           columns: [{ name: "title", type: "text" }],
           rows: [{ title: "Must not survive" }],
         },
-      })).rejects.toThrow(/injected after live mutation/i);
+      })).rejects.toMatchObject({
+        code: "E_TARGET_AUTHORITY_INVALID",
+        message: "injected failure after live mutation",
+      });
 
       expect(authority.readStore().registrySnapshot().has("rollback_me")).toBe(false);
       expect(authority.readStore().livePanels()).toEqual([]);

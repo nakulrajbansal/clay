@@ -7,6 +7,7 @@ import {
   ProductionStoreAuthority,
   armProductionAuthorityFailureForTest,
 } from "../src/production-authority";
+import { encodeProductionResponse } from "../src/production-response-envelope";
 
 const opaque = (prefix: string, char: string): string => `${prefix}_${char.repeat(26)}`;
 const legacyInventory = {
@@ -524,7 +525,10 @@ describe("production automation and operational authority", () => {
       expect(driver.select(
         "SELECT state, response_json FROM sys.production_request_receipts WHERE request_id = ?",
         [unknownRequest.requestId],
-      )).toEqual([{ state: "no_op", response_json: "null" }]);
+      )).toEqual([{
+        state: "no_op",
+        response_json: encodeProductionResponse("markNotificationRead", null).json,
+      }]);
       expect(driver.select(
         "SELECT state FROM catalog.production_request_receipts WHERE request_id = ?",
         [unknownRequest.requestId],
@@ -658,16 +662,21 @@ describe("production automation and operational authority", () => {
   it("enforces the exact shared two-megabyte recordUsage capture budget", async () => {
     const { authority, driver } = await automationAuthority();
     try {
-      const exactPayload = { event: {
-        kind: "filter", subject: "boundary_filter",
-        detail: { first: "", second: "" },
-      } };
-      const overhead = new TextEncoder().encode(JSON.stringify(exactPayload)).byteLength;
-      exactPayload.event.detail.first = "a".repeat(999_999);
-      exactPayload.event.detail.second = "b".repeat(2_000_000 - overhead - 999_999);
-      await expect(authority.executeMutation({
-        requestId: opaque("req", "2"), route: "recordUsage", payload: exactPayload,
-      })).resolves.toMatchObject({ changed: true });
+      const exactRequest = {
+        requestId: opaque("req", "2"),
+        route: "recordUsage" as const,
+        payload: { event: {
+          kind: "filter", subject: "boundary_filter",
+          detail: { first: "", second: "" },
+        } },
+      };
+      const encoder = new TextEncoder();
+      const overhead = encoder.encode(JSON.stringify(exactRequest)).byteLength;
+      exactRequest.payload.event.detail.first = "a".repeat(999_999);
+      exactRequest.payload.event.detail.second = "b".repeat(2_000_000 - overhead - 999_999);
+      expect(encoder.encode(JSON.stringify(exactRequest)).byteLength).toBe(2_000_000);
+      await expect(authority.executeMutation(exactRequest))
+        .resolves.toMatchObject({ changed: true });
 
       const rejectedId = opaque("req", "3");
       await expect(Promise.resolve().then(() => authority.executeMutation({
