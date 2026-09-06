@@ -37,20 +37,6 @@ import {
 } from "./durable-inventory";
 import { ClayError } from "./errors";
 
-const EXPECTED_TABLES = [
-  "app_entries",
-  "catalog_generation_events",
-  "catalog_root",
-  "generations",
-  "id_registry",
-  "leases",
-  "legacy_bootstrap_manifest",
-  "lineage_reservations",
-  "pending_jobs",
-  "production_request_receipts",
-  "revision_reservations",
-] as const;
-
 const CATALOG_DDL = [
   `CREATE TABLE catalog.catalog_root(
     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
@@ -234,29 +220,47 @@ const CATALOG_DDL = [
   )`,
 ] as const;
 
-const EXPECTED_COLUMN_SIGNATURES: Record<typeof EXPECTED_TABLES[number], string> = {
-  app_entries: "app_instance_id:TEXT:0:1|display_name:TEXT:1:0|shell_id:TEXT:1:0|active_generation_id:TEXT:1:0|journal_genesis_generation_id:TEXT:1:0|journal_genesis_lineage_epoch:TEXT:1:0|journal_genesis_protection_revision:TEXT:1:0|journal_genesis_state_sha256:TEXT:1:0|current_lineage_epoch:TEXT:1:0|lineage_epoch_high_water:TEXT:1:0|current_protection_revision:TEXT:1:0|revision_high_water:TEXT:1:0|digest_schema:INTEGER:1:0|state_sha256:TEXT:1:0|tombstoned:INTEGER:1:0",
-  catalog_generation_events: "catalog_generation:TEXT:0:1|event_kind:TEXT:1:0|app_instance_id:TEXT:0:0|operation_id:TEXT:0:0|write_epoch:TEXT:1:0|at:TEXT:1:0|display_name:TEXT:0:0|shell_id:TEXT:0:0|target_generation_id:TEXT:0:0|target_lineage_epoch:TEXT:0:0|target_protection_revision:TEXT:0:0|target_digest_schema:INTEGER:0:0|target_state_sha256:TEXT:0:0",
-  catalog_root: "singleton:INTEGER:0:1|schema_version:INTEGER:1:0|authority_incarnation_id:TEXT:1:0|catalog_generation:TEXT:1:0|selected_app_instance_id:TEXT:0:0|write_epoch:TEXT:1:0",
-  generations: "generation_id:TEXT:0:1|app_instance_id:TEXT:1:0|namespace_id:TEXT:1:0|storage_key:TEXT:1:0|operation_id:TEXT:1:0|lineage_epoch:TEXT:1:0|first_revision:TEXT:1:0|digest_schema:INTEGER:1:0|state_sha256:TEXT:1:0|source_archive_sha256:TEXT:0:0|source_provenance_id:TEXT:0:0|sealed_at:TEXT:1:0|read_back_at:TEXT:1:0",
-  id_registry: "id_value:TEXT:0:1|id_kind:TEXT:1:0|retained_at:TEXT:1:0",
-  leases: "lease_id:TEXT:0:1|authority_incarnation_id:TEXT:1:0|write_epoch:TEXT:1:0|release_id:TEXT:1:0|issued_at_ms:TEXT:1:0|expires_at_ms:TEXT:1:0|revoked:INTEGER:1:0",
-  legacy_bootstrap_manifest: "storage_key:TEXT:0:1|user_file:TEXT:1:0|system_file:TEXT:1:0|storage_kind:TEXT:1:0|app_instance_id:TEXT:1:0|generation_id:TEXT:1:0|namespace_id:TEXT:1:0|operation_id:TEXT:1:0|display_name:TEXT:1:0|shell_id:TEXT:1:0|selected:INTEGER:1:0|declared_at:TEXT:1:0",
-  lineage_reservations: "app_instance_id:TEXT:1:1|lineage_epoch:TEXT:1:2|operation_id:TEXT:1:0|state:TEXT:1:0",
-  pending_jobs: "job_id:TEXT:0:1|authority_incarnation_id:TEXT:1:0|app_instance_id:TEXT:0:0|kind:TEXT:1:0|state:TEXT:1:0|operation_id:TEXT:1:0|created_at:TEXT:1:0|updated_at:TEXT:1:0",
-  production_request_receipts: "request_id:TEXT:0:1|operation_id:TEXT:1:0|request_sha256:TEXT:1:0|app_instance_id:TEXT:1:0|active_generation_id:TEXT:1:0|lineage_epoch:TEXT:1:0|expected_protection_revision:TEXT:1:0|expected_state_sha256:TEXT:1:0|state:TEXT:1:0|resulting_protection_revision:TEXT:0:0|resulting_state_sha256:TEXT:0:0|response_sha256:TEXT:0:0|prepared_at:TEXT:1:0|invoked_at:TEXT:0:0|completed_at:TEXT:0:0",
-  revision_reservations: "app_instance_id:TEXT:1:1|revision:TEXT:1:2|operation_id:TEXT:1:0|authority_incarnation_id:TEXT:1:0|reserved_catalog_generation:TEXT:1:0|finalized_catalog_generation:TEXT:0:0|write_epoch:TEXT:1:0|lease_id:TEXT:1:0|release_id:TEXT:1:0|finalized_write_epoch:TEXT:0:0|finalized_lease_id:TEXT:0:0|finalized_release_id:TEXT:0:0|active_generation_id:TEXT:1:0|lineage_epoch:TEXT:1:0|expected_protection_revision:TEXT:1:0|expected_state_sha256:TEXT:1:0|request_sha256:TEXT:1:0|state:TEXT:1:0|published_active_generation_id:TEXT:0:0|published_lineage_epoch:TEXT:0:0|state_sha256:TEXT:0:0|reserved_at:TEXT:1:0|finalized_at:TEXT:0:0",
-};
-
 function normalizeDdl(sql: string): string {
   return sql.replace(/\s+/g, " ").trim();
 }
 
-const EXPECTED_DDL = new Map(CATALOG_DDL.map(ddl => {
+function ddlIdentity(ddl: string): readonly [string, string] {
   const match = /^CREATE TABLE catalog\.([a-z_]+)\(/.exec(ddl);
   if (!match) throw new Error("invalid trusted catalog DDL");
   return [match[1]!, normalizeDdl(ddl.replace("CREATE TABLE catalog.", "CREATE TABLE "))];
-}));
+}
+
+function columnSignature(ddl: string): string {
+  const columns: { name: string; type: string; required: number; pk: number }[] = [];
+  let compositePrimaryKey: string[] = [];
+  for (const source of ddl.slice(ddl.indexOf("(") + 1, ddl.lastIndexOf(")")).split("\n")) {
+    const line = source.trim().replace(/,$/, "");
+    const column = /^([a-z0-9_]+)\s+(TEXT|INTEGER|REAL|BLOB)\b/.exec(line);
+    if (column) {
+      columns.push({
+        name: column[1]!,
+        type: column[2]!,
+        required: /\bNOT NULL\b/.test(line) ? 1 : 0,
+        pk: /\bPRIMARY KEY\b/.test(line) ? 1 : 0,
+      });
+      continue;
+    }
+    const primaryKey = /^PRIMARY KEY\(([^)]+)\)/.exec(line);
+    if (primaryKey) compositePrimaryKey = primaryKey[1]!.split(",").map(name => name.trim());
+  }
+  if (columns.length === 0) throw new Error("invalid trusted catalog DDL");
+  return columns.map(column => {
+    const compositeIndex = compositePrimaryKey.indexOf(column.name);
+    return `${column.name}:${column.type}:${column.required}:${
+      compositeIndex < 0 ? column.pk : compositeIndex + 1}`;
+  }).join("|");
+}
+
+const EXPECTED_DDL = new Map(CATALOG_DDL.map(ddlIdentity));
+const EXPECTED_TABLES = Object.freeze([...EXPECTED_DDL.keys()].sort());
+const EXPECTED_COLUMN_SIGNATURES = Object.fromEntries(
+  CATALOG_DDL.map(ddl => [ddlIdentity(ddl)[0], columnSignature(ddl)]),
+) as Readonly<Record<string, string>>;
 
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 type OpaquePrefix = "auth" | "app" | "gen" | "ns" | "lease";

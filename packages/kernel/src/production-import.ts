@@ -1,4 +1,12 @@
-import { ClayError } from "./errors";
+import {
+  TABLE_IMPORT_PREFIX,
+  targetAuthorityInvalid as invalid,
+} from "./production-input-capture";
+import {
+  captureStrictJson,
+  type StrictJson,
+  type StrictJsonCapturePolicy,
+} from "./strict-json-capture";
 import { deriveInverse, type MigrationPlanT } from "./migrate";
 import { ClayStore, type PanelBlobInput } from "./store";
 
@@ -22,73 +30,30 @@ const MAX_COLUMNS = 20;
 const MAX_ROWS = 5_000;
 const MAX_ENUM_VALUES = 100;
 const MAX_VALUE_LENGTH = 1_000_000;
-const MAX_CAPTURE_UNITS = 2_000_000;
-const UTF8 = new TextEncoder();
+const IMPORT_CAPTURE_POLICY: StrictJsonCapturePolicy = [
+  8, 500_000, MAX_VALUE_LENGTH, 2_000_000, MAX_ROWS, 128, 128, true, true,
+  reason => {
+    if (reason === 10 || reason === 12)
+      throw invalid(TABLE_IMPORT_PREFIX + "fields must use plain data properties");
+    throw invalid(reason === 1
+      ? TABLE_IMPORT_PREFIX + "exceeds aggregate capture limits"
+      : TABLE_IMPORT_PREFIX + "payload is invalid");
+  },
+];
 
-type CaptureBudget = { units: number };
-
-function invalid(message: string): ClayError {
-  return new ClayError("E_TARGET_AUTHORITY_INVALID", message);
+function dataValue(input: object, key: PropertyKey): unknown {
+  return (input as Record<PropertyKey, unknown>)[key];
 }
 
-function spend(budget: CaptureBudget, units: number): void {
-  budget.units += units;
-  if (!Number.isSafeInteger(budget.units) || budget.units > MAX_CAPTURE_UNITS)
-    throw invalid("table import exceeds aggregate capture limits");
+function plainRecord(input: unknown, what: string): Record<string, StrictJson> {
+  if (typeof input !== "object" || input === null || Array.isArray(input))
+    throw invalid(`${TABLE_IMPORT_PREFIX}${what} must be a plain record`);
+  return input as Record<string, StrictJson>;
 }
 
-function utf8Length(value: string): number {
-  return UTF8.encode(value).byteLength;
-}
-
-function chargeRecord(record: object, budget: CaptureBudget): void {
-  const keys = Reflect.ownKeys(record);
-  spend(budget, 2);
-  for (let index = 0; index < keys.length; index++) {
-    const key = keys[index];
-    if (typeof key !== "string") throw invalid("table import record keys are invalid");
-    spend(budget, utf8Length(key) + 4);
-  }
-}
-
-function chargeArray(source: readonly unknown[], budget: CaptureBudget): void {
-  spend(budget, source.length + 2);
-}
-
-function dataValue(input: object, key: PropertyKey, what: string): unknown {
-  const descriptor = Reflect.getOwnPropertyDescriptor(input, key);
-  if (!descriptor || !("value" in descriptor) || (key !== "length" && !descriptor.enumerable))
-    throw invalid(`table import ${what} must use plain data properties`);
-  return descriptor.value;
-}
-
-function plainRecord(input: unknown, what: string): object {
-  if (typeof input !== "object" || input === null || Array.isArray(input)
-      || (Reflect.getPrototypeOf(input) !== Object.prototype
-        && Reflect.getPrototypeOf(input) !== null))
-    throw invalid(`table import ${what} must be a plain record`);
-  return input;
-}
-
-function denseArray(input: unknown, what: string, maximum: number): readonly unknown[] {
-  if (!Array.isArray(input) || Reflect.getPrototypeOf(input) !== Array.prototype)
-    throw invalid(`table import ${what} must be a plain array`);
-  const keys = Reflect.ownKeys(input);
-  const lengthValue = dataValue(input, "length", what);
-  if (!Number.isSafeInteger(lengthValue) || (lengthValue as number) < 0
-      || (lengthValue as number) > maximum || keys.length !== (lengthValue as number) + 1)
-    throw invalid(`table import ${what} is malformed or exceeds its limit`);
-  const length = lengthValue as number;
-  const keySet = new Set<PropertyKey>(keys);
-  for (let index = 0; index < length; index++) {
-    if (!keySet.has(String(index)))
-      throw invalid(`table import ${what} must be dense`);
-  }
-  for (let index = 0; index < keys.length; index++) {
-    const key = keys[index]!;
-    if (key !== "length" && (typeof key !== "string" || !/^(?:0|[1-9][0-9]*)$/.test(key)))
-      throw invalid(`table import ${what} has extra properties`);
-  }
+function denseArray(input: unknown, what: string, maximum: number): readonly StrictJson[] {
+  if (!Array.isArray(input) || input.length > maximum)
+    throw invalid(`${TABLE_IMPORT_PREFIX}${what} is malformed or exceeds its limit`);
   return input;
 }
 
@@ -97,81 +62,58 @@ function exactKeys(record: object, required: readonly string[], optional: readon
   const allowed = new Set<PropertyKey>([...required, ...optional]);
   if (keys.length < required.length || keys.length > required.length + optional.length
       || keys.some(key => !allowed.has(key)))
-    throw invalid("table import record has unknown or missing fields");
+    throw invalid(TABLE_IMPORT_PREFIX + "record has unknown or missing fields");
   for (let index = 0; index < required.length; index++) {
     if (!keys.includes(required[index]!))
-      throw invalid("table import record has unknown or missing fields");
+      throw invalid(TABLE_IMPORT_PREFIX + "record has unknown or missing fields");
   }
 }
 
-function identifier(input: unknown, what: string, budget: CaptureBudget): string {
+function identifier(input: unknown, what: string): string {
   if (typeof input !== "string" || !SAFE_IDENTIFIER.test(input))
-    throw invalid(`table import ${what} is invalid`);
-  spend(budget, utf8Length(input) + 2);
+    throw invalid(`${TABLE_IMPORT_PREFIX}${what} is invalid`);
   return input;
 }
 
-function boundedString(input: unknown, what: string, budget: CaptureBudget): string {
+function boundedString(input: unknown, what: string): string {
   if (typeof input !== "string" || input.length > MAX_VALUE_LENGTH)
-    throw invalid(`table import ${what} is invalid`);
-  spend(budget, utf8Length(input) + 2);
+    throw invalid(`${TABLE_IMPORT_PREFIX}${what} is invalid`);
   return input;
 }
 
-function captureColumn(input: unknown, budget: CaptureBudget): ImportColumn {
+function captureColumn(input: unknown): ImportColumn {
   const record = plainRecord(input, "column");
   exactKeys(record, ["name", "type"], ["values"]);
-  chargeRecord(record, budget);
-  const name = identifier(dataValue(record, "name", "column"), "column name", budget);
-  const type = dataValue(record, "type", "column");
+  const name = identifier(dataValue(record, "name"), "column name");
+  const type = dataValue(record, "type");
   if (type !== "text" && type !== "number" && type !== "date" && type !== "enum")
-    throw invalid("table import column type is invalid");
-  spend(budget, utf8Length(type) + 2);
-  const valuesDescriptor = Reflect.getOwnPropertyDescriptor(record, "values");
-  const rawValues = valuesDescriptor === undefined
-    ? undefined : dataValue(record, "values", "column");
+    throw invalid(TABLE_IMPORT_PREFIX + "column type is invalid");
+  const rawValues = dataValue(record, "values");
   let values: readonly string[] | undefined;
   if (rawValues !== undefined) {
     const source = denseArray(rawValues, "enum values", MAX_ENUM_VALUES);
-    chargeArray(source, budget);
-    if (source.length < 1) throw invalid("table import enum values are invalid");
-    const copy: string[] = [];
-    for (let index = 0; index < source.length; index++) {
-      copy.push(boundedString(
-        dataValue(source as object, String(index), "enum values"), "enum value", budget,
-      ));
-    }
+    if (source.length < 1) throw invalid(TABLE_IMPORT_PREFIX + "enum values are invalid");
+    const copy = source.map(value => boundedString(value, "enum value"));
     if (new Set(copy).size !== copy.length)
-      throw invalid("table import enum values must be unique");
+      throw invalid(TABLE_IMPORT_PREFIX + "enum values must be unique");
     values = Object.freeze(copy);
   }
   if ((type === "enum") !== (values !== undefined))
-    throw invalid("table import enum values are invalid");
+    throw invalid(TABLE_IMPORT_PREFIX + "enum values are invalid");
   return Object.freeze({ name, type, ...(values === undefined ? {} : { values }) });
 }
 
-function captureCell(
-  input: unknown,
-  column: ImportColumn,
-  budget: CaptureBudget,
-): ImportValue {
-  if (input === null) {
-    spend(budget, 4);
-    return null;
-  }
+function captureCell(input: unknown, column: ImportColumn): ImportValue {
+  if (input === null) return null;
   if (column.type === "number") {
     if (typeof input !== "number" || !Number.isFinite(input))
       throw invalid(`table import value for '${column.name}' is invalid`);
-    spend(budget, utf8Length(String(input)));
     return input;
   }
   if (typeof input !== "string" && !(column.type === "text" && typeof input === "boolean"))
     throw invalid(`table import value for '${column.name}' is invalid`);
-  if (typeof input === "boolean") {
-    spend(budget, input ? 4 : 5);
-    return input;
-  }
-  const value = boundedString(input, `value for '${column.name}'`, budget);
+  if (typeof input === "boolean") return input;
+  const value = boundedString(input, `value for '${column.name}'`);
   if (column.type === "enum" && !column.values?.includes(value))
     throw invalid(`table import value for '${column.name}' is outside its enum`);
   return value;
@@ -179,46 +121,32 @@ function captureCell(
 
 /** Capture imported typed rows without invoking accessors or caller-owned iteration. */
 export function captureTableImport(input: unknown): CapturedTableImport {
-  const budget: CaptureBudget = { units: 0 };
-  const record = plainRecord(input, "payload");
+  const record = plainRecord(captureStrictJson(input, IMPORT_CAPTURE_POLICY), "payload");
   exactKeys(record, ["table", "columns", "rows"]);
-  chargeRecord(record, budget);
-  const table = identifier(dataValue(record, "table", "payload"), "table name", budget);
-  const columnSource = denseArray(
-    dataValue(record, "columns", "payload"), "columns", MAX_COLUMNS,
-  );
-  chargeArray(columnSource, budget);
-  if (columnSource.length < 1) throw invalid("table import needs at least one column");
-  const columns: ImportColumn[] = [];
-  for (let index = 0; index < columnSource.length; index++) {
-    columns.push(captureColumn(
-      dataValue(columnSource as object, String(index), "columns"), budget,
-    ));
-  }
+  const table = identifier(dataValue(record, "table"), "table name");
+  const columnSource = denseArray(dataValue(record, "columns"), "columns", MAX_COLUMNS);
+  if (columnSource.length < 1) throw invalid(TABLE_IMPORT_PREFIX + "needs at least one column");
+  const columns = columnSource.map(captureColumn);
   if (new Set(columns.map(column => column.name)).size !== columns.length)
-    throw invalid("table import column names must be unique");
+    throw invalid(TABLE_IMPORT_PREFIX + "column names must be unique");
   const byName = new Map(columns.map(column => [column.name, column] as const));
 
-  const rowSource = denseArray(dataValue(record, "rows", "payload"), "rows", MAX_ROWS);
-  chargeArray(rowSource, budget);
-  if (rowSource.length < 1) throw invalid("table import needs at least one row");
-  const rows: ImportRow[] = [];
-  for (let index = 0; index < rowSource.length; index++) {
-    const source = plainRecord(
-      dataValue(rowSource as object, String(index), "rows"), "row",
-    );
-    chargeRecord(source, budget);
-    const keys = Reflect.ownKeys(source);
-    if (keys.length > columns.length || keys.some(key => typeof key !== "string" || !byName.has(key)))
-      throw invalid("table import row references an unknown column");
+  const rowSource = denseArray(dataValue(record, "rows"), "rows", MAX_ROWS);
+  if (rowSource.length < 1) throw invalid(TABLE_IMPORT_PREFIX + "needs at least one row");
+  const rows = rowSource.map(candidate => {
+    const source = plainRecord(candidate, "row");
+    const keys = Object.keys(source);
+    if (keys.length > columns.length || keys.some(key => !byName.has(key)))
+      throw invalid(TABLE_IMPORT_PREFIX + "row references an unknown column");
     const row: Record<string, ImportValue> = Object.create(null) as Record<string, ImportValue>;
-    for (let keyIndex = 0; keyIndex < keys.length; keyIndex++) {
-      const key = keys[keyIndex] as string;
-      row[key] = captureCell(dataValue(source, key, "row"), byName.get(key)!, budget);
-    }
-    rows.push(Object.freeze(row));
-  }
-  return Object.freeze({ table, columns: Object.freeze(columns), rows: Object.freeze(rows) });
+    for (const key of keys) row[key] = captureCell(source[key], byName.get(key)!);
+    return Object.freeze(row);
+  });
+  return Object.freeze({
+    table,
+    columns: Object.freeze(columns),
+    rows: Object.freeze(rows),
+  });
 }
 
 function allocateTableName(store: ClayStore, requested: string): string {
@@ -229,7 +157,7 @@ function allocateTableName(store: ClayStore, requested: string): string {
     const candidate = `${requested.slice(0, 40 - tail.length)}${tail}`;
     if (!registry.has(candidate)) return candidate;
   }
-  throw invalid("table import cannot allocate a unique table name");
+  throw invalid(TABLE_IMPORT_PREFIX + "cannot allocate a unique table name");
 }
 
 function allocatePanelId(store: ClayStore, requested: string): string {
@@ -242,7 +170,7 @@ function allocatePanelId(store: ClayStore, requested: string): string {
     const candidate = `${requested.slice(0, 41 - tail.length)}${tail}`;
     if (!used.has(candidate)) return candidate;
   }
-  throw invalid("table import cannot allocate a unique panel identity");
+  throw invalid(TABLE_IMPORT_PREFIX + "cannot allocate a unique panel identity");
 }
 
 function panelCode(table: string, columns: readonly ImportColumn[]): string {

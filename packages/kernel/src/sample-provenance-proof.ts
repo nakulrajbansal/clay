@@ -5,7 +5,10 @@ import type {
 } from "@clay/schema/catalog";
 import type { DbDriver } from "./db";
 import { DeviceCatalog } from "./device-catalog";
-import { ClayError } from "./errors";
+import {
+  SAMPLE_PROVENANCE_PREFIX,
+  targetAuthorityInvalid as invalid,
+} from "./production-input-capture";
 import {
   decodeProductionResponse,
   type SampleProvenanceCoordinate,
@@ -45,10 +48,6 @@ export type SampleProvenanceProofInput = Readonly<{
   catalogReservations: readonly CatalogRevisionReservation[];
 }>;
 
-function invalid(message: string): ClayError {
-  return new ClayError("E_TARGET_AUTHORITY_INVALID", message);
-}
-
 function coordinateKey(entry: SampleProvenanceLedgerEntry): string {
   return `${entry.operationId}\u0000${entry.tableId}\u0000${entry.rowId}`;
 }
@@ -77,17 +76,17 @@ function assertReceiptMirrors(input: SampleProvenanceProofInput): void {
       && item.activeGenerationId === input.target.activeGenerationId
       && item.lineageEpoch === input.target.lineageEpoch);
   if (targetReceipts.length !== catalogReceipts.length)
-    throw invalid("sample provenance receipt mirror is incomplete");
+    throw invalid(SAMPLE_PROVENANCE_PREFIX + "receipt mirror is incomplete");
   const catalogByRequest = new Map<string, ProductionRequestReceipt>();
   for (const receipt of catalogReceipts) {
     if (catalogByRequest.has(receipt.requestId))
-      throw invalid("sample provenance receipt mirror is duplicated");
+      throw invalid(SAMPLE_PROVENANCE_PREFIX + "receipt mirror is duplicated");
     catalogByRequest.set(receipt.requestId, receipt);
   }
   for (const target of targetReceipts) {
     const mirror = catalogByRequest.get(target.receipt.requestId);
     if (!mirror || receiptSignature(mirror) !== receiptSignature(target.receipt))
-      throw invalid("sample provenance receipt mirror is incomplete or divergent");
+      throw invalid(SAMPLE_PROVENANCE_PREFIX + "receipt mirror is incomplete or divergent");
   }
 }
 
@@ -139,7 +138,7 @@ function assertReservationPair(
       || catalog.reservedAt !== receipt.preparedAt
       || target.finalizedAt !== receipt.completedAt
       || catalog.finalizedAt !== receipt.completedAt)
-    throw invalid("sample provenance mirrored reservation evidence diverges");
+    throw invalid(SAMPLE_PROVENANCE_PREFIX + "mirrored reservation evidence diverges");
 }
 
 function byOperation<T extends { operationId: string }>(
@@ -148,7 +147,7 @@ function byOperation<T extends { operationId: string }>(
   const result = new Map<string, T>();
   for (const row of rows) {
     if (result.has(row.operationId))
-      throw invalid("sample provenance reservation evidence is duplicated");
+      throw invalid(SAMPLE_PROVENANCE_PREFIX + "reservation evidence is duplicated");
     result.set(row.operationId, row);
   }
   return result;
@@ -162,7 +161,7 @@ export function assertCommittedReceiptReservationBinding(
   const target = byOperation(targetReservations).get(receipt.operationId);
   const catalog = byOperation(catalogReservations).get(receipt.operationId);
   if (!target || !catalog)
-    throw invalid("sample provenance mirrored reservation evidence is incomplete");
+    throw invalid(SAMPLE_PROVENANCE_PREFIX + "mirrored reservation evidence is incomplete");
   assertReservationPair(receipt, target, catalog);
 }
 
@@ -175,7 +174,7 @@ export function assertAuthenticatedSampleProvenance(
   const ledger = new Set<string>();
   for (let index = 0; index < input.ledgerEntries.length; index++) {
     const key = coordinateKey(input.ledgerEntries[index]!);
-    if (ledger.has(key)) throw invalid("sample provenance ledger is duplicated");
+    if (ledger.has(key)) throw invalid(SAMPLE_PROVENANCE_PREFIX + "ledger is duplicated");
     ledger.add(key);
   }
 
@@ -188,7 +187,7 @@ export function assertAuthenticatedSampleProvenance(
     if (evidence.responseJson === null) continue;
     if (receipt.responseSha256 === null
         || responseDigest(evidence.responseJson) !== receipt.responseSha256)
-      throw invalid("sample provenance response digest is invalid");
+      throw invalid(SAMPLE_PROVENANCE_PREFIX + "response digest is invalid");
     const response = decodeProductionResponse(evidence.responseJson);
     const producerRoute = sampleProducerRouteForOperationId(
       input.authorityIncarnationId, receipt.requestId, receipt.operationId,
@@ -200,43 +199,43 @@ export function assertAuthenticatedSampleProvenance(
     }
     if (receipt.operationId !== productionOperationIdV2(
       input.authorityIncarnationId, receipt.requestId, response.route,
-    )) throw invalid("sample provenance operation is not bound to its response route");
+    )) throw invalid(SAMPLE_PROVENANCE_PREFIX + "operation is not bound to its response route");
     if (producerRoute === null) continue;
     if (response.route !== producerRoute)
       throw invalid("sample producer operation is relabeled as another response route");
     const coordinates = response.sampleProvenance;
-    if (coordinates === null) throw invalid("sample provenance response is incomplete");
+    if (coordinates === null) throw invalid(SAMPLE_PROVENANCE_PREFIX + "response is incomplete");
     if (receipt.activeGenerationId !== input.target.activeGenerationId
         || receipt.lineageEpoch !== input.target.lineageEpoch)
-      throw invalid("sample provenance receipt target is invalid");
+      throw invalid(SAMPLE_PROVENANCE_PREFIX + "receipt target is invalid");
     if (receipt.state !== "committed") {
       if (coordinates.length !== 0)
         throw invalid("noncommitted sample provenance receipt claims coordinates");
       continue;
     }
     if (producerOperations.has(receipt.operationId))
-      throw invalid("sample provenance producer operation is duplicated");
+      throw invalid(SAMPLE_PROVENANCE_PREFIX + "producer operation is duplicated");
     producerOperations.add(receipt.operationId);
     validateRouteResult(response.route, response.result, coordinates);
     const targetReservation = targetByOperation.get(receipt.operationId);
     const catalogReservation = catalogByOperation.get(receipt.operationId);
     if (!targetReservation || !catalogReservation)
-      throw invalid("sample provenance mirrored reservation evidence is incomplete");
+      throw invalid(SAMPLE_PROVENANCE_PREFIX + "mirrored reservation evidence is incomplete");
     assertReservationPair(receipt, targetReservation, catalogReservation);
     for (let coordinateIndex = 0; coordinateIndex < coordinates.length; coordinateIndex++) {
       const coordinate = coordinates[coordinateIndex]!;
       const key = coordinateKey({ ...coordinate, operationId: receipt.operationId });
       if (authenticated.has(key))
-        throw invalid("sample provenance authenticated coordinate is duplicated");
+        throw invalid(SAMPLE_PROVENANCE_PREFIX + "authenticated coordinate is duplicated");
       authenticated.add(key);
     }
   }
 
   if (authenticated.size !== ledger.size)
-    throw invalid("sample provenance ledger and authenticated results diverge");
+    throw invalid(SAMPLE_PROVENANCE_PREFIX + "ledger and authenticated results diverge");
   for (const key of authenticated) {
     if (!ledger.has(key))
-      throw invalid("sample provenance ledger and authenticated results diverge");
+      throw invalid(SAMPLE_PROVENANCE_PREFIX + "ledger and authenticated results diverge");
   }
 }
 

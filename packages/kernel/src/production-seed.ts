@@ -1,5 +1,12 @@
 import { expandBlueprint, parseBlueprintDirective } from "./blueprints";
-import { ClayError } from "./errors";
+import {
+  STARTER_SEED_PREFIX,
+  targetAuthorityInvalid as invalid,
+} from "./production-input-capture";
+import {
+  captureStrictJson,
+  type StrictJsonCapturePolicy,
+} from "./strict-json-capture";
 import { deriveInverse, type MigrationPlanT } from "./migrate";
 import type { SampleProvenanceCoordinate } from "./production-response-envelope";
 import {
@@ -60,13 +67,7 @@ export function starterSeedCatalogMetadata(
   return Object.freeze({ shellId: bundle.shellId });
 }
 
-const MAX_CAPTURE_DEPTH = 32;
-const MAX_CAPTURE_NODES = 100_000;
-const MAX_CAPTURE_UNITS = 2_000_000;
 const MAX_CAPTURE_STRING = 1_000_000;
-const MAX_CAPTURE_ARRAY = 10_000;
-const MAX_CAPTURE_KEYS = 256;
-const MAX_CAPTURE_KEY_LENGTH = 128;
 const MAX_TABLES = 64;
 const MAX_COLUMNS_PER_TABLE = 128;
 const MAX_SAMPLE_ROWS = 10_000;
@@ -78,102 +79,29 @@ const SAFE_IDENTIFIER = /^[a-z_][a-z0-9_]{0,63}$/;
 const SAFE_SHELL_ID = /^[a-z0-9_]{1,64}$/;
 const RELATIVE_STARTER_DAY = /^@clay\/starter-day:([+-]?\d{1,5})$/;
 
-function invalid(message: string): ClayError {
-  return new ClayError("E_TARGET_AUTHORITY_INVALID", message);
-}
+const SEED_CAPTURE_POLICY: StrictJsonCapturePolicy = [
+  32, 100_000, MAX_CAPTURE_STRING, 2_000_000, 10_000, 256, 128, false, true,
+  reason => {
+    if (reason === 2) throw invalid(STARTER_SEED_PREFIX + "string exceeds its capture limit");
+    if (reason === 3) throw invalid(STARTER_SEED_PREFIX + "array exceeds its capture limit");
+    const messages = [
+      STARTER_SEED_PREFIX + "contains a non-finite number",
+      STARTER_SEED_PREFIX + "contains a non-JSON value",
+      STARTER_SEED_PREFIX + "exceeds aggregate capture limits",
+      STARTER_SEED_PREFIX + "arrays must use the plain Array prototype",
+      STARTER_SEED_PREFIX + "arrays must be dense and have no extra properties",
+      STARTER_SEED_PREFIX + "fields must be plain data properties",
+      STARTER_SEED_PREFIX + "records must use a plain object prototype",
+      STARTER_SEED_PREFIX + "fields must be plain data properties",
+    ];
+    if (reason >= 5) throw invalid(messages[reason - 5] ?? STARTER_SEED_PREFIX + "exceeds aggregate capture limits");
+    throw invalid(STARTER_SEED_PREFIX + "exceeds aggregate capture limits");
+  },
+];
 
-type CaptureBudget = { nodes: number; units: number };
-
-function spend(budget: CaptureBudget, units: number): void {
-  budget.units += units;
-  if (!Number.isSafeInteger(budget.units) || budget.units > MAX_CAPTURE_UNITS)
-    throw invalid("starter seed exceeds aggregate capture limits");
-}
-
-function dataDescriptor(input: object, key: PropertyKey): PropertyDescriptor {
-  const descriptor = Reflect.getOwnPropertyDescriptor(input, key);
-  if (!descriptor || !("value" in descriptor) || (key !== "length" && !descriptor.enumerable))
-    throw invalid("starter seed fields must be plain data properties");
-  return descriptor;
-}
-
-/**
- * Captures caller-controlled JSON without invoking accessors, iterators, or
- * caller-owned array methods. The resulting graph is recursively detached and
- * frozen before the coordinator queues preflight work.
- */
-function capturePlainJson(
-  input: unknown,
-  budget: CaptureBudget,
-  depth = 0,
-): SeedJsonValue {
-  budget.nodes += 1;
-  if (budget.nodes > MAX_CAPTURE_NODES || depth > MAX_CAPTURE_DEPTH)
-    throw invalid("starter seed exceeds aggregate capture limits");
-  if (input === null || typeof input === "boolean") {
-    spend(budget, 1);
-    return input;
-  }
-  if (typeof input === "number") {
-    if (!Number.isFinite(input)) throw invalid("starter seed contains a non-finite number");
-    spend(budget, 1);
-    return input;
-  }
-  if (typeof input === "string") {
-    if (input.length > MAX_CAPTURE_STRING)
-      throw invalid("starter seed string exceeds its capture limit");
-    spend(budget, input.length);
-    return input;
-  }
-  if (typeof input !== "object") throw invalid("starter seed contains a non-JSON value");
-
-  if (Array.isArray(input)) {
-    if (Reflect.getPrototypeOf(input) !== Array.prototype)
-      throw invalid("starter seed arrays must use the plain Array prototype");
-    const keys = Reflect.ownKeys(input);
-    const lengthValue = dataDescriptor(input, "length").value;
-    if (!Number.isSafeInteger(lengthValue) || lengthValue < 0 || lengthValue > MAX_CAPTURE_ARRAY)
-      throw invalid("starter seed array exceeds its capture limit");
-    const length = lengthValue as number;
-    if (keys.length !== length + 1)
-      throw invalid("starter seed arrays must be dense and have no extra properties");
-    const keySet = new Set<PropertyKey>(keys);
-    if (!keySet.has("length"))
-      throw invalid("starter seed arrays must be dense and have no extra properties");
-    for (let index = 0; index < length; index++) {
-      if (!keySet.has(String(index)))
-        throw invalid("starter seed arrays must be dense and have no extra properties");
-    }
-    for (let index = 0; index < keys.length; index++) {
-      const key = keys[index]!;
-      if (key !== "length" && (typeof key !== "string" || !/^(?:0|[1-9][0-9]*)$/.test(key)))
-        throw invalid("starter seed arrays must be dense and have no extra properties");
-    }
-    spend(budget, length);
-    const output = new Array<SeedJsonValue>(length);
-    for (let index = 0; index < length; index++) {
-      const descriptor = dataDescriptor(input, String(index));
-      output[index] = capturePlainJson(descriptor.value, budget, depth + 1);
-    }
-    return Object.freeze(output) as SeedJsonValue[];
-  }
-
-  const prototype = Reflect.getPrototypeOf(input);
-  if (prototype !== Object.prototype && prototype !== null)
-    throw invalid("starter seed records must use a plain object prototype");
-  const keys = Reflect.ownKeys(input);
-  if (keys.length > MAX_CAPTURE_KEYS)
-    throw invalid("starter seed exceeds aggregate capture limits");
-  const output: SeedJsonRecord = Object.create(null) as SeedJsonRecord;
-  for (let index = 0; index < keys.length; index++) {
-    const key = keys[index]!;
-    if (typeof key !== "string" || key.length > MAX_CAPTURE_KEY_LENGTH)
-      throw invalid("starter seed record keys are invalid");
-    spend(budget, key.length);
-    const descriptor = dataDescriptor(input, key);
-    output[key] = capturePlainJson(descriptor.value, budget, depth + 1);
-  }
-  return Object.freeze(output);
+/** Capture caller JSON without invoking accessors, iterators, or array methods. */
+function capturePlainJson(input: unknown): SeedJsonValue {
+  return captureStrictJson(input, SEED_CAPTURE_POLICY) as SeedJsonValue;
 }
 
 function asRecord(value: SeedJsonValue, what: string): SeedJsonRecord {
@@ -197,14 +125,14 @@ function exactKeys(
   for (let index = 0; index < required.length; index++) allowed.add(required[index]!);
   for (let index = 0; index < optional.length; index++) allowed.add(optional[index]!);
   if (keys.length < required.length || keys.length > required.length + optional.length)
-    throw invalid("starter seed record has unknown or missing fields");
+    throw invalid(STARTER_SEED_PREFIX + "record has unknown or missing fields");
   for (let index = 0; index < required.length; index++) {
     if (!Object.hasOwn(record, required[index]!))
-      throw invalid("starter seed record has unknown or missing fields");
+      throw invalid(STARTER_SEED_PREFIX + "record has unknown or missing fields");
   }
   for (let index = 0; index < keys.length; index++) {
     if (!allowed.has(keys[index]!))
-      throw invalid("starter seed record has unknown or missing fields");
+      throw invalid(STARTER_SEED_PREFIX + "record has unknown or missing fields");
   }
 }
 
@@ -233,23 +161,23 @@ function parseColumn(value: SeedJsonValue): StarterSeedColumn {
   const type = record.type;
   if (type !== "text" && type !== "number" && type !== "integer"
       && type !== "date" && type !== "enum")
-    throw invalid("starter seed column type is invalid");
+    throw invalid(STARTER_SEED_PREFIX + "column type is invalid");
   if (typeof record.required !== "boolean")
-    throw invalid("starter seed column required flag is invalid");
+    throw invalid(STARTER_SEED_PREFIX + "column required flag is invalid");
   let values: readonly string[] | undefined;
   if (record.values !== undefined) {
     const source = asArray(record.values, "enum values");
     if (source.length < 1 || source.length > 100)
-      throw invalid("starter seed enum values are invalid");
+      throw invalid(STARTER_SEED_PREFIX + "enum values are invalid");
     const copy: string[] = [];
     for (let index = 0; index < source.length; index++)
       copy.push(boundedString(source[index]!, "enum value", 80));
     if (new Set(copy).size !== copy.length)
-      throw invalid("starter seed enum values must be unique");
+      throw invalid(STARTER_SEED_PREFIX + "enum values must be unique");
     values = Object.freeze(copy);
   }
   if ((type === "enum") !== (values !== undefined))
-    throw invalid("starter seed enum values are invalid");
+    throw invalid(STARTER_SEED_PREFIX + "enum values are invalid");
   return Object.freeze({ name, type, required: record.required, ...(values ? { values } : {}) });
 }
 
@@ -259,24 +187,24 @@ function parseTable(value: SeedJsonValue): StarterSeedTable {
   const name = identifier(record.name!, "table name");
   const columnSource = asArray(record.columns!, "columns");
   if (columnSource.length < 1 || columnSource.length > MAX_COLUMNS_PER_TABLE)
-    throw invalid("starter seed column array exceeds its limit");
+    throw invalid(STARTER_SEED_PREFIX + "column array exceeds its limit");
   const columns: StarterSeedColumn[] = [];
   for (let index = 0; index < columnSource.length; index++)
     columns.push(parseColumn(columnSource[index]!));
   if (new Set(columns.map(column => column.name)).size !== columns.length)
-    throw invalid("starter seed column names must be unique");
+    throw invalid(STARTER_SEED_PREFIX + "column names must be unique");
   const columnNames = new Set(columns.map(column => column.name));
 
   const rowSource = asArray(record.sampleRows!, "sample rows");
   if (rowSource.length > MAX_SAMPLE_ROWS_PER_TABLE)
-    throw invalid("starter seed sample row array exceeds its limit");
+    throw invalid(STARTER_SEED_PREFIX + "sample row array exceeds its limit");
   const sampleRows: Readonly<SeedJsonRecord>[] = [];
   for (let index = 0; index < rowSource.length; index++) {
     const row = asRecord(rowSource[index]!, "sample row");
     const keys = Object.keys(row);
     for (let keyIndex = 0; keyIndex < keys.length; keyIndex++) {
       if (!columnNames.has(keys[keyIndex]!))
-        throw invalid("starter seed sample row references an unknown column");
+        throw invalid(STARTER_SEED_PREFIX + "sample row references an unknown column");
     }
     sampleRows.push(row);
   }
@@ -307,7 +235,7 @@ function parsePanel(value: SeedJsonValue): StarterSeedPanel {
   exactKeys(placementRecord, ["region", "order"], ["w", "h", "col"]);
   const region = placementRecord.region;
   if (region !== "top" && region !== "main" && region !== "side")
-    throw invalid("starter seed panel placement region is invalid");
+    throw invalid(STARTER_SEED_PREFIX + "panel placement region is invalid");
   const order = nonNegativeInteger(placementRecord.order!, "panel placement order");
   const w = optionalPlacementInteger(placementRecord, "w");
   const h = optionalPlacementInteger(placementRecord, "h");
@@ -322,19 +250,19 @@ function parsePanel(value: SeedJsonValue): StarterSeedPanel {
 
   const querySource = asArray(record.declared_queries!, "declared queries");
   if (querySource.length > MAX_QUERIES_PER_PANEL)
-    throw invalid("starter seed declared query array exceeds its limit");
+    throw invalid(STARTER_SEED_PREFIX + "declared query array exceeds its limit");
   const declaredQueries: Readonly<SeedJsonRecord>[] = [];
   for (let index = 0; index < querySource.length; index++)
     declaredQueries.push(asRecord(querySource[index]!, "declared query"));
 
   const writeSource = asArray(record.declared_writes!, "declared writes");
   if (writeSource.length > MAX_WRITES_PER_PANEL)
-    throw invalid("starter seed declared write array exceeds its limit");
+    throw invalid(STARTER_SEED_PREFIX + "declared write array exceeds its limit");
   const declaredWrites: string[] = [];
   for (let index = 0; index < writeSource.length; index++)
     declaredWrites.push(identifier(writeSource[index]!, "declared write"));
   if (new Set(declaredWrites).size !== declaredWrites.length)
-    throw invalid("starter seed declared writes must be unique");
+    throw invalid(STARTER_SEED_PREFIX + "declared writes must be unique");
 
   return Object.freeze({
     panelId,
@@ -348,38 +276,38 @@ function parsePanel(value: SeedJsonValue): StarterSeedPanel {
 
 /** Source-private capture used only by ProductionMutationCoordinator. */
 export function captureStarterSeedBundle(input: unknown): CapturedStarterSeedBundle {
-  const captured = capturePlainJson(input, { nodes: 0, units: 0 });
+  const captured = capturePlainJson(input);
   const record = asRecord(captured, "bundle");
   exactKeys(record, ["schema", "shellId", "shellName", "tables", "panels"]);
-  if (record.schema !== 1) throw invalid("starter seed schema is invalid");
+  if (record.schema !== 1) throw invalid(STARTER_SEED_PREFIX + "schema is invalid");
   const shellId = boundedString(record.shellId!, "shell id", 64);
-  if (!SAFE_SHELL_ID.test(shellId)) throw invalid("starter seed shell id is invalid");
+  if (!SAFE_SHELL_ID.test(shellId)) throw invalid(STARTER_SEED_PREFIX + "shell id is invalid");
   const shellName = boundedString(record.shellName!, "shell name", 80);
-  if (shellName !== shellName.trim()) throw invalid("starter seed shell name is invalid");
+  if (shellName !== shellName.trim()) throw invalid(STARTER_SEED_PREFIX + "shell name is invalid");
 
   const tableSource = asArray(record.tables!, "tables");
   if (tableSource.length > MAX_TABLES)
-    throw invalid("starter seed table array exceeds its limit");
+    throw invalid(STARTER_SEED_PREFIX + "table array exceeds its limit");
   const tables: StarterSeedTable[] = [];
   let sampleRows = 0;
   for (let index = 0; index < tableSource.length; index++) {
     const table = parseTable(tableSource[index]!);
     sampleRows += table.sampleRows.length;
     if (sampleRows > MAX_SAMPLE_ROWS)
-      throw invalid("starter seed sample rows exceed their aggregate limit");
+      throw invalid(STARTER_SEED_PREFIX + "sample rows exceed their aggregate limit");
     tables.push(table);
   }
   if (new Set(tables.map(table => table.name)).size !== tables.length)
-    throw invalid("starter seed table names must be unique");
+    throw invalid(STARTER_SEED_PREFIX + "table names must be unique");
 
   const panelSource = asArray(record.panels!, "panels");
   if (panelSource.length > MAX_PANELS)
-    throw invalid("starter seed panel array exceeds its limit");
+    throw invalid(STARTER_SEED_PREFIX + "panel array exceeds its limit");
   const panels: StarterSeedPanel[] = [];
   for (let index = 0; index < panelSource.length; index++)
     panels.push(parsePanel(panelSource[index]!));
   if (new Set(panels.map(panel => panel.panelId)).size !== panels.length)
-    throw invalid("starter seed panel ids must be unique");
+    throw invalid(STARTER_SEED_PREFIX + "panel ids must be unique");
 
   return Object.freeze({
     schema: 1,
@@ -417,7 +345,7 @@ function materializeSampleRow(
     const match = RELATIVE_STARTER_DAY.exec(value);
     const offset = match ? Number(match[1]) : Number.NaN;
     if (!Number.isSafeInteger(offset) || Math.abs(offset) > 36_500)
-      throw invalid("starter seed relative date is invalid");
+      throw invalid(STARTER_SEED_PREFIX + "relative date is invalid");
     const date = new Date(seedInstant);
     if (Number.isNaN(date.getTime())) throw invalid("trusted starter seed instant is invalid");
     date.setDate(date.getDate() + offset);

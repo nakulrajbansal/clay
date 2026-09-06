@@ -1,5 +1,5 @@
 import { OperationId } from "@clay/schema";
-import { ClayError } from "./errors";
+import { targetAuthorityInvalid as invalid } from "./production-input-capture";
 import { sha256HexSync } from "./state-digest";
 
 const AUTHORITY_ID = /^auth_[a-z2-7]{26}$/;
@@ -10,14 +10,7 @@ const SAMPLE_PRODUCER_ROUTES = ["starter.seed", "samples.fill"] as const;
 
 export type SampleProducerRoute = typeof SAMPLE_PRODUCER_ROUTES[number];
 
-function invalid(message: string): ClayError {
-  return new ClayError("E_TARGET_AUTHORITY_INVALID", message);
-}
-
-function encodeOperationDigest(hex: string): string {
-  const bytes = new Uint8Array(32);
-  for (let index = 0; index < bytes.length; index++)
-    bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+export function encodeAuthorityIdBytes(prefix: string, bytes: Uint8Array): string {
   let bits = 0;
   let value = 0;
   let encoded = "";
@@ -30,7 +23,14 @@ function encodeOperationDigest(hex: string): string {
       value &= (1 << bits) - 1;
     }
   }
-  return OperationId.parse(`op_${encoded}`);
+  return `${prefix}_${encoded}`;
+}
+
+function encodeOperationDigest(hex: string): string {
+  const bytes = new Uint8Array(32);
+  for (let index = 0; index < bytes.length; index++)
+    bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+  return OperationId.parse(encodeAuthorityIdBytes("op", bytes));
 }
 
 function validateInputs(authorityIncarnationId: string, requestId: string): void {

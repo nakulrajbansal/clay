@@ -33,8 +33,16 @@ import { executePreparedPlannerKeep } from "./planner-authority";
 import {
   readProductionRequestReceipt,
   writeProductionRequestReceipt,
+  type PersistedProductionRequestReceipt,
 } from "./production-request-journal";
 import {
+  FIXED_OPERATIONAL_MUTATION_PREFIX,
+  PRODUCTION_MUTATION_PREFIX,
+  PRODUCTION_REQUEST_PREFIX,
+  STARTER_SEED_PREFIX,
+} from "./production-input-capture";
+import {
+  encodeAuthorityIdBytes,
   productionOperationIdV1,
   productionOperationIdV2,
 } from "./production-operation-id";
@@ -69,6 +77,12 @@ import {
   type CapturedSampleFill,
 } from "./production-samples";
 import { stableJson } from "./stable-json";
+import {
+  captureStrictJson,
+  UTF8_ENCODER,
+  type StrictJsonCaptureBudget as CaptureBudget,
+  type StrictJsonCapturePolicy,
+} from "./strict-json-capture";
 import { sha256HexSync } from "./state-digest";
 import { stateLeafHashV1 } from "./state-merkle";
 import type { StateMerkleChange } from "./state-merkle-index";
@@ -258,16 +272,16 @@ function captureMutationEnvelope(input: unknown): Readonly<{
   payload: unknown;
 }> {
   if (typeof input !== "object" || input === null || Array.isArray(input))
-    throw invalid("production mutation envelope must be a plain data record");
+    throw invalid(PRODUCTION_MUTATION_PREFIX + "envelope must be a plain data record");
   const prototype = Reflect.getPrototypeOf(input);
   if (prototype !== Object.prototype && prototype !== null)
-    throw invalid("production mutation envelope must be a plain data record");
+    throw invalid(PRODUCTION_MUTATION_PREFIX + "envelope must be a plain data record");
   const allowed = ["requestId", "route", "payload"] as const;
   const keys = Reflect.ownKeys(input);
   if (keys.length !== allowed.length
       || keys.some(key => typeof key !== "string"
         || !allowed.includes(key as typeof allowed[number])))
-    throw invalid("production mutation envelope fields are invalid");
+    throw invalid(PRODUCTION_MUTATION_PREFIX + "envelope fields are invalid");
   const values: Record<typeof allowed[number], unknown> = {
     requestId: undefined,
     route: undefined,
@@ -276,22 +290,32 @@ function captureMutationEnvelope(input: unknown): Readonly<{
   for (const key of allowed) {
     const descriptor = Reflect.getOwnPropertyDescriptor(input, key);
     if (!descriptor || !("value" in descriptor) || !descriptor.enumerable)
-      throw invalid("production mutation envelope fields must be plain data properties");
+      throw invalid(PRODUCTION_MUTATION_PREFIX + "envelope fields must be plain data properties");
     values[key] = descriptor.value;
   }
   return Object.freeze(values);
 }
 
-const MAX_CAPTURE_DEPTH = 64;
-const MAX_CAPTURE_NODES = 100_000;
-const MAX_CAPTURE_ARRAY = 10_000;
-const MAX_CAPTURE_KEYS = 10_000;
-const MAX_CAPTURE_KEY_LENGTH = 128;
-const MAX_CAPTURE_STRING = 1_000_000;
 const MAX_CAPTURE_BYTES = 2_000_000;
-const CAPTURE_ENCODER = new TextEncoder();
-
-type CaptureBudget = { nodes: number; bytes: number };
+const PRODUCTION_CAPTURE_POLICY: StrictJsonCapturePolicy = [
+  64, 100_000, 1_000_000, MAX_CAPTURE_BYTES, 10_000, 10_000, 128, true, true,
+  reason => {
+    if (reason < 5) throw unavailable(reason === 1
+      ? PRODUCTION_MUTATION_PREFIX + "payload exceeds aggregate limits"
+      : PRODUCTION_MUTATION_PREFIX + "payload exceeds limits");
+    const messages = [
+      "invalid JSON value",
+      "invalid JSON value",
+      "cyclic JSON value",
+      "invalid array",
+      "invalid array keys",
+      "invalid array item",
+      "invalid record",
+      "invalid record property",
+    ];
+    throw new Error(messages[reason - 5] ?? "invalid JSON value");
+  },
+];
 
 function consumeCaptureBytes(
   budget: CaptureBudget,
@@ -303,16 +327,12 @@ function consumeCaptureBytes(
     throw unavailable(`production mutation ${subject} exceeds aggregate limits`);
 }
 
-function chargeCaptureBytes(byteLength: number, budget: CaptureBudget): void {
-  consumeCaptureBytes(budget, byteLength);
-}
-
 function chargeCaptureText(value: string, budget: CaptureBudget, framingBytes = 0): void {
-  consumeCaptureBytes(budget, CAPTURE_ENCODER.encode(value).byteLength + framingBytes);
+  consumeCaptureBytes(budget, UTF8_ENCODER.encode(value).byteLength + framingBytes);
 }
 
 function chargeRecordFrame(keys: readonly string[], budget: CaptureBudget): void {
-  chargeCaptureBytes(2 + Math.max(0, keys.length - 1), budget);
+  consumeCaptureBytes(budget, 2 + Math.max(0, keys.length - 1));
   for (const key of keys) chargeCaptureText(key, budget, 3);
 }
 
@@ -322,99 +342,7 @@ function captureJsonValue(
   depth = 0,
   budget: CaptureBudget = { nodes: 0, bytes: 0 },
 ): JsonValue {
-  if (depth > MAX_CAPTURE_DEPTH || ++budget.nodes > MAX_CAPTURE_NODES)
-    throw unavailable("production mutation payload exceeds limits");
-  if (input === null) {
-    consumeCaptureBytes(budget, 4);
-    return input;
-  }
-  if (typeof input === "boolean") {
-    consumeCaptureBytes(budget, input ? 4 : 5);
-    return input;
-  }
-  if (typeof input === "string") {
-    if (input.length > MAX_CAPTURE_STRING)
-      throw unavailable("production mutation payload exceeds limits");
-    consumeCaptureBytes(budget, new TextEncoder().encode(JSON.stringify(input)).byteLength);
-    return input;
-  }
-  if (typeof input === "number" && Number.isFinite(input)) {
-    consumeCaptureBytes(budget, new TextEncoder().encode(JSON.stringify(input)).byteLength);
-    return input;
-  }
-  if (typeof input !== "object") throw new Error("invalid JSON value");
-  if (seen.has(input)) throw new Error("cyclic JSON value");
-  seen.add(input);
-  try {
-    if (Array.isArray(input)) {
-      if (Reflect.getPrototypeOf(input) !== Array.prototype)
-        throw new Error("invalid array");
-      const keys = Reflect.ownKeys(input);
-      const lengthDescriptor = Reflect.getOwnPropertyDescriptor(input, "length");
-      if (!lengthDescriptor || !("value" in lengthDescriptor)
-          || !Number.isSafeInteger(lengthDescriptor.value)
-          || (lengthDescriptor.value as number) < 0
-          || (lengthDescriptor.value as number) > MAX_CAPTURE_ARRAY)
-        throw unavailable("production mutation payload exceeds limits");
-      const length = lengthDescriptor.value as number;
-      if (keys.length !== length + 1 || keys.some(key => {
-        if (key === "length") return false;
-        if (typeof key !== "string" || !/^(?:0|[1-9][0-9]*)$/.test(key)) return true;
-        const index = Number(key);
-        return !Number.isSafeInteger(index) || index < 0 || index >= length;
-      })) throw new Error("invalid array keys");
-      consumeCaptureBytes(budget, 2 + Math.max(0, length - 1));
-      const output = new Array<JsonValue>(length);
-      for (let index = 0; index < length; index++) {
-        const descriptor = Reflect.getOwnPropertyDescriptor(input, String(index));
-        if (!descriptor || !("value" in descriptor) || !descriptor.enumerable)
-          throw new Error("invalid array item");
-        output[index] = captureJsonValue(descriptor.value, seen, depth + 1, budget);
-      }
-      return Object.freeze(output) as JsonValue[];
-    }
-    const prototype = Reflect.getPrototypeOf(input);
-    if (prototype !== Object.prototype && prototype !== null) throw new Error("invalid record");
-    const output: JsonRecord = Object.create(null) as JsonRecord;
-    const keys = Reflect.ownKeys(input);
-    if (keys.length > MAX_CAPTURE_KEYS || keys.some(key =>
-      typeof key !== "string" || key.length > MAX_CAPTURE_KEY_LENGTH))
-      throw unavailable("production mutation payload exceeds limits");
-    consumeCaptureBytes(budget, 2 + Math.max(0, keys.length - 1));
-    for (let index = 0; index < keys.length; index++) {
-      const key = keys[index] as string;
-      const descriptor = Reflect.getOwnPropertyDescriptor(input, key);
-      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable)
-        throw new Error("invalid record property");
-      consumeCaptureBytes(
-        budget,
-        new TextEncoder().encode(JSON.stringify(key)).byteLength + 1,
-      );
-      output[key] = captureJsonValue(descriptor.value, seen, depth + 1, budget);
-    }
-    return Object.freeze(output);
-  } finally {
-    seen.delete(input);
-  }
-}
-
-function captureExactDataFields(
-  input: unknown,
-  allowed: readonly string[],
-): Record<string, unknown> {
-  if (typeof input !== "object" || input === null || Array.isArray(input)
-      || (Reflect.getPrototypeOf(input) !== Object.prototype
-        && Reflect.getPrototypeOf(input) !== null)) throw new Error();
-  const keys = Reflect.ownKeys(input);
-  if (keys.length !== allowed.length || keys.some(key =>
-    typeof key !== "string" || !allowed.includes(key))) throw new Error();
-  const output: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
-  for (const key of allowed) {
-    const descriptor = Reflect.getOwnPropertyDescriptor(input, key);
-    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) throw new Error();
-    output[key] = descriptor.value;
-  }
-  return output;
+  return captureStrictJson(input, PRODUCTION_CAPTURE_POLICY, seen, budget, depth) as JsonValue;
 }
 
 function captureBinary(input: unknown, budget: CaptureBudget): CapturedBinary {
@@ -454,11 +382,26 @@ function capturedJsonRecord(input: JsonValue | undefined): Readonly<JsonRecord> 
   return input;
 }
 
+function capturePayload(input: unknown, fields: readonly string[]): Readonly<JsonRecord> {
+  const source = exactKeys(input, fields);
+  const staged: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const field of fields) staged[field] = source[field];
+  // The payload record itself was already counted by the old route-specific
+  // capture, so offset its depth while retaining identical node/byte limits.
+  return capturedJsonRecord(captureJsonValue(staged, new WeakSet(), -1));
+}
+
+function capturedProductionMutation(
+  requestId: string,
+  route: string,
+  payload: unknown,
+): CapturedProductionMutation {
+  return Object.freeze({ requestId, route, payload }) as CapturedProductionMutation;
+}
+
 function captureBatchMutations(
-  input: unknown,
-  budget: CaptureBudget,
+  captured: JsonValue | undefined,
 ): readonly CapturedBatchMutation[] {
-  const captured = captureJsonValue(input, new WeakSet(), 0, budget);
   if (!Array.isArray(captured) || captured.length < 1 || captured.length > 500)
     throw unavailable("production batch must contain 1 to 500 mutations");
   const output: CapturedBatchMutation[] = [];
@@ -466,20 +409,20 @@ function captureBatchMutations(
     const mutation = capturedJsonRecord(captured[index]);
     const kind = mutation.kind;
     if (kind === "insert") {
-      const fields = captureExactDataFields(mutation, ["kind", "table", "row"]);
+      const fields = exactDataFields(mutation, ["kind", "table", "row"]);
       if (typeof fields.table !== "string") throw new Error();
       output.push(Object.freeze({
         kind, table: fields.table, row: capturedJsonRecord(fields.row as JsonValue),
       }));
     } else if (kind === "update") {
-      const fields = captureExactDataFields(mutation, ["kind", "table", "id", "patch"]);
+      const fields = exactDataFields(mutation, ["kind", "table", "id", "patch"]);
       if (typeof fields.table !== "string" || typeof fields.id !== "string") throw new Error();
       output.push(Object.freeze({
         kind, table: fields.table, id: fields.id,
         patch: capturedJsonRecord(fields.patch as JsonValue),
       }));
     } else if (kind === "soft_delete" || kind === "restore") {
-      const fields = captureExactDataFields(mutation, ["kind", "table", "id"]);
+      const fields = exactDataFields(mutation, ["kind", "table", "id"]);
       if (typeof fields.table !== "string" || typeof fields.id !== "string") throw new Error();
       output.push(Object.freeze({ kind, table: fields.table, id: fields.id }));
     } else {
@@ -517,250 +460,17 @@ function captureMutation(input: unknown): CapturedProductionMutation {
     if (typeof requestId !== "string" || !/^req_[a-z2-7]{26}$/.test(requestId)
         || typeof route !== "string"
         || typeof payload !== "object" || payload === null || Array.isArray(payload)) throw new Error();
-    if (route === "planner.begin")
-      return Object.freeze({ requestId, route, payload: capturePlannerAttemptStart(payload) });
-    if (route === "planner.finalize")
-      return Object.freeze({
-        requestId, route, payload: capturePlannerAttemptFinalization(payload),
-      });
-    if (route === "planner.discard")
-      return Object.freeze({ requestId, route, payload: capturePreparedMutationCommand(payload) });
-    if (route === "planner.keep")
-      return Object.freeze({ requestId, route, payload: capturePreparedMutationCommand(payload) });
+    const done = (captured: unknown): CapturedProductionMutation =>
+      capturedProductionMutation(requestId, route, captured);
     switch (route) {
-      case "store.insert": {
-        const fields = exactKeys(payload, ["table", "row"]);
-        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
-        chargeRecordFrame(["table", "row"], budget);
-        const table = captureJsonValue(fields.table, new WeakSet(), 0, budget);
-        const row = fields.row;
-        if (typeof table !== "string") throw new Error();
-        return Object.freeze({ requestId, route, payload: Object.freeze({
-          table, row: captureJsonRecord(row, budget),
-        }) });
-      }
-      case "store.update": {
-        const fields = exactKeys(payload, ["table", "id", "patch"]);
-        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
-        chargeRecordFrame(["table", "id", "patch"], budget);
-        const table = captureJsonValue(fields.table, new WeakSet(), 0, budget);
-        const id = captureJsonValue(fields.id, new WeakSet(), 0, budget);
-        const patch = fields.patch;
-        if (typeof table !== "string" || typeof id !== "string") throw new Error();
-        return Object.freeze({ requestId, route, payload: Object.freeze({
-          table, id, patch: captureJsonRecord(patch, budget),
-        }) });
-      }
-      case "store.softDelete": {
-        const fields = exactKeys(payload, ["table", "id"]);
-        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
-        chargeRecordFrame(["table", "id"], budget);
-        const table = captureJsonValue(fields.table, new WeakSet(), 0, budget);
-        const id = captureJsonValue(fields.id, new WeakSet(), 0, budget);
-        if (typeof table !== "string" || typeof id !== "string") throw new Error();
-        return Object.freeze({ requestId, route, payload: Object.freeze({ table, id }) });
-      }
-      case "store.commit": {
-        const fields = exactKeys(payload, ["plan"]);
-        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
-        chargeRecordFrame(["plan"], budget);
-        return Object.freeze({ requestId, route, payload: Object.freeze({
-          plan: captureJsonRecord(fields.plan, budget),
-        }) });
-      }
-      case "table.import":
-        return Object.freeze({
-          requestId,
-          route,
-          payload: captureTableImport(payload),
-        });
-      case "samples.remove":
-        return Object.freeze({
-          requestId,
-          route,
-          payload: captureSampleRemoval(payload),
-        });
-      case "samples.fill":
-        return Object.freeze({
-          requestId,
-          route,
-          payload: captureSampleFill(payload),
-        });
-      case "starter.seed":
-        return Object.freeze({
-          requestId,
-          route,
-          payload: captureStarterSeedBundle(payload),
-        });
-      case "attachment.add": {
-        const fields = captureExactDataFields(
-          payload, ["table", "rowId", "field", "name", "mime", "bytes"],
-        );
-        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
-        chargeRecordFrame(["table", "rowId", "field", "name", "mime", "bytes"], budget);
-        const table = captureJsonValue(fields.table, new WeakSet(), 0, budget);
-        const rowId = captureJsonValue(fields.rowId, new WeakSet(), 0, budget);
-        const field = captureJsonValue(fields.field, new WeakSet(), 0, budget);
-        const name = captureJsonValue(fields.name, new WeakSet(), 0, budget);
-        const mime = captureJsonValue(fields.mime, new WeakSet(), 0, budget);
-        if (typeof table !== "string" || typeof rowId !== "string"
-            || typeof field !== "string" || typeof name !== "string"
-            || typeof mime !== "string") throw new Error();
-        return Object.freeze({ requestId, route, payload: Object.freeze({
-          table, rowId, field, name, mime,
-          bytes: captureBinary(fields.bytes, budget),
-        }) });
-      }
-      case "attachment.remove": {
-        const fields = captureExactDataFields(
-          payload, ["table", "rowId", "field", "id"],
-        );
-        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
-        chargeRecordFrame(["table", "rowId", "field", "id"], budget);
-        const table = captureJsonValue(fields.table, new WeakSet(), 0, budget);
-        const rowId = captureJsonValue(fields.rowId, new WeakSet(), 0, budget);
-        const field = captureJsonValue(fields.field, new WeakSet(), 0, budget);
-        const id = captureJsonValue(fields.id, new WeakSet(), 0, budget);
-        if (typeof table !== "string" || typeof rowId !== "string"
-            || typeof field !== "string" || typeof id !== "string") throw new Error();
-        return Object.freeze({
-          requestId, route, payload: Object.freeze({ table, rowId, field, id }),
-        });
-      }
-      case "attachment.purge": {
-        captureExactDataFields(payload, []);
-        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
-        chargeRecordFrame([], budget);
-        return Object.freeze({ requestId, route, payload: Object.freeze({}) });
-      }
-      case "batch.apply": {
-        const fields = exactKeys(payload, ["source", "summary", "mutations"]);
-        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
-        chargeRecordFrame(["source", "summary", "mutations"], budget);
-        const source = captureJsonValue(fields.source, new WeakSet(), 0, budget);
-        const summary = captureJsonValue(fields.summary, new WeakSet(), 0, budget);
-        if ((source !== "user" && source !== "automation") || typeof summary !== "string")
-          throw new Error();
-        return Object.freeze({ requestId, route, payload: Object.freeze({
-          source,
-          summary,
-          mutations: captureBatchMutations(fields.mutations, budget),
-        }) });
-      }
-      case "batch.undo": {
-        const fields = exactKeys(payload, ["id"]);
-        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
-        chargeRecordFrame(["id"], budget);
-        const id = captureJsonValue(fields.id, new WeakSet(), 0, budget);
-        if (typeof id !== "string") throw new Error();
-        return Object.freeze({ requestId, route, payload: Object.freeze({ id }) });
-      }
-      case "row.restore": {
-        const fields = exactKeys(payload, ["table", "id"]);
-        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
-        chargeRecordFrame(["table", "id"], budget);
-        const table = captureJsonValue(fields.table, new WeakSet(), 0, budget);
-        const id = captureJsonValue(fields.id, new WeakSet(), 0, budget);
-        if (typeof table !== "string" || typeof id !== "string") throw new Error();
-        return Object.freeze({ requestId, route, payload: Object.freeze({ table, id }) });
-      }
-      case "schema.removeColumn": {
-        const fields = exactKeys(payload, ["table", "column"]);
-        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
-        chargeRecordFrame(["table", "column"], budget);
-        const table = captureJsonValue(fields.table, new WeakSet(), 0, budget);
-        const column = captureJsonValue(fields.column, new WeakSet(), 0, budget);
-        if (typeof table !== "string" || typeof column !== "string") throw new Error();
-        return Object.freeze({ requestId, route, payload: Object.freeze({ table, column }) });
-      }
-      case "setting.set": {
-        const fields = exactKeys(payload, ["key", "value"]);
-        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
-        chargeRecordFrame(["key", "value"], budget);
-        const key = captureJsonValue(fields.key, new WeakSet(), 0, budget);
-        const value = fields.value;
-        if (typeof key !== "string") throw new Error();
-        assertSettingKeyAvailable(key);
-        return Object.freeze({ requestId, route, payload: Object.freeze({
-          key, value: captureJsonValue(value, new WeakSet(), 0, budget),
-        }) });
-      }
-      case "setting.delete": {
-        const fields = exactKeys(payload, ["key"]);
-        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
-        chargeRecordFrame(["key"], budget);
-        const key = captureJsonValue(fields.key, new WeakSet(), 0, budget);
-        if (typeof key !== "string") throw new Error();
-        assertSettingKeyAvailable(key);
-        return Object.freeze({ requestId, route, payload: Object.freeze({ key }) });
-      }
-      case "setting.compareAndSet": {
-        const fields = exactKeys(payload, ["key", "expectedRevision", "value"]);
-        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
-        chargeRecordFrame(["key", "expectedRevision", "value"], budget);
-        const key = captureJsonValue(fields.key, new WeakSet(), 0, budget);
-        const expectedRevision = captureJsonValue(
-          fields.expectedRevision, new WeakSet(), 0, budget,
-        );
-        const value = fields.value;
-        if (typeof key !== "string" || !Number.isSafeInteger(expectedRevision)
-            || (expectedRevision as number) < 0) throw new Error();
-        assertSettingKeyAvailable(key);
-        return Object.freeze({ requestId, route, payload: Object.freeze({
-          key,
-          expectedRevision: expectedRevision as number,
-          value: captureJsonValue(value, new WeakSet(), 0, budget),
-        }) });
-      }
-      case "upsertAutomation": {
-        const fields = exactKeys(payload, ["input"]);
-        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
-        chargeRecordFrame(["input"], budget);
-        return Object.freeze({ requestId, route, payload: Object.freeze({
-          input: captureJsonRecord(fields.input, budget),
-        }) });
-      }
-      case "deleteAutomation":
-      case "runAutomationNow":
-      case "undoAutomationRun":
-      case "markNotificationRead": {
-        const fields = exactKeys(payload, ["id"]);
-        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
-        chargeRecordFrame(["id"], budget);
-        const id = captureJsonValue(fields.id, new WeakSet(), 0, budget);
-        if (typeof id !== "string") throw new Error();
-        return Object.freeze({ requestId, route, payload: Object.freeze({ id }) });
-      }
-      case "runDueAutomations": {
-        exactKeys(payload, []);
-        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
-        chargeRecordFrame([], budget);
-        return Object.freeze({ requestId, route, payload: Object.freeze({}) });
-      }
-      case "recordUsage": {
-        const fields = exactKeys(payload, ["event"]);
-        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
-        chargeRecordFrame(["event"], budget);
-        return Object.freeze({ requestId, route, payload: Object.freeze({
-          event: validateCapturedUsageEvent(captureJsonRecord(fields.event, budget)),
-        }) });
-      }
-      case "acceptSuggestion":
-      case "dismissSuggestion": {
-        const fields = exactKeys(payload, ["subject", "kind"]);
-        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
-        chargeRecordFrame(["subject", "kind"], budget);
-        const subject = captureJsonValue(fields.subject, new WeakSet(), 0, budget);
-        const kind = captureJsonValue(fields.kind, new WeakSet(), 0, budget);
-        if (typeof subject !== "string" || subject.length < 1
-            || typeof kind !== "string" || ![
-              "promote_to_status", "pin_filtered_panel", "add_view", "flag_overdue",
-              "regroup_board", "make_workflow", "chart_metric",
-            ].includes(kind)) throw new Error();
-        return Object.freeze({ requestId, route, payload: Object.freeze({
-          subject, kind,
-        }) });
-      }
+      case "planner.begin": return done(capturePlannerAttemptStart(payload));
+      case "planner.finalize": return done(capturePlannerAttemptFinalization(payload));
+      case "planner.discard":
+      case "planner.keep": return done(capturePreparedMutationCommand(payload));
+      case "table.import": return done(captureTableImport(payload));
+      case "samples.remove": return done(captureSampleRemoval(payload));
+      case "samples.fill": return done(captureSampleFill(payload));
+      case "starter.seed": return done(captureStarterSeedBundle(payload));
       case "timeline.setCheckpoint":
       case "timeline.makeLatest":
       case "panel.revert":
@@ -769,18 +479,104 @@ function captureMutation(input: unknown): CapturedProductionMutation {
       case "schema.addColumn":
       case "schema.renameColumn":
       case "schema.addRelationColumn": {
-        const budget: CaptureBudget = { nodes: 0, bytes: 0 };
-        const capturedPayload = captureJsonRecord(payload, budget);
-        const captured = captureCoreMutation(requestId, route, capturedPayload);
+        const captured = captureCoreMutation(requestId, route, captureJsonRecord(payload));
         if (captured) return captured;
         throw new Error();
       }
-      default:
-        throw new Error();
+      case "attachment.add": {
+        const keys = ["table", "rowId", "field", "name", "mime", "bytes"] as const;
+        const fields = exactKeys(payload, keys);
+        const budget: CaptureBudget = { nodes: 1, bytes: 0 };
+        chargeRecordFrame(keys, budget);
+        const captured: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+        for (const key of keys.slice(0, -1)) {
+          const value = captureJsonValue(fields[key], new WeakSet(), 0, budget);
+          if (typeof value !== "string") throw new Error();
+          captured[key] = value;
+        }
+        captured.bytes = captureBinary(fields.bytes, budget);
+        return done(Object.freeze(captured));
+      }
     }
+
+    let fields: readonly string[];
+    switch (route) {
+      case "store.insert": fields = ["table", "row"]; break;
+      case "store.update": fields = ["table", "id", "patch"]; break;
+      case "store.softDelete":
+      case "row.restore": fields = ["table", "id"]; break;
+      case "store.commit": fields = ["plan"]; break;
+      case "attachment.remove": fields = ["table", "rowId", "field", "id"]; break;
+      case "attachment.purge":
+      case "runDueAutomations": fields = []; break;
+      case "batch.apply": fields = ["source", "summary", "mutations"]; break;
+      case "batch.undo":
+      case "deleteAutomation":
+      case "runAutomationNow":
+      case "undoAutomationRun":
+      case "markNotificationRead": fields = ["id"]; break;
+      case "schema.removeColumn": fields = ["table", "column"]; break;
+      case "setting.set": fields = ["key", "value"]; break;
+      case "setting.delete": fields = ["key"]; break;
+      case "setting.compareAndSet": fields = ["key", "expectedRevision", "value"]; break;
+      case "upsertAutomation": fields = ["input"]; break;
+      case "recordUsage": fields = ["event"]; break;
+      case "acceptSuggestion":
+      case "dismissSuggestion": fields = ["subject", "kind"]; break;
+      default: throw new Error();
+    }
+    const captured = capturePayload(payload, fields);
+    const strings = (...keys: string[]): void => {
+      if (keys.some(key => typeof captured[key] !== "string")) throw new Error();
+    };
+    switch (route) {
+      case "store.insert":
+        strings("table"); capturedJsonRecord(captured.row); break;
+      case "store.update":
+        strings("table", "id"); capturedJsonRecord(captured.patch); break;
+      case "store.softDelete":
+      case "row.restore": strings("table", "id"); break;
+      case "store.commit": capturedJsonRecord(captured.plan); break;
+      case "attachment.remove": strings("table", "rowId", "field", "id"); break;
+      case "batch.apply": {
+        if (captured.source !== "user" && captured.source !== "automation") throw new Error();
+        strings("summary");
+        return done(Object.freeze({
+          source: captured.source,
+          summary: captured.summary,
+          mutations: captureBatchMutations(captured.mutations),
+        }));
+      }
+      case "batch.undo":
+      case "deleteAutomation":
+      case "runAutomationNow":
+      case "undoAutomationRun":
+      case "markNotificationRead": strings("id"); break;
+      case "schema.removeColumn": strings("table", "column"); break;
+      case "setting.set":
+      case "setting.delete":
+        strings("key"); assertSettingKeyAvailable(captured.key as string); break;
+      case "setting.compareAndSet":
+        strings("key");
+        if (!Number.isSafeInteger(captured.expectedRevision)
+            || Number(captured.expectedRevision) < 0) throw new Error();
+        assertSettingKeyAvailable(captured.key as string);
+        break;
+      case "upsertAutomation": capturedJsonRecord(captured.input); break;
+      case "recordUsage": validateCapturedUsageEvent(capturedJsonRecord(captured.event)); break;
+      case "acceptSuggestion":
+      case "dismissSuggestion":
+        strings("subject", "kind");
+        if ((captured.subject as string).length < 1 || ![
+          "promote_to_status", "pin_filtered_panel", "add_view", "flag_overdue",
+          "regroup_board", "make_workflow", "chart_metric",
+        ].includes(captured.kind as string)) throw new Error();
+        break;
+    }
+    return done(captured);
   } catch (error) {
     if (error instanceof ClayError) throw error;
-    throw invalid("production mutation request is invalid");
+    throw invalid(PRODUCTION_MUTATION_PREFIX + "request is invalid");
   }
 }
 
@@ -822,8 +618,8 @@ function captureOperationalMetricMutation(input: unknown): CapturedOperationalMe
 
 function assertCapturedMutationBytes(request: CapturedProductionMutation): void {
   const serialized = JSON.stringify(request);
-  if (CAPTURE_ENCODER.encode(serialized).byteLength > MAX_CAPTURE_BYTES)
-    throw invalid("production mutation request exceeds 2,000,000 UTF-8 bytes");
+  if (UTF8_ENCODER.encode(serialized).byteLength > MAX_CAPTURE_BYTES)
+    throw invalid(PRODUCTION_MUTATION_PREFIX + "request exceeds 2,000,000 UTF-8 bytes");
 }
 
 type FixedOperationalMutation = CapturedOperationalMetricMutation;
@@ -864,21 +660,8 @@ function requestFingerprint(expected: TargetEvidence, request: CapturedProductio
 type AuthorityIdPrefix = "app" | "gen" | "ns" | "op" | "rel" | "req";
 
 function encodeAuthorityId(prefix: AuthorityIdPrefix, bytes: Uint8Array): string {
-  const alphabet = "abcdefghijklmnopqrstuvwxyz234567";
-  let bits = 0;
-  let value = 0;
-  let encoded = "";
-  for (let index = 0; index < bytes.length && encoded.length < 26; index++) {
-    value = (value << 8) | bytes[index]!;
-    bits += 8;
-    while (bits >= 5 && encoded.length < 26) {
-      bits -= 5;
-      encoded += alphabet[(value >>> bits) & 31];
-      value &= (1 << bits) - 1;
-    }
-  }
-  const id = `${prefix}_${encoded}`;
-  if (encoded.length !== 26) throw unavailable("trusted identity source failed");
+  const id = encodeAuthorityIdBytes(prefix, bytes);
+  if (id.length !== prefix.length + 27) throw unavailable("trusted identity source failed");
   return id;
 }
 
@@ -1042,7 +825,7 @@ function executeCapturedMutation(
       if (executionInstant === null)
         throw invalid("trusted starter seed instant is unavailable");
       if (sampleProvenanceCoordinates(store, operationId).length !== 0)
-        throw invalid("starter seed operation provenance already exists");
+        throw invalid(STARTER_SEED_PREFIX + "operation provenance already exists");
       {
         const outcome = executeCapturedStarterSeed(
           store, request.payload, executionInstant, operationId,
@@ -1052,7 +835,7 @@ function executeCapturedMutation(
         );
         const persisted = sampleProvenanceCoordinates(store, operationId);
         assertExactSampleProvenance(
-          outcome.sampleProvenance, persisted, expected, "starter seed operation",
+          outcome.sampleProvenance, persisted, expected, STARTER_SEED_PREFIX + "operation",
         );
         return capturedExecution(outcome.result, outcome.sampleProvenance);
       }
@@ -1160,6 +943,40 @@ function executeCapturedOperationalMetricMutation(
 
 function copyResult(input: JsonValue): JsonValue {
   return captureJsonValue(input, new WeakSet());
+}
+
+function mutationResult(
+  requestId: string,
+  operationId: string,
+  changed: boolean,
+  replayed: boolean,
+  evidence: TargetEvidence,
+  result: JsonValue,
+): ProductionMutationResult {
+  return {
+    requestId,
+    operationId,
+    changed,
+    replayed,
+    evidence: copyTarget(evidence),
+    result: copyResult(result),
+  };
+}
+
+function receiptTarget(
+  receipt: PersistedProductionRequestReceipt,
+  result: boolean,
+  digestSchema: TargetEvidence["digestSchema"],
+): TargetEvidence {
+  return copyTarget({
+    appInstanceId: receipt.appInstanceId,
+    activeGenerationId: receipt.activeGenerationId,
+    lineageEpoch: receipt.lineageEpoch,
+    protectionRevision: result
+      ? receipt.resultingProtectionRevision! : receipt.expectedProtectionRevision,
+    digestSchema,
+    stateSha256: result ? receipt.resultingStateSha256! : receipt.expectedStateSha256,
+  });
 }
 
 function preparedReceipt(
@@ -1370,6 +1187,23 @@ export class ProductionMutationCoordinator {
     }
   }
 
+  #authorityState(
+    expected: TargetEvidence,
+    catalogGeneration: string,
+    nowMs: number | null,
+    message: string,
+    generationError = true,
+  ): { catalog: DeviceCatalog; target: TargetAuthorityStore } {
+    const catalog = DeviceCatalog.openExisting(this.#driver);
+    const target = TargetAuthorityStore.open(this.#driver);
+    if (nowMs !== null) catalog.assertWriteFence(this.#fence, nowMs);
+    if (catalog.snapshot().catalogGeneration !== catalogGeneration
+        || !sameTarget(catalog.selectedTargetStorage().target, expected)
+        || !sameTarget(target.evidence(), expected))
+      throw generationError ? new ClayError("E_GENERATION_NOT_SELECTED", message) : invalid(message);
+    return { catalog, target };
+  }
+
   async #executeCaptured(request: CapturedProductionMutation): Promise<ProductionMutationResult> {
     const outcome = this.#durableReceiptReplay(request);
     if (outcome) return outcome;
@@ -1388,16 +1222,17 @@ export class ProductionMutationCoordinator {
       this.#fence.authorityIncarnationId, request.requestId, request.route,
     );
     const expectedCatalogGeneration = this.#catalogGeneration;
-    const catalogBefore = DeviceCatalog.openExisting(this.#driver);
-    if (catalogBefore.snapshot().catalogGeneration !== expectedCatalogGeneration
-        || !sameTarget(catalogBefore.selectedTargetStorage().target, expected)
-        || !sameTarget(TargetAuthorityStore.open(this.#driver).evidence(), expected))
-      throw new ClayError("E_GENERATION_NOT_SELECTED", "production mutation target is stale");
+    const { catalog: catalogBefore } = this.#authorityState(
+      expected,
+      expectedCatalogGeneration,
+      null,
+      PRODUCTION_MUTATION_PREFIX + "target is stale",
+    );
     const liveBefore = enumerateCanonicalStateV1(
       this.#driver, this.#store.validationRegistrySnapshot(),
     );
     if (liveBefore.stateSha256 !== expected.stateSha256)
-      throw invalid("production mutation prestate is not canonical");
+      throw invalid(PRODUCTION_MUTATION_PREFIX + "prestate is not canonical");
     const sampleLedgerCertificate = usesSampleProvenance(request.route)
       ? assertLiveSampleProvenance(this.#driver, this.#store, expected) : null;
 
@@ -1411,7 +1246,7 @@ export class ProductionMutationCoordinator {
         shadowDriver, shadow.validationRegistrySnapshot(),
       );
       if (shadowBefore.stateSha256 !== liveBefore.stateSha256)
-        throw invalid("production mutation snapshot is not canonical");
+        throw invalid(PRODUCTION_MUTATION_PREFIX + "snapshot is not canonical");
       if (sampleLedgerCertificate !== null) {
         const shadowLedger = STORE_SAMPLE_PROVENANCE.call(shadow).map(entry => ({
           tableId: entry.tableId,
@@ -1419,12 +1254,12 @@ export class ProductionMutationCoordinator {
           operationId: entry.operationId,
         }));
         if (JSON.stringify(shadowLedger) !== JSON.stringify(sampleLedgerCertificate))
-          throw invalid("production mutation sample proof changed in shadow capture");
+          throw invalid(PRODUCTION_MUTATION_PREFIX + "sample proof changed in shadow capture");
       }
       const preparedExecution = executeCapturedMutation(
         shadow, request, executionInstant, operationId,
       );
-      if (isThenable(preparedExecution)) throw invalid("production mutation must be synchronous");
+      if (isThenable(preparedExecution)) throw invalid(PRODUCTION_MUTATION_PREFIX + "must be synchronous");
       shadowResult = copyResult(preparedExecution.result);
       encodeProductionResponse(
         request.route, shadowResult, preparedExecution.sampleProvenance,
@@ -1462,11 +1297,9 @@ export class ProductionMutationCoordinator {
     this.#ensureWriteFence();
     const expected = copyTarget(this.#target);
     const expectedCatalogGeneration = this.#catalogGeneration;
-    const catalog = DeviceCatalog.openExisting(this.#driver);
-    if (catalog.snapshot().catalogGeneration !== expectedCatalogGeneration
-        || !sameTarget(catalog.selectedTargetStorage().target, expected)
-        || !sameTarget(TargetAuthorityStore.open(this.#driver).evidence(), expected))
-      throw new ClayError("E_GENERATION_NOT_SELECTED", "operational metric target is stale");
+    this.#authorityState(
+      expected, expectedCatalogGeneration, null, "operational metric target is stale",
+    );
     const liveCanonical = enumerateCanonicalStateV1(
       this.#driver, this.#store.validationRegistrySnapshot(),
     );
@@ -1514,17 +1347,10 @@ export class ProductionMutationCoordinator {
   ): ProductionMutationResult | null {
     const persisted = readProductionRequestReceipt(this.#driver, request.requestId);
     if (!persisted) return null;
-    const expected = copyTarget({
-      appInstanceId: persisted.appInstanceId,
-      activeGenerationId: persisted.activeGenerationId,
-      lineageEpoch: persisted.lineageEpoch,
-      protectionRevision: persisted.expectedProtectionRevision,
-      digestSchema: this.#target.digestSchema,
-      stateSha256: persisted.expectedStateSha256,
-    });
+    const expected = receiptTarget(persisted, false, this.#target.digestSchema);
     const fingerprint = requestFingerprint(expected, request);
     if (fingerprint !== persisted.requestSha256)
-      throw invalid("production request identity was reused for another mutation");
+      throw invalid(PRODUCTION_REQUEST_PREFIX + "identity was reused for another mutation");
     const expectedOperationV1 = productionOperationIdV1(
       this.#fence.authorityIncarnationId, request.requestId,
     );
@@ -1533,11 +1359,11 @@ export class ProductionMutationCoordinator {
     );
     if (persisted.operationId !== expectedOperationV1
         && persisted.operationId !== expectedOperationV2)
-      throw invalid("production request receipt operation identity is invalid");
+      throw invalid(PRODUCTION_REQUEST_PREFIX + "receipt operation identity is invalid");
     if (persisted.state === "prepared")
       throw invalid("prepared production request requires explicit recovery");
     if (persisted.state === "invoked")
-      throw invalid("production request was already invoked and its result is ambiguous");
+      throw invalid(PRODUCTION_REQUEST_PREFIX + "was already invoked and its result is ambiguous");
     if (persisted.resultingProtectionRevision === null
         || persisted.resultingStateSha256 === null || persisted.responseJson === null)
       throw invalid("terminal production request receipt is incomplete");
@@ -1545,19 +1371,12 @@ export class ProductionMutationCoordinator {
     if (decodedResponse.kind === "envelope") {
       if (decodedResponse.route !== request.route
           || persisted.operationId !== expectedOperationV2)
-        throw invalid("production request response route binding is invalid");
+        throw invalid(PRODUCTION_REQUEST_PREFIX + "response route binding is invalid");
     } else if (persisted.operationId !== expectedOperationV1) {
       throw invalid("legacy production response operation identity is invalid");
     }
     const response = decodedResponse.result;
-    const resulting = copyTarget({
-      appInstanceId: persisted.appInstanceId,
-      activeGenerationId: persisted.activeGenerationId,
-      lineageEpoch: persisted.lineageEpoch,
-      protectionRevision: persisted.resultingProtectionRevision,
-      digestSchema: this.#target.digestSchema,
-      stateSha256: persisted.resultingStateSha256,
-    });
+    const resulting = receiptTarget(persisted, true, this.#target.digestSchema);
     const catalog = DeviceCatalog.openExisting(this.#driver);
     const targetAuthority = TargetAuthorityStore.open(this.#driver);
     const current = targetAuthority.evidence();
@@ -1570,7 +1389,7 @@ export class ProductionMutationCoordinator {
         || !sameTarget(this.#target, resulting)
         || catalog.snapshot().catalogGeneration !== this.#catalogGeneration
         || canonical.stateSha256 !== resulting.stateSha256)
-      throw invalid("production request receipt failed current-state read-back");
+      throw invalid(PRODUCTION_REQUEST_PREFIX + "receipt failed current-state read-back");
     if (persisted.state === "committed") {
       assertCommittedReceiptReservationBinding(
         persisted, targetAuthority.reservations(), catalog.revisionReservations(),
@@ -1585,17 +1404,17 @@ export class ProductionMutationCoordinator {
     if (persisted.state === "failed") {
       const message = response !== null && !Array.isArray(response)
         && typeof response === "object" && typeof response.message === "string"
-        ? response.message : "production request failed previously";
+        ? response.message : PRODUCTION_REQUEST_PREFIX + "failed previously";
       throw invalid(`production request failed previously: ${message}`);
     }
-    return {
-      requestId: request.requestId,
-      operationId: persisted.operationId,
-      changed: persisted.state === "committed",
-      replayed: true,
-      evidence: copyTarget(resulting),
-      result: response,
-    };
+    return mutationResult(
+      request.requestId,
+      persisted.operationId,
+      persisted.state === "committed",
+      true,
+      resulting,
+      response,
+    );
   }
 
   #durableReplay(request: CapturedProductionMutation): ProductionMutationResult | null {
@@ -1613,7 +1432,7 @@ export class ProductionMutationCoordinator {
       .filter(candidate => operationIds.has(candidate.operationId));
     if (targetRows.length === 0 && catalogRows.length === 0) return null;
     if (targetRows.length !== 1 || catalogRows.length !== 1)
-      throw invalid("production request has incomplete mirrored journal evidence");
+      throw invalid(PRODUCTION_REQUEST_PREFIX + "has incomplete mirrored journal evidence");
     const targetRow = targetRows[0]!;
     const catalogRow = catalogRows[0]!;
     if (targetRow.operationId !== catalogRow.operationId
@@ -1621,7 +1440,7 @@ export class ProductionMutationCoordinator {
         || targetRow.requestSha256 !== catalogRow.requestSha256
         || targetRow.expectedProtectionRevision !== catalogRow.expectedProtectionRevision
         || targetRow.expectedStateSha256 !== catalogRow.expectedStateSha256)
-      throw invalid("production request mirrored journal evidence disagrees");
+      throw invalid(PRODUCTION_REQUEST_PREFIX + "mirrored journal evidence disagrees");
     const originalExpected = copyTarget({
       appInstanceId: catalogRow.appInstanceId,
       activeGenerationId: catalogRow.activeGenerationId,
@@ -1632,16 +1451,16 @@ export class ProductionMutationCoordinator {
     });
     const fingerprint = requestFingerprint(originalExpected, request);
     if (targetRow.requestSha256 !== fingerprint)
-      throw invalid("production request identity was reused for another mutation");
+      throw invalid(PRODUCTION_REQUEST_PREFIX + "identity was reused for another mutation");
     if (targetRow.state !== catalogRow.state)
-      throw invalid("production request mirrored journal states disagree");
+      throw invalid(PRODUCTION_REQUEST_PREFIX + "mirrored journal states disagree");
     if (targetRow.state === "abandoned")
-      throw invalid("production request was permanently abandoned");
+      throw invalid(PRODUCTION_REQUEST_PREFIX + "was permanently abandoned");
     if (targetRow.state !== "committed")
-      throw invalid("production request requires reservation recovery");
+      throw invalid(PRODUCTION_REQUEST_PREFIX + "requires reservation recovery");
     if (!targetRow.stateSha256 || !catalogRow.stateSha256
         || !catalogRow.publishedActiveGenerationId || !catalogRow.publishedLineageEpoch)
-      throw invalid("production request committed evidence is incomplete");
+      throw invalid(PRODUCTION_REQUEST_PREFIX + "committed evidence is incomplete");
     const committed = copyTarget({
       appInstanceId: catalogRow.appInstanceId,
       activeGenerationId: catalogRow.publishedActiveGenerationId,
@@ -1651,7 +1470,7 @@ export class ProductionMutationCoordinator {
       stateSha256: targetRow.stateSha256,
     });
     if (catalogRow.stateSha256 !== committed.stateSha256)
-      throw invalid("production request committed target evidence disagrees");
+      throw invalid(PRODUCTION_REQUEST_PREFIX + "committed target evidence disagrees");
     const currentTarget = target.evidence();
     if (!sameTarget(currentTarget, committed))
       throw invalid("historical committed evidence is not independently auditable");
@@ -1681,12 +1500,9 @@ export class ProductionMutationCoordinator {
     );
     this.#writeAuthority.run(() => {
       const at = trustedInstant(this.#clock);
-      const catalog = DeviceCatalog.openExisting(this.#driver);
-      catalog.assertWriteFence(this.#fence, at.milliseconds);
-      if (catalog.snapshot().catalogGeneration !== expectedCatalogGeneration
-          || !sameTarget(catalog.selectedTargetStorage().target, expected)
-          || !sameTarget(TargetAuthorityStore.open(this.#driver).evidence(), expected))
-        throw new ClayError("E_GENERATION_NOT_SELECTED", "production no-op target is stale");
+      this.#authorityState(
+        expected, expectedCatalogGeneration, at.milliseconds, "production no-op target is stale",
+      );
       const canonical = enumerateCanonicalStateV1(
         this.#driver, this.#store.validationRegistrySnapshot(),
       );
@@ -1702,14 +1518,7 @@ export class ProductionMutationCoordinator {
         null,
       );
     });
-    return {
-      requestId: request.requestId,
-      operationId,
-      changed: false,
-      replayed: false,
-      evidence: copyTarget(expected),
-      result: copyResult(result),
-    };
+    return mutationResult(request.requestId, operationId, false, false, expected, result);
   }
 
   #assertFixedOperationalPrestate(
@@ -1718,19 +1527,19 @@ export class ProductionMutationCoordinator {
     expectedOperationalFingerprint: string,
     nowMs: number,
   ): void {
-    const catalog = DeviceCatalog.openExisting(this.#driver);
-    catalog.assertWriteFence(this.#fence, nowMs);
-    if (catalog.snapshot().catalogGeneration !== expectedCatalogGeneration
-        || !sameTarget(catalog.selectedTargetStorage().target, expected)
-        || !sameTarget(TargetAuthorityStore.open(this.#driver).evidence(), expected))
-      throw new ClayError("E_GENERATION_NOT_SELECTED", "fixed operational mutation target is stale");
+    this.#authorityState(
+      expected,
+      expectedCatalogGeneration,
+      nowMs,
+      FIXED_OPERATIONAL_MUTATION_PREFIX + "target is stale",
+    );
     const canonical = enumerateCanonicalStateV1(
       this.#driver, this.#store.validationRegistrySnapshot(),
     );
     if (canonical.stateSha256 !== expected.stateSha256)
-      throw invalid("fixed operational mutation prestate is not canonical");
+      throw invalid(FIXED_OPERATIONAL_MUTATION_PREFIX + "prestate is not canonical");
     if (privateMetricOperationalFingerprint(this.#driver) !== expectedOperationalFingerprint)
-      throw invalid("fixed operational mutation prestate changed");
+      throw invalid(FIXED_OPERATIONAL_MUTATION_PREFIX + "prestate changed");
   }
 
   #executeOperationalNoOp(
@@ -1744,16 +1553,14 @@ export class ProductionMutationCoordinator {
     this.#assertFixedOperationalPrestate(
       expected, expectedCatalogGeneration, expectedOperationalFingerprint, at.milliseconds,
     );
-    return {
-      requestId: request.requestId,
-      operationId: operationIdForOperationalMetric(
-        this.#fence.authorityIncarnationId, request.requestId,
-      ),
-      changed: false,
-      replayed: false,
-      evidence: copyTarget(expected),
-      result: copyResult(result),
-    };
+    return mutationResult(
+      request.requestId,
+      operationIdForOperationalMetric(this.#fence.authorityIncarnationId, request.requestId),
+      false,
+      false,
+      expected,
+      result,
+    );
   }
 
   #executeOperationalMeaningful(
@@ -1774,7 +1581,7 @@ export class ProductionMutationCoordinator {
         throw invalid("injected fixed operational mutation failure");
       }
       result = executeCapturedOperationalMetricMutation(this.#store, request);
-      if (isThenable(result)) throw invalid("fixed operational mutation must be synchronous");
+      if (isThenable(result)) throw invalid(FIXED_OPERATIONAL_MUTATION_PREFIX + "must be synchronous");
       if (TEST_FAILURE.get(this) === "after_live_mutation") {
         TEST_FAILURE.delete(this);
         throw invalid("injected failure after live mutation");
@@ -1784,24 +1591,22 @@ export class ProductionMutationCoordinator {
       );
       if (canonical.stateSha256 !== expected.stateSha256
           || !sameTarget(TargetAuthorityStore.open(this.#driver).evidence(), expected))
-        throw invalid("fixed operational mutation reached canonical target state");
+        throw invalid(FIXED_OPERATIONAL_MUTATION_PREFIX + "reached canonical target state");
       const catalog = DeviceCatalog.openExisting(this.#driver);
       if (catalog.snapshot().catalogGeneration !== expectedCatalogGeneration
           || !sameTarget(catalog.selectedTargetStorage().target, expected))
-        throw invalid("fixed operational mutation reached catalog authority");
+        throw invalid(FIXED_OPERATIONAL_MUTATION_PREFIX + "reached catalog authority");
       if (privateMetricOperationalFingerprint(this.#driver) === expectedOperationalFingerprint)
-        throw invalid("fixed operational mutation became a no-op");
+        throw invalid(FIXED_OPERATIONAL_MUTATION_PREFIX + "became a no-op");
     });
-    return {
-      requestId: request.requestId,
-      operationId: operationIdForOperationalMetric(
-        this.#fence.authorityIncarnationId, request.requestId,
-      ),
-      changed: true,
-      replayed: false,
-      evidence: copyTarget(expected),
-      result: copyResult(result),
-    };
+    return mutationResult(
+      request.requestId,
+      operationIdForOperationalMetric(this.#fence.authorityIncarnationId, request.requestId),
+      true,
+      false,
+      expected,
+      result,
+    );
   }
 
   #executeMeaningful(
@@ -1820,18 +1625,17 @@ export class ProductionMutationCoordinator {
     try {
       const reservation = this.#writeAuthority.run(() => {
         const at = trustedInstant(this.#clock);
-        const catalog = DeviceCatalog.openExisting(this.#driver);
-        const target = TargetAuthorityStore.open(this.#driver);
-        catalog.assertWriteFence(this.#fence, at.milliseconds);
-        if (catalog.snapshot().catalogGeneration !== expectedCatalogGeneration
-            || !sameTarget(catalog.selectedTargetStorage().target, expected)
-            || !sameTarget(target.evidence(), expected))
-          throw new ClayError("E_GENERATION_NOT_SELECTED", "production mutation target is stale");
+        const { catalog, target } = this.#authorityState(
+          expected,
+          expectedCatalogGeneration,
+          at.milliseconds,
+          PRODUCTION_MUTATION_PREFIX + "target is stale",
+        );
         const canonical = enumerateCanonicalStateV1(
           this.#driver, this.#store.validationRegistrySnapshot(),
         );
         if (canonical.stateSha256 !== expected.stateSha256)
-          throw invalid("production mutation prestate changed before reservation");
+          throw invalid(PRODUCTION_MUTATION_PREFIX + "prestate changed before reservation");
         const targetReservation = target.reserveProtectionRevision(
           operationId, at.instant, expected, fingerprint,
         );
@@ -1858,7 +1662,7 @@ export class ProductionMutationCoordinator {
             || persistedTarget.revision !== targetReservation.revision
             || persistedTarget.requestSha256 !== fingerprint
             || persistedCatalog.requestSha256 !== fingerprint)
-          throw invalid("production mutation reservation failed read-back");
+          throw invalid(PRODUCTION_MUTATION_PREFIX + "reservation failed read-back");
         return {
           receipt,
           catalogGeneration: catalogReservation.reservedCatalogGeneration,
@@ -1869,13 +1673,13 @@ export class ProductionMutationCoordinator {
 
       const invoked = this.#writeAuthority.run(() => {
         const at = trustedInstant(this.#clock);
-        const catalog = DeviceCatalog.openExisting(this.#driver);
-        const target = TargetAuthorityStore.open(this.#driver);
-        catalog.assertWriteFence(this.#fence, at.milliseconds);
-        if (catalog.snapshot().catalogGeneration !== reservedCatalogGeneration
-            || !sameTarget(catalog.selectedTargetStorage().target, expected)
-            || !sameTarget(target.evidence(), expected))
-          throw invalid("production mutation target changed before invocation");
+        const { catalog, target } = this.#authorityState(
+          expected,
+          reservedCatalogGeneration!,
+          at.milliseconds,
+          PRODUCTION_MUTATION_PREFIX + "target changed before invocation",
+          false,
+        );
         const targetReservation = target.reservations()
           .find(candidate => candidate.operationId === operationId);
         const catalogReservation = catalog.revisionReservations()
@@ -1885,7 +1689,7 @@ export class ProductionMutationCoordinator {
           throw invalid("production invocation reservation is unavailable");
         const persisted = readProductionRequestReceipt(this.#driver, request.requestId);
         if (!persisted || persisted.state !== "prepared")
-          throw invalid("production request was not durably prepared");
+          throw invalid(PRODUCTION_REQUEST_PREFIX + "was not durably prepared");
         const next = invokedReceipt(persisted, at.instant);
         writeProductionRequestReceipt(this.#driver, next, null, "prepared");
         return next;
@@ -1905,13 +1709,12 @@ export class ProductionMutationCoordinator {
       liveTransactionAttempted = true;
       const committedState = this.#writeAuthority.run(() => {
         const at = trustedInstant(this.#clock);
-        const catalog = DeviceCatalog.openExisting(this.#driver);
-        const target = TargetAuthorityStore.open(this.#driver);
-        catalog.assertWriteFence(this.#fence, at.milliseconds);
-        if (catalog.snapshot().catalogGeneration !== reservedCatalogGeneration
-            || !sameTarget(catalog.selectedTargetStorage().target, expected)
-            || !sameTarget(target.evidence(), expected))
-          throw new ClayError("E_GENERATION_NOT_SELECTED", "production mutation target is stale");
+        const { catalog, target } = this.#authorityState(
+          expected,
+          reservedCatalogGeneration!,
+          at.milliseconds,
+          PRODUCTION_MUTATION_PREFIX + "target is stale",
+        );
         const persistedReceipt = readProductionRequestReceipt(this.#driver, request.requestId);
         if (!persistedReceipt || persistedReceipt.state !== "invoked"
             || persistedReceipt.operationId !== operationId)
@@ -1920,11 +1723,11 @@ export class ProductionMutationCoordinator {
           this.#driver, this.#store.validationRegistrySnapshot(),
         );
         if (before.stateSha256 !== expected.stateSha256)
-          throw invalid("production mutation prestate changed before commit");
+          throw invalid(PRODUCTION_MUTATION_PREFIX + "prestate changed before commit");
         const execution = executeCapturedMutation(
           this.#store, request, executionInstant, operationId,
         );
-        if (isThenable(execution)) throw invalid("production mutation must be synchronous");
+        if (isThenable(execution)) throw invalid(PRODUCTION_MUTATION_PREFIX + "must be synchronous");
         result = execution.result;
         resultSampleProvenance = execution.sampleProvenance;
         if (TEST_FAILURE.get(this) === "after_live_mutation") {
@@ -1933,11 +1736,11 @@ export class ProductionMutationCoordinator {
         }
         if (request.route === "starter.seed"
             && STORE_GET_SETTING.call(this.#store, "shell_id") !== request.payload.shellId)
-          throw invalid("starter seed system shell metadata failed read-back");
+          throw invalid(STARTER_SEED_PREFIX + "system shell metadata failed read-back");
         const publicationMetadata = request.route === "starter.seed" ? (() => {
           const app = catalog.snapshot().entries.find(candidate =>
             candidate.appInstanceId === expected.appInstanceId);
-          if (!app) throw invalid("starter seed catalog app metadata is unavailable");
+          if (!app) throw invalid(STARTER_SEED_PREFIX + "catalog app metadata is unavailable");
           const seedMetadata = starterSeedCatalogMetadata(request.payload);
           return Object.freeze({
             displayName: app.displayName,
@@ -1975,7 +1778,7 @@ export class ProductionMutationCoordinator {
         catalog.publishSelectedTarget(publicationInput);
         if (request.route === "starter.seed"
             && selectedCatalogShell(catalog, committedTarget) !== request.payload.shellId)
-          throw invalid("starter seed catalog shell metadata failed read-back");
+          throw invalid(STARTER_SEED_PREFIX + "catalog shell metadata failed read-back");
         writeProductionRequestReceipt(
           this.#driver,
           terminalReceipt(
@@ -2013,21 +1816,14 @@ export class ProductionMutationCoordinator {
             || (request.route === "starter.seed" && finalShell !== request.payload.shellId)
             || finalCatalog.catalogGeneration
               !== (BigInt(reservedCatalogGeneration!) + 1n).toString())
-          throw invalid("production mutation failed mirrored canonical read-back");
+          throw invalid(PRODUCTION_MUTATION_PREFIX + "failed mirrored canonical read-back");
         return { target: committedTarget, catalogGeneration: finalCatalog.catalogGeneration };
       });
 
       const committed = committedState.target;
       this.#target = copyTarget(committed);
       this.#catalogGeneration = committedState.catalogGeneration;
-      return {
-        requestId: request.requestId,
-        operationId,
-        changed: true,
-        replayed: false,
-        evidence: copyTarget(committed),
-        result: copyResult(result),
-      };
+      return mutationResult(request.requestId, operationId, true, false, committed, result);
     } catch (error) {
       if (error instanceof SimulatedInvocationCrash) throw error;
       try {
@@ -2044,7 +1840,7 @@ export class ProductionMutationCoordinator {
             request.route,
             fingerprint,
             expected,
-            reservedCatalogGeneration,
+            reservedCatalogGeneration!,
             error,
           );
         } catch (abandonmentError) {
@@ -2057,7 +1853,7 @@ export class ProductionMutationCoordinator {
           refreshStoreAfterPhysicalRollback(this.#store);
         } catch {
           this.#poisoned = true;
-          throw invalid("production mutation rollback recovery requires reopen");
+          throw invalid(PRODUCTION_MUTATION_PREFIX + "rollback recovery requires reopen");
         }
       }
       throw error;
@@ -2075,24 +1871,24 @@ export class ProductionMutationCoordinator {
   ): void {
     try {
       if (TEST_FAIL_ABANDONMENT.delete(this))
-        throw invalid("production mutation failed and reservation recovery is required");
+        throw invalid(PRODUCTION_MUTATION_PREFIX + "failed and reservation recovery is required");
       const failure: JsonValue = {
         code: error instanceof ClayError ? error.code : "E_INTERNAL",
         message: error instanceof Error
-          ? error.message.slice(0, 1_000) : "production mutation failed",
+          ? error.message.slice(0, 1_000) : PRODUCTION_MUTATION_PREFIX + "failed",
       };
       const encoded = encodeProductionResponse(
         route, failure, isSampleProducingRoute(route) ? [] : undefined,
       );
       const at = trustedInstant(this.#clock);
       this.#writeAuthority.run(() => {
-        const catalog = DeviceCatalog.openExisting(this.#driver);
-        const target = TargetAuthorityStore.open(this.#driver);
-        catalog.assertWriteFence(this.#fence, at.milliseconds);
-        if (catalog.snapshot().catalogGeneration !== reservedCatalogGeneration
-            || !sameTarget(catalog.selectedTargetStorage().target, expected)
-            || !sameTarget(target.evidence(), expected))
-          throw invalid("failed operation target changed before abandonment");
+        const { catalog, target } = this.#authorityState(
+          expected,
+          reservedCatalogGeneration!,
+          at.milliseconds,
+          "failed operation target changed before abandonment",
+          false,
+        );
         const targetReservation = target.reservations()
           .find(candidate => candidate.operationId === operationId);
         const catalogReservation = catalog.revisionReservations()
@@ -2136,7 +1932,7 @@ export class ProductionMutationCoordinator {
       this.#catalogGeneration = DeviceCatalog.openExisting(this.#driver)
         .snapshot().catalogGeneration;
     } catch {
-      throw invalid("production mutation failed and reservation recovery is required");
+      throw invalid(PRODUCTION_MUTATION_PREFIX + "failed and reservation recovery is required");
     }
   }
 }

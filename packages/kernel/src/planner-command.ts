@@ -3,6 +3,11 @@ import { ClayError } from "./errors";
 import { cloneFieldSemantic, cloneTableSemantic } from "./registry";
 import { parseFieldId, parseRelationshipId, parseTableId } from "./semantic";
 import { stableJson } from "./stable-json";
+import {
+  captureStrictJson,
+  type StrictJson as StrictData,
+  type StrictJsonCapturePolicy,
+} from "./strict-json-capture";
 import type {
   FieldId,
   PreparedSemanticAssignmentsV1,
@@ -47,121 +52,47 @@ export type PreparedPreviewInput = Readonly<{
   plan: MutationPlan;
 }>;
 
-type StrictData = null | boolean | number | string | StrictData[] | StrictRecord;
 type StrictRecord = { [key: string]: StrictData };
-type CaptureBudget = { nodes: number; bytes: number };
 
-const MAX_CAPTURE_DEPTH = 32;
-const MAX_CAPTURE_NODES = 50_000;
-const MAX_CAPTURE_STRING_LENGTH = 1_000_000;
-const MAX_CAPTURE_BYTES = 2_000_000;
-const MAX_CAPTURE_ARRAY = 20_000;
-const MAX_CAPTURE_RECORD_KEYS = 512;
-const MAX_CAPTURE_KEY_LENGTH = 256;
-const CAPTURE_ENCODER = new TextEncoder();
 const ATTEMPT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SHAPE_DIGEST = /^sha256:[0-9a-f]{64}$/;
-
-function consumeCaptureBytes(budget: CaptureBudget, bytes: number): void {
-  budget.bytes += bytes;
-  if (!Number.isSafeInteger(budget.bytes) || budget.bytes > MAX_CAPTURE_BYTES)
-    throw new ClayError("E_LIMIT", "prepared mutation request exceeds the aggregate byte limit");
-}
-
-function chargeJsonText(value: string, budget: CaptureBudget): void {
-  consumeCaptureBytes(budget, CAPTURE_ENCODER.encode(JSON.stringify(value)).byteLength);
-}
 
 function strictInvalid(message: string): ClayError {
   return new ClayError("E_TARGET_AUTHORITY_INVALID", message);
 }
 
-function captureStrictData(
-  input: unknown,
-  seen: WeakSet<object>,
-  budget: CaptureBudget,
-  depth = 0,
-): StrictData {
-  budget.nodes += 1;
-  if (depth > MAX_CAPTURE_DEPTH || budget.nodes > MAX_CAPTURE_NODES)
-    throw new ClayError("E_LIMIT", "prepared mutation command exceeds structural limits");
-  if (input === null) {
-    consumeCaptureBytes(budget, 4);
-    return input;
-  }
-  if (typeof input === "boolean") {
-    consumeCaptureBytes(budget, input ? 4 : 5);
-    return input;
-  }
-  if (typeof input === "number") {
-    if (!Number.isFinite(input)) throw strictInvalid("prepared command contains a non-finite number");
-    consumeCaptureBytes(budget, JSON.stringify(input).length);
-    return input;
-  }
-  if (typeof input === "string") {
-    if (input.length > MAX_CAPTURE_STRING_LENGTH)
+const STRICT_CAPTURE_POLICY: StrictJsonCapturePolicy = [
+  32, 50_000, 1_000_000, 2_000_000, 20_000, 512, 256, true, false,
+  reason => {
+    if (reason === 0)
+      throw new ClayError("E_LIMIT", "prepared mutation command exceeds structural limits");
+    if (reason === 1)
+      throw new ClayError("E_LIMIT", "prepared mutation request exceeds the aggregate byte limit");
+    if (reason === 2)
       throw new ClayError("E_LIMIT", "prepared mutation command exceeds string limits");
-    chargeJsonText(input, budget);
-    return input;
-  }
-  if (typeof input !== "object")
-    throw strictInvalid("prepared command contains unsupported data");
-  if (seen.has(input)) throw strictInvalid("prepared command contains a cycle");
-  seen.add(input);
-  try {
-    if (Array.isArray(input)) {
-      if (Reflect.getPrototypeOf(input) !== Array.prototype)
-        throw strictInvalid("prepared command arrays must use the standard prototype");
-      const lengthDescriptor = Reflect.getOwnPropertyDescriptor(input, "length");
-      if (!lengthDescriptor || !("value" in lengthDescriptor))
-        throw strictInvalid("prepared command arrays must have a data length");
-      const rawLength: unknown = lengthDescriptor.value;
-      if (typeof rawLength !== "number" || !Number.isSafeInteger(rawLength)
-          || rawLength < 0 || rawLength > MAX_CAPTURE_ARRAY)
-        throw new ClayError("E_LIMIT", "prepared command array exceeds limits");
-      const length = rawLength;
-      const keys = Reflect.ownKeys(input);
-      if (keys.length !== length + 1 || keys.some(key => typeof key !== "string"))
-        throw strictInvalid("prepared command arrays must be dense standard arrays");
-      consumeCaptureBytes(budget, 2 + Math.max(0, length - 1));
-      const output = new Array<StrictData>(length);
-      for (let index = 0; index < length; index++) {
-        const descriptor = Reflect.getOwnPropertyDescriptor(input, String(index));
-        if (!descriptor || !("value" in descriptor) || !descriptor.enumerable)
-          throw strictInvalid("prepared command arrays must contain enumerable data entries");
-        output[index] = captureStrictData(descriptor.value, seen, budget, depth + 1);
-      }
-      return output;
-    }
-    const prototype = Reflect.getPrototypeOf(input);
-    if (prototype !== Object.prototype && prototype !== null)
-      throw strictInvalid("prepared command records must be plain data records");
-    const keys = Reflect.ownKeys(input);
-    if (keys.length > MAX_CAPTURE_RECORD_KEYS
-        || keys.some(key => typeof key !== "string" || key.length > MAX_CAPTURE_KEY_LENGTH))
+    if (reason === 3)
+      throw new ClayError("E_LIMIT", "prepared command array exceeds limits");
+    if (reason === 4)
       throw new ClayError("E_LIMIT", "prepared command record exceeds limits");
-    consumeCaptureBytes(budget, 2 + Math.max(0, keys.length - 1));
-    const output: StrictRecord = Object.create(null);
-    for (const key of keys as string[]) {
-      const descriptor = Reflect.getOwnPropertyDescriptor(input, key);
-      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable)
-        throw strictInvalid("prepared command fields must be enumerable data properties");
-      chargeJsonText(key, budget);
-      consumeCaptureBytes(budget, 1);
-      output[key] = captureStrictData(descriptor.value, seen, budget, depth + 1);
-    }
-    return output;
-  } finally {
-    seen.delete(input);
-  }
-}
+    const messages = [
+      "prepared command contains a non-finite number",
+      "prepared command contains unsupported data",
+      "prepared command contains a cycle",
+      "prepared command arrays must use the standard prototype",
+      "prepared command arrays must be dense standard arrays",
+      "prepared command arrays must contain enumerable data entries",
+      "prepared command records must be plain data records",
+      "prepared command fields must be enumerable data properties",
+    ];
+    throw strictInvalid(messages[reason - 5] ?? "prepared command is invalid");
+  },
+];
 
 function captureCompleteStrictData(input: unknown): StrictData {
-  const captured = captureStrictData(input, new WeakSet(), { nodes: 0, bytes: 0 });
+  const captured = captureStrictJson(input, STRICT_CAPTURE_POLICY);
   try {
-    // The descriptor walk above rejects accessors before this operation can
-    // invoke one. Native structured clone then supplies the browser-standard
-    // fail-closed check which transparent Proxy wrappers cannot spoof.
+    // Descriptor capture runs first, so structured clone can reject transparent
+    // Proxy wrappers without giving caller accessors a chance to execute.
     structuredClone(input);
   } catch {
     throw strictInvalid("prepared mutation request must not contain proxies or exotic data");
