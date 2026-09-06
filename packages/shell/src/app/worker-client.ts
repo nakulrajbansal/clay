@@ -9,6 +9,7 @@ import type {
   RelationConversionRequest, RelationConversionResult, SemanticSchemaTraceV1, Suggestion,
 } from "@clay/kernel";
 import { ClayError } from "@clay/kernel/errors";
+import type { ProductionArchiveExport } from "@clay/kernel/worker-authority";
 import type { IntentOutcome } from "../worker/db-worker";
 
 export type TraceEntry = { at: string; intent: string; events: DebugEvent[] };
@@ -330,7 +331,7 @@ export class WorkerClient {
   acceptSuggestion(subject: string, kind: string): Promise<null> {
     return this.call("acceptSuggestion", { subject, kind });
   }
-  exportArchive(): Promise<{ bytes: ArrayBuffer; filename: string }> {
+  exportArchive(): Promise<Omit<ProductionArchiveExport, "bytes"> & { bytes: ArrayBuffer }> {
     return this.call("exportArchive");
   }
   importArchive(bytes: ArrayBuffer): Promise<{

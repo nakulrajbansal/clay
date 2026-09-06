@@ -71,6 +71,33 @@ describe("WorkerClient files and automation boundaries", () => {
       table: "projects", field: "files", name: "receipt.pdf",
     });
   });
+
+  it("requests one authority archive and preserves its target metadata", async () => {
+    const bytes = new ArrayBuffer(16);
+    const target = {
+      appInstanceId: `app_${"a".repeat(26)}`,
+      activeGenerationId: `gen_${"b".repeat(26)}`,
+      lineageEpoch: "0",
+      protectionRevision: "7",
+      digestSchema: 1 as const,
+      stateSha256: `sha256:${"c".repeat(64)}`,
+    };
+    const response = {
+      format: 5 as const,
+      bytes,
+      filename: "field-service.clay.zip",
+      target,
+      catalogGeneration: "12",
+    };
+    const { client, posted, transfers } = harness(message =>
+      message.op === "exportArchive" ? response : null);
+
+    await expect(client.exportArchive()).resolves.toEqual(response);
+    expect(posted).toHaveLength(1);
+    expect(posted[0]).toMatchObject({ op: "exportArchive" });
+    expect(posted[0]!.payload).toBeUndefined();
+    expect(transfers[0]).toEqual([]);
+  });
 });
 
 describe("WorkerClient daily-work boundary", () => {

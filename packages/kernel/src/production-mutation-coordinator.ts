@@ -612,6 +612,17 @@ export class ProductionMutationCoordinator {
     return run;
   }
 
+  /** Serialize an authority-owned read behind prior writes and ahead of later writes. */
+  serializeRead<T>(read: () => Promise<T>): Promise<T> {
+    const run = this.#tail.then(() => {
+      if (this.#poisoned)
+        throw invalid("production authority is poisoned; reopen for reservation recovery");
+      return read();
+    });
+    this.#tail = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
   #ensureWriteFence(): void {
     const now = trustedInstant(this.#clock).milliseconds;
     const catalog = DeviceCatalog.openExisting(this.#driver);

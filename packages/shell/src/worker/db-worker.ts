@@ -8,9 +8,9 @@ import {
   type DebugEvent, type LivePanel, type PanelProvenance, type PreviewHandle,
 } from "@clay/kernel";
 import { ClayError } from "@clay/kernel/errors";
-import {
+import type {
   ProductionStoreAuthority,
-  type ProductionStoreReader,
+  ProductionStoreReader,
 } from "@clay/kernel/worker-authority";
 import { createStarterSeedBundle } from "../shells/seed";
 import { sampleRowCount } from "./samples";
@@ -91,6 +91,7 @@ async function bootProductionAuthority(input: unknown): Promise<{
   apps: Array<{ id: string; name: string; shellId: string }>;
 }> {
   if (!authority) {
+    const { ProductionStoreAuthority } = await import("@clay/kernel/worker-authority");
     authorityBoot ??= ProductionStoreAuthority.bootBrowser(input);
     authority = await authorityBoot;
     store = authority.readStore();
@@ -310,7 +311,11 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "acceptSuggestion":
       return failClosedMutation(req.op);
     case "reset":
-    case "exportArchive":
+      return failClosedMutation(req.op);
+    case "exportArchive": {
+      const exported = await mustAuthority().exportArchive();
+      return { ...exported, bytes: exported.bytes.slice().buffer };
+    }
     case "importArchive":
       return failClosedMutation(req.op);
     case "status": {

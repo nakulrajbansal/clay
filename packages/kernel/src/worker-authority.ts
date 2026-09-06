@@ -2,6 +2,7 @@
 // does not expose production authority or its physical coordination internals.
 export {
   ProductionStoreAuthority,
+  type ProductionArchiveExport,
   type ProductionAuthorityInspection,
   type ProductionBootInfo,
   type ProductionStoreReader,

@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { ArchiveAuthorityEvidenceV1, ArchiveManifestV5 } from "@clay/schema/archive";
 import {
-  Bridge, ClayStore, StoreRpcClient, deriveInverse, openMemoryDriver, serveStore,
+  Bridge, ClayStore, StoreRpcClient, deriveInverse, openMemoryDriver, serveStore, zipRead,
   type DbDriver, type ForwardOpT, type MessagePortLike,
 } from "../src/index";
 import { enumerateCanonicalStateV1 } from "../src/canonical-state";
+import { importAuthorityArchive } from "../src/archive-authority";
 import { DeviceCatalog } from "../src/device-catalog";
 import {
   ProductionStoreAuthority,
@@ -11,10 +13,123 @@ import {
   planLegacyBootstrap,
   resolveCatalogInventory,
 } from "../src/production-authority";
+import { sha256HexSync } from "../src/state-digest";
 import { StateMerkleIndex } from "../src/state-merkle-index";
 import { TargetAuthorityStore } from "../src/target-authority";
 
 const opaque = (prefix: string, char: string): string => `${prefix}_${char.repeat(26)}`;
+
+function encodeOperationId(bytes: Uint8Array): string {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz234567";
+  let bits = 0;
+  let value = 0;
+  let encoded = "";
+  for (let index = 0; index < bytes.length && encoded.length < 26; index++) {
+    value = (value << 8) | bytes[index]!;
+    bits += 8;
+    while (bits >= 5 && encoded.length < 26) {
+      bits -= 5;
+      encoded += alphabet[(value >>> bits) & 31];
+      value &= (1 << bits) - 1;
+    }
+  }
+  return `op_${encoded}`;
+}
+
+function operationIdForFixture(driver: DbDriver, requestId: string): string {
+  const authorityRows = driver.select(
+    "SELECT authority_incarnation_id FROM catalog.catalog_root WHERE singleton = 1",
+  );
+  if (authorityRows.length !== 1 || typeof authorityRows[0]!.authority_incarnation_id !== "string")
+    throw new Error("fixture catalog authority is unavailable");
+  const authorityIncarnationId = authorityRows[0]!.authority_incarnation_id;
+  const digest = sha256HexSync(new TextEncoder().encode(
+    `clay-production-operation-v1\u0000${authorityIncarnationId}\u0000${requestId}`,
+  ));
+  const bytes = new Uint8Array(32);
+  for (let index = 0; index < bytes.length; index++)
+    bytes[index] = Number.parseInt(digest.slice(index * 2, index * 2 + 2), 16);
+  return encodeOperationId(bytes);
+}
+
+function sqlLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+/**
+ * This isolated archive branch predates the migration lane's canonical sample
+ * producer. The trigger lets the real starter route write that incoming
+ * contract in both its shadow and live transactions; once the lanes are
+ * combined it is a no-op because the producer no longer writes sample_rows.
+ */
+function installStarterProvenanceFixture(driver: DbDriver, operationId: string): void {
+  driver.exec(`CREATE TEMP TRIGGER archive_starter_provenance_fixture
+    BEFORE INSERT ON sys.settings
+    WHEN NEW.key = 'sample_rows'
+      AND NOT EXISTS (SELECT 1 FROM sys.settings WHERE key = 'sample_provenance_v1')
+    BEGIN
+      INSERT INTO settings(key,value_json)
+      SELECT 'sample_provenance_v1',
+        '{"schema":1,"entries":[' || COALESCE(group_concat(
+          '{"tableId":' || json_quote(json_extract(registry.spec_json, '$.semantic.tableId'))
+          || ',"rowId":' || json_quote(CAST(ids.value AS TEXT))
+          || ',"operationId":' || json_quote(${sqlLiteral(operationId)}) || '}', ','
+        ), '') || ']}'
+      FROM json_each(NEW.value_json) AS marker
+      JOIN tables_registry AS registry ON registry.table_name = marker.key
+      JOIN json_each(marker.value) AS ids;
+      SELECT RAISE(IGNORE);
+    END`);
+}
+
+type ProvenanceTamper = "table" | "operation" | "shape" | "legacy";
+
+function installProvenanceTamperFixture(
+  driver: DbDriver,
+  tamper: ProvenanceTamper,
+  operationId: string,
+): void {
+  const canonicalTableId = `json_quote(json_extract(
+        (SELECT spec_json FROM tables_registry WHERE table_name = 'samples'),
+        '$.semantic.tableId'))`;
+  const rowId = `json_quote(json_extract(
+        (SELECT value_json FROM settings WHERE key = 'sample_provenance_v1'),
+        '$.entries[0].rowId'))`;
+  const canonicalEntry = `'{"schema":1,"entries":[{"tableId":' || ${canonicalTableId}
+      || ',"rowId":' || ${rowId}
+      || ',"operationId":' || json_quote(${sqlLiteral(operationId)}) || '}]}'`;
+  let body: string;
+  switch (tamper) {
+    case "table":
+      body = `UPDATE settings SET value_json =
+        '{"schema":1,"entries":[{"tableId":"tbl_018f0000-0000-7000-8000-000000000099"'
+        || ',"rowId":' || ${rowId}
+        || ',"operationId":' || json_quote(${sqlLiteral(operationId)}) || '}]}'
+        WHERE key = 'sample_provenance_v1';`;
+      break;
+    case "operation":
+      body = `UPDATE settings SET value_json =
+        '{"schema":1,"entries":[{"tableId":' || ${canonicalTableId}
+        || ',"rowId":' || ${rowId}
+        || ',"operationId":"${opaque("op", "z")}"}]}'
+        WHERE key = 'sample_provenance_v1';`;
+      break;
+    case "shape":
+      body = `UPDATE settings SET value_json = substr(${canonicalEntry}, 1, length(${canonicalEntry}) - 1)
+        || ',"unexpected":true}' WHERE key = 'sample_provenance_v1';`;
+      break;
+    case "legacy":
+      body = `INSERT INTO settings(key,value_json)
+        SELECT 'sample_rows', '{"samples":[' || ${rowId} || ']}'
+        ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json;`;
+      break;
+  }
+  driver.exec(`CREATE TEMP TRIGGER archive_provenance_tamper_fixture
+    AFTER UPDATE ON main.projects
+    BEGIN
+      ${body}
+    END`);
+}
 
 function portPair(): [MessagePortLike, MessagePortLike] {
   let receiveA: ((message: unknown) => void) | null = null;
@@ -164,6 +279,95 @@ async function snapshotAuthorityDriver(source: DbDriver): Promise<DbDriver> {
   return copy;
 }
 
+type SampleProvenanceFixture = Readonly<{
+  authority: ProductionStoreAuthority;
+  ledger: Readonly<{
+    schema: 1;
+    entries: readonly Readonly<{ tableId: string; rowId: string; operationId: string }>[];
+  }>;
+}>;
+
+async function openSampleProvenanceFixture(
+  tamper?: ProvenanceTamper,
+): Promise<SampleProvenanceFixture> {
+  const driver = await cataloguedStore();
+  const seedRequestId = opaque("req", "r");
+  const expectedOperationId = operationIdForFixture(driver, seedRequestId);
+  const installTemporaryFixtures = (target: DbDriver): void => {
+    installStarterProvenanceFixture(target, expectedOperationId);
+    if (tamper !== undefined)
+      installProvenanceTamperFixture(target, tamper, expectedOperationId);
+  };
+  installTemporaryFixtures(driver);
+  const mutableDriver = driver as DbDriver & { snapshot: DbDriver["snapshot"] };
+  const realSnapshot = mutableDriver.snapshot.bind(driver);
+  mutableDriver.snapshot = async () => {
+    const shadow = await realSnapshot();
+    installTemporaryFixtures(shadow);
+    return shadow;
+  };
+  const authority = ProductionStoreAuthority.openExisting(driver, {
+    inventory: { ...legacyInventory, catalogPresent: true },
+    storageKey: "default",
+    releaseId: opaque("rel", "f"),
+    nowMs: 2_000,
+    leaseTtlMs: 5_000,
+  });
+  try {
+    const sourceMutation = await authority.executeMutation({
+      requestId: seedRequestId,
+      route: "starter.seed",
+      payload: {
+        schema: 1,
+        shellId: "tracker",
+        shellName: "Tracker",
+        tables: [{
+          name: "samples",
+          columns: [{ name: "name", type: "text", required: true }],
+          sampleRows: [{ name: "Provenance" }],
+        }],
+        panels: [],
+      },
+    });
+    if (sourceMutation.operationId !== expectedOperationId)
+      throw new Error("starter fixture operation identity changed");
+    const row = authority.query({ from: "samples" })[0];
+    const sampleSpecRow = driver.select(
+      "SELECT spec_json FROM sys.tables_registry WHERE table_name = 'samples'",
+    )[0];
+    if (!row || !sampleSpecRow)
+      throw new Error("trusted starter fixture did not produce one sample row");
+    const sampleSpec = JSON.parse(String(sampleSpecRow.spec_json)) as {
+      semantic: { tableId: string };
+    };
+    const ledger = Object.freeze({
+      schema: 1 as const,
+      entries: Object.freeze([Object.freeze({
+        tableId: sampleSpec.semantic.tableId,
+        rowId: String(row.id),
+        operationId: sourceMutation.operationId,
+      })]),
+    });
+    if (tamper !== undefined) {
+      const project = authority.query({ from: "projects" })[0];
+      if (!project) throw new Error("tamper fixture project is unavailable");
+      await authority.executeMutation({
+        requestId: opaque("req", "t"),
+        route: "store.update",
+        payload: {
+          table: "projects",
+          id: String(project.id),
+          patch: { name: `Provenance ${tamper}` },
+        },
+      });
+    }
+    return Object.freeze({ authority, ledger });
+  } catch (error) {
+    authority.close();
+    throw error;
+  }
+}
+
 describe("production Store authority", () => {
   it("plans every inventoried legacy namespace with one requested selection", () => {
     const inventory = {
@@ -265,6 +469,48 @@ describe("production Store authority", () => {
     }
   });
 
+  it("exports real authenticated format-5 bytes only through the production authority", async () => {
+    const driver = await cataloguedStore();
+    const authority = ProductionStoreAuthority.openExisting(driver, {
+      inventory: { ...legacyInventory, catalogPresent: true },
+      storageKey: "default",
+      releaseId: opaque("rel", "f"),
+      nowMs: 2_000,
+      leaseTtlMs: 5_000,
+    });
+    try {
+      expect((authority.readStore() as unknown as Record<string, unknown>).exportArchive)
+        .toBeUndefined();
+      const exported = await authority.exportArchive();
+      expect(exported).toMatchObject({ format: 5, filename: expect.stringMatching(/\.clay\.zip$/) });
+      expect(exported.bytes).toBeInstanceOf(Uint8Array);
+      expect(exported.bytes.slice(0, 2)).toEqual(new Uint8Array([0x50, 0x4b]));
+      const parts = zipRead(exported.bytes);
+      const manifest = ArchiveManifestV5.parse(JSON.parse(new TextDecoder().decode(
+        parts.find(part => part.name === "manifest.json")!.data,
+      )));
+      const evidence = ArchiveAuthorityEvidenceV1.parse(JSON.parse(new TextDecoder().decode(
+        parts.find(part => part.name === "authority.json")!.data,
+      )));
+      expect(manifest).toMatchObject({ format: 5, app: "My app" });
+      expect(evidence.target).toEqual(exported.target);
+      expect(evidence.catalogAuthority.catalogGeneration).toBe(exported.catalogGeneration);
+      const staged = await importAuthorityArchive(exported.bytes);
+      try {
+        expect(staged.authority).toMatchObject({
+          kind: "format5_authority_evidence",
+          checksumAuthenticated: true,
+        });
+        expect(staged.store.query({ from: "projects" }))
+          .toEqual([expect.objectContaining({ name: "Preserved" })]);
+      } finally {
+        staged.store.close();
+      }
+    } finally {
+      authority.close();
+    }
+  });
+
   it("returns detached canonical boot projections", async () => {
     const driver = await cataloguedStore();
     const authority = ProductionStoreAuthority.openExisting(driver, {
@@ -282,6 +528,98 @@ describe("production Store authority", () => {
         { id: opaque("app", "a"), name: "My app", shellId: "tracker" },
       ]);
     } finally {
+      authority.close();
+    }
+  });
+
+  it("preserves strict sample provenance and rejects forged ledger bindings", async () => {
+    const valid = await openSampleProvenanceFixture();
+    try {
+      expect(valid.authority.readStore().getSetting("sample_provenance_v1"))
+        .toEqual(valid.ledger);
+      expect(valid.authority.readStore().getSetting("sample_rows")).toBeUndefined();
+      const exported = await valid.authority.exportArchive();
+      const imported = await importAuthorityArchive(exported.bytes);
+      try {
+        expect(imported.store.getSetting("sample_provenance_v1")).toEqual(valid.ledger);
+      } finally {
+        imported.store.close();
+      }
+    } finally {
+      valid.authority.close();
+    }
+
+    const invalidCases: readonly (readonly [ProvenanceTamper, RegExp])[] = [
+      ["table", /stable table binding/i],
+      ["operation", /operation binding/i],
+      ["shape", /malformed|noncanonical/i],
+      ["legacy", /legacy sample_rows.*unauthenticated/i],
+    ];
+    for (const [tamper, expected] of invalidCases) {
+      const fixture = await openSampleProvenanceFixture(tamper);
+      try {
+        await expect(fixture.authority.exportArchive()).rejects.toThrow(expected);
+      } finally {
+        fixture.authority.close();
+      }
+    }
+  });
+
+  it("serializes archive export behind an earlier in-flight mutation", async () => {
+    const driver = await cataloguedStore();
+    const authority = ProductionStoreAuthority.openExisting(driver, {
+      inventory: { ...legacyInventory, catalogPresent: true },
+      storageKey: "default",
+      releaseId: opaque("rel", "f"),
+      nowMs: 2_000,
+      leaseTtlMs: 5_000,
+    });
+    const rowId = String(authority.query({ from: "projects" })[0]!.id);
+    const mutableDriver = driver as DbDriver & {
+      snapshot: DbDriver["snapshot"];
+      exportDatabases: DbDriver["exportDatabases"];
+    };
+    const realSnapshot = mutableDriver.snapshot.bind(driver);
+    const realExport = mutableDriver.exportDatabases.bind(driver);
+    let releaseShadow!: () => void;
+    const shadowGate = new Promise<void>(resolve => { releaseShadow = resolve; });
+    let shadowStarted!: () => void;
+    const shadowStart = new Promise<void>(resolve => { shadowStarted = resolve; });
+    let delayFirstShadow = true;
+    let archiveReadStarted = false;
+    mutableDriver.snapshot = async () => {
+      if (delayFirstShadow) {
+        delayFirstShadow = false;
+        shadowStarted();
+        await shadowGate;
+      }
+      return realSnapshot();
+    };
+    mutableDriver.exportDatabases = async () => {
+      archiveReadStarted = true;
+      return realExport();
+    };
+    let mutation: ReturnType<ProductionStoreAuthority["executeMutation"]> | undefined;
+    let archive: ReturnType<ProductionStoreAuthority["exportArchive"]> | undefined;
+    try {
+      mutation = authority.executeMutation({
+        requestId: opaque("req", "q"),
+        route: "store.update",
+        payload: { table: "projects", id: rowId, patch: { name: "After queue" } },
+      });
+      await shadowStart;
+      archive = authority.exportArchive();
+      await tick();
+      const startedBeforeEarlierMutationWasReleased = archiveReadStarted;
+      releaseShadow();
+      const [committed, exported] = await Promise.all([mutation, archive]);
+
+      expect(startedBeforeEarlierMutationWasReleased).toBe(false);
+      expect(exported.target.protectionRevision).toBe(committed.evidence.protectionRevision);
+      expect(exported.target.stateSha256).toBe(committed.evidence.stateSha256);
+    } finally {
+      releaseShadow();
+      await Promise.allSettled([mutation, archive]);
       authority.close();
     }
   });

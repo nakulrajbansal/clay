@@ -30,7 +30,7 @@ import {
   type ProductionMutationResult,
 } from "./production-mutation-coordinator";
 import { StateMerkleIndex } from "./state-merkle-index";
-import { ClayStore } from "./store";
+import { ClayStore, exportStoreArchiveReadOnly } from "./store";
 import { TargetCommitCoordinator } from "./target-commit-coordinator";
 import { TargetAuthorityStore } from "./target-authority";
 
@@ -43,6 +43,14 @@ export type ProductionBootInfo = {
   catalogGeneration: string;
   apps: Array<{ id: string; name: string; shellId: string }>;
 };
+
+export type ProductionArchiveExport = Readonly<{
+  format: 5;
+  bytes: Uint8Array;
+  filename: string;
+  target: TargetEvidence;
+  catalogGeneration: string;
+}>;
 
 export type ProductionAuthorityInspection = {
   catalog: ReturnType<DeviceCatalog["snapshot"]>;
@@ -849,6 +857,51 @@ export class ProductionStoreAuthority {
 
   createRequestId(): string {
     return this.#coordinator.mintRequestId();
+  }
+
+  async exportArchive(): Promise<ProductionArchiveExport> {
+    return this.#coordinator.serializeRead(async () => {
+      const readCurrent = () => {
+        const catalog = DeviceCatalog.openExisting(this.#driver).snapshot();
+        const target = TargetAuthorityStore.open(this.#driver).evidence();
+        const entry = catalog.entries.find(candidate =>
+          candidate.appInstanceId === catalog.selectedAppInstanceId);
+        if (!entry || catalog.selectedAppInstanceId !== target.appInstanceId
+            || entry.activeGenerationId !== target.activeGenerationId
+            || entry.currentLineageEpoch !== target.lineageEpoch
+            || entry.currentProtectionRevision !== target.protectionRevision
+            || entry.digestSchema !== target.digestSchema
+            || entry.stateSha256 !== target.stateSha256)
+          throw invalid("production archive target is not the current catalog selection");
+        return {
+          target: { ...target },
+          catalogGeneration: catalog.catalogGeneration,
+          writeEpoch: catalog.writeEpoch,
+          displayName: entry.displayName,
+          shellId: entry.shellId,
+        };
+      };
+      const before = readCurrent();
+      const legacy = await exportStoreArchiveReadOnly(this.#store, before.displayName);
+      const { exportAuthorityArchiveV5 } = await import("./archive-authority");
+      const bytes = await exportAuthorityArchiveV5(legacy, this.#driver);
+      const after = readCurrent();
+      if (!sameTarget(before.target, after.target)
+          || before.catalogGeneration !== after.catalogGeneration
+          || before.writeEpoch !== after.writeEpoch
+          || before.displayName !== after.displayName
+          || before.shellId !== after.shellId)
+        throw invalid("production archive target changed during the bounded read");
+      const stem = after.displayName.normalize("NFKC").toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "clay";
+      return Object.freeze({
+        format: 5 as const,
+        bytes,
+        filename: `${stem}.clay.zip`,
+        target: Object.freeze({ ...after.target }),
+        catalogGeneration: after.catalogGeneration,
+      });
+    });
   }
 
   /** Package-private diagnostics used by worker-boundary certification tests. */

@@ -258,6 +258,21 @@ const EXPECTED_DDL = new Map(CATALOG_DDL.map(ddl => {
   return [match[1]!, normalizeDdl(ddl.replace("CREATE TABLE catalog.", "CREATE TABLE "))];
 }));
 
+export type CatalogSchemaObject = Readonly<{
+  schema: 1;
+  type: "table";
+  name: string;
+  tableName: string;
+  sql: string;
+}>;
+
+/** Exact normalized catalog DDL allowlist for authenticated archive evidence. */
+export function expectedCatalogSchemaObjects(): CatalogSchemaObject[] {
+  return [...EXPECTED_DDL.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, sql]) => ({ schema: 1, type: "table", name, tableName: name, sql }));
+}
+
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 type OpaquePrefix = "auth" | "app" | "gen" | "ns" | "lease";
 type RetainedIdKind = "authority" | "app" | "generation" | "namespace" | "lease";

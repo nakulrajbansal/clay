@@ -95,7 +95,8 @@ describe("production mutation route census", () => {
     for (const [name, classification] of Object.entries(DB_WORKER_ROUTE_CENSUS)) {
       const body = caseBody(worker, name);
       const directStoreWriters = Object.keys(CLAY_STORE_WRITER_CENSUS)
-        .filter(method => body.includes(`.${method}(`));
+        .filter(method => body.includes(`.${method}(`)
+          && !body.includes(`mustAuthority().${method}(`));
       if (directStoreWriters.length > 0) {
         expect(
           ["boot", "authority", "authority-store-port", "unavailable"],
@@ -144,6 +145,8 @@ describe("production mutation route census", () => {
     expect(kernelPackage.exports["./worker-authority"])
       .toBe("./src/worker-authority.ts");
     expect(worker).toContain('from "@clay/kernel/worker-authority"');
+    expect(worker).toContain('await import("@clay/kernel/worker-authority")');
+    expect(worker).toContain("import type {");
     expect(worker).toContain("let store: ProductionStoreReader | null = null");
     expect(worker).toContain("store = authority.readStore()");
     expect(worker).toContain("return bootProductionAuthority(p)");
@@ -175,6 +178,19 @@ describe("production mutation route census", () => {
     expect(body).not.toContain("failClosedMutation(");
     expect(worker).toContain('route: "starter.seed"');
     expect(worker).toContain("const requestId = authorityRequestId(req)");
+  });
+
+  it("routes archive export through the bounded production authority read path", () => {
+    const worker = source("packages/shell/src/worker/db-worker.ts");
+    const authority = source("packages/kernel/src/production-authority.ts");
+    const body = caseBody(worker, "exportArchive");
+    expect(DB_WORKER_ROUTE_CENSUS.exportArchive)
+      .toEqual({ enforcement: "read", mutates: "none" });
+    expect(body).toContain("mustAuthority().exportArchive()");
+    expect(body).not.toContain("store.exportArchive(");
+    expect(body).not.toContain("failClosedMutation(");
+    expect(authority).toContain('await import("./archive-authority")');
+    expect(authority).not.toMatch(/^import .*archive-authority/m);
   });
 
   it("keeps StoreRpc and Bridge writes on the authority-backed port", () => {

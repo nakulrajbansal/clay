@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -276,4 +276,12 @@ test("assertWithinBudget rejects a closure over either byte limit", () => {
     ),
     /static entry closure: 724000 B raw \/ 221000 B gzip exceeds 725000 B \/ 220000 B/,
   );
+});
+
+test("production budget counts both lazy authority chunks in closure and runtime", async () => {
+  const source = await readFile(new URL("bundle-budget.mjs", import.meta.url), "utf8");
+  assert.match(source, /worker-authority/);
+  assert.match(source, /archive-authority/);
+  assert.match(source, /database worker complete authority closure/);
+  assert.match(source, /\[databaseWorkerFile, workerAuthorityFile, archiveAuthorityFile\]/);
 });

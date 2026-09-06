@@ -90,7 +90,7 @@ export const DB_WORKER_ROUTE_CENSUS = Object.freeze({
   dismissSuggestion: route("unavailable", "live"),
   acceptSuggestion: route("unavailable", "live"),
   reset: route("unavailable", "lifecycle"),
-  exportArchive: route("unavailable", "live"),
+  exportArchive: route("read", "none"),
   importArchive: route("unavailable", "lifecycle"),
   status: route("read", "none"),
   requestPersist: route("ephemeral", "none"),

@@ -157,10 +157,33 @@ function oneAsset(pattern, label) {
 }
 
 const databaseWorkerFile = oneAsset(/^db-worker-[^.]+\.js$/, "database worker");
+const workerAuthorityFile = oneAsset(
+  /^worker-authority-[^.]+\.js$/, "worker authority",
+);
+const archiveAuthorityFile = oneAsset(
+  /^archive-authority-[^.]+\.js$/, "archive authority",
+);
 await check(
   "database worker",
   [databaseWorkerFile],
   { raw: 765_000, gzip: 220_000 },
+);
+await check(
+  "worker authority lazy chunk",
+  [workerAuthorityFile],
+  { raw: 230_000, gzip: 60_000 },
+);
+await check(
+  "archive authority lazy chunk",
+  [archiveAuthorityFile],
+  // Keep roughly 4% raw headroom around the authenticated format-5 implementation;
+  // the complete closure below remains the binding aggregate authority cap.
+  { raw: 38_000, gzip: 10_000 },
+);
+await check(
+  "database worker complete authority closure",
+  [databaseWorkerFile, workerAuthorityFile, archiveAuthorityFile],
+  { raw: 940_000, gzip: 260_000 },
 );
 
 const sqliteSupportFiles = [
@@ -192,12 +215,13 @@ await check(
 );
 
 const browserRuntimeMeasured = await measureFiles(distRoot,
-  mergeFiles(analysis.totalShellJsFiles, [databaseWorkerFile], sqliteSupportFiles,
+  mergeFiles(analysis.totalShellJsFiles,
+    [databaseWorkerFile, workerAuthorityFile, archiveAuthorityFile], sqliteSupportFiles,
     [wasmFile], cssFiles));
 printAndAssert("complete browser runtime payload", {
   files: [...browserRuntimeMeasured.files, ...panelRuntimeMeasured.files],
   raw: browserRuntimeMeasured.raw + panelRuntimeMeasured.raw,
   gzip: browserRuntimeMeasured.gzip + panelRuntimeMeasured.gzip,
-}, { raw: 3_020_000, gzip: 1_035_000 });
+}, { raw: 3_250_000, gzip: 1_100_000 });
 
 console.log("BUNDLE BUDGET GREEN");

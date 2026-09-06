@@ -508,6 +508,18 @@ function stableFingerprint(value: string): string {
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
+const AUTHORITY_ARCHIVE_READERS = new WeakMap<object, (appName: string) => Promise<Uint8Array>>();
+
+/** Source-private, read-only archive capability installed by ClayStore itself. */
+export function exportStoreArchiveReadOnly(
+  store: ClayStore,
+  appName: string,
+): Promise<Uint8Array> {
+  const reader = AUTHORITY_ARCHIVE_READERS.get(store);
+  if (!reader) throw new ClayError("E_VALIDATION", "Store archive read authority is unavailable");
+  return reader(appName);
+}
+
 export class ClayStore {
   readonly #driver: DbDriver;
   private reg: Registry = new Map();
@@ -521,6 +533,7 @@ export class ClayStore {
     this.#driver = driver;
     this.#observer = new Observer(driver);
     this.#privateMetrics = new PrivateMetricsReducer(new SqlitePrivateMetricDriver(driver));
+    AUTHORITY_ARCHIVE_READERS.set(this, appName => this.#exportArchiveReadOnly(appName));
   }
 
   static async openMemory(): Promise<ClayStore> {
@@ -3101,8 +3114,7 @@ export class ClayStore {
   // ---------- .clay archives (doc 04 §7) ----------
   /** zip{ manifest.json, user.db, system.db } — the backup story and a
    * trust artifact: the whole app in one file. */
-  async exportArchive(appName: string): Promise<Uint8Array> {
-    this.scrubLegacyCredentialSettings();
+  async #buildArchive(appName: string): Promise<Uint8Array> {
     const attachmentIssues = await this.attachmentIntegrityIssues();
     if (attachmentIssues.length > 0)
       throw new ClayError("E_VALIDATION",
@@ -3119,6 +3131,22 @@ export class ClayStore {
       { name: "user.db", data: user },
       { name: "system.db", data: system },
     ]);
+  }
+
+  async #exportArchiveReadOnly(appName: string): Promise<Uint8Array> {
+    for (const key of LEGACY_CREDENTIAL_SETTING_KEYS) {
+      if (this.#driver.select("SELECT key FROM sys.settings WHERE key = ?", [key]).length !== 0)
+        throw new ClayError(
+          "E_VALIDATION",
+          "read-only archive export refused unsanitized legacy credential settings",
+        );
+    }
+    return this.#buildArchive(appName);
+  }
+
+  async exportArchive(appName: string): Promise<Uint8Array> {
+    this.scrubLegacyCredentialSettings();
+    return this.#buildArchive(appName);
   }
 
   static parseArchive(bytes: Uint8Array): {
