@@ -134,6 +134,40 @@ describe("bounded sample producer receipt history", () => {
     );
   });
 
+  it("rejects a duplicated target ID masking a catalog-only ID", () => {
+    const requestA = `req_${"u".repeat(26)}`;
+    const requestB = `req_${"v".repeat(26)}`;
+    const operationA = productionOperationIdV2(
+      scope.authorityIncarnationId, requestA, "store.insert",
+    );
+    const operationB = productionOperationIdV2(
+      scope.authorityIncarnationId, requestB, "store.insert",
+    );
+    const driver = {
+      select(sql: string): SqlRow[] {
+        if (sql.includes("COUNT(*)")) return [{ receipt_count: 2 }];
+        if (sql.includes("FROM sys.production_request_receipts")
+            && sql.includes("request_id,operation_id")) {
+          return [
+            { request_id: requestA, operation_id: operationA, response_bytes: 1 },
+            { request_id: requestA, operation_id: operationA, response_bytes: 1 },
+          ];
+        }
+        if (sql.includes("FROM catalog.production_request_receipts")
+            && sql.includes("request_id,operation_id")) {
+          return [
+            { request_id: requestA, operation_id: operationA },
+            { request_id: requestB, operation_id: operationB },
+          ];
+        }
+        throw new Error(`unexpected query: ${sql}`);
+      },
+    } as unknown as DbDriver;
+    expect(() => readCommittedSampleProducerReceipts(driver, scope)).toThrow(
+      /duplicate|diverge|mirror/i,
+    );
+  });
+
   it("rejects producer receipts disappearing after metadata discovery", () => {
     const driver = {
       select(sql: string): SqlRow[] {
