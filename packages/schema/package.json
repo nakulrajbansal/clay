@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./catalog": "./src/catalog.ts",
+    "./daily-home": "./src/daily-home.ts",
     "./mutation-plan-api.json": "./mutation-plan-api.json"
   },
   "scripts": {

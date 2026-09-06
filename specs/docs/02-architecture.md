@@ -172,3 +172,51 @@ clay/
   specs/           THIS PACKAGE, checked in; CLAUDE.md points here
   tests/           regression intents, property tests, fixtures
 ```
+
+## 10. Daily Home projection boundary
+
+Today and Inbox are trusted, local read-time projections, not durable copies of
+canonical records. Each source adapter returns a bounded page, a source-native
+watermark and status epoch, and closed exact or partial completeness. The worker
+performs deterministic ranking and deduplication against one snapshot basis. A
+cursor binds that basis, every adapter continuation, page scope, ranking version,
+app timezone, local date, and the earliest future instant at which time alone can
+change the result. A basis change returns an empty stale-cursor error, never a page
+mixed from two snapshots.
+
+The basis starts with the catalog-selected `(appInstanceId, activeGenerationId)`
+and also binds the canonical ready/issue profile-resolution partition because that
+partition changes configuration status. Profile IDs, source gaps, representatives,
+and items use byte-stable ordinal comparison rather than host-locale collation.
+Cursor payloads have one closed canonical JSON encoding, all seven adapter slots,
+and a domain-separated SHA-256 integrity checksum. Decoding rejects malformed,
+non-canonical, or checksum-mismatched envelopes; trusted verification additionally
+rejects another basis or page scope and any instant at or after the validity boundary.
+
+The app stores one recognized IANA timezone identifier and preserves that exact
+string. Readers accept valid IANA links across ICU revisions instead of rewriting
+an archived identifier to a runtime-specific preferred alias.
+
+Due-record sources resolve only reviewed stable semantic identities. They do not
+infer a field from a label, array position, or apparent value. A missing or
+incompatible binding becomes a visible Setup or Fix state. Read projection code
+uses an injected clock and cannot obtain the physical driver or write opener.
+Shell navigation is a presentation choice; it cannot authorize record,
+disposition, reminder, or recurrence writes.
+
+The first D1 implementation may expose only Open and Setup/Fix navigation actions. Recovery
+is represented only as an unavailable or partial source status until B3/B4 supplies a stable
+incident identity; D1 does not invent a recovery target. Complete,
+Capture, Snooze, Dismiss, device reminders, and recurrence stay unavailable until
+their separately typed worker-owned operations and dependency gates pass. Hosted
+reminder infrastructure is not part of the local projection boundary.
+
+`DailyHomeSnapshotV1` is a strict transport shape, not authority. The trusted kernel
+builder performs bounded descriptor capture, derives aggregate completeness and the
+SHA-256 basis digest, verifies that every rendered section occurrence exactly matches a
+source occurrence, enforces the fixed source-to-section registry, chooses one canonical
+representative per rendered identity, and returns a recursively frozen graph. Section
+occurrence totals come from every contributing source while rendered totals count only
+the deterministic representatives. Production consumers accept only that verified
+output. Row, automation, saved-view, and semantic target fields reuse their canonical
+subsystem identifier formats rather than generic bounded strings.

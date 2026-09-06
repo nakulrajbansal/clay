@@ -905,3 +905,63 @@ ADR-049 (2026-09-04) Catalog schema 1 proceeds; raw SQLite-pair target digests a
   starter seeding are authority-routed. Remaining lifecycle, preview, automation, import,
   attachment, undo, restore, and archive routes remain fail-closed and therefore block
   protection publication and release certification.
+
+ADR-050 (2026-09-06) Daily Home begins as a local read-time projection over explicit bindings
+  CONTEXT: Release D needs one ordinary returning-user home, but canonical work already
+  belongs to typed user tables and automation notices already belong to
+  `sys.notifications`. Copying either source into a second work queue would create stale
+  authority. Due-field guessing, loaded-page totals, host-timezone arithmetic, and a Push
+  prompt during first use would also make a polished surface materially untrustworthy.
+  The B3/B4 recovery-source contract and C2 entry descriptor contract are not yet stable
+  enough to substitute guessed routes or entry defaults. ADR-048 and ADR-049 certify a
+  mechanism and authority design, but the current browser report is not a release-bound
+  physical transaction certificate for every state-changing D path.
+  DECISION: Today and Inbox are fresh, bounded, model-free read projections. A table may
+  contribute due work only through one reviewed profile containing explicit stable field
+  identities for its label, due value, and optional completion rule. Bindings are never
+  inferred from labels or field order. Projection pages use closed exact or partial
+  completeness, source-native monotonic generations, source status and watermarks, a
+  deterministic ranking tuple, and cursors bound to the complete snapshot basis and next
+  time-only invalidation boundary. There is no copied Inbox or Today item table.
+  The basis begins with the selected app and active generation and includes the canonical
+  ready/issue profile-resolution partition. All canonical ordering is ordinal and
+  byte-stable, never locale-sensitive. The cursor is a closed canonical envelope over all
+  adapter continuations and page scope with a domain-separated integrity checksum; its
+  verifier rejects malformed, cross-basis, cross-scope, and expired values.
+  The exported Zod snapshot contract validates shape only. A trusted kernel builder captures
+  plain data without invoking accessors, derives aggregate completeness and the SHA-256 basis
+  digest, cross-checks section occurrences against source occurrences, and deep-freezes the
+  accepted result. Shape parsing alone never establishes a trusted projection.
+  Cross-source seen, snooze, and dismissal will use the app-owned
+  `sys.inbox_dispositions` table with integer compare-and-set revisions, but that table and
+  all related writers remain gated until physical transaction and archive integration pass.
+  App-owned Daily Home configuration and dispositions belong in archive format 5; device
+  capabilities, subscription credentials, and remote route maps do not.
+  Calendar behavior will use one injected-clock utility based on
+  `Intl.DateTimeFormat.formatToParts`, explicit UTC arithmetic, and recognized IANA zone
+  identifiers, with no new runtime dependency. Selection stores the runtime-preferred
+  identifier once. Readers preserve and accept any still-recognized stored IANA link rather
+  than re-canonicalizing it, so an ICU alias rename cannot brick an archive or silently
+  change a snapshot digest. Unsupported zones fail closed. Accepted stored date values
+  share the exact row-storage grammar and normalize missing seconds or one-to-three
+  fractional digits before projection. Nonexistent wall times advance to the first valid
+  instant after the gap; repeated wall times resolve once at the earlier offset and expose
+  that deterministic result in the snapshot basis.
+  Fixed-offset identifiers such as `+05:30` and `-04` are not IANA zone identifiers and
+  are rejected even on runtimes whose `Intl` implementation accepts them; recognized IANA
+  links such as `US/Eastern` and `Asia/Katmandu` remain valid stored values.
+  The local Inbox is independent of off-device delivery. Off-device reminder delivery
+  remains deferred until a separate protocol, custody, abuse, revocation, support-matrix,
+  and per-cell outcome decision is accepted. Read-only D1 projection work may proceed,
+  but every state-changing D route remains fail-closed until its B/C contracts, exact
+  worker-owned request path, archive lifecycle, and release-bound physical transaction
+  certificate pass. D5 also remains blocked on E3 runtime clarity.
+  Recovery remains a source-status slot only until B3/B4 defines a stable incident identity;
+  D0 exposes no guessed recovery item or route. D1 item actions are limited to Open and
+  Setup/Fix navigation and reuse canonical UUID row IDs, automation IDs, saved-view IDs,
+  and semantic table IDs. They cannot express Complete, Snooze, or Dismiss.
+  CONSEQUENCE: D0 may add strict projection schemas, deterministic calendar/ranking code,
+  bounded read adapters, and an Experimental Today surface. It may not describe Complete,
+  Capture, Snooze, Dismiss, reminders, or recurrence as available merely because the
+  read projection exists. Exact totals and caught-up copy are forbidden under any partial
+  source state, and no user-study promotion requirement is waived by this decision.
