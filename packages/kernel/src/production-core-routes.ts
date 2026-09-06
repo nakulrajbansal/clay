@@ -1,7 +1,7 @@
 import { ClayError } from "./errors";
 import { deriveInverse, type ForwardOpT } from "./migrate";
 import { registryToJson } from "./registry";
-import { ClayStore } from "./store";
+import { ClayStore, PRODUCTION_STORE_PRIMITIVES } from "./store";
 
 const IDENT = /^[a-z][a-z0-9_]{0,40}$/;
 const PANEL_ID = /^[a-z][a-z0-9_]{2,40}$/;
@@ -247,17 +247,6 @@ export function isCapturedCoreMutation(
   }
 }
 
-// Pinned once at module evaluation; caller prototype replacement cannot redirect authority.
-const COMMIT: ClayStore["commit"] = ClayStore.prototype.commit;
-const HISTORY: ClayStore["history"] = ClayStore.prototype.history;
-const LIVE_PANELS: ClayStore["livePanels"] = ClayStore.prototype.livePanels;
-const REGISTRY: ClayStore["registrySnapshot"] = ClayStore.prototype.registrySnapshot;
-const SET_CHECKPOINT: ClayStore["setCheckpoint"] = ClayStore.prototype.setCheckpoint;
-const ROLLBACK_TO: ClayStore["rollbackTo"] = ClayStore.prototype.rollbackTo;
-const REVERT_PANEL: ClayStore["revertPanel"] = ClayStore.prototype.revertPanel;
-const RENAME_PANEL: ClayStore["renamePanel"] = ClayStore.prototype.renamePanel;
-const REMOVE_PANEL: ClayStore["removePanel"] = ClayStore.prototype.removePanel;
-
 function columnIdent(label: string): string {
   return label.trim().toLowerCase()
     .replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").replace(/^(\d)/, "c$1")
@@ -265,7 +254,9 @@ function columnIdent(label: string): string {
 }
 
 function registryResult(store: ClayStore): unknown {
-  return JSON.parse(registryToJson(REGISTRY.call(store)));
+  return JSON.parse(registryToJson(
+    PRODUCTION_STORE_PRIMITIVES.registrySnapshot.call(store),
+  ));
 }
 
 function commitColumn(
@@ -296,11 +287,13 @@ function commitColumn(
     },
   };
   const operations: ForwardOpT[] = [operation];
-  COMMIT.call(store, {
+  PRODUCTION_STORE_PRIMITIVES.commit.call(store, {
     intent: `add a ${name} column to ${table}`,
     summary: `Added a “${name}” column to ${table}.`,
     semanticOrigin: "direct",
-    migration: { operations, inverse: deriveInverse(operations, REGISTRY.call(store)) },
+    migration: { operations, inverse: deriveInverse(
+      operations, PRODUCTION_STORE_PRIMITIVES.registrySnapshot.call(store),
+    ) },
     panels: [],
     diff: [{ kind: "add_field", detail: `${name} (${column.type}) on ${table}` }],
   });
@@ -311,13 +304,21 @@ function renameColumn(store: ClayStore, table: string, from: string, to: string)
   const next = columnIdent(to);
   if (!IDENT.test(next))
     throw new ClayError("E_VALIDATION", `'${to}' is not a usable column name`);
-  if (next === from) return registryResult(store);
+  const registry = PRODUCTION_STORE_PRIMITIVES.registrySnapshot.call(store);
+  const activeTable = registry.get(table);
+  if (!activeTable)
+    throw new ClayError("E_VALIDATION", `no active table '${table}'`);
+  if (!activeTable.columns.some(column => column.name === from && !column.inactive))
+    throw new ClayError("E_VALIDATION", `no active column '${table}.${from}'`);
+  if (next === from) return JSON.parse(registryToJson(registry));
   const operations: ForwardOpT[] = [{ op: "rename_column", table, from, to: next }];
-  COMMIT.call(store, {
+  PRODUCTION_STORE_PRIMITIVES.commit.call(store, {
     intent: `rename ${table}.${from} to ${next}`,
     summary: `Renamed “${from}” to “${next}” on ${table}.`,
     semanticOrigin: "direct",
-    migration: { operations, inverse: deriveInverse(operations, REGISTRY.call(store)) },
+    migration: { operations, inverse: deriveInverse(
+      operations, PRODUCTION_STORE_PRIMITIVES.registrySnapshot.call(store),
+    ) },
     panels: [],
     diff: [{ kind: "change_field", detail: `${from} → ${next} on ${table}` }],
   });
@@ -331,20 +332,26 @@ export function executeCapturedCoreMutation(
 ): unknown {
   switch (request.route) {
     case "timeline.setCheckpoint":
-      SET_CHECKPOINT.call(store, request.payload.version, request.payload.label);
-      return HISTORY.call(store);
+      PRODUCTION_STORE_PRIMITIVES.setCheckpoint.call(
+        store, request.payload.version, request.payload.label,
+      );
+      return PRODUCTION_STORE_PRIMITIVES.history.call(store);
     case "timeline.makeLatest":
-      ROLLBACK_TO.call(store, request.payload.version, { truncate: true });
-      return LIVE_PANELS.call(store);
+      PRODUCTION_STORE_PRIMITIVES.rollbackTo.call(
+        store, request.payload.version, { truncate: true },
+      );
+      return PRODUCTION_STORE_PRIMITIVES.livePanels.call(store);
     case "panel.revert":
-      REVERT_PANEL.call(store, request.payload.panelId);
-      return LIVE_PANELS.call(store);
+      PRODUCTION_STORE_PRIMITIVES.revertPanel.call(store, request.payload.panelId);
+      return PRODUCTION_STORE_PRIMITIVES.livePanels.call(store);
     case "panel.rename":
-      RENAME_PANEL.call(store, request.payload.panelId, request.payload.title);
-      return LIVE_PANELS.call(store);
+      PRODUCTION_STORE_PRIMITIVES.renamePanel.call(
+        store, request.payload.panelId, request.payload.title,
+      );
+      return PRODUCTION_STORE_PRIMITIVES.livePanels.call(store);
     case "panel.remove":
-      REMOVE_PANEL.call(store, request.payload.panelId);
-      return LIVE_PANELS.call(store);
+      PRODUCTION_STORE_PRIMITIVES.removePanel.call(store, request.payload.panelId);
+      return PRODUCTION_STORE_PRIMITIVES.livePanels.call(store);
     case "schema.addColumn":
     case "schema.addRelationColumn":
       return commitColumn(store, request.payload.table, request.payload.column);

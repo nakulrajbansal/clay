@@ -323,6 +323,50 @@ describe("production Store authority", () => {
     }
   });
 
+  it("keeps panel.rename off a replaced nested Store commit", async () => {
+    const { driver, store: rawStore } = await legacyStore();
+    rawStore.commit({
+      intent: "seed panel", summary: "Added project table.", migration: null,
+      panels: [{
+        panel_id: "project_table", title: "Projects",
+        placement: { region: "main", order: 0 },
+        code: "export default function(clay){}",
+        declared_queries: [{ from: "projects" }], declared_writes: [],
+      }],
+    });
+    const authority = ProductionStoreAuthority.adoptLegacy(driver, {
+      inventory: legacyInventory,
+      storageKey: "default",
+      displayName: "My app",
+      appInstanceId: opaque("app", "a"),
+      generationId: opaque("gen", "b"),
+      namespaceId: opaque("ns", "c"),
+      adoptionOperationId: opaque("op", "d"),
+      releaseId: opaque("rel", "e"),
+      nowMs: Date.now(),
+      leaseTtlMs: 60_000,
+    });
+    const originalCommit = ClayStore.prototype.commit;
+    try {
+      ClayStore.prototype.commit = function () {
+        this.setSetting("redirected_by_prototype", true);
+        return this.headVersion();
+      };
+      await expect(authority.executeMutation({
+        requestId: opaque("req", "r"),
+        route: "panel.rename",
+        payload: { panelId: "project_table", title: "Pinned title" },
+      })).resolves.toMatchObject({ changed: true });
+      expect(authority.readStore().livePanels()[0]?.title).toBe("Pinned title");
+      expect(driver.select(
+        "SELECT value_json FROM sys.settings WHERE key = 'redirected_by_prototype'",
+      )).toEqual([]);
+    } finally {
+      ClayStore.prototype.commit = originalCommit;
+      authority.close();
+    }
+  });
+
   it("never invokes a caller-supplied production clock", async () => {
     const { driver } = await legacyStore();
     let clockCalls = 0;
@@ -797,6 +841,55 @@ describe("production Store authority", () => {
       });
       await expect(authority.executeMutation(request))
         .resolves.toEqual({ ...committed, replayed: true });
+    } finally {
+      authority.close();
+    }
+  });
+
+  it("validates the active rename source before accepting a canonical no-op", async () => {
+    const { driver, store: rawStore } = await legacyStore();
+    const addArchived: ForwardOpT[] = [{
+      op: "add_column", table: "projects",
+      column: { name: "archived", type: "text", required: false },
+    }];
+    rawStore.commit({
+      intent: "add archived",
+      summary: "Added archived.",
+      migration: {
+        operations: addArchived,
+        inverse: deriveInverse(addArchived, rawStore.registrySnapshot()),
+      },
+    });
+    rawStore.rollbackTo(1, { truncate: true });
+    const authority = ProductionStoreAuthority.adoptLegacy(driver, {
+      inventory: legacyInventory,
+      storageKey: "default",
+      displayName: "My app",
+      appInstanceId: opaque("app", "a"),
+      generationId: opaque("gen", "b"),
+      namespaceId: opaque("ns", "c"),
+      adoptionOperationId: opaque("op", "d"),
+      releaseId: opaque("rel", "e"),
+      nowMs: Date.now(),
+      leaseTtlMs: 60_000,
+    });
+    const historyBefore = authority.readStore().history();
+    const eventsBefore = driver.select("SELECT COUNT(*) AS n FROM sys.record_events");
+    try {
+      for (const [requestChar, table, from, to] of [
+        ["x", "ghost", "name", "Name"],
+        ["y", "projects", "ghost", "Ghost"],
+        ["z", "projects", "archived", "Archived"],
+      ] as const) {
+        await expect(authority.executeMutation({
+          requestId: opaque("req", requestChar),
+          route: "schema.renameColumn",
+          payload: { table, from, to },
+        })).rejects.toMatchObject({ code: "E_VALIDATION" });
+      }
+      expect(authority.readStore().history()).toEqual(historyBefore);
+      expect(driver.select("SELECT COUNT(*) AS n FROM sys.record_events")).toEqual(eventsBefore);
+      expect(authority.inspectAuthority().targetReservations).toEqual([]);
     } finally {
       authority.close();
     }

@@ -34,7 +34,7 @@ type Request = {
   id: number;
   requestId?: string;
   op: string;
-  payload?: Record<string, unknown>;
+  payload?: unknown;
 };
 
 
@@ -115,6 +115,22 @@ function authorityRequestId(req: Request): string {
   return req.requestId;
 }
 
+const DIRECT_AUTHORITY_ROUTES = Object.freeze({
+  setCheckpoint: { route: "timeline.setCheckpoint" },
+  makeLatest: { route: "timeline.makeLatest" },
+  revertPanel: { route: "panel.revert" },
+  renamePanel: { route: "panel.rename" },
+  removePanel: { route: "panel.remove" },
+  addColumn: { route: "schema.addColumn" },
+  addRelationColumn: { route: "schema.addRelationColumn" },
+  renameColumn: { route: "schema.renameColumn" },
+  setSetting: { route: "setting.set" },
+  deleteSetting: { route: "setting.delete" },
+  compareAndSetSetting: { route: "setting.compareAndSet" },
+} as const);
+
+type DirectAuthorityRoute = keyof typeof DIRECT_AUTHORITY_ROUTES;
+
 async function runAuthorityMutation(
   route:
     | "seed" | "setSetting" | "deleteSetting" | "compareAndSetSetting" | "commitLayout"
@@ -126,7 +142,7 @@ async function runAuthorityMutation(
     | "acceptSuggestion" | "dismissSuggestion"
     | "setCheckpoint" | "makeLatest" | "revertPanel" | "renamePanel" | "removePanel"
     | "addColumn" | "addRelationColumn" | "renameColumn",
-  payload: Record<string, unknown>,
+  payload: unknown,
   req: Request,
 ): Promise<unknown> {
   const target = mustAuthority();
@@ -142,7 +158,7 @@ async function runAuthorityMutation(
       summary: "Saved layout changes.",
       semanticOrigin: "direct",
       migration: null,
-      panels: payload.layout,
+      panels: (payload as Record<string, unknown>).layout,
       diff: [],
     } },
   })).result;
@@ -167,73 +183,43 @@ async function runAuthorityMutation(
   if (route === "removeColumn") return (await target.executeMutation({
     requestId, route: "schema.removeColumn", payload,
   })).result;
-  if (route === "setCheckpoint") return (await target.executeMutation({
-    requestId, route: "timeline.setCheckpoint", payload,
-  })).result;
-  if (route === "makeLatest") return (await target.executeMutation({
-    requestId, route: "timeline.makeLatest", payload,
-  })).result;
-  if (route === "revertPanel") return (await target.executeMutation({
-    requestId, route: "panel.revert", payload,
-  })).result;
-  if (route === "renamePanel") return (await target.executeMutation({
-    requestId, route: "panel.rename", payload,
-  })).result;
-  if (route === "removePanel") return (await target.executeMutation({
-    requestId, route: "panel.remove", payload,
-  })).result;
-  if (route === "addColumn") return (await target.executeMutation({
-    requestId, route: "schema.addColumn", payload,
-  })).result;
-  if (route === "addRelationColumn") return (await target.executeMutation({
-    requestId, route: "schema.addRelationColumn", payload,
-  })).result;
-  if (route === "renameColumn") return (await target.executeMutation({
-    requestId, route: "schema.renameColumn", payload,
-  })).result;
-  if (route === "setSetting") return (await target.executeMutation({
-    requestId, route: "setting.set", payload: { key: payload.key, value: payload.value },
-  })).result;
-  if (route === "deleteSetting") return (await target.executeMutation({
-    requestId, route: "setting.delete", payload: { key: payload.key },
-  })).result;
-  if (route === "compareAndSetSetting") return (await target.executeMutation({
+
+  const authorityRoute = DIRECT_AUTHORITY_ROUTES[route as DirectAuthorityRoute];
+  if (authorityRoute) return (await target.executeMutation({
     requestId,
-    route: "setting.compareAndSet",
-    payload: {
-      key: payload.key,
-      expectedRevision: payload.expectedRevision,
-      value: payload.value,
-    },
+    route: authorityRoute.route,
+    payload,
   })).result;
+
   if (route === "runAutomations") return (await target.executeMutation({
     requestId, route: "runDueAutomations", payload: {},
   })).result;
+  const fields = payload as Record<string, unknown>;
   if (route === "recordFilter") {
-    const detail = payload.payload;
+    const detail = fields.payload;
     const event = typeof detail === "object" && detail !== null && !Array.isArray(detail)
-      ? { kind: "filter", subject: payload.name, detail }
-      : { kind: "filter", subject: payload.name };
+      ? { kind: "filter", subject: fields.name, detail }
+      : { kind: "filter", subject: fields.name };
     return (await target.executeMutation({ requestId, route: "recordUsage", payload: { event } })).result;
   }
   if (route === "clearPrivateMetrics") return (await target.executeOperationalMetricMutation({
     requestId, route, payload: {},
   })).result;
   if (route === "upsertAutomation") return (await target.executeMutation({
-    requestId, route, payload: { input: payload.input },
+    requestId, route, payload: { input: fields.input },
   })).result;
   if (route === "setPrivateMetricsEnabled") return (await target.executeOperationalMetricMutation({
-    requestId, route, payload: { enabled: payload.enabled },
+    requestId, route, payload: { enabled: fields.enabled },
   })).result;
   if (route === "recordPrivateMetric") return (await target.executeOperationalMetricMutation({
-    requestId, route, payload: { event: payload.event },
+    requestId, route, payload: { event: fields.event },
   })).result;
   if (route === "acceptSuggestion" || route === "dismissSuggestion")
     return (await target.executeMutation({
-      requestId, route, payload: { subject: payload.subject, kind: payload.kind },
+      requestId, route, payload: { subject: fields.subject, kind: fields.kind },
     })).result;
   return (await target.executeMutation({
-    requestId, route, payload: { id: payload.id },
+    requestId, route, payload: { id: fields.id },
   })).result;
 }
 
@@ -248,7 +234,10 @@ function serveProductionStore(target: "live" | "shadow", port: MessagePort): voi
 
 async function handle(req: Request, ports: readonly MessagePort[]): Promise<unknown> {
   enforceProductionMutationRoute(req.op);
-  const p = req.payload ?? {};
+  const payloadDescriptor = Reflect.getOwnPropertyDescriptor(req, "payload");
+  const rawPayload = payloadDescriptor && "value" in payloadDescriptor
+    ? payloadDescriptor.value : undefined;
+  const p = (rawPayload ?? {}) as Record<string, unknown>;
   switch (req.op) {
     case "boot":
       // appId/localStorage is presentation-only. Durable selection and any
@@ -298,11 +287,11 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "history":
       return mustStore().history();
     case "setCheckpoint":
-      return runAuthorityMutation("setCheckpoint", p, req);
+      return runAuthorityMutation("setCheckpoint", rawPayload, req);
     case "panelsAt":
       return mustStore().livePanels(Number(p.version));
     case "makeLatest":
-      return runAuthorityMutation("makeLatest", p, req);
+      return runAuthorityMutation("makeLatest", rawPayload, req);
     case "registryTables":
       return [...mustStore().registrySnapshot().values()];
     case "storePort": {
@@ -315,9 +304,9 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "repairPanel":
       return failClosedMutation(req.op);
     case "revertPanel":
-      return runAuthorityMutation("revertPanel", p, req);
+      return runAuthorityMutation("revertPanel", rawPayload, req);
     case "renamePanel":
-      return runAuthorityMutation("renamePanel", p, req);
+      return runAuthorityMutation("renamePanel", rawPayload, req);
     case "addAttachment":
       return runAuthorityMutation("addAttachment", p, req);
     case "attachmentsForRecord":
@@ -373,13 +362,13 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "removeColumn":
       return runAuthorityMutation("removeColumn", p, req);
     case "addColumn":
-      return runAuthorityMutation("addColumn", p, req);
+      return runAuthorityMutation("addColumn", rawPayload, req);
     case "addRelationColumn":
-      return runAuthorityMutation("addRelationColumn", p, req);
+      return runAuthorityMutation("addRelationColumn", rawPayload, req);
     case "renameColumn":
-      return runAuthorityMutation("renameColumn", p, req);
+      return runAuthorityMutation("renameColumn", rawPayload, req);
     case "removePanel":
-      return runAuthorityMutation("removePanel", p, req);
+      return runAuthorityMutation("removePanel", rawPayload, req);
     case "keep":
       return failClosedMutation(req.op);
     case "discard":
@@ -465,11 +454,11 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "getSetting":
       return mustStore().getSetting(String(p.key)) ?? null;
     case "setSetting":
-      return runAuthorityMutation("setSetting", p, req);
+      return runAuthorityMutation("setSetting", rawPayload, req);
     case "deleteSetting":
-      return runAuthorityMutation("deleteSetting", p, req);
+      return runAuthorityMutation("deleteSetting", rawPayload, req);
     case "compareAndSetSetting":
-      return runAuthorityMutation("compareAndSetSetting", p, req);
+      return runAuthorityMutation("compareAndSetSetting", rawPayload, req);
     default:
       throw new ClayError("E_CATALOG_UNAVAILABLE", `unclassified worker route '${req.op}'`);
   }

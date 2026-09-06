@@ -733,7 +733,7 @@ export class ClayStore {
   ): PreparedSemanticAssignmentsV1 {
     if (migration) validateMigrationPlan(migration, this.reg);
     const version = origin === "legacy_backfill" && migration === null
-      ? 0 : this.headVersion() + 1;
+      ? 0 : PRODUCTION_STORE_PRIMITIVES.headVersion.call(this) + 1;
     const sim = cloneRegistry(this.reg);
     const ref = (operationIndex: number, columnIndex?: number) => ({
       version, operationIndex, ...(columnIndex === undefined ? {} : { columnIndex }),
@@ -1224,12 +1224,14 @@ export class ClayStore {
   }
 
   currentVersion(): number {
-    const v = this.getSetting<number>("current_version");
-    return v === undefined ? this.headVersion() : v;
+    const v = PRODUCTION_STORE_PRIMITIVES.getSetting.call(
+      this, "current_version",
+    ) as number | undefined;
+    return v === undefined ? PRODUCTION_STORE_PRIMITIVES.headVersion.call(this) : v;
   }
 
   private setCurrentVersion(v: number): void {
-    this.setSetting("current_version", v);
+    PRODUCTION_STORE_PRIMITIVES.setSetting.call(this, "current_version", v);
   }
 
   // ---------- settings (doc 04 §3: mode, byo key, sample markers, …) ----------
@@ -1296,17 +1298,19 @@ export class ClayStore {
   /** Commit a mutation: validate, migrate, write panel blobs/tombstones,
    * persist registry, append log — one transaction (doc 04 §4). */
   commit(input: CommitInput): number {
-    const head = this.headVersion();
-    if (this.currentVersion() !== head)
+    const head = PRODUCTION_STORE_PRIMITIVES.headVersion.call(this);
+    if (PRODUCTION_STORE_PRIMITIVES.currentVersion.call(this) !== head)
       throw new ClayError("E_VALIDATION",
         "store is rolled back (scrub preview); roll forward or truncate first");
     const semanticOrigin = input.semanticOrigin ?? "system";
     const semanticAssignments = input.semanticAssignments
-      ?? this.prepareSemanticAssignments(input.migration, semanticOrigin);
+      ?? PRODUCTION_STORE_PRIMITIVES.prepareSemanticAssignments.call(
+        this, input.migration, semanticOrigin,
+      );
     try {
       return this.#driver.tx(() => {
         // capture the pre-commit manifest for the G16 rename rewrite
-        const preLive = this.livePanels();
+        const preLive = PRODUCTION_STORE_PRIMITIVES.livePanels.call(this);
         const untouched = preLive.filter(p =>
           !(input.panels ?? []).some(np => np.panel_id === p.panel_id)
           && !(input.removePanels ?? []).includes(p.panel_id));
@@ -1379,7 +1383,9 @@ export class ClayStore {
                 user_facing_diff: [{ kind: "change_panel", detail: lp.panel_id }],
                 clarifying_question: null, assumptions: [], migration: null,
                 panels: [transformed], remove_panels: [], semantic_hints: [], confidence: 1,
-              }, { registry: this.reg, livePanelIds: this.livePanels().map(panel => panel.panel_id) });
+              }, { registry: this.reg,
+                livePanelIds: PRODUCTION_STORE_PRIMITIVES.livePanels.call(this)
+                  .map(panel => panel.panel_id) });
               if (problems.length > 0)
                 throw new ClayError("E_VALIDATION",
                   `renamed panel '${lp.panel_id}' is invalid: ${problems.map(problem => problem.message).join("; ")}`);
@@ -1457,13 +1463,14 @@ export class ClayStore {
    * reversible commit — no model. Small changes must never need a prompt
    * round-trip. Same commit vocabulary as a plan's change_panel. */
   renamePanel(panelId: string, title: string): number {
-    const p = this.livePanels().find(x => x.panel_id === panelId);
+    const p = PRODUCTION_STORE_PRIMITIVES.livePanels.call(this)
+      .find(x => x.panel_id === panelId);
     if (!p) throw new ClayError("E_VALIDATION", `no live panel '${panelId}'`);
     const next = title.trim().slice(0, 80);
     if (next.length === 0)
       throw new ClayError("E_VALIDATION", "panel title cannot be empty");
-    if (next === p.title) return this.headVersion();
-    return this.commit({
+    if (next === p.title) return PRODUCTION_STORE_PRIMITIVES.headVersion.call(this);
+    return PRODUCTION_STORE_PRIMITIVES.commit.call(this, {
       intent: `rename the ${p.title} panel`,
       summary: `Renamed “${p.title}” to “${next}”.`,
       migration: null, semanticOrigin: "direct",
@@ -1479,9 +1486,10 @@ export class ClayStore {
    * commit (tombstone). Data rows are untouched — rewind the timeline to
    * bring the panel back. Same vocabulary as a plan's remove_panels. */
   removePanel(panelId: string): number {
-    const p = this.livePanels().find(x => x.panel_id === panelId);
+    const p = PRODUCTION_STORE_PRIMITIVES.livePanels.call(this)
+      .find(x => x.panel_id === panelId);
     if (!p) throw new ClayError("E_VALIDATION", `no live panel '${panelId}'`);
-    return this.commit({
+    return PRODUCTION_STORE_PRIMITIVES.commit.call(this, {
       intent: `remove the ${p.title} panel`,
       summary: `Removed the “${p.title}” panel.`,
       migration: null, semanticOrigin: "direct", removePanels: [panelId],
@@ -1494,7 +1502,7 @@ export class ClayStore {
    * (doc 04 §5). Passing an older version powers scrub-preview — panels AT
    * K rendered against CURRENT data, no inverses run (doc 02 §6). */
   livePanels(at?: number): LivePanel[] {
-    const v = at ?? this.currentVersion();
+    const v = at ?? PRODUCTION_STORE_PRIMITIVES.currentVersion.call(this);
     const rows = this.#driver.select(
       `SELECT b.panel_id, b.version, b.code, b.placement_json, b.declared_q_json
        FROM sys.panel_blobs b
@@ -1618,13 +1626,13 @@ export class ClayStore {
 
   /** Apply inverses current..K+1. With truncate, the chain above K is discarded. */
   rollbackTo(target: number, opts: { truncate?: boolean } = {}): void {
-    const cur = this.currentVersion();
+    const cur = PRODUCTION_STORE_PRIMITIVES.currentVersion.call(this);
     if (target < 0 || target >= cur)
       throw new ClayError("E_VALIDATION", `cannot roll back from ${cur} to ${target}`);
     try {
       this.#driver.tx(() => {
         for (let v = cur; v > target; v--) {
-          const entry = this.getEntry(v);
+          const entry = PRODUCTION_STORE_PRIMITIVES.getEntry.call(this, v);
           if (entry.migration)
             applyInverseOps(this.#driver, this.reg, entry.migration.inverse);
         }
@@ -3155,7 +3163,8 @@ export class ClayStore {
   /** Panel-scoped revert (doc 05 §7): restore the PREVIOUS blob of one
    * panel as a NEW commit — linear history preserved, nothing truncated. */
   revertPanel(panelId: string): number {
-    const current = this.livePanels().find(p => p.panel_id === panelId);
+    const current = PRODUCTION_STORE_PRIMITIVES.livePanels.call(this)
+      .find(p => p.panel_id === panelId);
     if (!current)
       throw new ClayError("E_VALIDATION", `no live panel '${panelId}'`);
     const rows = this.#driver.select(
@@ -3169,7 +3178,7 @@ export class ClayStore {
     const manifest = JSON.parse(String(prev.declared_q_json)) as {
       title: string; declared_queries: QueryT[]; declared_writes?: string[];
     };
-    return this.commit({
+    return PRODUCTION_STORE_PRIMITIVES.commit.call(this, {
       intent: `roll back panel ${panelId}`,
       summary: `Rolls back the ${manifest.title} panel to its previous version.`,
       migration: null,
@@ -3516,6 +3525,31 @@ export class ClayStore {
     }
   }
 }
+
+/**
+ * Module-captured Store implementations used by the production authority.
+ * This module finishes evaluation before callers can replace public prototype
+ * methods, so these references remain stable across the worker's later dynamic
+ * authority import. This is intentionally not re-exported from the public
+ * kernel entrypoint.
+ */
+export const PRODUCTION_STORE_PRIMITIVES = Object.freeze({
+  commit: ClayStore.prototype.commit,
+  currentVersion: ClayStore.prototype.currentVersion,
+  getEntry: ClayStore.prototype.getEntry,
+  getSetting: ClayStore.prototype.getSetting,
+  headVersion: ClayStore.prototype.headVersion,
+  history: ClayStore.prototype.history,
+  livePanels: ClayStore.prototype.livePanels,
+  prepareSemanticAssignments: ClayStore.prototype.prepareSemanticAssignments,
+  registrySnapshot: ClayStore.prototype.registrySnapshot,
+  removePanel: ClayStore.prototype.removePanel,
+  renamePanel: ClayStore.prototype.renamePanel,
+  revertPanel: ClayStore.prototype.revertPanel,
+  rollbackTo: ClayStore.prototype.rollbackTo,
+  setCheckpoint: ClayStore.prototype.setCheckpoint,
+  setSetting: ClayStore.prototype.setSetting,
+});
 
 export type ClayManifest = {
   /** v2 adds rollback tombstones; v3 requires semantics; v4 accounts for files. */

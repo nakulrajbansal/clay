@@ -60,6 +60,10 @@ function clayStorePublicWriterNames(text: string): Set<string> {
           const called = expression.name.text;
           if (called === "exec" || called === "tx" || directExternalWriters.has(called))
             writerNames.add(name);
+          if (called === "call" && ts.isPropertyAccessExpression(expression.expression)
+              && ts.isIdentifier(expression.expression.expression)
+              && expression.expression.expression.text === "PRODUCTION_STORE_PRIMITIVES")
+            localCalls.add(expression.expression.name.text);
           if (expression.expression.kind === ts.SyntaxKind.ThisKeyword
               || (ts.isIdentifier(expression.expression)
                 && expression.expression.text === "ClayStore")) localCalls.add(called);
