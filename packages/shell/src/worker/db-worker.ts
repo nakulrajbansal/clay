@@ -123,7 +123,9 @@ async function runAuthorityMutation(
     | "upsertAutomation" | "deleteAutomation" | "runAutomations" | "runAutomationNow"
     | "undoAutomationRun" | "markNotificationRead" | "recordPrivateMetric"
     | "setPrivateMetricsEnabled" | "clearPrivateMetrics" | "recordFilter"
-    | "acceptSuggestion" | "dismissSuggestion",
+    | "acceptSuggestion" | "dismissSuggestion"
+    | "setCheckpoint" | "makeLatest" | "revertPanel" | "renamePanel" | "removePanel"
+    | "addColumn" | "addRelationColumn" | "renameColumn",
   payload: Record<string, unknown>,
   req: Request,
 ): Promise<unknown> {
@@ -164,6 +166,30 @@ async function runAuthorityMutation(
   })).result;
   if (route === "removeColumn") return (await target.executeMutation({
     requestId, route: "schema.removeColumn", payload,
+  })).result;
+  if (route === "setCheckpoint") return (await target.executeMutation({
+    requestId, route: "timeline.setCheckpoint", payload,
+  })).result;
+  if (route === "makeLatest") return (await target.executeMutation({
+    requestId, route: "timeline.makeLatest", payload,
+  })).result;
+  if (route === "revertPanel") return (await target.executeMutation({
+    requestId, route: "panel.revert", payload,
+  })).result;
+  if (route === "renamePanel") return (await target.executeMutation({
+    requestId, route: "panel.rename", payload,
+  })).result;
+  if (route === "removePanel") return (await target.executeMutation({
+    requestId, route: "panel.remove", payload,
+  })).result;
+  if (route === "addColumn") return (await target.executeMutation({
+    requestId, route: "schema.addColumn", payload,
+  })).result;
+  if (route === "addRelationColumn") return (await target.executeMutation({
+    requestId, route: "schema.addRelationColumn", payload,
+  })).result;
+  if (route === "renameColumn") return (await target.executeMutation({
+    requestId, route: "schema.renameColumn", payload,
   })).result;
   if (route === "setSetting") return (await target.executeMutation({
     requestId, route: "setting.set", payload: { key: payload.key, value: payload.value },
@@ -272,11 +298,11 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "history":
       return mustStore().history();
     case "setCheckpoint":
-      return failClosedMutation(req.op);
+      return runAuthorityMutation("setCheckpoint", p, req);
     case "panelsAt":
       return mustStore().livePanels(Number(p.version));
     case "makeLatest":
-      return failClosedMutation(req.op);
+      return runAuthorityMutation("makeLatest", p, req);
     case "registryTables":
       return [...mustStore().registrySnapshot().values()];
     case "storePort": {
@@ -287,9 +313,11 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     }
     case "intent":
     case "repairPanel":
-    case "revertPanel":
-    case "renamePanel":
       return failClosedMutation(req.op);
+    case "revertPanel":
+      return runAuthorityMutation("revertPanel", p, req);
+    case "renamePanel":
+      return runAuthorityMutation("renamePanel", p, req);
     case "addAttachment":
       return runAuthorityMutation("addAttachment", p, req);
     case "attachmentsForRecord":
@@ -341,13 +369,17 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
         targetTable: String(p.targetTable), displayField: String(p.displayField),
       });
     case "convertTextToRelation":
-    case "addColumn":
-    case "renameColumn":
       return failClosedMutation(req.op);
     case "removeColumn":
       return runAuthorityMutation("removeColumn", p, req);
+    case "addColumn":
+      return runAuthorityMutation("addColumn", p, req);
+    case "addRelationColumn":
+      return runAuthorityMutation("addRelationColumn", p, req);
+    case "renameColumn":
+      return runAuthorityMutation("renameColumn", p, req);
     case "removePanel":
-      return failClosedMutation(req.op);
+      return runAuthorityMutation("removePanel", p, req);
     case "keep":
       return failClosedMutation(req.op);
     case "discard":

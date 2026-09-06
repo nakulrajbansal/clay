@@ -17,6 +17,12 @@ import {
   privateMetricOperationalFingerprint,
 } from "./production-private-metric-authority";
 import {
+  captureCoreMutation,
+  executeCapturedCoreMutation,
+  isCapturedCoreMutation,
+  type CapturedCoreMutation,
+} from "./production-core-routes";
+import {
   readProductionRequestReceipt,
   writeProductionRequestReceipt,
 } from "./production-request-journal";
@@ -46,7 +52,7 @@ type CapturedBatchMutation =
   | Readonly<{ kind: "soft_delete"; table: string; id: string }>
   | Readonly<{ kind: "restore"; table: string; id: string }>;
 
-type CapturedProductionMutation = Readonly<{
+type CapturedProductionMutation = CapturedCoreMutation | Readonly<{
   requestId: string;
 } & (
   | { route: "store.insert"; payload: Readonly<{ table: string; row: Readonly<JsonRecord> }> }
@@ -457,6 +463,7 @@ function captureMutation(input: unknown): CapturedProductionMutation {
     const route = envelope.route;
     const payload = envelope.payload;
     if (typeof requestId !== "string" || !/^req_[a-z2-7]{26}$/.test(requestId)
+        || typeof route !== "string"
         || typeof payload !== "object" || payload === null || Array.isArray(payload)) throw new Error();
     switch (route) {
       case "store.insert": {
@@ -674,6 +681,20 @@ function captureMutation(input: unknown): CapturedProductionMutation {
           subject, kind,
         }) });
       }
+      case "timeline.setCheckpoint":
+      case "timeline.makeLatest":
+      case "panel.revert":
+      case "panel.rename":
+      case "panel.remove":
+      case "schema.addColumn":
+      case "schema.renameColumn":
+      case "schema.addRelationColumn": {
+        const budget: CaptureBudget = { nodes: 0, bytes: 0 };
+        const capturedPayload = captureJsonRecord(payload, budget);
+        const captured = captureCoreMutation(requestId, route, capturedPayload);
+        if (captured) return captured;
+        throw new Error();
+      }
       default:
         throw new Error();
     }
@@ -857,6 +878,8 @@ function executeCapturedMutation(
   request: CapturedProductionMutation,
   executionInstant: string | null,
 ): JsonValue {
+  if (isCapturedCoreMutation(request))
+    return captureJsonValue(executeCapturedCoreMutation(store, request), new WeakSet());
   switch (request.route) {
     case "store.insert":
       return captureJsonValue(STORE_INSERT.call(

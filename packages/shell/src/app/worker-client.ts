@@ -6,6 +6,7 @@ import type {
   GlobalSearchResult,
   HistoryEntry, LivePanel, PanelProvenance,
   PrivateMetricEvent, PrivateMetricsSummary, RegTable, RelationConversionPreview,
+  RelationFieldSpec,
   RelationConversionRequest, RelationConversionResult, SemanticSchemaTraceV1, Suggestion,
 } from "@clay/kernel";
 import { ClayError } from "@clay/kernel/errors";
@@ -286,6 +287,12 @@ export class WorkerClient {
   addColumn(table: string, column: { name: string; type: string } & Record<string, unknown>):
     Promise<RegTable[]> {
     return this.call("addColumn", { table, column });
+  }
+  addRelationColumn(
+    table: string,
+    column: { name: string; type: "relation"; relation: RelationFieldSpec } & Record<string, unknown>,
+  ): Promise<RegTable[]> {
+    return this.call("addRelationColumn", { table, column });
   }
   renameColumn(table: string, from: string, to: string): Promise<RegTable[]> {
     return this.call("renameColumn", { table, from, to });

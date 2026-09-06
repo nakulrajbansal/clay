@@ -357,6 +357,529 @@ describe("production Store authority", () => {
     }
   });
 
+  it("authority-routes a checkpoint label and replays its stable history result", async () => {
+    const { driver } = await legacyStore();
+    const authority = ProductionStoreAuthority.adoptLegacy(driver, {
+      inventory: legacyInventory,
+      storageKey: "default",
+      displayName: "My app",
+      appInstanceId: opaque("app", "a"),
+      generationId: opaque("gen", "b"),
+      namespaceId: opaque("ns", "c"),
+      adoptionOperationId: opaque("op", "d"),
+      releaseId: opaque("rel", "e"),
+      nowMs: Date.now(),
+      leaseTtlMs: 60_000,
+    });
+    const request = {
+      requestId: opaque("req", "c"),
+      route: "timeline.setCheckpoint",
+      payload: { version: 1, label: "  Before launch  " },
+    } as const;
+    try {
+      const committed = await authority.executeMutation(request);
+      expect(committed).toMatchObject({
+        changed: true,
+        replayed: false,
+        result: [expect.objectContaining({ version: 1, label: "Before launch" })],
+      });
+      await expect(authority.executeMutation(request))
+        .resolves.toEqual({ ...committed, replayed: true });
+      const historyBeforeNoOp = authority.readStore().history();
+      const eventsBeforeNoOp = driver.select("SELECT COUNT(*) AS n FROM sys.record_events");
+      const authorityBeforeNoOp = authority.inspectAuthority();
+      const noOp = await authority.executeMutation({
+        requestId: opaque("req", "h"),
+        route: "timeline.setCheckpoint",
+        payload: { version: 1, label: "Before launch" },
+      });
+      expect(noOp).toMatchObject({ changed: false, replayed: false });
+      expect(authority.readStore().history()).toEqual(historyBeforeNoOp);
+      expect(driver.select("SELECT COUNT(*) AS n FROM sys.record_events")).toEqual(eventsBeforeNoOp);
+      expect(authority.inspectAuthority()).toEqual(authorityBeforeNoOp);
+    } finally {
+      authority.close();
+    }
+  });
+
+  it.each([
+    ["timeline.setCheckpoint", { label: "Unsafe" }, "version", 1, "w"],
+    ["timeline.makeLatest", {}, "version", 1, "x"],
+    ["panel.revert", {}, "panelId", "project_table", "y"],
+    ["panel.rename", { title: "Unsafe" }, "panelId", "project_table", "z"],
+    ["panel.remove", {}, "panelId", "project_table", "o"],
+    ["schema.addColumn", { table: "projects" }, "column", { name: "unsafe", type: "text" }, "j"],
+    ["schema.renameColumn", { table: "projects", to: "title" }, "from", "name", "k"],
+    ["schema.addRelationColumn", { table: "projects" }, "column", {
+      name: "owner", type: "relation",
+      relation: { target_table: "people", cardinality: "one", unique_targets: false },
+    }, "s"],
+  ] as const)("rejects %s accessors without invoking caller code", async (
+    route, initialPayload, accessorField, accessorValue, requestChar,
+  ) => {
+    const { driver } = await legacyStore();
+    const authority = ProductionStoreAuthority.adoptLegacy(driver, {
+      inventory: legacyInventory,
+      storageKey: "default",
+      displayName: "My app",
+      appInstanceId: opaque("app", "a"),
+      generationId: opaque("gen", "b"),
+      namespaceId: opaque("ns", "c"),
+      adoptionOperationId: opaque("op", "d"),
+      releaseId: opaque("rel", "e"),
+      nowMs: Date.now(),
+      leaseTtlMs: 60_000,
+    });
+    let reads = 0;
+    const payload: Record<string, unknown> = { ...initialPayload };
+    Object.defineProperty(payload, accessorField, {
+      enumerable: true,
+      get: () => { reads += 1; return accessorValue; },
+    });
+    try {
+      expect(() => authority.executeMutation({
+        requestId: opaque("req", requestChar), route, payload,
+      })).toThrow(/invalid/i);
+      expect(reads).toBe(0);
+      expect(authority.inspectAuthority().targetReservations).toEqual([]);
+    } finally {
+      authority.close();
+    }
+  });
+
+  it("rejects an over-budget UTF-8 core-route payload before reservation", async () => {
+    const { driver } = await legacyStore();
+    const authority = ProductionStoreAuthority.adoptLegacy(driver, {
+      inventory: legacyInventory,
+      storageKey: "default",
+      displayName: "My app",
+      appInstanceId: opaque("app", "a"),
+      generationId: opaque("gen", "b"),
+      namespaceId: opaque("ns", "c"),
+      adoptionOperationId: opaque("op", "d"),
+      releaseId: opaque("rel", "e"),
+      nowMs: Date.now(),
+      leaseTtlMs: 60_000,
+    });
+    try {
+      expect(() => authority.executeMutation({
+        requestId: opaque("req", "b"),
+        route: "timeline.setCheckpoint",
+        payload: { version: 1, label: "€".repeat(700_000) },
+      })).toThrow(/payload.*limits/i);
+      expect(authority.inspectAuthority().targetReservations).toEqual([]);
+    } finally {
+      authority.close();
+    }
+  });
+
+  it("authority-routes make-latest as one replayable timeline truncation", async () => {
+    const { driver, store: rawStore } = await legacyStore();
+    const operations: ForwardOpT[] = [{
+      op: "add_column", table: "projects",
+      column: { name: "status", type: "text", required: false },
+    }];
+    rawStore.commit({
+      intent: "add status",
+      summary: "Added status.",
+      migration: { operations, inverse: deriveInverse(operations, rawStore.registrySnapshot()) },
+    });
+    const authority = ProductionStoreAuthority.adoptLegacy(driver, {
+      inventory: legacyInventory,
+      storageKey: "default",
+      displayName: "My app",
+      appInstanceId: opaque("app", "a"),
+      generationId: opaque("gen", "b"),
+      namespaceId: opaque("ns", "c"),
+      adoptionOperationId: opaque("op", "d"),
+      releaseId: opaque("rel", "e"),
+      nowMs: Date.now(),
+      leaseTtlMs: 60_000,
+    });
+    const request = {
+      requestId: opaque("req", "l"),
+      route: "timeline.makeLatest",
+      payload: { version: 1 },
+    } as const;
+    try {
+      const committed = await authority.executeMutation(request);
+      expect(committed).toMatchObject({ changed: true, replayed: false, result: [] });
+      expect(authority.readStore().history().map(entry => entry.version)).toEqual([1]);
+      expect(authority.readStore().registrySnapshot().get("projects")?.columns
+        .some(column => column.name === "status" && !column.inactive)).toBe(false);
+      await expect(authority.executeMutation(request))
+        .resolves.toEqual({ ...committed, replayed: true });
+    } finally {
+      authority.close();
+    }
+  });
+
+  it("authority-routes panel revert as a new replayable timeline commit", async () => {
+    const { driver, store: rawStore } = await legacyStore();
+    const first = {
+      panel_id: "project_table",
+      title: "Projects",
+      placement: { region: "main" as const, order: 0 },
+      code: "export default function(clay){/* v1 */}",
+      declared_queries: [{ from: "projects" }],
+      declared_writes: [] as string[],
+    };
+    rawStore.commit({
+      intent: "seed panel", summary: "Added project table.", migration: null, panels: [first],
+    });
+    rawStore.commit({
+      intent: "restyle panel", summary: "Restyled project table.", migration: null,
+      panels: [{ ...first, code: "export default function(clay){/* v2 */}" }],
+    });
+    const authority = ProductionStoreAuthority.adoptLegacy(driver, {
+      inventory: legacyInventory,
+      storageKey: "default",
+      displayName: "My app",
+      appInstanceId: opaque("app", "a"),
+      generationId: opaque("gen", "b"),
+      namespaceId: opaque("ns", "c"),
+      adoptionOperationId: opaque("op", "d"),
+      releaseId: opaque("rel", "e"),
+      nowMs: Date.now(),
+      leaseTtlMs: 60_000,
+    });
+    const request = {
+      requestId: opaque("req", "v"),
+      route: "panel.revert",
+      payload: { panelId: "project_table" },
+    } as const;
+    try {
+      const committed = await authority.executeMutation(request);
+      expect(committed).toMatchObject({
+        changed: true,
+        replayed: false,
+        result: [expect.objectContaining({ panel_id: "project_table", code: first.code })],
+      });
+      expect(authority.readStore().history().map(entry => entry.version)).toEqual([1, 2, 3, 4]);
+      await expect(authority.executeMutation(request))
+        .resolves.toEqual({ ...committed, replayed: true });
+    } finally {
+      authority.close();
+    }
+  });
+
+  it("does not invoke the live Store for a canonical panel-rename no-op", async () => {
+    const { driver, store: rawStore } = await legacyStore();
+    rawStore.commit({
+      intent: "seed panel", summary: "Added project table.", migration: null,
+      panels: [{
+        panel_id: "project_table", title: "Projects",
+        placement: { region: "main", order: 0 },
+        code: "export default function(clay){}",
+        declared_queries: [{ from: "projects" }], declared_writes: [],
+      }],
+    });
+    const authority = ProductionStoreAuthority.adoptLegacy(driver, {
+      inventory: legacyInventory,
+      storageKey: "default",
+      displayName: "My app",
+      appInstanceId: opaque("app", "a"),
+      generationId: opaque("gen", "b"),
+      namespaceId: opaque("ns", "c"),
+      adoptionOperationId: opaque("op", "d"),
+      releaseId: opaque("rel", "e"),
+      nowMs: Date.now(),
+      leaseTtlMs: 60_000,
+    });
+    const request = {
+      requestId: opaque("req", "n"),
+      route: "panel.rename",
+      payload: { panelId: "project_table", title: "  Projects  " },
+    } as const;
+    try {
+      const historyBefore = authority.readStore().history();
+      const eventsBefore = driver.select("SELECT COUNT(*) AS n FROM sys.record_events");
+      const authorityBefore = authority.inspectAuthority();
+      const noOp = await authority.executeMutation(request);
+      expect(noOp).toMatchObject({
+        changed: false,
+        replayed: false,
+        result: [expect.objectContaining({ panel_id: "project_table", title: "Projects" })],
+      });
+      expect(authority.readStore().history()).toEqual(historyBefore);
+      expect(driver.select("SELECT COUNT(*) AS n FROM sys.record_events")).toEqual(eventsBefore);
+      expect(authority.inspectAuthority()).toEqual(authorityBefore);
+      await expect(authority.executeMutation(request))
+        .resolves.toEqual({ ...noOp, replayed: true });
+    } finally {
+      authority.close();
+    }
+  });
+
+  it("authority-routes panel removal as one replayable tombstone commit", async () => {
+    const { driver, store: rawStore } = await legacyStore();
+    rawStore.commit({
+      intent: "seed panel", summary: "Added project table.", migration: null,
+      panels: [{
+        panel_id: "project_table", title: "Projects",
+        placement: { region: "main", order: 0 },
+        code: "export default function(clay){}",
+        declared_queries: [{ from: "projects" }], declared_writes: [],
+      }],
+    });
+    const authority = ProductionStoreAuthority.adoptLegacy(driver, {
+      inventory: legacyInventory,
+      storageKey: "default",
+      displayName: "My app",
+      appInstanceId: opaque("app", "a"),
+      generationId: opaque("gen", "b"),
+      namespaceId: opaque("ns", "c"),
+      adoptionOperationId: opaque("op", "d"),
+      releaseId: opaque("rel", "e"),
+      nowMs: Date.now(),
+      leaseTtlMs: 60_000,
+    });
+    const request = {
+      requestId: opaque("req", "o"),
+      route: "panel.remove",
+      payload: { panelId: "project_table" },
+    } as const;
+    try {
+      const committed = await authority.executeMutation(request);
+      expect(committed).toMatchObject({ changed: true, replayed: false, result: [] });
+      expect(authority.readStore().history().map(entry => entry.version)).toEqual([1, 2, 3]);
+      await expect(authority.executeMutation(request))
+        .resolves.toEqual({ ...committed, replayed: true });
+    } finally {
+      authority.close();
+    }
+  });
+
+  it("captures and module-pins one replayable add-column workflow", async () => {
+    const { driver } = await legacyStore();
+    const authority = ProductionStoreAuthority.adoptLegacy(driver, {
+      inventory: legacyInventory,
+      storageKey: "default",
+      displayName: "My app",
+      appInstanceId: opaque("app", "a"),
+      generationId: opaque("gen", "b"),
+      namespaceId: opaque("ns", "c"),
+      adoptionOperationId: opaque("op", "d"),
+      releaseId: opaque("rel", "e"),
+      nowMs: Date.now(),
+      leaseTtlMs: 60_000,
+    });
+    let reads = 0;
+    const hostileColumn: Record<string, unknown> = { type: "enum", values: ["low", "high"] };
+    Object.defineProperty(hostileColumn, "name", {
+      enumerable: true,
+      get: () => { reads += 1; return "Priority"; },
+    });
+    const originalCommit = ClayStore.prototype.commit;
+    try {
+      expect(() => authority.executeMutation({
+        requestId: opaque("req", "u"),
+        route: "schema.addColumn",
+        payload: { table: "projects", column: hostileColumn },
+      })).toThrow(/invalid/i);
+      expect(reads).toBe(0);
+
+      let arrayReads = 0;
+      const hostileValues: string[] = [];
+      Object.defineProperty(hostileValues, "0", {
+        enumerable: true,
+        get: () => { arrayReads += 1; return "low"; },
+      });
+      hostileValues.length = 1;
+      expect(() => authority.executeMutation({
+        requestId: opaque("req", "v"),
+        route: "schema.addColumn",
+        payload: {
+          table: "projects",
+          column: { name: "Priority", type: "enum", values: hostileValues },
+        },
+      })).toThrow(/invalid/i);
+      expect(arrayReads).toBe(0);
+
+      ClayStore.prototype.commit = function () {
+        throw new Error("replaced Store commit executed");
+      };
+      const values = ["low", "high"];
+      const column = { name: "Priority level", type: "enum", values };
+      const request = {
+        requestId: opaque("req", "a"),
+        route: "schema.addColumn" as const,
+        payload: { table: "projects", column },
+      };
+      const pending = authority.executeMutation(request);
+      column.name = "Tampered after capture";
+      values[0] = "tampered";
+      const committed = await pending;
+      expect(committed).toMatchObject({
+        changed: true,
+        replayed: false,
+        result: expect.arrayContaining([expect.objectContaining({
+          name: "projects",
+          columns: expect.arrayContaining([expect.objectContaining({
+            name: "priority_level", type: "enum", values: ["low", "high"],
+          })]),
+        })]),
+      });
+      await expect(authority.executeMutation({
+        ...request,
+        payload: {
+          table: "projects",
+          column: { name: "Priority level", type: "enum", values: ["low", "high"] },
+        },
+      })).resolves.toEqual({ ...committed, replayed: true });
+
+      const historyBeforeDuplicate = authority.readStore().history();
+      const eventsBeforeDuplicate = driver.select("SELECT COUNT(*) AS n FROM sys.record_events");
+      const authorityBeforeDuplicate = authority.inspectAuthority();
+      await expect(authority.executeMutation({
+        requestId: opaque("req", "g"),
+        route: "schema.addColumn",
+        payload: {
+          table: "projects",
+          column: { name: "Priority level", type: "enum", values: ["low", "high"] },
+        },
+      })).rejects.toThrow(/already exists/i);
+      expect(authority.readStore().history()).toEqual(historyBeforeDuplicate);
+      expect(driver.select("SELECT COUNT(*) AS n FROM sys.record_events"))
+        .toEqual(eventsBeforeDuplicate);
+      expect(authority.inspectAuthority()).toEqual(authorityBeforeDuplicate);
+    } finally {
+      ClayStore.prototype.commit = originalCommit;
+      authority.close();
+    }
+  });
+
+  it("authority-routes rename-column while keeping canonical no-ops out of Store history", async () => {
+    const { driver } = await legacyStore();
+    const authority = ProductionStoreAuthority.adoptLegacy(driver, {
+      inventory: legacyInventory,
+      storageKey: "default",
+      displayName: "My app",
+      appInstanceId: opaque("app", "a"),
+      generationId: opaque("gen", "b"),
+      namespaceId: opaque("ns", "c"),
+      adoptionOperationId: opaque("op", "d"),
+      releaseId: opaque("rel", "e"),
+      nowMs: Date.now(),
+      leaseTtlMs: 60_000,
+    });
+    try {
+      const historyBefore = authority.readStore().history();
+      const eventsBefore = driver.select("SELECT COUNT(*) AS n FROM sys.record_events");
+      const noOpRequest = {
+        requestId: opaque("req", "c"),
+        route: "schema.renameColumn",
+        payload: { table: "projects", from: "name", to: "Name" },
+      } as const;
+      const noOp = await authority.executeMutation(noOpRequest);
+      expect(noOp).toMatchObject({ changed: false, replayed: false });
+      expect(authority.readStore().history()).toEqual(historyBefore);
+      expect(driver.select("SELECT COUNT(*) AS n FROM sys.record_events")).toEqual(eventsBefore);
+      await expect(authority.executeMutation(noOpRequest))
+        .resolves.toEqual({ ...noOp, replayed: true });
+
+      const request = {
+        requestId: opaque("req", "d"),
+        route: "schema.renameColumn",
+        payload: { table: "projects", from: "name", to: "Project title" },
+      } as const;
+      const committed = await authority.executeMutation(request);
+      expect(committed).toMatchObject({
+        changed: true,
+        replayed: false,
+        result: expect.arrayContaining([expect.objectContaining({
+          name: "projects",
+          columns: expect.arrayContaining([expect.objectContaining({ name: "project_title" })]),
+        })]),
+      });
+      expect(authority.query({ from: "projects" })[0]).toMatchObject({
+        project_title: "Preserved",
+      });
+      await expect(authority.executeMutation(request))
+        .resolves.toEqual({ ...committed, replayed: true });
+    } finally {
+      authority.close();
+    }
+  });
+
+  it("captures and authority-routes one replayable relation-column workflow", async () => {
+    const { driver, store: rawStore } = await legacyStore();
+    const setup: ForwardOpT[] = [{
+      op: "create_table",
+      table: "people",
+      columns: [{ name: "name", type: "text", required: true }],
+    }];
+    rawStore.commit({
+      intent: "create people", summary: "Created people.",
+      migration: { operations: setup, inverse: deriveInverse(setup, rawStore.registrySnapshot()) },
+    });
+    const authority = ProductionStoreAuthority.adoptLegacy(driver, {
+      inventory: legacyInventory,
+      storageKey: "default",
+      displayName: "My app",
+      appInstanceId: opaque("app", "a"),
+      generationId: opaque("gen", "b"),
+      namespaceId: opaque("ns", "c"),
+      adoptionOperationId: opaque("op", "d"),
+      releaseId: opaque("rel", "e"),
+      nowMs: Date.now(),
+      leaseTtlMs: 60_000,
+    });
+    let reads = 0;
+    const hostileRelation: Record<string, unknown> = {
+      cardinality: "one", unique_targets: false,
+    };
+    Object.defineProperty(hostileRelation, "target_table", {
+      enumerable: true,
+      get: () => { reads += 1; return "people"; },
+    });
+    try {
+      expect(() => authority.executeMutation({
+        requestId: opaque("req", "e"),
+        route: "schema.addRelationColumn",
+        payload: {
+          table: "projects",
+          column: { name: "Owner", type: "relation", relation: hostileRelation },
+        },
+      })).toThrow(/invalid/i);
+      expect(reads).toBe(0);
+
+      const request = {
+        requestId: opaque("req", "f"),
+        route: "schema.addRelationColumn",
+        payload: {
+          table: "projects",
+          column: {
+            name: "Owner", type: "relation",
+            relation: {
+              target_table: "people", cardinality: "one", unique_targets: false,
+              display_field: "name",
+            },
+          },
+        },
+      } as const;
+      const committed = await authority.executeMutation(request);
+      expect(committed).toMatchObject({
+        changed: true,
+        replayed: false,
+        result: expect.arrayContaining([expect.objectContaining({
+          name: "projects",
+          columns: expect.arrayContaining([expect.objectContaining({
+            name: "owner", type: "relation",
+            relation: {
+              target_table: "people", cardinality: "one", unique_targets: false,
+              display_field: "name",
+            },
+          })]),
+        })]),
+      });
+      await expect(authority.executeMutation(request))
+        .resolves.toEqual({ ...committed, replayed: true });
+    } finally {
+      authority.close();
+    }
+  });
+
   it("routes one validated structural commit through production authority", async () => {
     const { driver, store: rawStore } = await legacyStore();
     const operations: ForwardOpT[] = [{

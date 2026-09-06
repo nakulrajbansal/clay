@@ -164,6 +164,27 @@ describe("WorkerClient connected-record boundary", () => {
   });
 });
 
+describe("WorkerClient structural workflow boundary", () => {
+  it("pins relation-column creation to its own explicit worker operation", async () => {
+    const { client, posted } = harness();
+    const column = {
+      name: "Owner",
+      type: "relation" as const,
+      relation: {
+        target_table: "people",
+        cardinality: "one" as const,
+        unique_targets: false,
+        display_field: "name",
+      },
+    };
+    await client.addRelationColumn("projects", column);
+    expect(posted[0]).toEqual(expect.objectContaining({
+      op: "addRelationColumn",
+      payload: { table: "projects", column },
+    }));
+  });
+});
+
 describe("WorkerClient model credential boundary", () => {
   it.each(["codex", "openai", "anthropic"] as const)(
     "never serializes a Clay session for %s",

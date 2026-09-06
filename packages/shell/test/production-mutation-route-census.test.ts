@@ -158,6 +158,96 @@ describe("production mutation route census", () => {
     expect(worker).not.toMatch(/from ["'][.]{2}[/\\][.]{2}[/\\][.]{2}[/\\]kernel[/\\]src[/\\]/);
   });
 
+  it("routes checkpoint labels through the production authority", () => {
+    const worker = source("packages/shell/src/worker/db-worker.ts");
+    const body = caseBody(worker, "setCheckpoint");
+    expect(DB_WORKER_ROUTE_CENSUS.setCheckpoint)
+      .toEqual({ enforcement: "authority", mutates: "live" });
+    expect(CLAY_STORE_WRITER_CENSUS.setCheckpoint).toBe("authority");
+    expect(body).toContain('runAuthorityMutation("setCheckpoint"');
+    expect(body).not.toContain("failClosedMutation(");
+    expect(worker).toContain('route: "timeline.setCheckpoint"');
+  });
+
+  it("routes make-latest through the production authority", () => {
+    const worker = source("packages/shell/src/worker/db-worker.ts");
+    const body = caseBody(worker, "makeLatest");
+    expect(DB_WORKER_ROUTE_CENSUS.makeLatest)
+      .toEqual({ enforcement: "authority", mutates: "live" });
+    expect(CLAY_STORE_WRITER_CENSUS.rollbackTo).toBe("unavailable");
+    expect(body).toContain('runAuthorityMutation("makeLatest"');
+    expect(body).not.toContain("failClosedMutation(");
+    expect(worker).toContain('route: "timeline.makeLatest"');
+  });
+
+  it("routes panel revert through the production authority", () => {
+    const worker = source("packages/shell/src/worker/db-worker.ts");
+    const body = caseBody(worker, "revertPanel");
+    expect(DB_WORKER_ROUTE_CENSUS.revertPanel)
+      .toEqual({ enforcement: "authority", mutates: "live" });
+    expect(CLAY_STORE_WRITER_CENSUS.revertPanel).toBe("authority");
+    expect(body).toContain('runAuthorityMutation("revertPanel"');
+    expect(body).not.toContain("failClosedMutation(");
+    expect(worker).toContain('route: "panel.revert"');
+  });
+
+  it("routes panel rename through the production authority", () => {
+    const worker = source("packages/shell/src/worker/db-worker.ts");
+    const body = caseBody(worker, "renamePanel");
+    expect(DB_WORKER_ROUTE_CENSUS.renamePanel)
+      .toEqual({ enforcement: "authority", mutates: "live" });
+    expect(CLAY_STORE_WRITER_CENSUS.renamePanel).toBe("authority");
+    expect(body).toContain('runAuthorityMutation("renamePanel"');
+    expect(body).not.toContain("failClosedMutation(");
+    expect(worker).toContain('route: "panel.rename"');
+  });
+
+  it("routes panel removal through the production authority", () => {
+    const worker = source("packages/shell/src/worker/db-worker.ts");
+    const body = caseBody(worker, "removePanel");
+    expect(DB_WORKER_ROUTE_CENSUS.removePanel)
+      .toEqual({ enforcement: "authority", mutates: "live" });
+    expect(CLAY_STORE_WRITER_CENSUS.removePanel).toBe("authority");
+    expect(body).toContain('runAuthorityMutation("removePanel"');
+    expect(body).not.toContain("failClosedMutation(");
+    expect(worker).toContain('route: "panel.remove"');
+  });
+
+  it("routes non-relation column creation through the production authority", () => {
+    const worker = source("packages/shell/src/worker/db-worker.ts");
+    const body = caseBody(worker, "addColumn");
+    expect(DB_WORKER_ROUTE_CENSUS.addColumn)
+      .toEqual({ enforcement: "authority", mutates: "live" });
+    expect(CLAY_STORE_WRITER_CENSUS.commit).toBe("unavailable");
+    expect(body).toContain('runAuthorityMutation("addColumn"');
+    expect(body).not.toContain("failClosedMutation(");
+    expect(worker).toContain('route: "schema.addColumn"');
+    expect(worker).not.toContain("addColumnCommit(");
+  });
+
+  it("routes column rename through the production authority", () => {
+    const worker = source("packages/shell/src/worker/db-worker.ts");
+    const body = caseBody(worker, "renameColumn");
+    expect(DB_WORKER_ROUTE_CENSUS.renameColumn)
+      .toEqual({ enforcement: "authority", mutates: "live" });
+    expect(body).toContain('runAuthorityMutation("renameColumn"');
+    expect(body).not.toContain("failClosedMutation(");
+    expect(worker).toContain('route: "schema.renameColumn"');
+    expect(worker).not.toContain("renameColumnCommit(");
+  });
+
+  it("routes relation-column creation through its explicit production-authority command", () => {
+    const worker = source("packages/shell/src/worker/db-worker.ts");
+    const dataView = source("packages/shell/src/app/DataView.tsx");
+    const body = caseBody(worker, "addRelationColumn");
+    expect(DB_WORKER_ROUTE_CENSUS.addRelationColumn)
+      .toEqual({ enforcement: "authority", mutates: "live" });
+    expect(body).toContain('runAuthorityMutation("addRelationColumn"');
+    expect(body).not.toContain("failClosedMutation(");
+    expect(worker).toContain('route: "schema.addRelationColumn"');
+    expect(dataView).toContain("worker.addRelationColumn(selected, column as never)");
+  });
+
   it("classifies preview discard as unavailable live mutation until attempt finalization is routed", () => {
     const census = DB_WORKER_ROUTE_CENSUS.discard;
     const worker = source("packages/shell/src/worker/db-worker.ts");

@@ -192,7 +192,9 @@ export function DataView(props: {
           unique_targets: false, ...(display ? { display_field: display.name } : {}),
         };
       }
-      const nextTables = await worker.addColumn(selected, column as never);
+      const nextTables = await (addingCol.type === "relation"
+        ? worker.addRelationColumn(selected, column as never)
+        : worker.addColumn(selected, column as never));
       acceptRegistry(nextTables, await worker.semanticTrace());
       setAddingCol(null);
       await reload(selected);

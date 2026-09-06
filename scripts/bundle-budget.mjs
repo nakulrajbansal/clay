@@ -106,9 +106,10 @@ async function checkAt(root, label, files, limits) {
   return measured;
 }
 
-// Connected records, global workbench, bounded automations, and local files
-// add trusted behavior mostly in lazy chunks and the DB worker. These limits
-// retain 2–5% headroom over the measured four-release production artifacts.
+// Connected records, global workbench, bounded automations, local files, and
+// authority-routed timeline/structure workflows add trusted behavior mostly in
+// lazy chunks and the DB worker. These limits retain 2–5% headroom over the
+// measured integrated production artifacts.
 const entryLimits = { raw: 770_000, gzip: 232_000 };
 const bootLimits = { raw: 875_000, gzip: 260_000 };
 const panelLimits = { raw: 135_000, gzip: 35_000 };
@@ -168,12 +169,12 @@ await check(
 await check(
   "worker authority lazy chunk",
   [workerAuthorityFile],
-  { raw: 230_000, gzip: 60_000 },
+  { raw: 240_000, gzip: 60_000 },
 );
 await check(
   "database worker authority closure",
   [databaseWorkerFile, workerAuthorityFile],
-  { raw: 925_000, gzip: 255_000 },
+  { raw: 950_000, gzip: 255_000 },
 );
 
 const sqliteSupportFiles = [
