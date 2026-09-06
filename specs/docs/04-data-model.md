@@ -340,9 +340,11 @@ matching target and catalog reservations before returning it. Provenance is trus
 only when producer membership is derived independently from each request ID and
 version-2 operation ID, the stored envelope route agrees with that identity, and the
 union of coordinates from all committed producer envelopes equals the complete ledger
-bidirectionally. Exactly one matching target receipt, catalog receipt mirror, target
-revision reservation, and catalog revision reservation must agree on operation,
-request digest, target, revision, and resulting state. Live proof scans only bounded,
+bidirectionally. The complete current-target committed receipt identity sets must also
+agree bidirectionally across target and catalog before producer classification.
+Exactly one matching target receipt, catalog receipt mirror, target revision
+reservation, and catalog revision reservation must agree on operation, request digest,
+target, revision, and resulting state. Live proof scans only bounded,
 fixed-size receipt identity metadata for the current app generation and lineage, then
 loads bodies only for independently identified producers. It refuses more than
 100,000 current-target committed receipt identities, 10,001 producer receipts, or
