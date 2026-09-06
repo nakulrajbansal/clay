@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { WorkerClient } from "../src/app/worker-client";
 
-type Posted = { id: number; op: string; payload: Record<string, unknown> };
+type Posted = {
+  id: number;
+  requestId: string;
+  op: string;
+  payload: Record<string, unknown>;
+};
 
 function harness(reply?: (message: Posted) => unknown): {
   client: WorkerClient; posted: Posted[]; transfers: Transferable[][];
@@ -41,8 +46,7 @@ describe("WorkerClient boot boundary", () => {
       op: "boot",
       payload: { requestedAppId: "default", appCache: hints },
     });
-    expect((posted[0] as unknown as { requestId: string }).requestId)
-      .toMatch(/^req_[a-z2-7]{26}$/);
+    expect(posted[0]!.requestId).toMatch(/^req_[a-z2-7]{26}$/);
   });
 
   it("rejects malformed neutral boot information", async () => {
@@ -70,6 +74,45 @@ describe("WorkerClient files and automation boundaries", () => {
     expect(posted[0]?.payload).toMatchObject({
       table: "projects", field: "files", name: "receipt.pdf",
     });
+  });
+
+  it("posts every automation, notification, observer, and metric command with an identity", async () => {
+    const { client, posted } = harness();
+    const automation = {
+      name: "Notify",
+      enabled: false,
+      trigger: { kind: "manual" as const, table: "deals", conditions: [] },
+      actions: [{ kind: "notify" as const, title: "Review", body: "Review this deal." }],
+    };
+    await client.upsertAutomation(automation);
+    await client.deleteAutomation("auto_00000000000000000000000000000000");
+    await client.simulateAutomation("auto_00000000000000000000000000000000");
+    await client.runAutomations();
+    await client.runAutomationNow("auto_00000000000000000000000000000000");
+    await client.undoAutomationRun("00000000-0000-7000-8000-000000000000");
+    await client.markNotificationRead("00000000-0000-7000-8000-000000000001");
+    await client.recordPrivateMetric({ type: "trust_surface_opened", surface: "history" });
+    await client.setPrivateMetricsEnabled(false);
+    await client.clearPrivateMetrics();
+    await client.recordFilter("deals", { status: "won" });
+    await client.acceptSuggestion("deals", "add_view");
+    await client.dismissSuggestion("deals", "add_view");
+
+    expect(posted.map(message => message.op)).toEqual([
+      "upsertAutomation", "deleteAutomation", "simulateAutomation", "runAutomations",
+      "runAutomationNow", "undoAutomationRun", "markNotificationRead",
+      "recordPrivateMetric", "setPrivateMetricsEnabled", "clearPrivateMetrics",
+      "recordFilter", "acceptSuggestion", "dismissSuggestion",
+    ]);
+    expect(posted.every(message => /^req_[a-z2-7]{26}$/.test(message.requestId))).toBe(true);
+    expect(new Set(posted.map(message => message.requestId)).size).toBe(posted.length);
+    expect(posted[0]!.payload).toEqual({ input: automation });
+    expect(posted[7]!.payload).toEqual({
+      event: { type: "trust_surface_opened", surface: "history" },
+    });
+    expect(posted[10]!.payload).toEqual({ name: "deals", payload: { status: "won" } });
+    expect(posted[11]!.payload).toEqual({ subject: "deals", kind: "add_view" });
+    expect(posted[12]!.payload).toEqual({ subject: "deals", kind: "add_view" });
   });
 });
 

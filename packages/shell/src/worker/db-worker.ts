@@ -116,18 +116,21 @@ function authorityRequestId(req: Request): string {
 }
 
 async function runAuthorityMutation(
-  route: "seed" | "setSetting" | "deleteSetting" | "compareAndSetSetting" | "commitLayout"
+  route:
+    | "seed" | "setSetting" | "deleteSetting" | "compareAndSetSetting" | "commitLayout"
     | "addAttachment" | "removeAttachment" | "purgeDeletedAttachments"
-    | "applyBatch" | "undoBatch" | "restoreRow" | "removeColumn",
+    | "applyBatch" | "undoBatch" | "restoreRow" | "removeColumn"
+    | "upsertAutomation" | "deleteAutomation" | "runAutomations" | "runAutomationNow"
+    | "undoAutomationRun" | "markNotificationRead" | "recordPrivateMetric"
+    | "setPrivateMetricsEnabled" | "clearPrivateMetrics" | "recordFilter"
+    | "acceptSuggestion" | "dismissSuggestion",
   payload: Record<string, unknown>,
   req: Request,
 ): Promise<unknown> {
   const target = mustAuthority();
   const requestId = authorityRequestId(req);
   if (route === "seed") return (await target.executeMutation({
-    requestId,
-    route: "starter.seed",
-    payload,
+    requestId, route: "starter.seed", payload,
   })).result;
   if (route === "commitLayout") return (await target.executeMutation({
     requestId,
@@ -168,7 +171,7 @@ async function runAuthorityMutation(
   if (route === "deleteSetting") return (await target.executeMutation({
     requestId, route: "setting.delete", payload: { key: payload.key },
   })).result;
-  return (await target.executeMutation({
+  if (route === "compareAndSetSetting") return (await target.executeMutation({
     requestId,
     route: "setting.compareAndSet",
     payload: {
@@ -176,6 +179,35 @@ async function runAuthorityMutation(
       expectedRevision: payload.expectedRevision,
       value: payload.value,
     },
+  })).result;
+  if (route === "runAutomations") return (await target.executeMutation({
+    requestId, route: "runDueAutomations", payload: {},
+  })).result;
+  if (route === "recordFilter") {
+    const detail = payload.payload;
+    const event = typeof detail === "object" && detail !== null && !Array.isArray(detail)
+      ? { kind: "filter", subject: payload.name, detail }
+      : { kind: "filter", subject: payload.name };
+    return (await target.executeMutation({ requestId, route: "recordUsage", payload: { event } })).result;
+  }
+  if (route === "clearPrivateMetrics") return (await target.executeOperationalMetricMutation({
+    requestId, route, payload: {},
+  })).result;
+  if (route === "upsertAutomation") return (await target.executeMutation({
+    requestId, route, payload: { input: payload.input },
+  })).result;
+  if (route === "setPrivateMetricsEnabled") return (await target.executeOperationalMetricMutation({
+    requestId, route, payload: { enabled: payload.enabled },
+  })).result;
+  if (route === "recordPrivateMetric") return (await target.executeOperationalMetricMutation({
+    requestId, route, payload: { event: payload.event },
+  })).result;
+  if (route === "acceptSuggestion" || route === "dismissSuggestion")
+    return (await target.executeMutation({
+      requestId, route, payload: { subject: payload.subject, kind: payload.kind },
+    })).result;
+  return (await target.executeMutation({
+    requestId, route, payload: { id: payload.id },
   })).result;
 }
 
@@ -230,9 +262,11 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "commitLayout":
       return runAuthorityMutation("commitLayout", p, req);
     case "recordPrivateMetric":
+      return runAuthorityMutation("recordPrivateMetric", p, req);
     case "setPrivateMetricsEnabled":
+      return runAuthorityMutation("setPrivateMetricsEnabled", p, req);
     case "clearPrivateMetrics":
-      return failClosedMutation(req.op);
+      return runAuthorityMutation("clearPrivateMetrics", p, req);
     case "privateMetricsSummary":
       return mustStore().privateMetricsSummary();
     case "history":
@@ -272,25 +306,25 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "listAutomations":
       return mustStore().listAutomations();
     case "upsertAutomation":
-      return failClosedMutation(req.op);
+      return runAuthorityMutation("upsertAutomation", p, req);
     case "deleteAutomation":
-      return failClosedMutation(req.op);
+      return runAuthorityMutation("deleteAutomation", p, req);
     case "simulateAutomation":
       return mustStore().simulateAutomation(String(p.id));
     case "runAutomations":
-      return failClosedMutation(req.op);
+      return runAuthorityMutation("runAutomations", p, req);
     case "runAutomationNow":
-      return failClosedMutation(req.op);
+      return runAuthorityMutation("runAutomationNow", p, req);
     case "automationRuns":
       return mustStore().automationRuns(
         p.automationId === null || p.automationId === undefined ? undefined : String(p.automationId),
         Number(p.limit ?? 100));
     case "undoAutomationRun":
-      return failClosedMutation(req.op);
+      return runAuthorityMutation("undoAutomationRun", p, req);
     case "notifications":
       return mustStore().listNotifications(Number(p.limit ?? 100));
     case "markNotificationRead":
-      return failClosedMutation(req.op);
+      return runAuthorityMutation("markNotificationRead", p, req);
     case "globalSearch":
       return mustStore().globalSearch(String(p.term ?? ""), Number(p.limit ?? 20));
     case "applyBatch":
@@ -331,11 +365,11 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "suggestions":
       return mustStore().suggestions();
     case "recordFilter":
-      return failClosedMutation(req.op);
+      return runAuthorityMutation("recordFilter", p, req);
     case "dismissSuggestion":
-      return failClosedMutation(req.op);
+      return runAuthorityMutation("dismissSuggestion", p, req);
     case "acceptSuggestion":
-      return failClosedMutation(req.op);
+      return runAuthorityMutation("acceptSuggestion", p, req);
     case "reset":
     case "exportArchive":
     case "importArchive":
