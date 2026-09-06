@@ -8,9 +8,10 @@
     "codex": "pnpm --filter @clay/backend codex",
     "typecheck": "pnpm --workspace-concurrency=1 -r typecheck",
     "test": "pnpm -r test",
-    "test:ordinary": "pnpm --filter @clay/backend test --maxWorkers=1 --minWorkers=1 && pnpm --filter @clay/schema test --maxWorkers=1 --minWorkers=1 && pnpm --filter @clay/kernel test --maxWorkers=1 --minWorkers=1 && pnpm --filter @clay/mutation test --maxWorkers=1 --minWorkers=1 && pnpm --filter @clay/panel-runtime test --maxWorkers=1 --minWorkers=1 && pnpm --filter @clay/shell test --maxWorkers=1 --minWorkers=1 && node --test scripts/bundle-budget.test.mjs scripts/product-gate-config.test.mjs",
+    "test:ordinary": "pnpm --filter @clay/backend test --maxWorkers=1 --minWorkers=1 && pnpm --filter @clay/schema test --maxWorkers=1 --minWorkers=1 && pnpm --filter @clay/kernel test --maxWorkers=1 --minWorkers=1 && pnpm --filter @clay/mutation test --maxWorkers=1 --minWorkers=1 && pnpm --filter @clay/panel-runtime test --maxWorkers=1 --minWorkers=1 && pnpm --filter @clay/shell test --maxWorkers=1 --minWorkers=1 && node --test scripts/bundle-budget.test.mjs scripts/product-gate-config.test.mjs scripts/release-a-evidence.test.mjs",
     "build": "pnpm --filter @clay/shell build",
     "budget": "node scripts/bundle-budget.mjs",
+    "verify:release-a": "node scripts/release-a-evidence.mjs",
     "check": "pnpm typecheck && pnpm test && pnpm build && pnpm budget",
     "check:ordinary": "pnpm typecheck && pnpm test:ordinary && pnpm build && pnpm budget",
     "verify:shape-map": "node scripts/shape-map.mjs evidence",
@@ -26,7 +27,7 @@
     "regression": "pnpm --filter @clay/mutation regression"
   },
   "devDependencies": {
-    "@axe-core/playwright": "^4.12.1",
+    "@axe-core/playwright": "^4.13.0",
     "playwright": "^1.61.1"
   },
   "dependencies": {

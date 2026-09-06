@@ -596,6 +596,7 @@ function makeTip(ctx: Ctx, wrap: HTMLElement): (mark: Element, text: string) => 
   const tip = el(ctx, "div", "clay-chart-tip");
   wrap.appendChild(tip);
   return (mark, text) => {
+    mark.setAttribute("role", "img");
     mark.setAttribute("aria-label", text);
     listen(mark, "pointerenter", () => {
       const w = wrap.getBoundingClientRect();
@@ -694,6 +695,7 @@ function buildChart(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
   const svg = ctx.doc.createElementNS(SVG_NS, "svg");
   svg.setAttribute("viewBox", `0 0 ${CHART_W} ${height}`);
   svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", `${kind.charAt(0).toUpperCase()}${kind.slice(1)} chart with ${data.length} data point${data.length === 1 ? "" : "s"}`);
   wrap.appendChild(svg);
   const tip = makeTip(ctx, wrap);
 
@@ -893,6 +895,7 @@ function buildMultiSeriesChart(
   const svg = ctx.doc.createElementNS(SVG_NS, "svg");
   svg.setAttribute("viewBox", `0 0 ${CHART_W} ${height}`);
   svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", `${kind.charAt(0).toUpperCase()}${kind.slice(1)} chart with ${series.length} series and ${cats.length} categor${cats.length === 1 ? "y" : "ies"}`);
   wrap.appendChild(svg);
   const tip = makeTip(ctx, wrap);
 

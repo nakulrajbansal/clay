@@ -19,7 +19,7 @@
   --accent-text: #963c27;
   --accent-on: #ffffff;
   --ok: #287c4f; --ok-soft: #e7f4ec;
-  --warn: #b47b2b; --warn-soft: #fbf1de;
+  --warn: #805412; --warn-soft: #fbf1de;
   --danger: #bb4b45; --danger-soft: #fbeceb;
   --radius: 16px; --radius-sm: 11px;
   --shadow: 0 1px 2px rgba(40,38,60,.04), 0 4px 14px rgba(40,38,60,.05);
@@ -93,6 +93,10 @@ button.link.danger { color: var(--danger); }
 .surface-error h2, .surface-error p { margin: 0; }
 .surface-error p { color: var(--text-2); line-height: 1.5; }
 .surface-error-backdrop .surface-error { width: min(620px, 100%); margin: 0; }
+.import-review { align-content: start; max-height: min(760px, calc(100vh - 100px));
+  overflow: auto; border-color: var(--border); }
+.import-review dt { color: var(--text-2); }
+.import-review dd { color: var(--text); font-weight: 750; }
 
 /* multi-app switcher bar (G4) */
 .appbar { display: flex; align-items: center; gap: 10px; flex: none;
@@ -197,7 +201,7 @@ button.link.danger { color: var(--danger); }
   display: flex; align-items: center; gap: 16px; justify-content: space-between;
 }
 .banner-actions { display: flex; gap: 14px; flex: none; }
-.banner-actions .link { color: var(--warn); font-weight: 700; text-decoration: underline; }
+.banner-actions .link { color: var(--warn); min-height: 44px; font-weight: 700; text-decoration: underline; }
 .regions {
   flex: 1; overflow-y: auto; padding: 20px;
   display: grid; gap: 16px;
@@ -296,6 +300,10 @@ button.link.danger { color: var(--danger); }
 .empty-canvas-busy { color: var(--accent-text); font-weight: 600; margin-top: 20px; }
 
 /* onboarding hero (start from scratch) */
+.onboarding-primary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 26px; }
+.onboarding-primary .onboarding-hero { margin-bottom: 0; }
+.onboarding-refine { width: 100%; min-height: 72px; margin-bottom: 14px; }
+.onboarding-secondary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 /* theme-aware surfaces only — a hardcoded white card made the title
    unreadable (white-on-white) under dark themes */
 .onboarding-hero { display: flex; align-items: center; gap: 16px; width: 100%;
@@ -954,7 +962,7 @@ button.shape-field[aria-expanded="true"] { color: var(--accent-text); border-col
 }
 @media (max-width: 720px) {
   .onboarding { padding: 44px 18px 72px; }
-  .onboarding-cards { grid-template-columns: 1fr; }
+  .onboarding-cards, .onboarding-primary, .onboarding-secondary { grid-template-columns: 1fr; }
   .shell-card { min-height: 0; }
   .appbar { padding-inline: 6px; gap: 6px; }
   .appbar-brand { font-size: 0; gap: 0; }
@@ -984,7 +992,7 @@ button.shape-field[aria-expanded="true"] { color: var(--accent-text); border-col
   .appbar-action, .appbar-theme-btn, .appbar-rail-toggle {
     width: 34px; min-width: 34px; justify-content: center; padding-inline: 0;
   }
-  .appbar-mode-button { width: auto; min-width: auto; padding-inline: 2px; font-size: 12px; }
+  .appbar-mode-button { width: auto; min-width: 44px; min-height: 44px; padding-inline: 4px; font-size: 12px; }
   .timeslider { min-width: 0; gap: 6px; padding-inline: 9px; }
   .timeslider input[type="range"], .timeslider-info { min-width: 0; }
   .timeslider-summary { display: none; }

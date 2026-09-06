@@ -9,6 +9,11 @@ import type {
   RelationConversionRequest, RelationConversionResult, SemanticSchemaTraceV1, Suggestion,
 } from "@clay/kernel";
 import type { IntentOutcome } from "../worker/db-worker";
+import type {
+  FirstRunPublicationReceipt, ImportActivationRequest,
+  StarterActivationRequest, UndoFirstRunImportRequest,
+} from "../worker/first-run-activation";
+import type { SampleFillResult } from "../worker/samples";
 
 export type TraceEntry = { at: string; intent: string; events: DebugEvent[] };
 
@@ -92,10 +97,21 @@ export class WorkerClient {
   deleteApp(appId: string): Promise<null> { return this.call("deleteApp", { appId }); }
   forkApp(newAppId: string): Promise<null> { return this.call("forkApp", { newAppId }); }
   status(): Promise<StatusInfo> { return this.call("status"); }
-  seed(shellId: string): Promise<null> { return this.call("seed", { shellId }); }
+  activateStarter(request: StarterActivationRequest): Promise<FirstRunPublicationReceipt> {
+    return this.call("activateStarter", request);
+  }
   importTable(payload: { table: string; columns: unknown[]; rows: unknown[] }):
     Promise<{ table: string; imported: number; columns: number }> {
     return this.call("importTable", payload);
+  }
+  activateImportedApp(request: ImportActivationRequest): Promise<FirstRunPublicationReceipt> {
+    return this.call("activateImportedApp", request);
+  }
+  firstRunPublication(appId: string): Promise<FirstRunPublicationReceipt | null> {
+    return this.call("firstRunPublication", { appId });
+  }
+  undoFirstRunImport(request: UndoFirstRunImportRequest): Promise<FirstRunPublicationReceipt> {
+    return this.call("undoFirstRunImport", request);
   }
   panels(): Promise<LivePanel[]> { return this.call("panels"); }
   panelProvenance(): Promise<PanelProvenance[]> { return this.call("panelProvenance"); }
@@ -219,8 +235,12 @@ export class WorkerClient {
   keep(): Promise<{ version: number }> { return this.call("keep"); }
   discard(): Promise<null> { return this.call("discard"); }
   removeSamples(): Promise<null> { return this.call("removeSamples"); }
-  fillSamples(): Promise<{ added: number; tables: number }> { return this.call("fillSamples"); }
+  fillSamples(): Promise<SampleFillResult> { return this.call("fillSamples"); }
   sampleCount(): Promise<number> { return this.call("sampleCount"); }
+  firstRunEvidence(): Promise<{
+    sampleCount: number; sampleTables: string[]; realRecordCount: number;
+    provenanceValid: boolean;
+  }> { return this.call("firstRunEvidence"); }
   reset(): Promise<null> { return this.call("reset"); }
   registryTables(): Promise<RegTable[]> { return this.call("registryTables"); }
   restoreRow(table: string, id: string): Promise<null> {

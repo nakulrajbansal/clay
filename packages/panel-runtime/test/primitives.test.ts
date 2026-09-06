@@ -333,6 +333,16 @@ describe("Chart multi-series (from live diagnostic: planned vs actual)", () => {
     expect(vals).toEqual(["3", "7"]);                                   // value labels
   });
 
+  it("gives chart images and labelled marks permitted accessible roles", () => {
+    const c = mount(h(Chart, { kind: "bar", data: [{ x: "August", y: 140 }] }));
+    const svg = c.querySelector("svg")!;
+    expect(svg.getAttribute("role")).toBe("img");
+    expect(svg.getAttribute("aria-label")).toBe("Bar chart with 1 data point");
+    const mark = c.querySelector(".clay-chart-bar")!;
+    expect(mark.getAttribute("aria-label")).toBe("August: 140");
+    expect(mark.getAttribute("role")).toBe("img");
+  });
+
   it("line chart draws an area fill and a point dot per value", () => {
     const c = mount(h(Chart, { kind: "line", data: [{ x: "a", y: 3 }, { x: "b", y: 7 }, { x: "c", y: 5 }] }));
     expect(c.querySelectorAll(".clay-chart-dot")).toHaveLength(3);

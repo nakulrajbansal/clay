@@ -3330,10 +3330,13 @@ export class ClayStore {
     return { tables, indexes };
   }
 
-  async replaceFromArchive(bytes: Uint8Array): Promise<{
+  async replaceFromArchive(
+    bytes: Uint8Array,
+    verifyInstalled?: (store: ClayStore) => void,
+  ): Promise<{
     store: ClayStore; manifest: ClayManifest; invalidPanels: string[];
   }> {
-    return ClayStore.importArchive(bytes, async () => this.driver);
+    return ClayStore.importArchive(bytes, async () => this.driver, verifyInstalled);
   }
 
   /**
@@ -3346,6 +3349,7 @@ export class ClayStore {
   static async importArchive(
     bytes: Uint8Array,
     openFresh?: () => Promise<DbDriver>,
+    verifyInstalled?: (store: ClayStore) => void,
   ): Promise<{ store: ClayStore; manifest: ClayManifest; invalidPanels: string[] }> {
     const { manifest, user, system } = ClayStore.parseArchive(bytes);
     const archiveDriver = await openDriverFromBytes(user, system);
@@ -3413,6 +3417,7 @@ export class ClayStore {
         if (readBackIssues.length > 0)
           throw new ClayError("E_VALIDATION",
             `installed archive failed read-back: ${readBackIssues.join("; ")}`, readBackIssues);
+        verifyInstalled?.(installed);
       });
       staging.close();
       return { store: installed!, manifest, invalidPanels };

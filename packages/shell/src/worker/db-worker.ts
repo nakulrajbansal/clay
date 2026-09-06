@@ -4,15 +4,21 @@
 // serveStore RPC ports for the Bridge's AsyncStore (live and shadow).
 // Records never leave this worker except over those ports to the Bridge.
 import {
-  ClayStore, MutationPipeline, deleteAppStorage, deriveInverse, openBrowserDriver,
+  ClayStore, MutationPipeline, deleteAppStorage, openBrowserDriver,
   portFromMessagePort, serveStore, wipeBrowserStorage,
-  type DbDriver, type DebugEvent, type LivePanel, type MigrationPlanT,
+  type DbDriver, type DebugEvent, type LivePanel,
   type PanelProvenance, type PreviewHandle, type PrivateMetricEvent,
 } from "@clay/kernel";
 import { MutationClient } from "@clay/mutation";
-import { removeSampleRows, seedStarterShell, type StarterShellId } from "../shells/seed";
-import { fillSampleRows, sampleRowCount } from "./samples";
+import { removeSampleRows } from "../shells/seed";
+import {
+  fillSampleRows, recordProvenanceSummary, sampleRowCount,
+} from "./samples";
 import { addColumnCommit, renameColumnCommit } from "./schema-ops";
+import {
+  activateImportedAppAtomically, activateStarterAtomically, importTableAtomically,
+  readFirstRunPublication, undoFirstRunImportAtomically,
+} from "./first-run-activation";
 
 export type PreviewInfo = {
   summary: string;
@@ -30,26 +36,8 @@ export type IntentOutcome =
 
 type Request = { id: number; op: string; payload?: Record<string, unknown> };
 
-type ImportColumn = { name: string; type: string; values?: string[] };
-
-/** A basic, always-valid table panel so imported data is visible immediately
- * (before any model reshape). Columns are formatted by inferred type. */
-function importTablePanelCode(table: string, columns: ImportColumn[]): string {
-  const cols = columns.map(c => {
-    const fmt = c.type === "number" ? ', format: "number"'
-      : c.type === "date" ? ', format: "date"' : "";
-    return `{ field: ${JSON.stringify(c.name)}, label: ${JSON.stringify(c.name)}${fmt} }`;
-  }).join(", ");
-  return `export default function (clay) {
-  clay.db.watch({ from: ${JSON.stringify(table)}, limit: 500 }, (rows) => {
-    clay.ui.render(rows.length === 0
-      ? h(EmptyState, { label: "No rows yet" })
-      : h(Table, { sortable: true, rows, columns: [${cols}] }));
-  });
-}`;
-}
-
 let store: ClayStore | null = null;
+let storeDriver: DbDriver | null = null;
 let persistent = false;
 let persistRequested = false;
 let pending: PreviewHandle | null = null;
@@ -78,6 +66,23 @@ function recordTrace(entry: TraceEntry): void {
 function mustStore(): ClayStore {
   if (!store) throw new Error("worker not booted");
   return store;
+}
+
+function mustDriver(): DbDriver {
+  if (!storeDriver) throw new Error("worker driver not booted");
+  return storeDriver;
+}
+
+const RESERVED_WORKER_SETTINGS = new Set([
+  "sample_rows", "sample_provenance_v1", "first_run_publication_v1", "shell_id",
+]);
+
+function writableSettingKey(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 120)
+    throw new Error("worker setting key is invalid");
+  if (RESERVED_WORKER_SETTINGS.has(value))
+    throw new Error(`reserved worker setting '${value}' cannot be changed generically`);
+  return value;
 }
 
 function dropPending(): void {
@@ -157,6 +162,7 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
         const opened = await openBrowserDriver(appId);
         persistent = opened.persistent;
         currentAppId = appId;
+        storeDriver = opened.driver;
         store = ClayStore.fromDriver(opened.driver);
       }
       return {
@@ -200,47 +206,34 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
         dropPending();
         store?.close();
         store = null;
+        storeDriver = null;
         currentAppId = undefined;
       }
       await deleteAppStorage(appId);
       return null;
     }
-    case "seed":
-      seedStarterShell(mustStore(), p.shellId as StarterShellId);
-      return null;
-    case "importTable": {
-      // Bring-your-own-data: create the table + a starter view and insert the
-      // parsed rows as ONE reversible commit (data outlives interface). The
-      // model builds the richer dashboard afterwards.
-      const s = mustStore();
-      const columns = p.columns as ImportColumn[];
-      const rows = p.rows as Record<string, unknown>[];
-      const reg = s.registrySnapshot();
-      let table = String(p.table);
-      let n = 2;
-      while (reg.has(table)) table = `${String(p.table)}_${n++}`;   // avoid collision
-      const ops: MigrationPlanT["operations"] = [{
-        op: "create_table", table,
-        columns: columns.map(c => ({
-          name: c.name, type: c.type as "text", required: false,
-          ...(c.values ? { values: c.values } : {}),
-        })),
-      }];
-      const panelId = `${table}_view`.slice(0, 40).replace(/^[^a-z]/, "t");
-      s.commit({
-        intent: `Import data (${table})`,
-        summary: `Imported ${rows.length} row${rows.length === 1 ? "" : "s"} into ${table}.`,
-        migration: { operations: ops, inverse: deriveInverse(ops, reg) },
-        panels: [{
-          panel_id: panelId, title: table, placement: { region: "main", order: 0, w: 4 },
-          code: importTablePanelCode(table, columns),
-          declared_queries: [{ from: table, limit: 500 }], declared_writes: [],
-        }],
+    case "activateStarter": {
+      const result = await activateStarterAtomically(mustDriver(), mustStore(), p, {
+        onPublishedStore: published => { store = published; },
       });
-      let imported = 0;
-      for (const row of rows) { try { s.insert(table, row); imported++; } catch { /* skip bad row */ } }
-      return { table, imported, columns: columns.length };
+      return result.receipt;
     }
+    case "activateImportedApp": {
+      const result = await activateImportedAppAtomically(mustDriver(), mustStore(), p, {
+        onPublishedStore: published => { store = published; },
+      });
+      return result.receipt;
+    }
+    case "importTable": {
+      const result = await importTableAtomically(
+        mustDriver(), mustStore(), p, published => { store = published; },
+      );
+      return result.result;
+    }
+    case "firstRunPublication":
+      return readFirstRunPublication(mustStore(), p.appId);
+    case "undoFirstRunImport":
+      return undoFirstRunImportAtomically(mustDriver(), mustStore(), p);
     case "panels":
       return mustStore().livePanels();
     case "panelProvenance":
@@ -398,12 +391,16 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       dropPending();
       return null;
     case "removeSamples":
-      removeSampleRows(mustStore());
-      return null;
+      return mustDriver().tx(() => {
+        removeSampleRows(mustStore());
+        return null;
+      });
     case "fillSamples":
-      return fillSampleRows(mustStore());
+      return mustDriver().tx(() => fillSampleRows(mustStore()));
     case "sampleCount":
       return sampleRowCount(mustStore());
+    case "firstRunEvidence":
+      return recordProvenanceSummary(mustStore());
     case "restoreRow":
       mustStore().restoreRow(String(p.table), String(p.id));
       return null;
@@ -426,6 +423,7 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       dropPending();
       store?.close();
       store = null;
+      storeDriver = null;
       await wipeBrowserStorage();
       return null;
     }
@@ -503,13 +501,13 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "getSetting":
       return mustStore().getSetting(String(p.key)) ?? null;
     case "setSetting":
-      mustStore().setSetting(String(p.key), p.value);
+      mustStore().setSetting(writableSettingKey(p.key), p.value);
       return null;
     case "deleteSetting":
-      mustStore().deleteSetting(String(p.key));
+      mustStore().deleteSetting(writableSettingKey(p.key));
       return null;
     case "compareAndSetSetting": {
-      const key = String(p.key);
+      const key = writableSettingKey(p.key);
       const current = mustStore().getSetting<unknown>(key);
       const revision = current && typeof current === "object"
         && Number.isSafeInteger((current as { revision?: unknown }).revision)

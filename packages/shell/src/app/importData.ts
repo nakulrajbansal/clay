@@ -4,10 +4,22 @@
 // the rows as a normal reversible commit; the model builds the dashboard.
 
 export type ImportColumn = { name: string; type: "text" | "number" | "date" | "enum"; values?: string[] };
-export type ParsedFile = { table: string; columns: ImportColumn[]; rows: Record<string, unknown>[] };
+export type ImportReviewSummary = {
+  sourceRows: number; acceptedRows: number; skippedRows: number; truncatedRows: number;
+  sourceColumns: number; acceptedColumns: number; truncatedColumns: number;
+};
+export type ParsedFile = {
+  table: string; columns: ImportColumn[]; rows: Record<string, unknown>[];
+  review: ImportReviewSummary;
+};
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2})?|^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$/;
 const NUM_RE = /^-?\d{1,3}(,\d{3})*(\.\d+)?$|^-?\d+(\.\d+)?$|^-?\$?\d+(\.\d+)?$/;
+const RELEASE_A_IMPORT_EXTENSION = /\.(?:csv|tsv|txt|json)$/i;
+
+export function isSupportedImportFileName(name: string): boolean {
+  return RELEASE_A_IMPORT_EXTENSION.test(name.trim());
+}
 
 /** A safe snake_case identifier from an arbitrary header. */
 export function sanitizeIdent(raw: string, fallback: string): string {
@@ -47,12 +59,14 @@ function parseDelimited(text: string): { headers: string[]; rows: string[][] } {
     else if (c !== "\r" || q) cur += c;
   }
   if (cur.trim() !== "") lines.push(cur);
-  const nonEmpty = lines.filter(l => l.trim() !== "");
-  if (nonEmpty.length === 0) return { headers: [], rows: [] };
-  const first = nonEmpty[0]!;
+  const headerIndex = lines.findIndex(line => line.trim() !== "");
+  if (headerIndex < 0) return { headers: [], rows: [] };
+  const first = lines[headerIndex]!;
   const delim = first.split("\t").length > first.split(",").length ? "\t" : ",";
   const headers = splitLine(first, delim);
-  const rows = nonEmpty.slice(1).map(l => splitLine(l, delim));
+  // Preserve interior blank records so the review can account for every
+  // source row instead of silently dropping omissions before counting.
+  const rows = lines.slice(headerIndex + 1).map(line => splitLine(line, delim));
   return { headers, rows };
 }
 
@@ -127,7 +141,7 @@ export function parseImportFile(text: string, filename: string): ParsedFile {
     return { ...inferType(vals), name: id };
   }).slice(0, 20);   // schema cap (doc: <=20 columns)
 
-  const rows: Record<string, unknown>[] = raw.slice(0, 5000).map(r => {
+  const convertedRows: Record<string, unknown>[] = raw.map(r => {
     const out: Record<string, unknown> = {};
     columns.forEach((c, i) => {
       const v = (r[headers[i]!] ?? "").trim();
@@ -137,7 +151,21 @@ export function parseImportFile(text: string, filename: string): ParsedFile {
       else out[c.name] = v;
     });
     return out;
-  }).filter(r => Object.keys(r).length > 0);
+  });
+  const skippedRows = convertedRows.filter(row => Object.keys(row).length === 0).length;
+  const acceptedCandidates = convertedRows.filter(row => Object.keys(row).length > 0);
+  const rows = acceptedCandidates.slice(0, 5000);
 
-  return { table, columns, rows };
+  return {
+    table, columns, rows,
+    review: {
+      sourceRows: raw.length,
+      acceptedRows: rows.length,
+      skippedRows,
+      truncatedRows: acceptedCandidates.length - rows.length,
+      sourceColumns: headers.length,
+      acceptedColumns: columns.length,
+      truncatedColumns: headers.length - columns.length,
+    },
+  };
 }

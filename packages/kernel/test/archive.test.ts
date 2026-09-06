@@ -239,7 +239,29 @@ describe("export -> import round trip", () => {
     source.close(); target.close();
   });
 
-  it("aborts on integrity failure (mixed-up databases)", async () => {
+  it("rolls back an existing target when post-copy publication validation fails", async () => {
+    const source = await richStore();
+    const target = await seededStore();
+    const targetBefore = JSON.stringify(target.dumpTable("projects"));
+    const targetRegistry = registryToJson(target.registrySnapshot());
+    const targetDriver = (target as unknown as { driver: DbDriver }).driver;
+    let validated = false;
+
+    await expect(ClayStore.importArchive(
+      await source.exportArchive("replacement"),
+      async () => targetDriver,
+      installed => {
+        validated = installed.query({ from: "projects" }).length > 0;
+        throw new Error("injected publication validation failure");
+      },
+    )).rejects.toThrow("injected publication validation failure");
+    expect(validated).toBe(true);
+    expect(JSON.stringify(target.dumpTable("projects"))).toBe(targetBefore);
+    expect(registryToJson(target.registrySnapshot())).toBe(targetRegistry);
+    source.close(); target.close();
+  });
+
+  it("aborts on integrity failure (mixed-up databases)",  async () => {
     const a = await richStore();
     const empty = await ClayStore.openMemory();
     const aBytes = await a.exportArchive("a");

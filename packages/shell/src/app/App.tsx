@@ -13,13 +13,17 @@ import {
 } from "@clay/kernel";
 import { WorkerClient } from "./worker-client";
 import type { IntentOutcome, PreviewInfo } from "../worker/db-worker";
+import type { FirstRunPublicationReceipt } from "../worker/first-run-activation";
 import type { StarterShellId } from "../shells/seed";
 import { ConversationRail, pruneFeedAfterVersion, type FeedItem } from "./ConversationRail";
-import { Onboarding } from "./Onboarding";
+import {
+  loadFirstSuccessState, mutateFirstSuccessState,
+  type FirstSuccessEvent, type FirstSuccessState,
+} from "./first-success-state";
 import { TimeSlider } from "./TimeSlider";
 import { AppSwitcher } from "./AppSwitcher";
 import {
-  addForkEntry, createApp, currentApp, currentAppId, deriveAppName, ensureLegacyAdopted,
+  addForkEntry, cachePublishedApp, currentApp, currentAppId, deriveAppName, ensureLegacyAdopted,
   listApps, removeApp, renameApp, setCurrentApp, shellName, type AppEntry,
 } from "./apps";
 import {
@@ -31,15 +35,36 @@ import {
   setSessionToken, type ModelProviderId,
 } from "./settings";
 import { reorder, type Region } from "./layout";
-import { parseImportFile } from "./importData";
+import { isSupportedImportFileName, parseImportFile, type ParsedFile } from "./importData";
+import { ImportReview } from "./ImportReview";
 import { buildTrustReceipt } from "./change-contract";
 import { useLensController } from "./useLensController";
 import { LazySurfaceBoundary } from "./LazySurfaceBoundary";
 import { ModalDialog } from "./ModalDialog";
-import { useWorkspaceMode, type WorkspaceMode } from "./workspace-mode";
+import {
+  useWorkspaceMode, writeWorkspaceMode, type WorkspaceMode,
+} from "./workspace-mode";
 
 type Phase = "loading" | "onboarding" | "main" | "error";
+const ACTIVATION_FOCUS_KEY = "clay_activation_focus_v1";
+const CLAY_BUILD_ID = import.meta.env.VITE_CLAY_BUILD_ID ?? "development";
 
+function newFirstRunOperationId(kind: "starter" | "import"): string {
+  const random = globalThis.crypto?.randomUUID?.()
+    ?? `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+  return `${kind}-${random}`.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 128);
+}
+
+function publicationAppName(receipt: FirstRunPublicationReceipt): string {
+  if (receipt.kind !== "import" || !receipt.import) return shellName(receipt.shellId);
+  return receipt.import.table.replace(/_/g, " ")
+    .replace(/^./, value => value.toUpperCase()).slice(0, 40) || "Imported data";
+}
+
+const Onboarding = lazy(() => import("./Onboarding")
+  .then(module => ({ default: module.Onboarding })));
+const FirstSuccessChecklist = lazy(() => import("./FirstSuccessChecklist")
+  .then(module => ({ default: module.FirstSuccessChecklist })));
 const DataView = lazy(() => import("./DataView").then(module => ({ default: module.DataView })));
 const CommandPalette = lazy(() => import("./CommandPalette")
   .then(module => ({ default: module.CommandPalette })));
@@ -157,6 +182,9 @@ export function App(): React.JSX.Element {
   const proofLoopRecorded = useRef(false);
   const pendingRecovery = useRef<RecoveryMethod | null>(null);
   const surfaceReturnFocus = useRef<HTMLElement | null>(null);
+  const workspaceRef = useRef<HTMLElement | null>(null);
+  const activationFocusPending = useRef(false);
+  const starterOperationIds = useRef(new Map<StarterShellId, string>());
   const openRecordRef = useRef<(table: string, id: string) => void>(() => {});
   const restoreToRef = useRef<(version: number) => Promise<void>>(async () => {});
   const [phase, setPhase] = useState<Phase>("loading");
@@ -164,6 +192,21 @@ export function App(): React.JSX.Element {
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [workspaceMode, setWorkspaceMode] = useWorkspaceMode(currentId);
   const [bootError, setBootError] = useState<string | null>(null);
+  const [onboardingError, setOnboardingError] = useState<string | null>(null);
+  const [pendingImport, setPendingImport] = useState<{
+    operationId: string; fileName: string; parsed: ParsedFile;
+  } | null>(null);
+  const [firstRunPublication, setFirstRunPublication] =
+    useState<FirstRunPublicationReceipt | null>(null);
+  const [importUndoError, setImportUndoError] = useState<string | null>(null);
+  const [activationAnnouncement, setActivationAnnouncement] = useState<string | null>(null);
+  const [firstSuccess, setFirstSuccess] = useState<FirstSuccessState | null>(null);
+  const [firstSuccessLoading, setFirstSuccessLoading] = useState(false);
+  const [firstSuccessError, setFirstSuccessError] = useState<string | null>(null);
+  const [firstRunEvidence, setFirstRunEvidence] = useState({
+    sampleCount: 0, sampleTables: [] as string[], realRecordCount: 0,
+    provenanceValid: false,
+  });
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{ region: Region; index: number; col: number | null } | null>(null);
   const [themeId, setThemeId] = useState<string>(() => getThemeId(currentAppId()));
@@ -214,6 +257,36 @@ export function App(): React.JSX.Element {
   const toastId = useRef(0);
 
   useEffect(() => {
+    document.documentElement.dataset.clayBuildId = CLAY_BUILD_ID;
+    return () => { delete document.documentElement.dataset.clayBuildId; };
+  }, []);
+
+  const markActivationReady = useCallback((label: string, reload: boolean): void => {
+    const message = `${label} is ready. Work is open.`;
+    if (reload) {
+      try { sessionStorage.setItem(ACTIVATION_FOCUS_KEY, message); } catch { /* presentation only */ }
+      return;
+    }
+    activationFocusPending.current = true;
+    setActivationAnnouncement(message);
+  }, []);
+
+  useEffect(() => {
+    if (phase !== "main") return;
+    let message: string | null = null;
+    try {
+      message = sessionStorage.getItem(ACTIVATION_FOCUS_KEY);
+      sessionStorage.removeItem(ACTIVATION_FOCUS_KEY);
+    } catch { /* presentation only */ }
+    if (!activationFocusPending.current && !message) return;
+    activationFocusPending.current = false;
+    if (message) setActivationAnnouncement(message);
+    const frame = requestAnimationFrame(() => workspaceRef.current?.focus());
+    const timer = window.setTimeout(() => setActivationAnnouncement(null), 5_000);
+    return () => { cancelAnimationFrame(frame); window.clearTimeout(timer); };
+  }, [phase]);
+
+  useEffect(() => {
     const openSearch = (event: KeyboardEvent): void => {
       const activeModal = document.querySelector<HTMLElement>('[aria-modal="true"]');
       const paletteCanStack = !activeModal || activeModal.closest(".modal-backdrop") !== null;
@@ -256,6 +329,41 @@ export function App(): React.JSX.Element {
     return workerRef.current;
   };
 
+  const loadFirstSuccess = useCallback(async (wc: WorkerClient): Promise<void> => {
+    setFirstSuccessLoading(true);
+    setFirstSuccessError(null);
+    try {
+      setFirstSuccess(await loadFirstSuccessState(wc));
+    } catch {
+      setFirstSuccess(null);
+      setFirstSuccessError("Setup progress could not be loaded. Your records were not changed.");
+    } finally {
+      setFirstSuccessLoading(false);
+    }
+  }, []);
+
+  const updateFirstSuccess = useCallback(async (
+    event: FirstSuccessEvent, wc: WorkerClient = client(),
+  ): Promise<void> => {
+    try {
+      const next = await mutateFirstSuccessState(wc, event);
+      setFirstSuccess(next);
+      setFirstSuccessError(null);
+    } catch {
+      setFirstSuccessError("Setup progress could not be saved. Your records were not changed.");
+    }
+  }, []);
+
+  const refreshFirstRunEvidence = useCallback(async (wc: WorkerClient): Promise<void> => {
+    const evidence = await wc.firstRunEvidence();
+    setFirstRunEvidence(evidence);
+    if (evidence.provenanceValid && evidence.realRecordCount > 0) {
+      await updateFirstSuccess({
+        type: "real_record", source: "create", changed: evidence.realRecordCount, sample: false,
+      }, wc);
+    }
+  }, [updateFirstSuccess]);
+
   useEffect(() => {
     if (phase !== "main" || !workerRef.current) return;
     let live = true;
@@ -282,6 +390,27 @@ export function App(): React.JSX.Element {
     const timer = window.setInterval(() => void tick(), 15_000);
     return () => { live = false; window.clearInterval(timer); };
   }, [phase, liveBridge, registryTables, pushToast]);
+
+  // Until the first real record is observed, poll only content-free worker
+  // evidence. Exact sample row ids are excluded in the worker, so examples
+  // can demonstrate a starter without ever completing activation.
+  useEffect(() => {
+    if (phase !== "main" || !workerRef.current
+        || firstSuccess?.steps.app.state !== "complete"
+        || firstSuccess.steps.realRecord.state === "complete") return;
+    const wc = workerRef.current;
+    let live = true;
+    const check = (): void => {
+      void refreshFirstRunEvidence(wc).catch(() => {
+        if (live) setFirstSuccessError(
+          "Setup progress could not be checked. Your records were not changed.",
+        );
+      });
+    };
+    check();
+    const timer = window.setInterval(check, 4_000);
+    return () => { live = false; window.clearInterval(timer); };
+  }, [phase, firstSuccess, refreshFirstRunEvidence]);
 
   // Styled in-app confirmation (native dialogs read as unfinished and
   // can't be themed). One dialog serves the shell AND sandboxed panels
@@ -363,6 +492,12 @@ export function App(): React.JSX.Element {
       const res = await client().importTable(
         { table: parsed.table, columns: parsed.columns, rows: parsed.rows });
       await refreshPanels();
+      if (res.imported > 0) {
+        await updateFirstSuccess({
+          type: "real_record", source: "import", changed: res.imported, sample: false,
+        });
+        await refreshFirstRunEvidence(client());
+      }
       setDataTable(res.table);   // if the Data editor is open, jump to the new table
       setFeed(f => [...f, { kind: "info", text: `Imported ${res.imported} row${res.imported === 1 ? "" : "s"} into “${res.table}”.` }]);
       setBusy(false);
@@ -377,6 +512,89 @@ export function App(): React.JSX.Element {
     } catch (e) {
       setBusy(false);
       pushToast("Import failed: " + (e as Error).message, "danger");
+    }
+  };
+
+  // Parse in the trusted shell and stop at a review boundary. No app, table,
+  // record, or local selection exists until the user confirms this exact subset.
+  const reviewNewAppImport = async (file: File): Promise<void> => {
+    setBusy(true);
+    setOnboardingError(null);
+    try {
+      if (!isSupportedImportFileName(file.name)) {
+        throw new Error("Use a CSV or JSON file for now. TSV and text files are also supported.");
+      }
+      const parsed = parseImportFile(await file.text(), file.name);
+      if (parsed.columns.length === 0 || parsed.rows.length === 0)
+        throw new Error("No accepted rows were found. Choose a file with a header row and data.");
+      setPendingImport({
+        operationId: newFirstRunOperationId("import"), fileName: file.name, parsed,
+      });
+    } catch (error) {
+      setOnboardingError(
+        `Import review could not be prepared. Nothing was changed. ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const importNewApp = async (review: {
+    operationId: string; fileName: string; parsed: ParsedFile;
+  }): Promise<void> => {
+    setBusy(true);
+    setOnboardingError(null);
+    setImportUndoError(null);
+    try {
+      if (listApps().length !== 0
+          && firstRunPublication?.operationId !== review.operationId) {
+        throw new Error(
+          "Safe creation of another imported app is not available yet. Your existing apps were not changed.",
+        );
+      }
+      const { parsed } = review;
+      const receipt = await client().activateImportedApp({
+        operationId: review.operationId,
+        appId: "default",
+        table: parsed.table,
+        columns: parsed.columns,
+        rows: parsed.rows,
+        review: parsed.review,
+      });
+      if (receipt.kind !== "import" || !receipt.import
+          || receipt.import.acceptedRows !== parsed.review.acceptedRows
+          || receipt.import.review.acceptedRows !== parsed.review.acceptedRows) {
+        throw new Error("The reviewed row set was not published exactly.");
+      }
+      setFirstRunPublication(receipt);
+      const name = publicationAppName(receipt);
+      const entry = cachePublishedApp({ id: receipt.appId, name, shellId: receipt.shellId });
+      writeWorkspaceMode(entry.id, "work");
+      const progress = await loadFirstSuccessState(client());
+      setFirstSuccess(progress);
+      setFirstRunEvidence(await client().firstRunEvidence());
+      setApps(listApps());
+      setCurrentId(entry.id);
+      setWorkspaceMode("work");
+      setRailOpen(false);
+      setLiveBridge(makeBridge(client(), "live", pushToast, recordFault, askConfirm,
+        (table, rowId) => openRecordRef.current(table, rowId)));
+      await refreshPanels();
+      setFeed([{ kind: "info",
+        text: `Imported ${receipt.import.acceptedRows} accepted row${receipt.import.acceptedRows === 1 ? "" : "s"} from ${review.fileName}. Your Work view is ready.` }]);
+      setPendingImport(null);
+      markActivationReady(name, false);
+      setPhase("main");
+      recordPrivateMetric({ type: "app_ready", entry: "new_starter" });
+    } catch (error) {
+      // A lost response can happen after the worker's one atomic publication.
+      // Keep the exact reviewed operation for a safe, idempotent retry; never
+      // delete a canonical store merely because presentation finalization failed.
+      setOnboardingError(
+        `Import could not be confirmed. The worker may already have finished it; choose Import accepted rows again to retry without duplicates. ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -424,21 +642,27 @@ export function App(): React.JSX.Element {
 
         if (!boot.seeded) {
           if (cur) {
-            // a freshly created additional app pending its first seed
-            await withTimeout(wc.seed(cur.shellId as StarterShellId), 20_000, "Setting up the app");
-          } else {
-            setPhase("onboarding");         // first run ever — pick a template
-            return;
+            throw new Error(
+              "Clay found an uncompleted app cache entry but no published worker app. No data was changed. Return to a verified app and try again.",
+            );
           }
+          setPhase("onboarding");
+          return;
         }
         setApps(listApps());
         setCurrentId(currentApp()?.id ?? null);
         setLiveBridge(makeBridge(wc, "live", pushToast, recordFault, askConfirm,
           (table, id) => openRecordRef.current(table, id)));
         const [bootPanels, bootHistory, bootTables, bootSuggestions, bootProvenance,
-          bootSemanticTrace, bootFieldProvenance] = await Promise.all([
+          bootSemanticTrace, bootFieldProvenance, bootFirstRunEvidence,
+          bootFirstSuccess, bootPublication] = await Promise.all([
           wc.panels(), wc.history(), wc.registryTables(), wc.suggestions(), wc.panelProvenance(),
           wc.semanticTrace(), wc.fieldProvenance(),
+          wc.firstRunEvidence().catch(() => ({
+            sampleCount: 0, sampleTables: [], realRecordCount: 0, provenanceValid: false,
+          })),
+          loadFirstSuccessState(wc).catch(() => null),
+          wc.firstRunPublication(cur?.id ?? "default").catch(() => null),
         ]);
         setPanels(bootPanels);
         setHistory(bootHistory);
@@ -447,6 +671,11 @@ export function App(): React.JSX.Element {
         setPanelProvenance(bootProvenance);
         setSemanticTrace(bootSemanticTrace);
         setFieldProvenance(bootFieldProvenance);
+        setFirstRunEvidence(bootFirstRunEvidence);
+        setFirstSuccess(bootFirstSuccess);
+        setFirstRunPublication(bootPublication);
+        setFirstSuccessError(bootFirstSuccess ? null
+          : "Setup progress could not be loaded. Your records were not changed.");
         setPhase("main");
         void wc.recordPrivateMetric({ type: "app_ready",
           entry: boot.seeded ? "existing" : "new_starter" }).catch(() => undefined);
@@ -465,23 +694,50 @@ export function App(): React.JSX.Element {
 
   const pickShell = async (id: StarterShellId): Promise<void> => {
     setBusy(true);
-    const first = listApps().length === 0;
-    createApp(shellName(id), id);
-    if (first) {
-      // the worker already holds this app's (empty, "default") files open
-      await client().seed(id);
+    setOnboardingError(null);
+    let operationId = starterOperationIds.current.get(id);
+    if (!operationId) {
+      operationId = newFirstRunOperationId("starter");
+      starterOperationIds.current.set(id, operationId);
+    }
+    try {
+      if (listApps().length !== 0
+          && firstRunPublication?.operationId !== operationId) {
+        throw new Error(
+          "Safe creation of another starter app is not available yet. Your existing apps were not changed.",
+        );
+      }
+      const receipt = await client().activateStarter({
+        operationId, appId: "default", shellId: id,
+      });
+      if (receipt.kind !== "starter" || receipt.shellId !== id || receipt.appId !== "default")
+        throw new Error("The worker returned a starter receipt for a different app.");
+      setFirstRunPublication(receipt);
+      const entry = cachePublishedApp({
+        id: receipt.appId, name: shellName(id), shellId: receipt.shellId,
+      });
+      writeWorkspaceMode(entry.id, "work");
+      const progress = await loadFirstSuccessState(client());
+      const evidence = await client().firstRunEvidence();
+      setFirstSuccess(progress);
+      setFirstRunEvidence(evidence);
       setApps(listApps());
-      setCurrentId(currentApp()?.id ?? null);
+      setCurrentId(entry.id);
+      setWorkspaceMode("work");
+      setRailOpen(false);
       setLiveBridge(makeBridge(client(), "live", pushToast, recordFault, askConfirm,
-        (table, id) => openRecordRef.current(table, id)));
+        (table, rowId) => openRecordRef.current(table, rowId)));
       await refreshPanels();
-      setFeed([{ kind: "info", text: "Your app is ready. Describe any change to reshape it." }]);
-      setBusy(false);
+      setFeed([{ kind: "info", text: "Your app is ready in Work. Add your first real record when you are ready." }]);
+      markActivationReady(shellName(id), false);
       setPhase("main");
       recordPrivateMetric({ type: "app_ready", entry: "new_starter" });
-    } else {
-      // an additional app: reboot so the worker opens its own files, then seed
-      reloadApp();
+    } catch (error) {
+      setOnboardingError(
+        `Setup could not be confirmed. The worker may already have finished it; choose the same starter again to retry without duplicates. ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -492,7 +748,11 @@ export function App(): React.JSX.Element {
     setTimeout(() => window.location.reload(), 150);
   };
   const switchApp = (id: string): void => { setCurrentApp(id); reloadApp(); };
-  const newApp = (): void => setPhase("onboarding");
+  const newApp = (): void => {
+    setOnboardingError(null);
+    setBusy(false);
+    setPhase("onboarding");
+  };
   // B5 fork-and-explore: duplicate the current app (data + history + panels)
   // into a new one, then switch to it — experiment freely without risking the
   // original. Uses the validated .clay export/import path in the worker.
@@ -665,7 +925,8 @@ export function App(): React.JSX.Element {
   // one-click export. Never more than once per session.
   const backupNudged = useRef(false);
   useEffect(() => {
-    if (phase !== "main" || backupNudged.current) return;
+    if (phase !== "main" || backupNudged.current
+        || !firstRunEvidence.provenanceValid || firstRunEvidence.realRecordCount < 1) return;
     backupNudged.current = true;
     let last = 0;
     try { last = Number(localStorage.getItem("clay_last_backup") ?? 0); } catch { /* private mode */ }
@@ -677,7 +938,7 @@ export function App(): React.JSX.Element {
         "default", { label: "Export now", run: () => void exportArchive() });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, history.length]);
+  }, [phase, history.length, firstRunEvidence.realRecordCount]);
 
   const importArchive = async (file: File): Promise<void> => {
     if (!(await askConfirm(
@@ -777,6 +1038,11 @@ export function App(): React.JSX.Element {
       recordPrivateMetric({ type: "activation_completed",
         elapsed: durationBucket(Date.now() - appReadyAt.current) });
     }
+    await updateFirstSuccess({
+      type: "customization_kept",
+      version,
+      changed: preview.diff.length > 0 || preview.panels.length > 0 || preview.removePanels.length > 0,
+    });
     setFeed(f => [...f, { kind: "committed", summary: preview.summary, version, receipt }]);
     resetLens();
     closePreview();
@@ -1010,11 +1276,51 @@ export function App(): React.JSX.Element {
   };
 
   const removeSamples = async (): Promise<void> => {
-    await client().removeSamples();
-    liveBridge?.notifyWrite("items");
-    for (const p of panels)
-      for (const q of p.declared_queries) liveBridge?.notifyWrite(q.from);
-    pushToast("Sample rows removed", "success");
+    try {
+      await client().removeSamples();
+      setFirstRunEvidence(await client().firstRunEvidence());
+      liveBridge?.notifyWrite("items");
+      for (const panel of panels)
+        for (const query of panel.declared_queries) liveBridge?.notifyWrite(query.from);
+      pushToast("Example records cleared. Your own records were not changed.", "success");
+    } catch (error) {
+      pushToast(
+        `Examples were not cleared. Your records were not changed. ${error instanceof Error ? error.message : String(error)}`,
+        "danger",
+      );
+    }
+  };
+
+  const undoPublishedImport = async (): Promise<void> => {
+    const receipt = firstRunPublication;
+    if (!receipt || receipt.kind !== "import" || !receipt.import || receipt.undone) return;
+    setBusy(true);
+    setImportUndoError(null);
+    try {
+      const undone = await client().undoFirstRunImport({
+        operationId: receipt.operationId,
+        appId: receipt.appId,
+        expectedRevision: receipt.revision,
+      });
+      setFirstRunPublication(undone);
+      const [evidence, progress] = await Promise.all([
+        client().firstRunEvidence(), loadFirstSuccessState(client()),
+      ]);
+      setFirstRunEvidence(evidence);
+      setFirstSuccess(progress);
+      liveBridge?.notifyWrite(receipt.import.table);
+      await refreshPanels();
+      pushToast(
+        `Import undone. ${receipt.import.acceptedRows} imported row${receipt.import.acceptedRows === 1 ? "" : "s"} removed; the table and view remain.`,
+        "success",
+      );
+    } catch (error) {
+      setImportUndoError(
+        `Undo is unavailable because the published app or imported rows no longer match the receipt. Nothing was removed. ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      setBusy(false);
+    }
   };
 
   // Scrub takes precedence (read-only render at K); otherwise S5 merging:
@@ -1062,11 +1368,12 @@ export function App(): React.JSX.Element {
     [panelProvenance],
   );
 
-  if (phase === "loading") return <div className="boot">Opening your app…</div>;
+  if (phase === "loading")
+    return <div className="boot" role="status" aria-live="polite">Opening your app…</div>;
   if (phase === "error")
     return (<>
       <div className="boot boot-error">
-        <h2>This app didn’t open</h2>
+        <h2 tabIndex={-1} autoFocus>This app didn’t open</h2>
         <p className="boot-error-msg">{bootError}</p>
         <div className="rail-actions">
           <button className="primary" onClick={() => window.location.reload()}>Try again</button>
@@ -1084,11 +1391,36 @@ export function App(): React.JSX.Element {
     </>);
   if (phase === "onboarding")
     return (
-      <Onboarding
-        onPick={id => void pickShell(id)}
-        busy={busy}
-        onCancel={listApps().length > 0 ? () => setPhase("main") : undefined}
-      />
+      <>
+        <LazySurfaceBoundary label="setup">
+        <Suspense fallback={<SurfaceFallback label="setup" />}>
+          <Onboarding
+            onPick={id => void pickShell(id)}
+            onImport={file => void reviewNewAppImport(file)}
+            busy={busy}
+            error={onboardingError}
+            onCancel={listApps().length > 0 ? () => {
+              setOnboardingError(null);
+              setPhase("main");
+              requestAnimationFrame(() => workspaceRef.current?.focus());
+            } : undefined}
+          />
+        </Suspense>
+        </LazySurfaceBoundary>
+        {pendingImport ? (
+          <ImportReview
+            fileName={pendingImport.fileName}
+            parsed={pendingImport.parsed}
+            busy={busy}
+            error={onboardingError}
+            onCancel={() => {
+              setPendingImport(null);
+              setOnboardingError(null);
+            }}
+            onConfirm={() => void importNewApp(pendingImport)}
+          />
+        ) : null}
+      </>
     );
 
   // Direct manipulation (B4): drag a panel by its grip to rearrange. Each
@@ -1401,6 +1733,85 @@ export function App(): React.JSX.Element {
         workspaceMode={workspaceMode}
         onWorkspaceModeChange={chooseWorkspaceMode}
       />
+      {activationAnnouncement ? (
+        <p className="contract-note" role="status" aria-live="polite">
+          {activationAnnouncement}
+        </p>
+      ) : null}
+      {(firstSuccessLoading || firstSuccessError
+          || firstSuccess?.steps.app.state === "complete") ? (
+        <LazySurfaceBoundary label="first steps">
+        <Suspense fallback={<SurfaceFallback label="first steps" />}>
+          <FirstSuccessChecklist
+          state={firstSuccess}
+          loading={firstSuccessLoading}
+          error={firstSuccessError}
+          persistent={persistent}
+          onAddRecord={() => {
+            chooseWorkspaceMode("work");
+            setShowCommandPalette(true);
+          }}
+          onReviewWork={() => {
+            chooseWorkspaceMode("work");
+            void updateFirstSuccess({
+              type: "work_used", workspaceMode: "work",
+              realRecordAvailable: firstRunEvidence.provenanceValid
+                && firstRunEvidence.realRecordCount > 0,
+            });
+            requestAnimationFrame(() => workspaceRef.current?.focus());
+          }}
+          onCustomize={() => {
+            chooseWorkspaceMode("customize");
+            setRailOpen(true);
+            try { localStorage.setItem("clay_reshape_open", "true"); } catch { /* presentation only */ }
+            setFeed(items => items.some(item => item.kind === "info"
+              && item.text.startsWith("Clay sends your request")) ? items : [...items, {
+                kind: "info",
+                text: "Clay sends your request and app structure to plan this change. Your records stay on this device.",
+              }]);
+            seedIntent("Add one useful summary to this app.");
+          }}
+          onDismiss={() => void updateFirstSuccess({ type: "set_dismissed", dismissed: true })}
+          onResume={() => void updateFirstSuccess({ type: "set_dismissed", dismissed: false })}
+          onRetry={() => { if (workerRef.current) void loadFirstSuccess(workerRef.current); }}
+          />
+        </Suspense>
+        </LazySurfaceBoundary>
+      ) : null}
+      {firstRunPublication?.kind === "import" && firstRunPublication.import ? (
+        <section className="banner import-publication-receipt"
+          aria-label="Import publication receipt" style={{ alignItems: "flex-start", flexWrap: "wrap" }}>
+          <span style={{ flex: "1 1 520px", minWidth: 0 }}>
+            <strong>{firstRunPublication.undone ? "Import undone." : "Import published."}</strong>{" "}
+            {firstRunPublication.undone
+              ? `${firstRunPublication.import.acceptedRows} imported rows were removed. The ${firstRunPublication.import.table} table and view remain.`
+              : `${firstRunPublication.import.acceptedRows} accepted rows are in ${firstRunPublication.import.table}. Undo import removes only the imported rows; the table and view remain.`}
+            <small style={{ display: "block", overflowWrap: "anywhere", marginTop: 4 }}>
+              Worker receipt: app {firstRunPublication.appId} · revision {firstRunPublication.revision}
+              {" · operation "}<code>{firstRunPublication.operationId}</code>
+            </small>
+            {importUndoError ? <small role="alert" style={{ display: "block", marginTop: 5 }}>
+              {importUndoError}
+            </small> : null}
+          </span>
+          {!firstRunPublication.undone ? (
+            <span className="banner-actions">
+              <button className="link" disabled={busy}
+                onClick={() => void undoPublishedImport()}>Undo import</button>
+            </span>
+          ) : null}
+        </section>
+      ) : null}
+      {firstRunEvidence.sampleCount > 0 ? (
+        <section className="banner" aria-label="Example data" style={{ flexWrap: "wrap" }}>
+          <span><strong>Example data.</strong> {firstRunEvidence.sampleCount} example record{
+            firstRunEvidence.sampleCount === 1 ? " is" : "s are"
+          } included across {firstRunEvidence.sampleTables.join(", ")}.</span>
+          <span className="banner-actions">
+            <button className="link" onClick={() => void removeSamples()}>Clear examples</button>
+          </span>
+        </section>
+      ) : null}
       {!persistent ? (
         <div className="banner">
           <span>
@@ -1415,7 +1826,8 @@ export function App(): React.JSX.Element {
       ) : null}
       <div className="app-body">
       <LazySurfaceBoundary label="views">
-      <main className="regions">
+      <main ref={workspaceRef} className="regions" tabIndex={0}
+        aria-label={workspaceMode === "work" ? "Work workspace" : "Customize workspace"}>
         <TimeSlider
           history={history}
           current={scrub?.version ?? head}
@@ -1513,7 +1925,10 @@ export function App(): React.JSX.Element {
               onClose={() => setShowCommandPalette(false)}
               onOpenRecord={(table, id) => openData(table, id)}
               onOpenData={table => openData(table)}
-              onWrite={table => liveBridge?.notifyWrite(table)}
+              onWrite={table => {
+                liveBridge?.notifyWrite(table);
+                void refreshFirstRunEvidence(workerRef.current!);
+              }}
               onError={message => pushToast(message, "danger")}
               onInfo={message => pushToast(message, "info")}
             />
@@ -1530,7 +1945,10 @@ export function App(): React.JSX.Element {
           initialRecordId={dataRecord}
           returnFocusRef={surfaceReturnFocus}
           onImport={file => void importFile(file)}
-          onWrite={table => liveBridge?.notifyWrite(table)}
+          onWrite={table => {
+            liveBridge?.notifyWrite(table);
+            void refreshFirstRunEvidence(workerRef.current!);
+          }}
           onClose={closeData}
           onError={msg => pushToast(msg, "danger")}
           onInfo={msg => pushToast(msg, "info")}

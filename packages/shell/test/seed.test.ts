@@ -11,6 +11,10 @@ import {
 import {
   SEED_PANELS, STARTER_SHELLS, removeSampleRows, seedStarterShell,
 } from "../src/index";
+import { STARTER_SHELL_CATALOG } from "../src/shells/starter-catalog";
+import {
+  SAMPLE_PROVENANCE_SETTING, parseSampleProvenanceLedger,
+} from "../src/shells/sample-provenance";
 
 type SpecShell = {
   shell_id: string; name: string; tagline: string;
@@ -24,6 +28,12 @@ const spec = JSON.parse(readFileSync(
   "utf8")) as { shells: SpecShell[] };
 
 describe("seed definitions match specs/shells/starter-shells.json", () => {
+  it("keeps lightweight onboarding metadata aligned with worker seeds", () => {
+    expect(STARTER_SHELL_CATALOG).toEqual(STARTER_SHELLS.map(({ id, name, tagline }) => ({
+      id, name, tagline,
+    })));
+  });
+
   for (const specShell of spec.shells) {
     it(specShell.shell_id, () => {
       const shell = STARTER_SHELLS.find(s => s.id === specShell.shell_id)!;
@@ -79,10 +89,17 @@ describe("every seed panel passes the Validator (G9: validator-passing)", () => 
 describe("seeding and samples", () => {
   it("seeds a single-table shell in table + panel commits", async () => {
     const store = await ClayStore.openMemory();
-    seedStarterShell(store, "tracker");
+    const seeded = seedStarterShell(store, "tracker");
     expect(store.livePanels().map(p => p.panel_id).sort())
       .toEqual(["add_item_form", "items_flow", "items_table", "status_counts"]);
     expect(store.query({ from: "items" })).toHaveLength(3);
+    expect(store.getSetting("sample_rows")).toBeUndefined();
+    const ledger = parseSampleProvenanceLedger(store.getSetting(SAMPLE_PROVENANCE_SETTING));
+    expect(seeded).toEqual({ route: "starter.seed", created: ledger.entries });
+    expect(seeded.created).toHaveLength(3);
+    expect(Object.isFrozen(seeded)).toBe(true);
+    expect(Object.isFrozen(seeded.created)).toBe(true);
+    expect(seeded.created.every(entry => Object.isFrozen(entry))).toBe(true);
     store.close();
   });
 

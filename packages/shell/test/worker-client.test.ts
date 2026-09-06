@@ -39,6 +39,55 @@ describe("WorkerClient boot boundary", () => {
   });
 });
 
+describe("WorkerClient first-run evidence boundary", () => {
+  it("requests only content-free sample and real-record evidence", async () => {
+    const evidence = {
+      sampleCount: 3, sampleTables: ["items"], realRecordCount: 1, provenanceValid: true,
+    };
+    const { client, posted } = harness(message =>
+      message.op === "firstRunEvidence" ? evidence : null);
+    await expect(client.firstRunEvidence()).resolves.toEqual(evidence);
+    expect(posted).toEqual([
+      { id: 1, op: "firstRunEvidence", payload: undefined },
+    ]);
+  });
+
+  it("binds publication, receipt lookup, and Undo to explicit operation, app, and revision", async () => {
+    const { client, posted } = harness();
+    const importReview = {
+      sourceRows: 2, acceptedRows: 2, skippedRows: 0, truncatedRows: 0,
+      sourceColumns: 1, acceptedColumns: 1, truncatedColumns: 0,
+    };
+    await client.activateStarter({
+      operationId: "starter-operation-0001", appId: "default", shellId: "tracker",
+    });
+    await client.activateImportedApp({
+      operationId: "import-operation-00001", appId: "default", table: "jobs",
+      columns: [{ name: "name", type: "text" }], rows: [{ name: "One" }, { name: "Two" }],
+      review: importReview,
+    });
+    await client.firstRunPublication("default");
+    await client.undoFirstRunImport({
+      operationId: "import-operation-00001", appId: "default", expectedRevision: 1,
+    });
+
+    expect(posted).toEqual([
+      { id: 1, op: "activateStarter", payload: {
+        operationId: "starter-operation-0001", appId: "default", shellId: "tracker",
+      } },
+      { id: 2, op: "activateImportedApp", payload: {
+        operationId: "import-operation-00001", appId: "default", table: "jobs",
+        columns: [{ name: "name", type: "text" }], rows: [{ name: "One" }, { name: "Two" }],
+        review: importReview,
+      } },
+      { id: 3, op: "firstRunPublication", payload: { appId: "default" } },
+      { id: 4, op: "undoFirstRunImport", payload: {
+        operationId: "import-operation-00001", appId: "default", expectedRevision: 1,
+      } },
+    ]);
+  });
+});
+
 describe("WorkerClient files and automation boundaries", () => {
   it("transfers file bytes and exposes only bounded workflow commands", async () => {
     const { client, posted, transfers } = harness();

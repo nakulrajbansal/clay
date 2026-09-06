@@ -2,9 +2,9 @@
 // The multi-app registry (G4): create/switch/remove semantics over
 // localStorage, including the legacy-adoption path for existing single-app
 // users and the "first app uses the default id" rule (preserves /user.db).
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  createApp, currentApp, currentAppId, ensureLegacyAdopted, listApps,
+  cachePublishedApp, createApp, currentApp, currentAppId, ensureLegacyAdopted, listApps,
   removeApp, renameApp, setCurrentApp, shellName,
 } from "../src/app/apps";
 
@@ -24,6 +24,42 @@ describe("app registry", () => {
     expect(b.id).not.toBe("default");
     expect(listApps().map(x => x.name)).toEqual(["Tracker", "Sales CRM"]);
     expect(currentApp()?.id).toBe(b.id);   // new app becomes current
+  });
+
+  it("caches the exact worker-published app idempotently and rejects rebinding", () => {
+    const published = { id: "default", name: "Imported data", shellId: "blank" };
+    expect(cachePublishedApp(published)).toEqual(published);
+    expect(cachePublishedApp(published)).toEqual(published);
+    expect(listApps()).toEqual([published]);
+    expect(currentAppId()).toBe("default");
+
+    expect(() => cachePublishedApp({ ...published, shellId: "tracker" }))
+      .toThrow(/binding/i);
+    expect(listApps()).toEqual([published]);
+  });
+
+  it("rolls the presentation cache back when either localStorage write fails", () => {
+    const existing = createApp("Tracker", "tracker");
+    const beforeApps = localStorage.getItem("clay_apps");
+    const beforeCurrent = localStorage.getItem("clay_current_app");
+    const native = Storage.prototype.setItem;
+    let writes = 0;
+    const spy = vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (
+      this: Storage, key, value,
+    ) {
+      writes++;
+      if (writes === 2) throw new Error("injected cache failure");
+      native.call(this, key, value);
+    });
+    try {
+      expect(() => cachePublishedApp({ id: "published-app", name: "CRM", shellId: "crm" }))
+        .toThrow("injected cache failure");
+    } finally {
+      spy.mockRestore();
+    }
+    expect(localStorage.getItem("clay_apps")).toBe(beforeApps);
+    expect(localStorage.getItem("clay_current_app")).toBe(beforeCurrent);
+    expect(currentAppId()).toBe(existing.id);
   });
 
   it("switch + rename", () => {

@@ -1,9 +1,12 @@
 // Sample ("dummy") data generation — trusted worker code, never a panel.
-// Rows are inserted through the normal kernel path and their ids recorded in
-// the same `sample_rows` setting the template seeder uses, so "clear sample
-// data" removes EXACTLY the generated rows (soft-deleted, restorable) and can
+// Rows are inserted through the normal kernel path and their exact semantic
+// table id, row id, and trusted operation id are recorded in the reserved
+// provenance ledger, so "clear sample data" removes EXACTLY those rows and can
 // never touch anything the user typed or imported themselves.
 import type { ClayStore, RegColumn } from "@clay/kernel";
+import {
+  readSampleProvenance, recordSampleRows, type SampleCreatedResult,
+} from "../shells/sample-provenance";
 
 const PROJECT_NAMES = [
   "Website Redesign", "Mobile App Launch", "Data Platform Migration",
@@ -123,15 +126,19 @@ function valueFor(col: RegColumn, i: number, rng: () => number, tableName = ""):
 
 const ROWS_PER_TABLE = 8;
 
-/** Fill every table with plausible rows, tracked in the sample_rows marker.
- * Returns per-table counts. Deterministic-ish but varied (seeded LCG). */
-export function fillSampleRows(store: ClayStore): { added: number; tables: number } {
+export type SampleFillResult = Extract<SampleCreatedResult, { route: "samples.fill" }>;
+
+/** Fill every table with plausible rows and return exact durable coordinates. */
+export function fillSampleRows(store: ClayStore): SampleFillResult {
   let seed = 42;
   const rng = (): number => {
     seed = (seed * 1664525 + 1013904223) % 4294967296;
     return seed / 4294967296;
   };
-  const marker = store.getSetting<Record<string, string[]>>("sample_rows") ?? {};
+  // Validate the reserved ledger before inserting anything. In particular,
+  // legacy sample_rows is unauthenticated and must never authorize deletion.
+  readSampleProvenance(store);
+  const additions: Record<string, string[]> = {};
   let added = 0; let tableCount = 0;
   for (const table of store.registrySnapshot().values()) {
     // History must reflect real moves, never invented ones: skip audit
@@ -143,7 +150,7 @@ export function fillSampleRows(store: ClayStore): { added: number; tables: numbe
     const writable = table.columns.filter(c =>
       c.type !== "computed" && c.type !== "json" && !c.hidden);
     if (writable.length === 0) continue;
-    const ids: string[] = marker[table.name] ?? [];
+    const ids: string[] = [];
     for (let i = 0; i < ROWS_PER_TABLE; i++) {
       const row: Record<string, unknown> = {};
       for (const c of writable) {
@@ -155,14 +162,63 @@ export function fillSampleRows(store: ClayStore): { added: number; tables: numbe
         added++;
       } catch { /* required/validation mismatch on odd schemas — skip row */ }
     }
-    if (ids.length > 0) { marker[table.name] = ids; tableCount++; }
+    if (ids.length > 0) { additions[table.name] = ids; tableCount++; }
   }
-  store.setSetting("sample_rows", marker);
-  return { added, tables: tableCount };
+  const created = added > 0
+    ? recordSampleRows(store, additions) : Object.freeze([]);
+  return Object.freeze({ route: "samples.fill", added, tables: tableCount, created });
 }
 
-/** How many tracked sample rows currently exist (drives the Clear button). */
+/** How many tracked sample rows are currently active (drives the Clear button). */
 export function sampleRowCount(store: ClayStore): number {
-  const marker = store.getSetting<Record<string, string[]>>("sample_rows") ?? {};
-  return Object.values(marker).reduce((s, ids) => s + ids.length, 0);
+  return recordProvenanceSummary(store).sampleCount;
+}
+
+/** Content-free evidence for first-run UI. Exact trusted row ids separate
+ * active examples from real records; record values never leave the worker. */
+export function recordProvenanceSummary(store: ClayStore): {
+  sampleCount: number; sampleTables: string[]; realRecordCount: number;
+  provenanceValid: boolean;
+} {
+  let provenance: ReturnType<typeof readSampleProvenance>;
+  try { provenance = readSampleProvenance(store); }
+  catch { return {
+    sampleCount: 0, sampleTables: [], realRecordCount: 0, provenanceValid: false,
+  }; }
+  const registry = store.registrySnapshot();
+  const sampleByTable = new Map<string, Set<string>>();
+  for (const entry of provenance) {
+    if (!entry.tableActive) continue;
+    const rows = sampleByTable.get(entry.tableName) ?? new Set<string>();
+    rows.add(entry.rowId);
+    sampleByTable.set(entry.tableName, rows);
+  }
+  const sampleTables: string[] = [];
+  let sampleCount = 0;
+  let realRecordCount = 0;
+  for (const table of registry.values()) {
+    if (table.inactive) continue;
+    const sampleIds = sampleByTable.get(table.name) ?? new Set<string>();
+    let tableSamples = 0;
+    let afterId: string | null = null;
+    while (true) {
+      const page = store.query({
+        from: table.name,
+        orderBy: [{ field: "id", dir: "asc" }],
+        limit: 500,
+        ...(afterId ? { where: [{ field: "id", op: "gt", value: afterId }] } : {}),
+      });
+      for (const row of page) {
+        if (sampleIds.has(String(row.id))) tableSamples++;
+        else realRecordCount++;
+      }
+      if (page.length < 500) break;
+      afterId = String(page.at(-1)!.id);
+    }
+    if (tableSamples > 0) {
+      sampleCount += tableSamples;
+      sampleTables.push(table.name);
+    }
+  }
+  return { sampleCount, sampleTables, realRecordCount, provenanceValid: true };
 }

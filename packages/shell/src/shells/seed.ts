@@ -8,15 +8,14 @@
 // land in one commit; then sample rows.
 import {
   ClayStore, deriveInverse, expandBlueprint, parseBlueprintDirective,
-  type MigrationPlanT,
+  type BatchMutation, type MigrationPlanT,
 } from "@clay/kernel";
 import { SEED_PANELS } from "./seed-panels";
-
-export type StarterShellId =
-  | "blank"
-  | "tracker" | "log" | "dashboard" | "small_business"
-  | "crm" | "financials" | "staff" | "habits" | "inventory" | "approvals"
-  | "jobs" | "content" | "okrs" | "events" | "library";
+import type { StarterShellId } from "./starter-catalog";
+import {
+  readSampleProvenance, recordSampleRows, type SampleCreatedResult,
+} from "./sample-provenance";
+export type { StarterShellId } from "./starter-catalog";
 
 export type ShellColumn = {
   name: string;
@@ -581,7 +580,14 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
-export function seedStarterShell(store: ClayStore, id: StarterShellId): void {
+export type StarterSeedStage = "structure-staged" | "records-staged" | "provenance-staged";
+export type StarterSeedResult = Extract<SampleCreatedResult, { route: "starter.seed" }>;
+
+export function seedStarterShell(
+  store: ClayStore,
+  id: StarterShellId,
+  onStage?: (stage: StarterSeedStage) => void,
+): StarterSeedResult {
   const shell = STARTER_SHELLS.find(s => s.id === id);
   if (!shell) throw new Error(`unknown starter shell '${id}'`);
 
@@ -623,20 +629,32 @@ export function seedStarterShell(store: ClayStore, id: StarterShellId): void {
     migration: null, panels,
     diff: isBlank ? [] : [{ kind: "add_panel", detail: `${shell.name} starter panels` }],
   });
+  onStage?.("structure-staged");
 
   // Sample rows, flagged for one-click removal.
   const sampleIds: Record<string, string[]> = {};
   for (const t of shell.tables) {
     sampleIds[t.name] = t.sampleRows.map(row => String(store.insert(t.name, row).id));
   }
-  store.setSetting("sample_rows", sampleIds);
+  onStage?.("records-staged");
+  const created = Object.values(sampleIds).some(ids => ids.length > 0)
+    ? recordSampleRows(store, sampleIds) : Object.freeze([]);
   store.setSetting("shell_id", shell.id);
+  onStage?.("provenance-staged");
+  return Object.freeze({ route: "starter.seed", created });
 }
 
 /** One-click sample removal (G9): kernel-local, soft-deleted (reversible). */
 export function removeSampleRows(store: ClayStore): void {
-  const marker = store.getSetting<Record<string, string[]>>("sample_rows") ?? {};
-  for (const [table, ids] of Object.entries(marker))
-    for (const id of ids) store.softDelete(table, id);
-  store.setSetting("sample_rows", {});
+  const provenance = readSampleProvenance(store);
+  const removals: BatchMutation[] = [];
+  for (const entry of provenance)
+    if (entry.tableActive && entry.rowState === "active")
+      removals.push({ kind: "soft_delete", table: entry.tableName, id: entry.rowId });
+  if (removals.length === 0) return;
+  store.applyBatch({
+    source: "user",
+    summary: "Remove example records",
+    mutations: removals,
+  });
 }

@@ -1,7 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { parseImportFile, sanitizeIdent } from "../src/app/importData";
+import {
+  isSupportedImportFileName, parseImportFile, sanitizeIdent,
+} from "../src/app/importData";
 
 describe("parseImportFile", () => {
+  it("accepts only the narrow Release A text formats", () => {
+    expect(["data.csv", "data.tsv", "data.txt", "data.json"].every(isSupportedImportFileName))
+      .toBe(true);
+    expect(["data.xlsx", "data.xls", "data.ods", "data.pdf", "data"].some(isSupportedImportFileName))
+      .toBe(false);
+  });
+
   it("parses CSV, infers types, and coerces typed rows", () => {
     const csv = [
       "Name,Amount,Category,Due Date",
@@ -55,6 +64,31 @@ describe("parseImportFile", () => {
     expect(names[1]).toBe("first_name_2");
     expect(names[2]).toBe("c_3rd");
     expect(names[3]).toBe("column_4");
+  });
+
+  it("reports exact accepted, skipped, row-truncated, and schema-truncated totals", () => {
+    const headers = Array.from({ length: 22 }, (_, index) => `Column ${index + 1}`).join(",");
+    const full = Array.from({ length: 22 }, (_, index) => String(index + 1)).join(",");
+    const csv = [
+      headers,
+      ...Array.from({ length: 2_500 }, () => full),
+      "",
+      ...Array.from({ length: 2_501 }, () => full),
+    ].join("\n");
+    const result = parseImportFile(csv, "bounded.csv");
+    expect(result.review).toEqual({
+      sourceRows: 5_002,
+      acceptedRows: 5_000,
+      skippedRows: 1,
+      truncatedRows: 1,
+      sourceColumns: 22,
+      acceptedColumns: 20,
+      truncatedColumns: 2,
+    });
+    expect(result.rows).toHaveLength(5_000);
+    expect(
+      result.review.acceptedRows + result.review.skippedRows + result.review.truncatedRows,
+    ).toBe(result.review.sourceRows);
   });
 
   it("throws a friendly error for an empty file", () => {
