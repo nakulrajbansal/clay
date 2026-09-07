@@ -387,3 +387,12 @@ test("preview cleanup settles when termination emits exit synchronously", async 
   ]);
   assert.deepEqual(child.signals, ["SIGTERM"]);
 });
+
+test("worktree cleanup trusts only exact absent-and-unregistered readback", () => {
+  const checkout = "C:/Temp/clay certificate/source";
+  assert.equal(evidenceLib.worktreeRemovalComplete(checkout, false,
+    "worktree C:/repo\nHEAD aaaa\ndetached\n"), true);
+  assert.equal(evidenceLib.worktreeRemovalComplete(checkout, true, ""), false);
+  assert.equal(evidenceLib.worktreeRemovalComplete(checkout, false,
+    `worktree ${checkout}\nHEAD bbbb\ndetached\n`), false);
+});

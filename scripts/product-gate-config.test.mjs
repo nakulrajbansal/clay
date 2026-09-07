@@ -120,6 +120,11 @@ test("local-export browser evidence observes real dialog states and doubles ever
   assert.match(source, /style\.setProperty\("font-size"/);
   assert.match(source, /renderedTextNodes/);
   assert.match(source, /targetReachability/);
+  assert.match(source, /overflowingElements/);
+  const mobileScreenshot = source.indexOf("mobile-320px-200pct.png");
+  const reflowFailure = source.indexOf("320 CSS px at 200% text scale has no document-level horizontal overflow");
+  assert.ok(mobileScreenshot >= 0 && reflowFailure >= 0 && mobileScreenshot < reflowFailure,
+    "mobile screenshot and geometry diagnostics must exist before a reflow assertion can fail");
   assert.doesNotMatch(source,
     /document\.documentElement\.style\.setProperty\("font-size", "200%", "important"\)/);
   assert.doesNotMatch(source, /deviceScaleFactor:\s*2/);

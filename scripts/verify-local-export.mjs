@@ -1,6 +1,6 @@
 // Authoritative Release F local-export certificate entrypoint.
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { lstat, mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -11,6 +11,7 @@ import {
   deriveCleanHeadSource,
   prepareEvidenceOutput,
   stopChildProcess,
+  worktreeRemovalComplete,
 } from "./local-export-evidence-lib.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -21,6 +22,24 @@ function git(directory, ...args) {
   return execFileSync("git", args, {
     cwd: directory, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
   }).trim();
+}
+
+async function pathExists(path) {
+  try { await lstat(path); return true; }
+  catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function removeIsolatedWorktree(checkout) {
+  let removalError;
+  try { git(repoRoot, "worktree", "remove", "--force", checkout); return; }
+  catch (error) { removalError = error; }
+  const checkoutExists = await pathExists(checkout);
+  const registered = git(repoRoot, "worktree", "list", "--porcelain");
+  if (worktreeRemovalComplete(checkout, checkoutExists, registered)) return;
+  throw removalError;
 }
 
 function isInside(parent, candidate) {
@@ -161,7 +180,7 @@ async function main() {
       await cleanup("verify strict preview source", () =>
         assertExactCleanSource(checkout, source, "strict preview after"));
       await cleanup("remove isolated worktree", () =>
-        git(repoRoot, "worktree", "remove", "--force", checkout));
+        removeIsolatedWorktree(checkout));
     }
     await cleanup("remove isolated temporary directory", () =>
       rm(temporaryRoot, { recursive: true, force: true }));

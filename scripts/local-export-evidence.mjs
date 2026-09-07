@@ -477,10 +477,38 @@ try {
   const dialogFitsViewport = await mobileDialog.evaluate(element =>
     element.getBoundingClientRect().width <= innerWidth);
   check(dialogFitsViewport, "mobile: preview fits the viewport");
-  const horizontalDocumentOverflow = await mobilePage.evaluate(() =>
-    document.documentElement.scrollWidth > document.documentElement.clientWidth);
+  const mobileReflow = await mobilePage.evaluate(() => {
+    window.scrollTo(0, 0);
+    const root = document.documentElement;
+    const viewportWidth = root.clientWidth;
+    const overflowingElements = [...document.body.querySelectorAll("*")].flatMap(element => {
+      const rect = element.getBoundingClientRect();
+      if (rect.left >= -0.5 && rect.right <= viewportWidth + 0.5) return [];
+      const style = getComputedStyle(element);
+      return [{
+        tag: element.tagName.toLocaleLowerCase("en-US"),
+        id: element.id.slice(0, 80),
+        className: typeof element.className === "string" ? element.className.slice(0, 160) : "",
+        left: Math.round(rect.left * 100) / 100,
+        right: Math.round(rect.right * 100) / 100,
+        width: Math.round(rect.width * 100) / 100,
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+        overflowX: style.overflowX,
+      }];
+    }).slice(0, 25);
+    return {
+      horizontalDocumentOverflow: root.scrollWidth > viewportWidth,
+      documentClientWidth: viewportWidth,
+      documentScrollWidth: root.scrollWidth,
+      overflowingElements,
+    };
+  });
+  const horizontalDocumentOverflow = mobileReflow.horizontalDocumentOverflow;
+  await mobilePage.screenshot({ path: join(outDir, "mobile-320px-200pct.png"), fullPage: true });
   check(!horizontalDocumentOverflow,
-  "mobile: 320 CSS px at 200% text scale has no document-level horizontal overflow");
+    "mobile: 320 CSS px at 200% text scale has no document-level horizontal overflow",
+    mobileReflow);
   check(await mobileDialog.getByRole("button", { name: "Print / Save as PDF" }).evaluate(element =>
     element.getBoundingClientRect().height >= 44), "mobile: primary print target is at least 44px high");
   const mobileAxe = await blockingAxe(mobilePage, ".export-dialog");
@@ -488,7 +516,6 @@ try {
   await mobilePage.keyboard.press("Tab");
   check(await mobileDialog.evaluate(element => element.contains(document.activeElement)),
     "mobile: keyboard focus remains trapped inside the preview");
-  await mobilePage.screenshot({ path: join(outDir, "mobile-320px-200pct.png"), fullPage: true });
   await mobilePage.keyboard.press("Escape");
   await mobileDialog.waitFor({ state: "detached" });
   check(await mobilePage.getByRole("button", {

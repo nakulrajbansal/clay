@@ -78,6 +78,19 @@ export async function stopChildProcess(child, graceMs = 3_000) {
   if (!await forcedExit) throw new Error("preview process did not exit after SIGKILL");
 }
 
+function comparablePath(value) {
+  const canonical = resolve(value);
+  return process.platform === "win32" ? canonical.toLocaleLowerCase("en-US") : canonical;
+}
+
+export function worktreeRemovalComplete(checkout, checkoutExists, porcelain) {
+  if (checkoutExists) return false;
+  const expected = comparablePath(checkout);
+  return !porcelain.split(/\r?\n/u)
+    .filter(line => line.startsWith("worktree "))
+    .some(line => comparablePath(line.slice("worktree ".length)) === expected);
+}
+
 export function assertCleanGitWorktree(directory = process.cwd()) {
   const status = execFileSync("git", ["status", "--porcelain=v1", "--untracked-files=all"], {
     cwd: directory,
