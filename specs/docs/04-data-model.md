@@ -363,6 +363,10 @@ the required empty unprotected map, and the tag field encoding are not MAC input
 A strict parser requires their one deterministic encoding and rejects a nonempty
 unprotected map, alternate framing, malformed lengths, and trailing bytes. Clay makes
 no cryptographic-coverage claim for bytes that RFC 9052 excludes from `MAC_structure`.
+The exact protected-map profile uses standard labels 1 (`alg`), 2 (`crit`), 3
+(`content type`), and 4 (`kid`), plus private labels -65537 through -65540 for
+authentication version, archive format, backup-series ID, and generation. The content
+type is `application/vnd.clay.archive+zip`; every private label is critical.
 
 The HMAC key is a single-purpose random 256-bit Backup Trust Key. It never appears in
 the archive, destination handle, account data, telemetry, or hosted service. A
@@ -375,6 +379,9 @@ than blessing old archives. Unsigned pre-release format-5 candidates may report 
 self-consistent checksums through explicit development tooling and are rejected by
 normal restore. `checksumAuthenticated` remains a legacy implementation name and must
 never produce a cryptographic, protected-backup, freshness, or newest-backup claim.
+Internal development import now uses `checksumConsistent`; production backup snapshots,
+stage results, records, publication receipts, and restore grants bind the exact closed
+`BackupAuthenticationV1` key ID, series ID, and positive generation.
 
 Import parses only the bounded outer envelope needed to select an already trusted key,
 then verifies the MAC before decompressing members, parsing JSON, opening SQLite, or

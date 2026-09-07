@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  BackupAuthenticationV1,
   BackupRecordV1,
   BackupResultV1,
   BackupRunV1,
   BackupSelectedTargetV1,
+  BackupStageValidationV1,
   BackupTargetAdapterCertificationV1,
   BackupTargetV1,
   ManualBackupDownloadV1,
@@ -12,6 +14,15 @@ import { AuthenticatedFormat5RestoreGrantV1 } from "../src/restore";
 
 const id = (prefix: string, char: string): string => `${prefix}_${char.repeat(26)}`;
 const sha = (char: string): string => `sha256:${char.repeat(64)}`;
+
+const authentication = {
+  schema: 1 as const,
+  kind: "cose_mac0_hmac_256_256" as const,
+  authenticationVersion: 1 as const,
+  keyId: "10".repeat(16),
+  seriesId: "20".repeat(16),
+  generation: "9",
+};
 
 const evidence = {
   appInstanceId: id("app", "a"),
@@ -61,6 +72,7 @@ const run = {
     format: 5 as const,
     byteLength: 12,
     archiveSha256: sha("a"),
+    authentication,
     shapeHead: 7,
     shapeCurrent: 6,
   },
@@ -122,6 +134,7 @@ const record = {
   archiveFormat: 5 as const,
   byteLength: run.archive.byteLength,
   archiveSha256: run.archive.archiveSha256,
+  authentication,
   adapterCertificationId: backupTarget.adapterCertificationId,
   state: "valid" as const,
   validationCode: "archive_valid" as const,
@@ -180,6 +193,7 @@ describe("Release B2 external-backup contracts", () => {
   });
 
   it("bounds automatic snapshots and admits only authority-bearing format 5 semantics", () => {
+    expect(BackupAuthenticationV1.parse(authentication)).toEqual(authentication);
     expect(BackupRunV1.safeParse({
       ...run,
       archive: { ...run.archive, format: 4 },
@@ -191,6 +205,20 @@ describe("Release B2 external-backup contracts", () => {
     expect(BackupRunV1.safeParse({
       ...run,
       archive: { ...run.archive, shapeCurrent: run.archive.shapeHead + 1 },
+    }).success).toBe(false);
+    expect(BackupRunV1.safeParse({
+      ...run,
+      archive: { ...run.archive, authentication: undefined },
+    }).success).toBe(false);
+    expect(BackupRunV1.safeParse({
+      ...run,
+      archive: { ...run.archive, authentication: { ...authentication, generation: "0" } },
+    }).success).toBe(false);
+    expect(BackupStageValidationV1.safeParse({
+      schema: 1, status: "valid", evidence, authentication,
+    }).success).toBe(true);
+    expect(BackupStageValidationV1.safeParse({
+      schema: 1, status: "valid", evidence,
     }).success).toBe(false);
     expect(BackupRunV1.safeParse({ ...run, fileLabel: "x".repeat(121) }).success).toBe(false);
   });
@@ -266,7 +294,8 @@ describe("Release B2 external-backup contracts", () => {
       kind: "authenticated_format5_restore_as_new" as const,
       validationId: id("restoreval", "v"),
       archiveFormat: 5 as const,
-      checksumAuthenticated: true as const,
+      cryptographicallyAuthenticated: true as const,
+      authentication,
       archiveSha256: sha("8"),
       archiveTarget: evidence,
       preservedAppInstanceId: evidence.appInstanceId,
@@ -277,10 +306,15 @@ describe("Release B2 external-backup contracts", () => {
     expect(AuthenticatedFormat5RestoreGrantV1.parse(grant)).toEqual(grant);
     for (const invalid of [
       { ...grant, archiveFormat: 4 },
-      { ...grant, checksumAuthenticated: false },
+      { ...grant, cryptographicallyAuthenticated: false },
+      { ...grant, authentication: { ...authentication, seriesId: "21".repeat(15) } },
       { ...grant, installMode: "replace_current" },
       { ...grant, destinationAppInstanceId: grant.preservedAppInstanceId },
       { ...grant, untrustedDetail: "looks valid" },
     ]) expect(AuthenticatedFormat5RestoreGrantV1.safeParse(invalid).success).toBe(false);
+    expect(AuthenticatedFormat5RestoreGrantV1.safeParse({
+      ...grant,
+      checksumAuthenticated: true,
+    }).success).toBe(false);
   });
 });

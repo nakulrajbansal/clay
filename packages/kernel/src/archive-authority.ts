@@ -27,6 +27,10 @@ import {
   TargetEvidenceV1,
 } from "@clay/schema/catalog";
 import {
+  BackupStageValidationV1,
+  type BackupStageValidationV1 as BackupStageValidation,
+} from "@clay/schema/backup";
+import {
   CLAY_ARCHIVE_CONTENT_TYPE,
   sealAuthenticatedArchiveV5,
   verifyAuthenticatedArchiveV5,
@@ -125,6 +129,12 @@ function hasNonemptySampleProvenance(store: ClayStore): boolean {
 
 function digest(bytes: Uint8Array): string {
   return `sha256:${sha256HexSync(bytes)}`;
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  let value = "";
+  for (const byte of bytes) value += byte.toString(16).padStart(2, "0");
+  return value;
 }
 
 function canonicalBytes(value: unknown): Uint8Array {
@@ -1215,13 +1225,13 @@ export type ArchiveAuthorityClaim =
   | {
       kind: "legacy_archive";
       format: 1 | 2 | 3 | 4;
-      checksumAuthenticated: false;
+      checksumConsistent: false;
       evidence: null;
     }
   | {
-      kind: "format5_authority_evidence";
+      kind: "format5_internal_consistency";
       format: 5;
-      checksumAuthenticated: true;
+      checksumConsistent: true;
       evidence: ArchiveAuthorityEvidence;
     };
 
@@ -1258,7 +1268,7 @@ export async function importAuthorityArchive(
       authority: {
         kind: "legacy_archive",
         format: imported.manifest.format,
-        checksumAuthenticated: false,
+        checksumConsistent: false,
         evidence: null,
       },
     };
@@ -1345,9 +1355,9 @@ export async function importAuthorityArchive(
     manifest,
     invalidPanels: imported.invalidPanels,
     authority: {
-      kind: "format5_authority_evidence",
+      kind: "format5_internal_consistency",
       format: 5,
-      checksumAuthenticated: true,
+      checksumConsistent: true,
       evidence,
     },
   };
@@ -1374,7 +1384,7 @@ export async function importAuthenticatedAuthorityArchive(
   const verified = verifyAuthenticatedArchiveV5(bytes, resolveKey);
   const imported = await importAuthorityArchive(verified.payload, openFresh);
   if (imported.manifest.format !== 5
-      || imported.authority.kind !== "format5_authority_evidence") {
+      || imported.authority.kind !== "format5_internal_consistency") {
     imported.store.close();
     throw invalid("authenticated envelope payload is not format 5 authority evidence");
   }
@@ -1392,6 +1402,37 @@ export async function importAuthenticatedAuthorityArchive(
       evidence: imported.authority.evidence,
     },
   };
+}
+
+export async function validateAuthenticatedAuthorityArchiveStage(
+  bytes: Uint8Array,
+  expectedTarget: TargetEvidence,
+  resolveKey: BackupTrustKeyResolver,
+): Promise<BackupStageValidation> {
+  let imported: Awaited<ReturnType<typeof importAuthenticatedAuthorityArchive>> | undefined;
+  try {
+    imported = await importAuthenticatedAuthorityArchive(bytes, resolveKey);
+    if (!sameTarget(imported.authority.evidence.target, expectedTarget))
+      return { schema: 1, status: "invalid", evidence: null };
+    const authentication = imported.authority.authentication;
+    return BackupStageValidationV1.parse({
+      schema: 1,
+      status: "valid",
+      evidence: imported.authority.evidence.target,
+      authentication: {
+        schema: 1,
+        kind: "cose_mac0_hmac_256_256",
+        authenticationVersion: 1,
+        keyId: bytesToHex(authentication.keyId),
+        seriesId: bytesToHex(authentication.seriesId),
+        generation: authentication.generation.toString(),
+      },
+    });
+  } catch {
+    return { schema: 1, status: "invalid", evidence: null };
+  } finally {
+    imported?.store.close();
+  }
 }
 
 /**
@@ -1418,7 +1459,7 @@ export async function restoreAuthorityArchiveAsNew(
     throw invalid("restore-as-new requires a fresh target opener");
 
   const validated = await importAuthorityArchive(bytes);
-  if (validated.authority.kind !== "format5_authority_evidence") {
+  if (validated.authority.kind !== "format5_internal_consistency") {
     validated.store.close();
     throw invalid("restore-as-new requires certified format 5 authority evidence");
   }

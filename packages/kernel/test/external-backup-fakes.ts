@@ -27,6 +27,15 @@ export const EVIDENCE = {
   stateSha256: `sha256:${"c".repeat(64)}`,
 };
 
+export const AUTHENTICATION = {
+  schema: 1 as const,
+  kind: "cose_mac0_hmac_256_256" as const,
+  authenticationVersion: 1 as const,
+  keyId: "10".repeat(16),
+  seriesId: "20".repeat(16),
+  generation: "9",
+};
+
 export const SELECTED: BackupSelectedTarget = {
   schema: 1,
   authorityIncarnationId: id("auth", "d"),
@@ -67,6 +76,7 @@ export function backupRun(bytes: Uint8Array): BackupRun {
       format: 5,
       byteLength: bytes.byteLength,
       archiveSha256: digestBytes(bytes),
+      authentication: AUTHENTICATION,
       shapeHead: 9,
       shapeCurrent: 8,
     },
@@ -211,6 +221,7 @@ export class DeterministicStageValidator {
   invalid = false;
   throws = false;
   evidence = EVIDENCE;
+  authentication = AUTHENTICATION;
   observedBytes: Uint8Array | null = null;
 
   constructor(events: string[] = []) {
@@ -225,7 +236,12 @@ export class DeterministicStageValidator {
     if (this.throws) throw new Error("isolated stage failed");
     return this.invalid
       ? { schema: 1, status: "invalid", evidence: null }
-      : { schema: 1, status: "valid", evidence: structuredClone(this.evidence) };
+      : {
+          schema: 1,
+          status: "valid",
+          evidence: structuredClone(this.evidence),
+          authentication: structuredClone(this.authentication),
+        };
   };
 }
 
@@ -249,6 +265,7 @@ export function historicalRecord(
     archiveFormat: 5,
     byteLength: 3,
     archiveSha256: digestBytes(new Uint8Array([1, 2, 3])),
+    authentication: AUTHENTICATION,
     adapterCertificationId: TARGET.adapterCertificationId,
     state: "valid",
     validationCode: "archive_valid",

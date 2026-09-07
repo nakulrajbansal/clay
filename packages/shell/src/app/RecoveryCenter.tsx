@@ -63,6 +63,7 @@ export function recoveryFailureMessage(reason: BackupFailureReasonCode): string 
 
 function freezeGrant(value: AuthenticatedFormat5RestoreGrant): AuthenticatedFormat5RestoreGrant {
   Object.freeze(value.archiveTarget);
+  Object.freeze(value.authentication);
   return Object.freeze(value);
 }
 

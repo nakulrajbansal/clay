@@ -18,6 +18,7 @@ import {
   importAuthenticatedAuthorityArchive,
   importAuthorityArchive,
   restoreAuthorityArchiveAsNew,
+  validateAuthenticatedAuthorityArchiveStage,
   MAX_ARCHIVE_AUTHORITY_BYTES,
 } from "../src/archive-authority";
 import { sha256HexSync } from "../src/state-digest";
@@ -758,8 +759,8 @@ describe("archive format 5 authority evidence", () => {
       const imported = await importAuthorityArchive(archive);
       try {
         expect(imported.authority).toMatchObject({
-          kind: "format5_authority_evidence",
-          checksumAuthenticated: true,
+          kind: "format5_internal_consistency",
+          checksumConsistent: true,
           evidence: { target: source.target.evidence() },
         });
         expect(imported.store.query({ from: "projects" }))
@@ -1190,7 +1191,7 @@ describe("archive format 5 authority evidence", () => {
         expect(imported.authority).toEqual({
           kind: "legacy_archive",
           format: 4,
-          checksumAuthenticated: false,
+          checksumConsistent: false,
           evidence: null,
         });
         expect(imported.store.query({ from: "projects" })).toHaveLength(3);
@@ -1254,6 +1255,26 @@ describe("archive format 5 authority evidence", () => {
         imported.store.close();
       }
 
+      await expect(validateAuthenticatedAuthorityArchiveStage(
+        sealed, source.target.evidence(), () => key,
+      )).resolves.toEqual({
+        schema: 1,
+        status: "valid",
+        evidence: source.target.evidence(),
+        authentication: {
+          schema: 1,
+          kind: "cose_mac0_hmac_256_256",
+          authenticationVersion: 1,
+          keyId: "101112131415161718191a1b1c1d1e1f",
+          seriesId: "202122232425262728292a2b2c2d2e2f",
+          generation: "1",
+        },
+      });
+      await expect(validateAuthenticatedAuthorityArchiveStage(sealed, {
+        ...source.target.evidence(),
+        protectionRevision: "1",
+      }, () => key)).resolves.toEqual({ schema: 1, status: "invalid", evidence: null });
+
       await expect(importAuthenticatedAuthorityArchive(unsigned, () => key))
         .rejects.toThrow(/COSE|authenticated archive|tag/i);
       const tampered = sealed.slice();
@@ -1264,6 +1285,9 @@ describe("archive format 5 authority evidence", () => {
         return openMemoryDriver();
       })).rejects.toThrow(/authentication|trusted key/i);
       expect(freshTargetCalls).toBe(0);
+      await expect(validateAuthenticatedAuthorityArchiveStage(
+        tampered, source.target.evidence(), () => key,
+      )).resolves.toEqual({ schema: 1, status: "invalid", evidence: null });
     } finally {
       source.store.close();
     }

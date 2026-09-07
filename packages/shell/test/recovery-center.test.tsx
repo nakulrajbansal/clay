@@ -28,7 +28,15 @@ const grant: AuthenticatedFormat5RestoreGrant = {
   kind: "authenticated_format5_restore_as_new",
   validationId: id("restoreval", "e"),
   archiveFormat: 5,
-  checksumAuthenticated: true,
+  cryptographicallyAuthenticated: true,
+  authentication: {
+    schema: 1,
+    kind: "cose_mac0_hmac_256_256",
+    authenticationVersion: 1,
+    keyId: "10".repeat(16),
+    seriesId: "20".repeat(16),
+    generation: "9",
+  },
   archiveSha256: sha("8"),
   archiveTarget: {
     appInstanceId: currentAppInstanceId,
@@ -163,7 +171,7 @@ describe("Release B Recovery Center", () => {
     const validate = vi.fn(async () => ({
       ...grant,
       archiveFormat: 4,
-      checksumAuthenticated: false,
+      cryptographicallyAuthenticated: false,
     }));
     const { root } = await mount({
       ...baseProps(),
@@ -198,6 +206,10 @@ describe("Release B Recovery Center", () => {
     await act(async () => button("Restore as new app").click());
     expect(restore).toHaveBeenCalledTimes(1);
     expect(restore).toHaveBeenCalledWith(grant);
+    const delivered = restore.mock.calls[0]![0]!;
+    expect(Object.isFrozen(delivered)).toBe(true);
+    expect(Object.isFrozen(delivered.archiveTarget)).toBe(true);
+    expect(Object.isFrozen(delivered.authentication)).toBe(true);
     expect(grant.installMode).toBe("new_app_only");
     expect(grant.destinationAppInstanceId).not.toBe(grant.preservedAppInstanceId);
     await act(async () => root.unmount());

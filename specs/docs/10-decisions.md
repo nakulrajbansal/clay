@@ -920,6 +920,14 @@ ADR-052 (2026-09-06) Format 5 uses a user-held COSE_Mac0 Backup Trust Key
   decompression, JSON parsing, SQLite open, migration, restore callbacks, or writes.
   Inner hashes remain mandatory defense in depth but cannot independently authenticate.
 
+  IMPLEMENTATION PROFILE: protected labels 1, 2, 3, and 4 carry algorithm 5, the
+  critical-label list, content type `application/vnd.clay.archive+zip`, and the 16-byte
+  key ID. IANA private-use labels -65537, -65538, -65539, and -65540 carry authentication
+  version 1, archive format 5, the 16-byte backup-series ID, and positive uint64
+  generation. All four private labels are listed in `crit`. The codec accepts only one
+  shortest-form deterministic encoding. HMAC consumes the standard `MAC_structure` as
+  bounded chunks, so a 384 MiB payload is not duplicated merely to calculate its tag.
+
   The key is a CSPRNG-generated, single-purpose 256-bit Backup Trust Key. It is never
   stored in an archive, destination handle, account record, telemetry event, or hosted
   service. Automatic backup may use a device-protected working copy only after the owner
@@ -931,6 +939,11 @@ ADR-052 (2026-09-06) Format 5 uses a user-held COSE_Mac0 Backup Trust Key
   copy must state that anyone with file access can read records and anyone with the kit
   can forge a matching seal. Unsigned pre-release format 5 is rejected by normal restore
   and may claim only self-consistent checksums through explicit development tooling.
+  Recovery Kit version 1 is exact UTF-8 text beginning `CLAY RECOVERY KIT 1` plus one
+  canonical JSON object containing only format, version, base64url key ID, base64url
+  series ID, base64url 256-bit key, and a SHA-256 corruption checksum. It is not an
+  encrypted or authenticated secret container. Automatic-backup key access stays closed
+  until the exact exported bytes are independently read back and test-imported.
 
   A trusted generation high-water mark rejects known replay and forks. On a clean device
   with no independent checkpoint, a valid MAC establishes authenticity but not newest
@@ -951,6 +964,9 @@ ADR-052 (2026-09-06) Format 5 uses a user-held COSE_Mac0 Backup Trust Key
   recovery, and one exact integrated browser tree pass. The current
   `checksumAuthenticated` field describes checksum consistency only and must be renamed
   or quarantined before release.
+  The implementation names that internal-only state `checksumConsistent`; production
+  restore grants and backup records instead carry closed `BackupAuthenticationV1`
+  evidence and `cryptographicallyAuthenticated: true` only after COSE verification.
 ### ADR-050 — Release B2 external-backup mechanics are certification-gated and fail closed (2026-09-05)
 STATUS: accepted
 DECISION: Automatic external backup uses a separate `@clay/schema/backup` contract surface.

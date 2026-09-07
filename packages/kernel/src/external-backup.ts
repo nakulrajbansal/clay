@@ -10,6 +10,7 @@ import {
   BackupStageValidationV1,
   ValidatedBackupArtifactV1,
   type BackupFailureReasonCodeV1 as BackupFailureReason,
+  type BackupAuthenticationV1 as BackupAuthentication,
   type BackupPublicationRequestV1 as BackupPublicationRequest,
   type BackupRecordV1 as BackupRecord,
   type BackupResultV1 as BackupResult,
@@ -62,6 +63,18 @@ function evidenceEquals(left: TargetEvidence, right: TargetEvidence): boolean {
     && left.protectionRevision === right.protectionRevision
     && left.digestSchema === right.digestSchema
     && left.stateSha256 === right.stateSha256;
+}
+
+function authenticationEquals(
+  left: BackupAuthentication,
+  right: BackupAuthentication,
+): boolean {
+  return left.schema === right.schema
+    && left.kind === right.kind
+    && left.authenticationVersion === right.authenticationVersion
+    && left.keyId === right.keyId
+    && left.seriesId === right.seriesId
+    && left.generation === right.generation;
 }
 
 function selectionEquals(
@@ -173,6 +186,7 @@ function artifactMatchesRecord(
     && record.archiveFormat === artifact.archiveFormat
     && record.byteLength === artifact.byteLength
     && record.archiveSha256 === artifact.archiveSha256
+    && authenticationEquals(record.authentication, artifact.authentication)
     && record.adapterCertificationId === artifact.adapterCertificationId
     && record.state === "valid"
     && record.validationCode === "archive_valid";
@@ -287,7 +301,9 @@ export async function runExternalBackup(
   } catch {
     return failed("backup_invalid");
   }
-  if (stage.status !== "valid" || !evidenceEquals(stage.evidence, run.expected.target))
+  if (stage.status !== "valid"
+      || !evidenceEquals(stage.evidence, run.expected.target)
+      || !authenticationEquals(stage.authentication, run.archive.authentication))
     return failed("backup_invalid");
 
   const artifactResult = ValidatedBackupArtifactV1.safeParse({
@@ -304,6 +320,7 @@ export async function runExternalBackup(
     archiveFormat: 5,
     byteLength: run.archive.byteLength,
     archiveSha256: run.archive.archiveSha256,
+    authentication: run.archive.authentication,
     adapterCertificationId: run.target.adapterCertificationId,
   });
   if (!artifactResult.success) return failed("backup_invalid");

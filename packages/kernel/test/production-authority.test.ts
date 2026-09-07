@@ -497,8 +497,8 @@ describe("production Store authority", () => {
       const staged = await importAuthorityArchive(exported.bytes);
       try {
         expect(staged.authority).toMatchObject({
-          kind: "format5_authority_evidence",
-          checksumAuthenticated: true,
+          kind: "format5_internal_consistency",
+          checksumConsistent: true,
         });
         expect(staged.store.query({ from: "projects" }))
           .toEqual([expect.objectContaining({ name: "Preserved" })]);

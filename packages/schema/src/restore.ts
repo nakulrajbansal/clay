@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { AppInstanceId, Sha256 } from "./index";
 import { CanonicalInstant, TargetEvidenceV1 } from "./catalog";
+import { BackupAuthenticationV1 } from "./backup";
 
 const RestoreValidationId = z.string().regex(/^restoreval_[a-z2-7]{26}$/);
 
@@ -14,7 +15,8 @@ export const AuthenticatedFormat5RestoreGrantV1 = z.object({
   kind: z.literal("authenticated_format5_restore_as_new"),
   validationId: RestoreValidationId,
   archiveFormat: z.literal(5),
-  checksumAuthenticated: z.literal(true),
+  cryptographicallyAuthenticated: z.literal(true),
+  authentication: BackupAuthenticationV1,
   archiveSha256: Sha256,
   archiveTarget: TargetEvidenceV1,
   preservedAppInstanceId: AppInstanceId,

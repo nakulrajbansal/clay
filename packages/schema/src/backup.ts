@@ -31,6 +31,28 @@ export type BackupTargetAdapterCertificationId = z.infer<
   typeof BackupTargetAdapterCertificationId
 >;
 
+const Hex16 = z.string().regex(/^[0-9a-f]{32}$/);
+const PositiveUInt64Decimal = UInt64Decimal.refine(
+  value => BigInt(value) > 0n,
+  "positive uint64 required",
+);
+export const BackupAuthenticationV1 = z.object({
+  schema: z.literal(1),
+  kind: z.literal("cose_mac0_hmac_256_256"),
+  authenticationVersion: z.literal(1),
+  keyId: Hex16,
+  seriesId: Hex16,
+  generation: PositiveUInt64Decimal,
+}).strict().superRefine((value, context) => {
+  if (value.keyId === value.seriesId)
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["seriesId"],
+      message: "key and backup-series identifiers must differ",
+    });
+});
+export type BackupAuthenticationV1 = z.infer<typeof BackupAuthenticationV1>;
+
 const BindingIdentifier = z.string().min(1).max(64).regex(/^[a-z][a-z0-9._-]{0,63}$/);
 const RuntimeVersion = z.string().min(1).max(40)
   .regex(/^[0-9A-Za-z](?:[0-9A-Za-z._-]{0,39})$/);
@@ -142,6 +164,7 @@ const BackupSnapshotV1 = z.object({
   format: z.literal(5),
   byteLength: ArchiveByteLength,
   archiveSha256: Sha256,
+  authentication: BackupAuthenticationV1,
   shapeHead: ShapeVersion,
   shapeCurrent: ShapeVersion,
 }).strict().superRefine((value, context) => {
@@ -208,6 +231,7 @@ const backupArtifactShape = {
   archiveFormat: z.literal(5),
   byteLength: ArchiveByteLength,
   archiveSha256: Sha256,
+  authentication: BackupAuthenticationV1,
   adapterCertificationId: BackupTargetAdapterCertificationId,
 } as const;
 
@@ -293,6 +317,7 @@ export const BackupStageValidationV1 = z.discriminatedUnion("status", [
     schema: z.literal(1),
     status: z.literal("valid"),
     evidence: TargetEvidenceV1,
+    authentication: BackupAuthenticationV1,
   }).strict(),
   z.object({
     schema: z.literal(1),

@@ -12,7 +12,15 @@ const valid = (): AuthenticatedFormat5RestoreGrant => ({
   kind: "authenticated_format5_restore_as_new",
   validationId: id("restoreval", "e"),
   archiveFormat: 5,
-  checksumAuthenticated: true,
+  cryptographicallyAuthenticated: true,
+  authentication: {
+    schema: 1,
+    kind: "cose_mac0_hmac_256_256",
+    authenticationVersion: 1,
+    keyId: "10".repeat(16),
+    seriesId: "20".repeat(16),
+    generation: "9",
+  },
   archiveSha256: sha("8"),
   archiveTarget: {
     appInstanceId: id("app", "a"),
@@ -35,9 +43,15 @@ describe("authenticated format-5 restore presentation grant parser", () => {
     expect(parsed).toEqual(source);
     expect(parsed).not.toBe(source);
     expect(parsed?.archiveTarget).not.toBe(source.archiveTarget);
+    expect(parsed?.authentication).not.toBe(source.authentication);
 
     expect(parseAuthenticatedFormat5RestoreGrant({ ...source, archiveFormat: 4 })).toBeNull();
-    expect(parseAuthenticatedFormat5RestoreGrant({ ...source, checksumAuthenticated: false })).toBeNull();
+    expect(parseAuthenticatedFormat5RestoreGrant({
+      ...source, cryptographicallyAuthenticated: false,
+    })).toBeNull();
+    expect(parseAuthenticatedFormat5RestoreGrant({
+      ...source, checksumAuthenticated: true,
+    })).toBeNull();
     expect(parseAuthenticatedFormat5RestoreGrant({
       ...source,
       destinationAppInstanceId: source.preservedAppInstanceId,
