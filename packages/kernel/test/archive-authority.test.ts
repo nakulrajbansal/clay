@@ -13,7 +13,9 @@ import { DeviceCatalog, expectedCatalogSchemaObjects } from "../src/device-catal
 import {
   assertArchiveAuthorityCardinality,
   assertArchiveAuthorityMemberSize,
+  exportAuthenticatedAuthorityArchiveV5,
   exportAuthorityArchiveV5,
+  importAuthenticatedAuthorityArchive,
   importAuthorityArchive,
   restoreAuthorityArchiveAsNew,
   MAX_ARCHIVE_AUTHORITY_BYTES,
@@ -1208,6 +1210,59 @@ describe("archive format 5 authority evidence", () => {
         freshTargetCalls++;
         return openMemoryDriver();
       })).rejects.toThrow(/certified format 5 authority evidence/i);
+      expect(freshTargetCalls).toBe(0);
+    } finally {
+      source.store.close();
+    }
+  });
+
+  it("authenticates format 5 before archive parsing or fresh-target opening", async () => {
+    const source = await authoritativeArchiveSource();
+    const key = new Uint8Array(32).map((_, index) => index);
+    const keyId = new Uint8Array(16).map((_, index) => 0x10 + index);
+    const seriesId = new Uint8Array(16).map((_, index) => 0x20 + index);
+    try {
+      const legacy = await source.store.exportArchive("Field Service");
+      const unsigned = await exportAuthorityArchiveV5(legacy, source.driver);
+      const sealed = await exportAuthenticatedAuthorityArchiveV5(legacy, source.driver, {
+        backupTrustKey: key,
+        keyId,
+        seriesId,
+        generation: 1n,
+      });
+      expect(sealed[0]).toBe(0xd1);
+      const imported = await importAuthenticatedAuthorityArchive(sealed, hint => {
+        expect(hint).toMatchObject({
+          authenticationVersion: 1,
+          archiveFormat: 5,
+          generation: 1n,
+        });
+        expect(hint.keyId).toEqual(keyId);
+        expect(hint.seriesId).toEqual(seriesId);
+        return key;
+      });
+      try {
+        expect(imported.manifest.format).toBe(5);
+        expect(imported.authority).toMatchObject({
+          kind: "authenticated_format5_authority",
+          format: 5,
+          cryptographicallyAuthenticated: true,
+          checksumConsistent: true,
+          authentication: { generation: 1n },
+        });
+      } finally {
+        imported.store.close();
+      }
+
+      await expect(importAuthenticatedAuthorityArchive(unsigned, () => key))
+        .rejects.toThrow(/COSE|authenticated archive|tag/i);
+      const tampered = sealed.slice();
+      tampered[tampered.byteLength - 1] = tampered[tampered.byteLength - 1]! ^ 1;
+      let freshTargetCalls = 0;
+      await expect(importAuthenticatedAuthorityArchive(tampered, () => key, async () => {
+        freshTargetCalls++;
+        return openMemoryDriver();
+      })).rejects.toThrow(/authentication|trusted key/i);
       expect(freshTargetCalls).toBe(0);
     } finally {
       source.store.close();

@@ -26,6 +26,13 @@ import {
   type TargetEvidenceV1 as TargetEvidence,
   TargetEvidenceV1,
 } from "@clay/schema/catalog";
+import {
+  CLAY_ARCHIVE_CONTENT_TYPE,
+  sealAuthenticatedArchiveV5,
+  verifyAuthenticatedArchiveV5,
+  type AuthenticatedArchiveHeaderV1,
+  type BackupTrustKeyResolver,
+} from "./archive-authentication";
 import { enumerateCanonicalStateV1, verifyCanonicalStateV1 } from "./canonical-state";
 import type { DbDriver, SqlRow } from "./db";
 import { openDriverFromBytes } from "./db";
@@ -49,6 +56,13 @@ const MAX_MANIFEST_BYTES = 64 * 1024;
 export const MAX_ARCHIVE_AUTHORITY_BYTES = 32 * 1024 * 1024;
 const FORMAT_5_FILES = new Set(["manifest.json", "authority.json", "user.db", "system.db"]);
 const textEncoder = new TextEncoder();
+
+export interface ArchiveSealMaterialV1 {
+  backupTrustKey: Uint8Array;
+  keyId: Uint8Array;
+  seriesId: Uint8Array;
+  generation: bigint;
+}
 
 export function assertArchiveAuthorityMemberSize(byteLength: number): void {
   if (!Number.isSafeInteger(byteLength) || byteLength < 0
@@ -527,6 +541,22 @@ export async function exportAuthorityArchiveV5(
       || !sameJson(finalCatalogAuthority, authority.catalogAuthority))
     throw invalid("current exact target authority changed during archive collection read-back");
   return archive;
+}
+
+export async function exportAuthenticatedAuthorityArchiveV5(
+  legacyArchive: Uint8Array,
+  authorityDriver: DbDriver,
+  material: ArchiveSealMaterialV1,
+): Promise<Uint8Array> {
+  const inner = await exportAuthorityArchiveV5(legacyArchive, authorityDriver);
+  return sealAuthenticatedArchiveV5(inner, material.backupTrustKey, {
+    authenticationVersion: 1,
+    archiveFormat: 5,
+    contentType: CLAY_ARCHIVE_CONTENT_TYPE,
+    keyId: material.keyId,
+    seriesId: material.seriesId,
+    generation: material.generation,
+  });
 }
 
 function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
@@ -1319,6 +1349,47 @@ export async function importAuthorityArchive(
       format: 5,
       checksumAuthenticated: true,
       evidence,
+    },
+  };
+}
+
+export async function importAuthenticatedAuthorityArchive(
+  bytes: Uint8Array,
+  resolveKey: BackupTrustKeyResolver,
+  openFresh?: () => Promise<DbDriver>,
+): Promise<{
+  store: ClayStore;
+  manifest: ArchiveManifest;
+  invalidPanels: string[];
+  authority: {
+    kind: "authenticated_format5_authority";
+    format: 5;
+    cryptographicallyAuthenticated: true;
+    checksumConsistent: true;
+    authentication: AuthenticatedArchiveHeaderV1;
+    envelopeSha256: string;
+    evidence: ArchiveAuthorityEvidence;
+  };
+}> {
+  const verified = verifyAuthenticatedArchiveV5(bytes, resolveKey);
+  const imported = await importAuthorityArchive(verified.payload, openFresh);
+  if (imported.manifest.format !== 5
+      || imported.authority.kind !== "format5_authority_evidence") {
+    imported.store.close();
+    throw invalid("authenticated envelope payload is not format 5 authority evidence");
+  }
+  return {
+    store: imported.store,
+    manifest: imported.manifest as ArchiveManifest,
+    invalidPanels: imported.invalidPanels,
+    authority: {
+      kind: "authenticated_format5_authority",
+      format: 5,
+      cryptographicallyAuthenticated: true,
+      checksumConsistent: true,
+      authentication: verified.header,
+      envelopeSha256: digest(bytes),
+      evidence: imported.authority.evidence,
     },
   };
 }
