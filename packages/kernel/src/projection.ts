@@ -118,15 +118,16 @@ export function encodeProjectionPlaintextV1(value: ProjectionPlaintextV1): Uint8
 }
 
 export function decodeProjectionPlaintextV1(bytes: Uint8Array): ProjectionPlaintextV1 {
-  if (!(bytes instanceof Uint8Array) || bytes.byteLength > PROJECTION_LIMITS_V1.plaintextBytes)
+  const view = uint8View(bytes);
+  if (!view || view.byteLength > PROJECTION_LIMITS_V1.plaintextBytes)
     throw invalid("Projection bytes are missing or over 8 MiB");
   let unknown: unknown;
-  try { unknown = JSON.parse(utf8Decoder.decode(bytes)); }
+  try { unknown = JSON.parse(utf8Decoder.decode(view)); }
   catch (error) { throw invalid("Projection is not valid UTF-8 JSON", error); }
   const parsed = ProjectionPlaintextSchema.safeParse(unknown);
   if (!parsed.success) throw invalid("invalid projection", parsed.error.issues);
   const canonical = textEncoder.encode(canonicalProjectionJsonV1(parsed.data));
-  if (!equalBytes(bytes, canonical))
+  if (!equalBytes(view, canonical))
     throw invalid("Projection bytes are not canonical");
   return freezeJson(parsed.data);
 }

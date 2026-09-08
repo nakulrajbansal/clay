@@ -54,13 +54,26 @@ describe("local export scope builder", () => {
     expect(scope.fieldChoices).toEqual([{ fieldId: titleId, label: "Title" }]);
   });
 
-  it("builds only the proven single-record target and rejects identity drift", () => {
-    expect(buildRecordProjectionScopeV1({ trace, table, recordId }).request).toMatchObject({
+  it("binds a record's current visible attachment fields to exact stable authority", () => {
+    const scope = buildRecordProjectionScopeV1({ trace, table, recordId });
+    expect(scope.request).toMatchObject({
       kind: "record", recordId, tableId, expectedSchemaVersion: 7,
       fieldIds: [titleId, statusId],
     });
+    expect(scope.attachmentAuthorities).toEqual([{
+      tableName: "tasks",
+      fieldName: "files",
+      source: { tableId, fieldId: filesId, recordId },
+    }]);
+
     expect(() => buildRecordProjectionScopeV1({
       trace: { ...trace, tables: [] }, table, recordId,
     })).toThrow(/stable table identity/i);
+    expect(() => buildRecordProjectionScopeV1({
+      trace: { ...trace, fields: trace.fields.map(field =>
+        field.fieldId === filesId ? { ...field, state: "hidden" as const } : field) },
+      table,
+      recordId,
+    })).toThrow(/stable field identity/i);
   });
 });

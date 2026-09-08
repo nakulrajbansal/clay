@@ -138,6 +138,7 @@ export function RecordDetail(props: {
   onError: (message: string) => void;
   onInfo: (message: string) => void;
   onExport?: () => void;
+  onShare?: () => void;
   onConfirm?: (message: string) => Promise<boolean>;
 }): React.JSX.Element {
   const [row, setRow] = useState<QueryRow | null>(null);
@@ -347,6 +348,9 @@ export function RecordDetail(props: {
             {props.onExport ? <button type="button"
               aria-label="Preview Print / CSV for this record"
               onClick={props.onExport}>Print / CSV</button> : null}
+            {props.onShare ? <button type="button"
+              aria-label="Create read-only share for this record"
+              onClick={props.onShare}>Share link</button> : null}
             <button onClick={() => void duplicate()}>Duplicate</button>
             <button className="danger" onClick={() => void archive()}>Archive</button>
           </div>

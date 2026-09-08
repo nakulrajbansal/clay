@@ -8,6 +8,7 @@
     "./catalog": "./src/catalog.ts",
     "./evidence": "./src/evidence.ts",
     "./projection": "./src/projection.ts",
+    "./share": "./src/share.ts",
     "./mutation-plan-api.json": "./mutation-plan-api.json"
   },
   "scripts": {

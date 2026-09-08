@@ -19,6 +19,9 @@ import {
   buildCurrentViewProjectionScopeV1, buildRecordProjectionScopeV1, localDateAnchorV1,
   type LocalProjectionScopeV1,
 } from "./projection-scope";
+import { getBackendUrl, getSessionToken } from "./settings";
+import { BrowserShareRelayClient } from "../share/relay-client";
+import type { ShareAttachmentChoiceV1 } from "../share/ShareDialog";
 export { loadAllTableRows } from "./paged-query";
 import {
   createOperationalView, deleteOperationalView, loadOperationalViews,
@@ -36,6 +39,9 @@ const loadExportDialog = () => import("./ExportDialog").then(module => ({
 const ExportDialog = lazy(loadExportDialog);
 // Start the local UI asset fetch with the Data surface, never with export.
 void loadExportDialog();
+const ShareDialog = lazy(() => import("../share/ShareDialog").then(module => ({
+  default: module.ShareDialog,
+})));
 const RelationConversionDialog = lazy(() => import("./RelationConversionDialog").then(module => ({
   default: module.RelationConversionDialog,
 })));
@@ -43,6 +49,9 @@ const RelationConversionDialog = lazy(() => import("./RelationConversionDialog")
 type EditingCell = { rowId: string; col: string; draft: string };
 type ActiveFilter = NonNullable<Query["where"]>[number];
 type SortOrder = NonNullable<Query["orderBy"]>[number];
+type ShareProjectionScopeV1 = LocalProjectionScopeV1 & Readonly<{
+  attachmentChoices: readonly ShareAttachmentChoiceV1[];
+}>;
 
 function coerceDraft(type: string, draft: string): unknown {
   if (draft === "") return null;
@@ -131,7 +140,9 @@ export function DataView(props: {
   const [detailStack, setDetailStack] = useState<{ table: string; id: string }[]>([]);
   const [showRelationDialog, setShowRelationDialog] = useState(false);
   const [exportScope, setExportScope] = useState<LocalProjectionScopeV1 | null>(null);
+  const [shareScope, setShareScope] = useState<ShareProjectionScopeV1 | null>(null);
   const exportButtonRef = useRef<HTMLButtonElement>(null);
+  const shareButtonRef = useRef<HTMLButtonElement>(null);
   const [samples, setSamples] = useState(0);
   // ADR-027: per-record history + local schema edits (no model call)
   const [histFor, setHistFor] = useState<{ id: string;
@@ -140,6 +151,10 @@ export function DataView(props: {
     name: string; type: string; targetTable?: string; cardinality?: "one" | "many";
   } | null>(null);
   const [renamingCol, setRenamingCol] = useState<{ from: string; value: string } | null>(null);
+  const shareRelay = useMemo(() => {
+    const relayUrl = getBackendUrl() ?? window.location.origin;
+    return new BrowserShareRelayClient(relayUrl, getSessionToken(relayUrl));
+  }, []);
 
   useEffect(() => { setSelectedRows(new Set()); }, [selected, search, filter, activeViewId]);
 
@@ -522,6 +537,53 @@ export function DataView(props: {
     }
   };
 
+  const openCurrentViewShare = (): void => {
+    if (!table || !semanticTrace) {
+      props.onError("Sharing is not ready. Reopen Data.");
+      return;
+    }
+    try {
+      setShareScope({
+        ...buildCurrentViewProjectionScopeV1({
+          trace: semanticTrace, table, columns, search, filter, sort,
+          dateAnchor: localDateAnchorV1(),
+        }),
+        // Multi-row snapshots do not infer file authority. Files can be
+        // separately approved from a one-record share instead.
+        attachmentChoices: [],
+      });
+    } catch (error) {
+      props.onError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const openRecordShare = async (recordTable: RegTable, recordId: string): Promise<void> => {
+    if (!semanticTrace) {
+      props.onError("Sharing is not ready. Reopen Data.");
+      return;
+    }
+    try {
+      const scope = buildRecordProjectionScopeV1({ trace: semanticTrace, table: recordTable, recordId });
+      const groups = await Promise.all(scope.attachmentAuthorities.map(async authority => {
+        const files = await worker.attachmentsForRecord(
+          authority.tableName, authority.source.recordId, authority.fieldName,
+        );
+        return files.map(file => ({
+          ...file,
+          tableName: authority.tableName,
+          fieldName: authority.fieldName,
+          source: { ...authority.source },
+        }));
+      }));
+      const attachmentChoices = groups.flat();
+      if (new Set(attachmentChoices.map(file => file.id)).size !== attachmentChoices.length)
+        throw new Error("A file has ambiguous current record-field authority. Reopen Data.");
+      setShareScope({ ...scope, attachmentChoices });
+    } catch (error) {
+      props.onError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   const q = search.trim();
   const safeFilter = filter ? {
     field: filter.field, op: filter.op,
@@ -592,6 +654,9 @@ export function DataView(props: {
           {table ? <button ref={exportButtonRef} className="dataview-import"
             type="button" aria-label="Preview Print / CSV for current Data view"
             onClick={openCurrentViewExport}>Print / CSV</button> : null}
+          {table ? <button ref={shareButtonRef} className="dataview-import"
+            type="button" aria-label="Create read-only share for current Data view"
+            onClick={openCurrentViewShare}>Share link</button> : null}
           <button className="dataview-close" aria-label="Close data view"
             title="Close (Esc)" onClick={props.onClose}>✕</button>
         </div>
@@ -1038,6 +1103,16 @@ export function DataView(props: {
           returnFocusRef={exportScope.request.kind === "current_view" ? exportButtonRef : undefined}
           onClose={() => setExportScope(null)}
         /></Suspense> : null}
+      {shareScope ? <Suspense fallback={null}><ShareDialog
+          worker={worker}
+          request={shareScope.request}
+          fieldChoices={shareScope.fieldChoices}
+          attachmentChoices={shareScope.attachmentChoices}
+          relay={shareRelay}
+          viewerOrigin={window.location.origin}
+          returnFocusRef={shareScope.request.kind === "current_view" ? shareButtonRef : undefined}
+          onClose={() => setShareScope(null)}
+        /></Suspense> : null}
       {detail && detailTable ? (
         <Suspense fallback={<div className="record-detail-loading" role="status">Loading record…</div>}>
         <RecordDetail
@@ -1069,6 +1144,7 @@ export function DataView(props: {
               props.onError(error instanceof Error ? error.message : String(error));
             }
           }}
+          onShare={() => void openRecordShare(detailTable, detail.id)}
           onConfirm={props.onConfirm}
         />
         </Suspense>

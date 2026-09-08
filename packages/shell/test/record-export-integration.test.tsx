@@ -33,12 +33,14 @@ it("offers the one-record export boundary without writing the record", async () 
   const root = createRoot(host);
   const beforeHistory = store.rowHistoryCount();
   let exports = 0;
+  let shares = 0;
   await act(async () => root.render(<RecordDetail
     table={store.registrySnapshot().get("tasks")!}
     recordId={String(row.id)} tables={[store.registrySnapshot().get("tasks")!]}
     store={new InProcessAsyncStore(store)} worker={worker}
     onNavigate={() => undefined} onClose={() => undefined} onWrite={() => undefined}
     onExport={() => { exports++; }}
+    onShare={() => { shares++; }}
     onError={message => { throw new Error(message); }} onInfo={() => undefined}
   />));
   await waitFor(() => document.body.textContent?.includes("Canonical record") ?? false);
@@ -48,6 +50,12 @@ it("offers the one-record export boundary without writing the record", async () 
   expect(button).not.toBeNull();
   await act(async () => button.click());
   expect(exports).toBe(1);
+  const shareButton = document.body.querySelector<HTMLButtonElement>(
+    'button[aria-label="Create read-only share for this record"]',
+  )!;
+  expect(shareButton).not.toBeNull();
+  await act(async () => shareButton.click());
+  expect(shares).toBe(1);
   expect(store.rowHistoryCount()).toBe(beforeHistory);
   expect(store.query({ from: "tasks" })[0]?.title).toBe("Canonical record");
   await act(async () => root.unmount());
