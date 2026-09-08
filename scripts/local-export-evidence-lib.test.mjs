@@ -50,6 +50,12 @@ const samples = [
   sample(5000, "cold", "owner-preview", 30), ...warm(5000, "owner-preview", 25),
   sample(5000, "cold", "cancel", 5), ...warm(5000, "cancel", 4),
 ];
+const maximumPrint = {
+  artifact: { file: "maximum-print.pdf", bytes: 3, sha256: digest("bin") },
+  rows: 5000, fields: 30, previewRows: 100, renderedCells: 150_000,
+  maxCellsPerTask: 600, sheets: 272, responsiveBeforePrint: true,
+  extractedSha256: digest("maximum print text"), exact: true,
+};
 const benchmark = {
   schema: "BenchmarkEvidenceManifestV1",
   generatedAt: "2026-09-06T00:00:00.000Z",
@@ -59,11 +65,14 @@ const benchmark = {
   path: "browser-worker-rpc-owner-preview",
   fixture: { harnessSha256: digest("fixture"), harnessBytes: 2048, fields: 30,
     rows: [1000, 5000], nearLimitPlaintextBytes: 8_000_000 },
+  maximumPrint,
   methodology,
   limits,
   samples,
   results: summarizeBenchmarkSamples(samples),
-  rawResultsSha256: sha256Evidence(Buffer.from(canonicalEvidenceJson({ methodology, samples }))),
+  rawResultsSha256: sha256Evidence(Buffer.from(canonicalEvidenceJson({
+    methodology, samples, maximumPrint,
+  }))),
   verdict: "PASS",
 };
 const textScaleSurfaces = [
@@ -161,6 +170,7 @@ async function fixtureDirectory(writeManifests = true) {
   const runtime = join(root, "runtime");
   await mkdir(runtime);
   await Promise.all(runtimeArtifactNames.map(file => writeFile(join(runtime, file), "bin")));
+  await writeFile(join(root, "maximum-print.pdf"), "bin");
   const artifacts = runtimeArtifactNames.map(file => ({
     file, bytes: 3, sha256: digest("bin"),
   }));
@@ -194,8 +204,14 @@ async function fixtureDirectory(writeManifests = true) {
         keyboardAssertions: ["tab route", "forward wrap", "reverse wrap", "inert outside",
           "Space closes", "focus returns", "Escape returns"],
         actionsReachable: true, axeBlocking: 0 },
-      network: { desktopExportRequests: 0, recordExportRequests: 0,
-        mobileExportRequests: 0, unexpected: [] },
+      network: {
+        desktopExportRequests: 0, recordExportRequests: 0, mobileExportRequests: 0,
+        desktopActions: ["csv", "print"], recordActions: ["csv", "print"],
+        desktopWebSockets: 0, recordWebSockets: 0,
+        desktopBlobUrls: 1, recordBlobUrls: 1,
+        desktopDownloadBlobUrls: 1, recordDownloadBlobUrls: 1,
+        unexpected: [],
+      },
     },
     cases: [
       "current-view-preview-exact", "current-view-csv-exact", "print-document-exact",
@@ -216,7 +232,10 @@ async function fixtureDirectory(writeManifests = true) {
       { file: "runtime/report.json", schema: report.schema, sha256: sha256Evidence(reportBytes) },
       { file: "benchmark.json", schema: benchmark.schema, sha256: sha256Evidence(benchmarkBytes) },
     ],
-    artifacts: artifacts.map(artifact => ({ ...artifact, file: `runtime/${artifact.file}` })),
+    artifacts: [
+      ...artifacts.map(artifact => ({ ...artifact, file: `runtime/${artifact.file}` })),
+      benchmark.maximumPrint.artifact,
+    ],
     verdict: "BLOCKED",
   };
   if (writeManifests) {
@@ -240,17 +259,50 @@ test("benchmark semantics bind raw samples, p95 method, counts, memory, and verd
   }), /cold/i);
 });
 
+test("zero-egress proof spans observed CSV and Print actions and rejects same-origin traffic", () => {
+  const assertLocalExportActionEgress = evidenceLib.assertLocalExportActionEgress;
+  assert.equal(typeof assertLocalExportActionEgress, "function",
+    "action-interval egress assertion must be exported");
+  const local = {
+    actions: ["csv", "print"],
+    requests: [],
+    webSockets: [],
+    blobUrls: ["blob:http://127.0.0.1:4173/local-export"],
+    downloadUrls: ["blob:http://127.0.0.1:4173/local-export"],
+  };
+  assert.deepEqual(assertLocalExportActionEgress(local), {
+    actions: ["csv", "print"], httpRequests: 0, webSockets: 0,
+    blobUrls: ["blob:http://127.0.0.1:4173/local-export"],
+    downloadUrls: ["blob:http://127.0.0.1:4173/local-export"],
+  });
+  assert.throws(() => assertLocalExportActionEgress({
+    ...local, requests: ["http://127.0.0.1:4173/export-probe"],
+  }), /http|network|egress/i);
+  assert.throws(() => assertLocalExportActionEgress({
+    ...local, actions: ["csv"],
+  }), /print|actions/i);
+  assert.throws(() => assertLocalExportActionEgress({
+    ...local, webSockets: ["ws://127.0.0.1:4173/export-probe"],
+  }), /websocket|egress/i);
+  assert.throws(() => assertLocalExportActionEgress({
+    ...local, downloadUrls: ["https://127.0.0.1:4173/export.csv"],
+  }), /blob|download/i);
+});
+
 test("outer release verification closes source, reports, and every referenced artifact", async () => {
   const { root } = await fixtureDirectory();
   await assert.doesNotReject(verifyReleaseEvidenceDirectory(root, source));
   await assert.rejects(verifyReleaseEvidenceDirectory(root, {
     commit: "d".repeat(40), tree: source.tree,
   }), /source/i);
+  await writeFile(join(root, "maximum-print.pdf"), "changed");
+  await assert.rejects(verifyReleaseEvidenceDirectory(root, source), /digest|bytes/i);
+  await writeFile(join(root, "maximum-print.pdf"), "bin");
   await writeFile(join(root, "runtime", "desktop-print.pdf"), "changed");
   await assert.rejects(verifyReleaseEvidenceDirectory(root, source), /digest|bytes/i);
 });
 
-test("release writer emits closed V2 reports and the complete runtime artifact inventory", async t => {
+test("release writer emits closed V2 reports and the complete runtime/benchmark artifact inventory", async t => {
   const { root, report } = await fixtureDirectory(false);
   t.after(() => rm(root, { recursive: true, force: true }));
   const writeReleaseEvidenceDirectory = evidenceLib.writeReleaseEvidenceDirectory;
@@ -261,7 +313,7 @@ test("release writer emits closed V2 reports and the complete runtime artifact i
   assert.equal(verified.release.schema, "ReleaseEvidenceManifestV1");
   assert.equal(verified.release.verdict, "BLOCKED");
   assert.deepEqual(verified.inventory, [
-    "benchmark.json", "release.json", "runtime/accessibility-tree.json",
+    "benchmark.json", "maximum-print.pdf", "release.json", "runtime/accessibility-tree.json",
     "runtime/current-view.csv", "runtime/desktop-current-view.png",
     "runtime/desktop-print-media.png", "runtime/desktop-print.pdf",
     "runtime/desktop-record.png", "runtime/mobile-320px-200pct.png", "runtime/record.csv",
@@ -481,6 +533,7 @@ test("evidence output cleanup rejects unknown entries and deletes only owned out
   await mkdir(join(root, "runtime"));
   await writeFile(join(root, "runtime", "report.json"), "old\n");
   await writeFile(join(root, "benchmark.json"), "old\n");
+  await writeFile(join(root, "maximum-print.pdf"), "old\n");
   await writeFile(join(root, "release.json"), "old\n");
   await evidenceLib.prepareEvidenceOutput(root);
   assert.deepEqual(await readdir(root), []);

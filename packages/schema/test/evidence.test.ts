@@ -22,6 +22,12 @@ const benchmark = {
   path: "browser-worker-rpc-owner-preview",
   fixture: { harnessSha256: digest, harnessBytes: 2048, fields: 30,
     rows: [1000, 5000], nearLimitPlaintextBytes: 8_000_000 },
+  maximumPrint: {
+    artifact: { file: "maximum-print.pdf", bytes: 123, sha256: digest },
+    rows: 5000, fields: 30, previewRows: 100, renderedCells: 150_000,
+    maxCellsPerTask: 600, sheets: 272, responsiveBeforePrint: true,
+    extractedSha256: digest, exact: true,
+  },
   methodology: {
     clock: "performance.now",
     percentile: "nearest-rank-p95",
@@ -186,8 +192,14 @@ const localExport = {
         "Space closes", "focus returns", "Escape returns"],
       actionsReachable: true, axeBlocking: 0,
     },
-    network: { desktopExportRequests: 0, recordExportRequests: 0,
-      mobileExportRequests: 0, unexpected: [] },
+    network: {
+      desktopExportRequests: 0, recordExportRequests: 0, mobileExportRequests: 0,
+      desktopActions: ["csv", "print"], recordActions: ["csv", "print"],
+      desktopWebSockets: 0, recordWebSockets: 0,
+      desktopBlobUrls: 1, recordBlobUrls: 1,
+      desktopDownloadBlobUrls: 1, recordDownloadBlobUrls: 1,
+      unexpected: [],
+    },
   },
   cases: [
     "current-view-preview-exact", "current-view-csv-exact", "print-document-exact",
@@ -209,9 +221,12 @@ const release = {
     { file: "runtime/report.json", schema: "LocalExportEvidenceManifestV2", sha256: digest },
     { file: "benchmark.json", schema: "BenchmarkEvidenceManifestV1", sha256: digest },
   ],
-  artifacts: requiredArtifactNames.map(file => ({
-    file: `runtime/${file}`, bytes: 123, sha256: digest,
-  })),
+  artifacts: [
+    ...requiredArtifactNames.map(file => ({
+      file: `runtime/${file}`, bytes: 123, sha256: digest,
+    })),
+    { file: "maximum-print.pdf", bytes: 123, sha256: digest },
+  ],
   verdict: "BLOCKED",
 } as const;
 

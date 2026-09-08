@@ -10,7 +10,8 @@ import {
 } from "./product-gate-url.mjs";
 import { runExportDialogStateEvidence } from "./local-export-browser-benchmark.mjs";
 import {
-  assertBenchmarkEvidence, assertExactCleanSource, buildDirectoryDigest,
+  assertBenchmarkEvidence, assertExactCleanSource, assertLocalExportActionEgress,
+  buildDirectoryDigest,
   deriveCleanHeadSource, ingestManualScreenReaderEvidence, sha256Evidence,
   pdfTextMatchesExactSequence,
   summarizeExportDialogStateEvidence, writeReleaseEvidenceDirectory,
@@ -381,23 +382,42 @@ try {
     viewport: { width: 1440, height: 1050 }, acceptDownloads: true,
   });
   await context.addInitScript(() => {
-    window.__f3Evidence = { printCalls: 0, historyPush: 0, historyReplace: 0 };
+    window.__f3Evidence = {
+      printCalls: 0, historyPush: 0, historyReplace: 0,
+      blobUrls: [], downloadUrls: [],
+    };
     window.print = () => { window.__f3Evidence.printCalls++; };
     const push = history.pushState.bind(history);
     const replace = history.replaceState.bind(history);
     history.pushState = (...args) => { window.__f3Evidence.historyPush++; return push(...args); };
     history.replaceState = (...args) => { window.__f3Evidence.historyReplace++; return replace(...args); };
+    const createObjectUrl = URL.createObjectURL.bind(URL);
+    URL.createObjectURL = value => {
+      const objectUrl = createObjectUrl(value);
+      window.__f3Evidence.blobUrls.push(objectUrl);
+      return objectUrl;
+    };
+    const clickAnchor = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function click() {
+      if (this.download) window.__f3Evidence.downloadUrls.push(this.href);
+      return clickAnchor.call(this);
+    };
   });
   const page = await context.newPage();
   const requests = [];
+  const webSockets = [];
   const assertDesktopOrigin = monitorProductGatePage(page, url);
-  page.on("request", request => {
+  context.on("request", request => {
     requests.push(request.url());
     if (!isExpectedProductGateRequest(url, request.url()))
       errors.push(`unexpected network origin: ${request.url()}`);
   });
-  page.on("requestfailed", request =>
+  context.on("requestfailed", request =>
     errors.push(`requestfailed: ${request.url()} (${request.failure()?.errorText ?? "unknown"})`));
+  const monitorWebSockets = candidate =>
+    candidate.on("websocket", socket => webSockets.push(socket.url()));
+  context.on("page", monitorWebSockets);
+  monitorWebSockets(page);
   page.on("pageerror", error => errors.push(`pageerror: ${error.message}`));
   page.on("console", message => {
     if (message.type() === "error") errors.push(`console: ${message.text()}`);
@@ -435,12 +455,13 @@ try {
   const trigger = page.getByRole("button", { name: "Preview Print / CSV for current Data view" });
   await trigger.focus();
   const requestBaseline = requests.length;
+  const webSocketBaseline = webSockets.length;
   const historyBaseline = await page.evaluate(() => ({ ...window.__f3Evidence }));
   await trigger.press("Enter");
   const dialog = page.locator(".export-dialog");
   await dialog.locator("tbody").waitFor({ timeout: 15_000 });
-  const exportRequests = requests.slice(requestBaseline);
-  check(exportRequests.length === 0, "desktop: projection/preview makes zero network requests", exportRequests);
+  const previewRequests = requests.slice(requestBaseline);
+  check(previewRequests.length === 0, "desktop: projection/preview makes zero network requests", previewRequests);
   check(await dialog.getByText("3 rows × 8 fields", { exact: true }).count() >= 1,
     "desktop: preview discloses exact row and field count");
   for (const policy of [
@@ -507,42 +528,37 @@ try {
   const csvSha256 = createHash("sha256").update(csvBytes).digest("hex");
 
   await dialog.getByRole("button", { name: "Print / Save as PDF", exact: true }).click();
+  await page.waitForFunction(() => window.__f3Evidence.printCalls === 1
+    && document.querySelector('.projection-print-root[data-print-ready="true"]') !== null);
   check(await page.evaluate(() => window.__f3Evidence.printCalls) === 1,
     "desktop: print action invokes only browser-native window.print");
+  const printRoot = page.locator('body > .projection-print-root[data-print-ready="true"]');
+  check(await dialog.locator("tbody tr").count() === previewRows.length,
+    "desktop: print preparation leaves the bounded React preview unchanged");
+  const orderedPrintValues = await printRoot.locator("h1, p, h2, caption, th, td").allTextContents();
   await page.emulateMedia({ media: "print" });
   check(await dialog.locator(".export-dialog-actions").evaluate(element =>
     getComputedStyle(element).display === "none"), "print CSS excludes export controls");
   check(await page.locator(".dataview").evaluate(element =>
     getComputedStyle(element).visibility === "hidden"), "print CSS excludes Data controls/navigation");
-  check(await dialog.locator("thead").evaluate(element =>
-    getComputedStyle(element).display === "table-header-group"), "print CSS repeats table headers");
-  check(await dialog.locator(".projection-print-document").isVisible(),
-    "print CSS keeps only trusted semantic document visible");
+  check(await printRoot.locator("thead").first().evaluate(element =>
+    getComputedStyle(element).display === "table-row-group"),
+  "print CSS keeps one header inside each deterministic horizontal segment");
+  check(await printRoot.isVisible(),
+    "print CSS keeps only the bounded trusted print document visible");
+  await page.screenshot({ path: join(outDir, "desktop-print-media.png"), fullPage: true });
   const printPdfPath = join(outDir, "desktop-print.pdf");
-  await page.pdf({ path: printPdfPath, format: "A4", printBackground: true });
+  await page.pdf({ path: printPdfPath, format: "A4", landscape: true, printBackground: true });
   const printPdfBytes = await readFile(printPdfPath);
   check(printPdfBytes.subarray(0, 5).toString("ascii") === "%PDF-" && printPdfBytes.byteLength > 1_000,
     "desktop: browser print renderer emits a non-empty PDF document");
   const printText = execFileSync("pdftotext", ["-enc", "UTF-8", "-raw", printPdfPath, "-"],
     { encoding: "utf8" });
-  const printHeaderValues = await dialog.locator(".projection-print-header")
-    .evaluate(header => [
-      header.querySelector("h1")?.textContent ?? "",
-      header.querySelector("p")?.textContent ?? "",
-    ]);
-  const printCaption = await dialog.locator(".projection-print-document caption").textContent() ?? "";
-  const orderedPrintValues = [
-    ...printHeaderValues,
-    printCaption,
-    ...previewHeadings.map(heading => heading.toLocaleUpperCase("en-US")),
-    ...previewRows.flat(),
-  ];
   check(pdfTextMatchesExactSequence(printText, orderedPrintValues),
     "desktop: selectable PDF text exactly matches the complete print document",
     orderedPrintValues);
   printTextSha256 = sha256Evidence(Buffer.from(printText));
   const printPdf = await artifactDigest("desktop-print.pdf");
-  await page.screenshot({ path: join(outDir, "desktop-print-media.png"), fullPage: true });
   await page.emulateMedia({ media: "screen" });
 
   await dialog.press("Escape");
@@ -555,6 +571,20 @@ try {
   check(historyAfter.historyPush === historyBaseline.historyPush
       && historyAfter.historyReplace === historyBaseline.historyReplace,
     "desktop: preview/CSV/print does not mutate browser history", { historyBaseline, historyAfter });
+  const exportRequests = requests.slice(requestBaseline);
+  const exportEgress = assertLocalExportActionEgress({
+    actions: [
+      ...(historyAfter.downloadUrls.length > historyBaseline.downloadUrls.length ? ["csv"] : []),
+      ...(historyAfter.printCalls === historyBaseline.printCalls + 1 ? ["print"] : []),
+    ],
+    requests: exportRequests,
+    webSockets: webSockets.slice(webSocketBaseline),
+    blobUrls: historyAfter.blobUrls.slice(historyBaseline.blobUrls.length),
+    downloadUrls: historyAfter.downloadUrls.slice(historyBaseline.downloadUrls.length),
+  });
+  check(exportEgress.httpRequests === 0 && exportEgress.webSockets === 0,
+    "desktop: preview, CSV download, and print make zero network or WebSocket egress",
+    exportEgress);
 
   const firstRow = grid.locator("tbody tr:not(.dataview-new):not(.dataview-hist)").first();
   const recordOpen = firstRow.getByRole("button", { name: /record details/ });
@@ -585,6 +615,8 @@ try {
       return label ? [[label, value]] : [];
     })));
   const recordBaseline = requests.length;
+  const recordWebSocketBaseline = webSockets.length;
+  const recordEvidenceBaseline = await page.evaluate(() => ({ ...window.__f3Evidence }));
   const recordTrigger = record.getByRole("button", { name: "Preview Print / CSV for this record" });
   await recordTrigger.focus(); await recordTrigger.press("Enter");
   const recordDialog = page.locator(".export-dialog");
@@ -621,20 +653,41 @@ try {
     { recordCsvRows, expectedRecordCsv });
   const recordPrintBaseline = await page.evaluate(() => window.__f3Evidence.printCalls);
   await recordDialog.getByRole("button", { name: "Print / Save as PDF", exact: true }).click();
-  check(await page.evaluate(() => window.__f3Evidence.printCalls === recordPrintBaseline + 1),
+  await page.waitForFunction(expected => window.__f3Evidence.printCalls === expected
+    && document.querySelector('.projection-print-root[data-print-ready="true"]') !== null,
+  recordPrintBaseline + 1);
+  check(await page.evaluate(expected => window.__f3Evidence.printCalls === expected,
+    recordPrintBaseline + 1),
     "record: native Print action is invoked exactly once");
   await page.screenshot({ path: join(outDir, "desktop-record.png"), fullPage: true });
   const opfsAfter = await settledOpfsSnapshot(page);
   check(JSON.stringify(opfsAfter) === JSON.stringify(opfsBefore),
     "desktop: current-view/record preview, CSV, and print leave OPFS byte-identical",
     { before: opfsBefore, after: opfsAfter });
+  const recordEvidenceAfter = await page.evaluate(() => ({ ...window.__f3Evidence }));
+  const recordExportRequests = requests.slice(recordBaseline);
+  const recordEgress = assertLocalExportActionEgress({
+    actions: [
+      ...(recordEvidenceAfter.downloadUrls.length > recordEvidenceBaseline.downloadUrls.length
+        ? ["csv"] : []),
+      ...(recordEvidenceAfter.printCalls === recordEvidenceBaseline.printCalls + 1
+        ? ["print"] : []),
+    ],
+    requests: recordExportRequests,
+    webSockets: webSockets.slice(recordWebSocketBaseline),
+    blobUrls: recordEvidenceAfter.blobUrls.slice(recordEvidenceBaseline.blobUrls.length),
+    downloadUrls: recordEvidenceAfter.downloadUrls.slice(recordEvidenceBaseline.downloadUrls.length),
+  });
+  check(recordEgress.httpRequests === 0 && recordEgress.webSockets === 0,
+    "record: preview, CSV download, and print make zero network or WebSocket egress",
+    recordEgress);
   assertDesktopOrigin();
   check(true, "desktop: browser remained on the configured preview origin");
 
   desktopEvidence = {
     viewport: { width: 1440, height: 1050 }, totalRequests: requests.length,
     screenHeadings, screenRows, previewHeadings, previewRows,
-    exportRequests, recordExportRequests: requests.slice(recordBaseline),
+    exportRequests, recordExportRequests,
     csv: { bytes: csvBytes.byteLength, sha256: `sha256:${csvSha256}`, rows: csvRows.length - 1,
       fields: csvRows[0]?.length ?? 0 },
     record: {
@@ -644,6 +697,7 @@ try {
       printCalls: 1,
     },
     printPdf,
+    egress: { currentView: exportEgress, record: recordEgress },
     axeBlocking: axe,
     recordAxeBlocking: recordAxe,
     opfs: { before: opfsBefore, after: opfsAfter, unchanged: true },
@@ -898,8 +952,8 @@ const cases = [
     passed("record: downloaded CSV exactly matches its one-record preview")
       && passed("record: native Print action is invoked exactly once") ? "PASS" : "FAIL" },
   { id: "network-local-only", status: browserClean
-    && passed("desktop: projection/preview makes zero network requests")
-    && passed("record: projection/preview makes zero network requests")
+    && passed("desktop: preview, CSV download, and print make zero network or WebSocket egress")
+    && passed("record: preview, CSV download, and print make zero network or WebSocket egress")
     && passed("mobile: projection/preview makes zero network requests") ? "PASS" : "FAIL" },
   { id: "durable-state-unchanged", status:
     passed("desktop: current-view/record preview, CSV, and print leave OPFS byte-identical")
@@ -987,6 +1041,14 @@ const report = LocalExportEvidenceManifestV2.parse({
       desktopExportRequests: desktopEvidence.exportRequests.length,
       recordExportRequests: desktopEvidence.recordExportRequests.length,
       mobileExportRequests: mobileEvidence.exportRequests.length,
+      desktopActions: desktopEvidence.egress.currentView.actions,
+      recordActions: desktopEvidence.egress.record.actions,
+      desktopWebSockets: desktopEvidence.egress.currentView.webSockets,
+      recordWebSockets: desktopEvidence.egress.record.webSockets,
+      desktopBlobUrls: desktopEvidence.egress.currentView.blobUrls.length,
+      recordBlobUrls: desktopEvidence.egress.record.blobUrls.length,
+      desktopDownloadBlobUrls: desktopEvidence.egress.currentView.downloadUrls.length,
+      recordDownloadBlobUrls: desktopEvidence.egress.record.downloadUrls.length,
       unexpected: errors.filter(error => error.includes("network")
         || error.includes("requestfailed")),
     },

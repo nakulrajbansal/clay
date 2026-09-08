@@ -1,4 +1,7 @@
-import { useEffect, useRef, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import {
+  useEffect, useRef, useSyncExternalStore,
+  type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject,
+} from "react";
 import { createPortal } from "react-dom";
 
 const FOCUSABLE = [
@@ -12,6 +15,16 @@ let priorBodyOverflow = "";
 
 type ModalLayer = { backdrop: HTMLDivElement; dialog: HTMLElement };
 const modalLayers: ModalLayer[] = [];
+const modalLayerListeners = new Set<() => void>();
+
+function activeModalDialog(): HTMLElement | null {
+  return modalLayers.at(-1)?.dialog ?? null;
+}
+
+function subscribeToModalLayers(listener: () => void): () => void {
+  modalLayerListeners.add(listener);
+  return () => modalLayerListeners.delete(listener);
+}
 
 function syncModalLayers(): void {
   const top = modalLayers.at(-1);
@@ -27,6 +40,19 @@ function syncModalLayers(): void {
       layer.dialog.removeAttribute("aria-modal");
     }
   });
+  modalLayerListeners.forEach(listener => listener());
+}
+
+/**
+ * Keeps shell-owned feedback in the active modal's accessibility and focus
+ * boundary. Without a modal it leaves the content at its ordinary React
+ * position; nested modals move it to the newly active dialog.
+ */
+export function ModalScopedPortal(props: { children: ReactNode }): React.JSX.Element {
+  const dialog = useSyncExternalStore(
+    subscribeToModalLayers, activeModalDialog, () => null,
+  );
+  return dialog ? createPortal(props.children, dialog) : <>{props.children}</>;
 }
 
 function focusDialog(dialog: HTMLElement): void {
@@ -54,12 +80,52 @@ export function ModalDialog(props: {
   const previousFocus = useRef<HTMLElement | null>(
     document.activeElement instanceof HTMLElement ? document.activeElement : null,
   );
+  const closeRef = useRef(props.onClose);
+  closeRef.current = props.onClose;
+
+  // Native capture is intentional: feedback may be portalled here from a
+  // different React branch, whose synthetic events follow that owner branch
+  // rather than this dialog's React ancestry.
+  const trapKeyDown = (event: globalThis.KeyboardEvent): void => {
+    const top = modalLayers.at(-1);
+    if (top && top.dialog !== dialogRef.current) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      closeRef.current();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const items = [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE)]
+      .filter(item => !item.hasAttribute("disabled") && item.getClientRects().length > 0);
+    if (items.length === 0) { event.preventDefault(); dialog.focus(); return; }
+    const first = items[0]!;
+    const last = items.at(-1)!;
+    const active = document.activeElement;
+    if (!(active instanceof Node) || !dialog.contains(active)) {
+      event.preventDefault(); first.focus();
+    } else if (event.shiftKey && active === first) {
+      event.preventDefault(); last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault(); first.focus();
+    }
+  };
 
   useEffect(() => {
     const backdrop = backdropRef.current;
     const dialog = dialogRef.current;
     const layer = backdrop && dialog ? { backdrop, dialog } : null;
     if (layer) { modalLayers.push(layer); syncModalLayers(); }
+    const onScopedPortalKeyDown = (event: globalThis.KeyboardEvent): void => {
+      const target = event.target;
+      if (!(target instanceof Element)
+          || !target.closest("[data-modal-scoped-feedback]")) return;
+      trapKeyDown(event);
+    };
+    backdrop?.addEventListener("keydown", onScopedPortalKeyDown, true);
     if (modalScrollLocks++ === 0) {
       priorBodyOverflow = document.body.style.overflow;
       document.body.style.overflow = "hidden";
@@ -75,6 +141,7 @@ export function ModalDialog(props: {
     });
     return () => {
       cancelAnimationFrame(frame);
+      backdrop?.removeEventListener("keydown", onScopedPortalKeyDown, true);
       if (layer) {
         const index = modalLayers.indexOf(layer);
         if (index >= 0) modalLayers.splice(index, 1);
@@ -96,36 +163,9 @@ export function ModalDialog(props: {
     };
   }, []);
 
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
-    const top = modalLayers.at(-1);
-    if (top && top.dialog !== dialogRef.current) return;
-    if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      event.nativeEvent.stopImmediatePropagation();
-      props.onClose();
-      return;
-    }
-    if (event.key !== "Tab") return;
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    const items = [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE)]
-      .filter(item => !item.hasAttribute("disabled") && item.getClientRects().length > 0);
-    if (items.length === 0) { event.preventDefault(); dialog.focus(); return; }
-    const first = items[0]!;
-    const last = items.at(-1)!;
-    const active = document.activeElement;
-    if (!(active instanceof Node) || !dialog.contains(active)) {
-      event.preventDefault(); first.focus();
-    } else if (event.shiftKey && active === first) {
-      event.preventDefault(); last.focus();
-    } else if (!event.shiftKey && active === last) {
-      event.preventDefault(); first.focus();
-    }
-  };
-
   return createPortal(
-    <div ref={backdropRef} className={props.backdropClassName} onKeyDown={onKeyDown}
+    <div ref={backdropRef} className={props.backdropClassName}
+      onKeyDown={(event: ReactKeyboardEvent<HTMLDivElement>) => trapKeyDown(event.nativeEvent)}
       onClick={event => { if (event.target === event.currentTarget) props.onClose(); }}>
       <section ref={dialogRef} className={props.className} role={props.role ?? "dialog"}
         aria-modal="true" aria-label={props.ariaLabel}

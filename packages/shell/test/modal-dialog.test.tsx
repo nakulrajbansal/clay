@@ -1,22 +1,42 @@
 /** @vitest-environment jsdom */
-import { act, useRef, useState } from "react";
+import { act, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { createRoot } from "react-dom/client";
 import { expect, it } from "vitest";
-import { ModalDialog } from "../src/app/ModalDialog";
+import * as modalDialogModule from "../src/app/ModalDialog";
 import "../src/app/styles.css";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-it("keeps actionable toasts inside the inert app subtree", async () => {
+const { ModalDialog } = modalDialogModule;
+const ModalScopedPortal = (modalDialogModule as typeof modalDialogModule & {
+  ModalScopedPortal?: ComponentType<{ children: ReactNode }>;
+}).ModalScopedPortal;
+
+it("keeps modal feedback accessible inside the active focus trap", async () => {
   const appSource = readFileSync(resolve(process.cwd(), "src/app/App.tsx"), "utf8");
-  expect(appSource).not.toContain('createPortal(<div className="toasts"');
+  expect(appSource).toContain("<ModalScopedPortal>");
+  expect(appSource).toContain("</ModalScopedPortal>");
+  expect(ModalScopedPortal).toBeTypeOf("function");
+  if (!ModalScopedPortal) return;
+
+  let closes = 0;
   function Probe(): React.JSX.Element {
     return <div className="app">
-      <div className="toasts"><button className="toast-action">Export now</button></div>
+      <button className="outside-action">Outside action</button>
+      <ModalScopedPortal>
+        <div className="toasts" data-modal-scoped-feedback
+          aria-live="polite" aria-atomic="true">
+          <div className="toast toast-danger" role="alert">
+            Export failed
+            <button className="toast-action"
+              onKeyDown={event => event.stopPropagation()}>Try again</button>
+          </div>
+        </div>
+      </ModalScopedPortal>
       <ModalDialog className="probe-dialog" backdropClassName="modal-backdrop"
-        ariaLabel="Probe" onClose={() => undefined}><button>Inside action</button></ModalDialog>
+        ariaLabel="Probe" onClose={() => { closes++; }}><button>Inside action</button></ModalDialog>
     </div>;
   }
   const host = document.createElement("div");
@@ -24,10 +44,31 @@ it("keeps actionable toasts inside the inert app subtree", async () => {
   document.body.replaceChildren(host);
   const root = createRoot(host);
   await act(async () => root.render(<Probe />));
+
   const app = host.querySelector<HTMLElement>(".app")!;
+  const dialog = document.body.querySelector<HTMLElement>(".probe-dialog")!;
+  const alert = dialog.querySelector<HTMLElement>('.toast[role="alert"]')!;
+  const action = alert.querySelector<HTMLButtonElement>(".toast-action")!;
   expect(app.inert).toBe(true);
   expect(app.getAttribute("aria-hidden")).toBe("true");
-  expect(app.querySelector(".toast-action")).not.toBeNull();
+  expect(app.querySelector(".toast-action")).toBeNull();
+  expect(alert.textContent).toContain("Export failed");
+  expect(alert.closest('[aria-live="polite"]')).not.toBeNull();
+  expect(dialog.contains(action)).toBe(true);
+
+  action.focus();
+  await act(async () => action.dispatchEvent(new KeyboardEvent("keydown", {
+    key: "Tab", bubbles: true,
+  })));
+  expect(document.activeElement).toBe(dialog);
+  expect(document.activeElement).not.toBe(app.querySelector(".outside-action"));
+
+  action.focus();
+  await act(async () => action.dispatchEvent(new KeyboardEvent("keydown", {
+    key: "Escape", bubbles: true,
+  })));
+  expect(closes).toBe(1);
+
   await act(async () => root.unmount());
 });
 

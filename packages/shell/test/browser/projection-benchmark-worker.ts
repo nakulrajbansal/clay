@@ -35,8 +35,25 @@ const TRACE: SemanticSchemaTraceV1 = {
 };
 const encoder = new TextEncoder();
 let rowCount: 1000 | 5000 | null = null;
-const active = new Set<number>();
 const cancelled = new Set<number>();
+type ProjectionOutcome = "cancelled" | "completed" | "failed";
+type ProjectionLifecycle = {
+  terminal: Promise<ProjectionOutcome>;
+  resolve: (outcome: ProjectionOutcome) => void;
+};
+const projectionLifecycles = new Map<number, ProjectionLifecycle>();
+
+function beginProjectionLifecycle(id: number): void {
+  let resolve!: (outcome: ProjectionOutcome) => void;
+  const terminal = new Promise<ProjectionOutcome>(done => { resolve = done; });
+  projectionLifecycles.set(id, { terminal, resolve });
+}
+
+function finishProjectionLifecycle(id: number, outcome: ProjectionOutcome): void {
+  const lifecycle = projectionLifecycles.get(id);
+  projectionLifecycles.delete(id);
+  lifecycle?.resolve(outcome);
+}
 
 function rowId(index: number): string {
   return `018f0000-0000-7000-8000-${index.toString(16).padStart(12, "0")}`;
@@ -117,7 +134,10 @@ function post(id: number, ok: boolean, result?: unknown, error?: unknown): void 
 
 self.onmessage = (event: MessageEvent): void => {
   const request = event.data as { id: number; op: string; payload?: unknown };
+  const projectionRequest = request.op === "projectPlaintextV1";
+  if (projectionRequest) beginProjectionLifecycle(request.id);
   void (async () => {
+    let projectionOutcome: ProjectionOutcome = "failed";
     try {
       if (request.op === "benchmarkInit") {
         const rows = Number((request.payload as { rows?: unknown } | null)?.rows);
@@ -140,13 +160,18 @@ self.onmessage = (event: MessageEvent): void => {
       }
       if (request.op === "cancelProjectionV1") {
         const targetId = Number((request.payload as { targetId?: unknown } | null)?.targetId);
-        if (active.has(targetId)) cancelled.add(targetId);
-        post(request.id, true, null);
+        const lifecycle = projectionLifecycles.get(targetId);
+        if (!lifecycle) {
+          post(request.id, true, { targetId, quiescent: true, outcome: "not_found" });
+          return;
+        }
+        cancelled.add(targetId);
+        const outcome = await lifecycle.terminal;
+        post(request.id, true, { targetId, quiescent: true, outcome });
         return;
       }
       if (request.op !== "projectPlaintextV1")
         throw new ClayError("E_VALIDATION", "unsupported benchmark worker operation");
-      active.add(request.id);
       try {
         const artifact = await projectPlaintextV1Cooperative(
           source,
@@ -154,8 +179,8 @@ self.onmessage = (event: MessageEvent): void => {
           { isCancelled: () => cancelled.has(request.id) },
         );
         post(request.id, true, projectionTransportV1(artifact));
+        projectionOutcome = "completed";
       } finally {
-        active.delete(request.id);
         cancelled.delete(request.id);
       }
     } catch (error) {
@@ -163,6 +188,10 @@ self.onmessage = (event: MessageEvent): void => {
         code: error instanceof ClayError ? error.code : "E_INTERNAL",
         message: error instanceof Error ? error.message : String(error),
       });
+      if (projectionRequest && error instanceof ClayError && error.code === "E_CANCELLED")
+        projectionOutcome = "cancelled";
+    } finally {
+      if (projectionRequest) finishProjectionLifecycle(request.id, projectionOutcome);
     }
   })();
 };

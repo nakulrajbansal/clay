@@ -1000,3 +1000,25 @@ ADR-050 (2026-09-08) Read-only shares are immutable client-encrypted export snap
   files, while tests can prove hidden fields, stale same-count previews, and
   unapproved file bytes never cross the export boundary. Revocation prevents all
   subsequent relay reads, and expired ciphertext is reclaimable.
+
+ADR-052 (2026-09-08) Local-export network evidence closes over user actions.
+  CONTEXT: Release F's zero-network count stopped after preview and treated every
+  same-origin request as expected. CSV or Print could therefore issue HTTP, beacon,
+  image, form, or WebSocket traffic after the recorded interval while the report
+  still claimed local-only execution. Blob-backed downloads also had no separate,
+  durable classification in the strict evidence schema. The actual maximum Print
+  PDF was checked only in a temporary harness directory and then deleted.
+  DECISION: extend the unshipped LocalExportEvidenceManifestV2 network observation
+  with exact current-view and record action tuples, zero WebSocket counts, and
+  exact created/downloaded blob-URL counts. The browser certificate now brackets
+  preview through observed CSV and Print completion, rejects every request or
+  socket regardless of origin, and accepts download URLs only when they match an
+  object URL created inside that interval. BenchmarkEvidenceManifestV1 also binds
+  maximum-print.pdf metadata, extracted-text digest, exactness, cell/task bounds,
+  and responsiveness; the outer release inventory retains and rehashes that PDF.
+  ALTERNATIVES: continue relying on the global expected-origin guard (rejected: it
+  proves origin containment, not zero egress); infer action coverage from output
+  files (rejected: files do not bind the request interval or Print invocation).
+  CONSEQUENCE: older draft V2 reports fail closed until regenerated. No released
+  evidence format is migrated; release ingestion gains durable proof of action
+  coverage, intentionally local blob transport, and actual maximum Print output.

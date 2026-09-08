@@ -39,6 +39,14 @@ const flush = async (): Promise<void> => {
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
 };
 
+const waitFor = async (condition: () => boolean): Promise<void> => {
+  const started = performance.now();
+  while (!condition()) {
+    if (performance.now() - started > 3_000) throw new Error(document.body.innerHTML);
+    await flush();
+  }
+};
+
 const readBlob = (blob: Blob): Promise<Uint8Array> => new Promise((resolveBlob, rejectBlob) => {
   const reader = new FileReader();
   reader.onerror = () => rejectBlob(reader.error ?? new Error("could not read download Blob"));
@@ -132,6 +140,7 @@ describe("local export owner preview", () => {
     expect(createObjectURL.mock.calls[0]?.[0]).toBeInstanceOf(Blob);
     expect(anchorClick).toHaveBeenCalledTimes(1);
     await act(async () => printButton.click());
+    await waitFor(() => print.mock.calls.length === 1);
     expect(print).toHaveBeenCalledTimes(1);
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(push).not.toHaveBeenCalled();
@@ -143,20 +152,30 @@ describe("local export owner preview", () => {
     expect(closes).toBe(1);
   });
 
-  it("paginates large previews but expands every frozen row before native Print", async () => {
-    const rows = Array.from({ length: 205 }, (_, index) => [
-      `Title ${index}`, `Notes ${index}`, String(index), `Customer ${index}`,
-      String(index * 2), "",
-    ]);
+  it("prepares wide print output in bounded isolated sheets without expanding the React preview", async () => {
+    const fields = Array.from({ length: 30 }, (_, index) => ({
+      ...artifact.projection.manifest.fields[index % artifact.projection.manifest.fields.length]!,
+      name: `field_${index.toString().padStart(2, "0")}`,
+      label: `Field ${index.toString().padStart(2, "0")}`,
+    }));
+    const rows = Array.from({ length: 205 }, (_, rowIndex) =>
+      fields.map((_field, fieldIndex) => `R${rowIndex.toString().padStart(3, "0")}F${fieldIndex.toString().padStart(2, "0")}`));
     const largeArtifact: ProjectionArtifactV1 = {
       ...artifact,
       projection: {
         ...artifact.projection,
-        manifest: { ...artifact.projection.manifest, rowCount: rows.length },
+        manifest: {
+          ...artifact.projection.manifest,
+          rowCount: rows.length,
+          fieldCount: fields.length,
+          fields,
+        },
         rows,
       },
     };
-    const print = vi.fn();
+    let yieldedToBrowser = false;
+    let responsiveBeforePrint = false;
+    const print = vi.fn(() => { responsiveBeforePrint = yieldedToBrowser; });
     Object.defineProperty(window, "print", { configurable: true, value: print });
     const host = document.createElement("div");
     document.body.append(host);
@@ -181,12 +200,25 @@ describe("local export owner preview", () => {
     expect(dialog.textContent).toContain("Rows 201–205 of 205");
     const printButton = [...dialog.querySelectorAll("button")]
       .find(button => button.textContent === "Print / Save as PDF")!;
+    setTimeout(() => { yieldedToBrowser = true; }, 0);
     await act(async () => printButton.click());
+    expect(print).not.toHaveBeenCalled();
+    expect(dialog.querySelectorAll("tbody tr")).toHaveLength(5);
+    expect(dialog.textContent).toContain("Rows 201–205 of 205");
+    await waitFor(() => print.mock.calls.length === 1);
     expect(print).toHaveBeenCalledTimes(1);
-    expect(dialog.querySelectorAll("tbody tr")).toHaveLength(205);
+    expect(responsiveBeforePrint).toBe(true);
+    expect(dialog.querySelectorAll("tbody tr")).toHaveLength(5);
+    const printRoot = document.body.querySelector<HTMLElement>(":scope > .projection-print-root")!;
+    expect(printRoot).not.toBeNull();
+    expect(printRoot.dataset.printRows).toBe("205");
+    expect(printRoot.dataset.printFields).toBe("30");
+    expect(printRoot.querySelectorAll("td")).toHaveLength(205 * 30);
+    expect(Math.max(...[...printRoot.querySelectorAll(".projection-print-sheet")]
+      .map(sheet => sheet.querySelectorAll("td").length))).toBeLessThanOrEqual(600);
     await act(async () => window.dispatchEvent(new Event("afterprint")));
-    expect(dialog.querySelectorAll("tbody tr")).toHaveLength(100);
-    expect(dialog.textContent).toContain("Rows 1–100 of 205");
+    expect(document.body.querySelector(".projection-print-root")).toBeNull();
+    expect(dialog.querySelectorAll("tbody tr")).toHaveLength(5);
     await act(async () => root.unmount());
   });
 
