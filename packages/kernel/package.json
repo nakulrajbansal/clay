@@ -7,6 +7,8 @@
     ".": "./src/index.ts",
     "./expr": "./src/expr.ts",
     "./errors": "./src/errors.ts",
+    "./import-contracts": "./src/import-contracts.ts",
+    "./import-staging-contracts": "./src/import-staging-contracts.ts",
     "./shell-runtime": "./src/shell-runtime.ts",
     "./static-javascript-strings": "./src/static-javascript-strings.ts",
     "./worker-rpc": "./src/worker-rpc.ts",

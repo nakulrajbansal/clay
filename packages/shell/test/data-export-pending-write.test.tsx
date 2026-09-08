@@ -60,7 +60,7 @@ describe("Data export pending-write barrier", () => {
     } as unknown as WorkerClient;
     const view = <DataView
       worker={worker} store={delayed} initialTable="tasks"
-      onImport={() => undefined} onWrite={() => undefined} onClose={() => undefined}
+      onWrite={() => undefined} onClose={() => undefined}
       onError={message => { throw new Error(message); }} onInfo={() => undefined}
     />;
     const host = document.createElement("div");
@@ -164,7 +164,7 @@ describe("Data export pending-write barrier", () => {
     const root = createRoot(host);
     await act(async () => root.render(<DataView
       worker={worker} store={delayed} initialTable="notes"
-      onImport={() => undefined} onWrite={() => undefined} onClose={() => undefined}
+      onWrite={() => undefined} onClose={() => undefined}
       onError={message => errors.push(message)} onInfo={() => undefined}
     />));
     await waitFor(() => document.body.textContent?.includes("Plan") ?? false);
@@ -267,7 +267,7 @@ describe("Data export pending-write barrier", () => {
     const root = createRoot(host);
     await act(async () => root.render(<DataView
       worker={worker} store={delayed} initialTable="tasks"
-      onImport={() => undefined} onWrite={() => undefined} onClose={() => undefined}
+      onWrite={() => undefined} onClose={() => undefined}
       onConfirm={async () => true}
       onError={message => { throw new Error(message); }} onInfo={() => undefined}
     />));
@@ -345,7 +345,7 @@ describe("Data export pending-write barrier", () => {
     const root = createRoot(host);
     await act(async () => root.render(<DataView
       worker={worker} store={guardedStore} initialTable="tasks"
-      onImport={() => undefined} onWrite={() => undefined} onClose={() => undefined}
+      onWrite={() => undefined} onClose={() => undefined}
       onConfirm={async () => true}
       onError={message => { throw new Error(message); }} onInfo={() => undefined}
     />));
@@ -425,7 +425,7 @@ describe("Data export pending-write barrier", () => {
     const root = createRoot(host);
     await act(async () => root.render(<DataView
       worker={worker} store={delayed} initialTable="tasks"
-      onImport={() => undefined} onWrite={() => undefined} onClose={() => undefined}
+      onWrite={() => undefined} onClose={() => undefined}
       onError={message => errors.push(message)} onInfo={() => undefined}
     />));
     await waitFor(() => document.body.textContent?.includes("Leave this record") ?? false);
@@ -490,7 +490,7 @@ describe("Data export pending-write barrier", () => {
     const root = createRoot(host);
     await act(async () => root.render(<DataView
       worker={worker} store={delayed} initialTable="tasks"
-      onImport={() => undefined} onWrite={() => undefined} onClose={() => undefined}
+      onWrite={() => undefined} onClose={() => undefined}
       onError={message => { throw new Error(message); }} onInfo={() => undefined}
     />));
     await waitFor(() => document.body.textContent?.includes("Before") ?? false);

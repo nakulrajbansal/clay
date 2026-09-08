@@ -55,7 +55,7 @@ describe("Data view local projection integration", () => {
     const root = createRoot(host);
     await act(async () => root.render(<DataView
       worker={worker} store={new InProcessAsyncStore(store)} initialTable="jobs"
-      onImport={() => undefined} onWrite={() => undefined} onClose={() => undefined}
+      onWrite={() => undefined} onClose={() => undefined}
       onError={message => { throw new Error(message); }} onInfo={() => undefined}
     />));
     await waitFor(() => document.body.textContent?.includes("Install") ?? false);
@@ -115,7 +115,7 @@ describe("Data view local projection integration", () => {
     const root = createRoot(host);
     await act(async () => root.render(<DataView
       worker={worker} store={new InProcessAsyncStore(store)} initialTable="tasks"
-      onImport={() => undefined} onWrite={() => undefined} onClose={() => undefined}
+      onWrite={() => undefined} onClose={() => undefined}
       onError={message => { throw new Error(message); }} onInfo={() => undefined}
     />));
     await waitFor(() => document.body.textContent?.includes("Zed") ?? false);

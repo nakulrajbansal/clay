@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   ClayStore, InProcessAsyncStore, deriveInverse,
   type AutomationDefinition, type AutomationDefinitionInput, type AsyncStore,
@@ -200,7 +200,7 @@ describe("Daily Workbench UI", () => {
       getSetting: async () => undefined, compareAndSetSetting: async () => ({ ok: true }),
     } as unknown as WorkerClient;
     const { unmount } = await mount(<DataView store={store} worker={worker}
-      onClose={() => undefined} onImport={() => undefined}
+      onClose={() => undefined}
       onError={message => { throw new Error(message); }}
       onInfo={() => undefined} onWrite={() => undefined} />);
     await waitFor(() => [...document.body.querySelectorAll<HTMLButtonElement>(".dataview-tables button")]
@@ -239,7 +239,7 @@ describe("Daily Workbench UI", () => {
     } as unknown as WorkerClient;
     const { container, unmount } = await mount(<DataView
       worker={worker} store={new InProcessAsyncStore(store)} initialTable="tasks"
-      onImport={() => undefined} onWrite={() => undefined} onClose={() => undefined}
+      onWrite={() => undefined} onClose={() => undefined}
       onError={message => { throw new Error(message); }}
       onInfo={message => { if (message.startsWith("Archived")) archivedResolve(); }}
       onSchemaChange={() => undefined} onRecovery={() => undefined}
@@ -247,8 +247,8 @@ describe("Daily Workbench UI", () => {
     await waitFor(() => document.body.textContent?.includes("Second") ?? false);
     await act(async () => { await initialized; });
     const importInput = document.body.querySelector<HTMLInputElement>(
-      '.dataview-import input[type="file"]')!;
-    expect(importInput.style.display).not.toBe("none");
+      '.dataview-import input[type="file"]');
+    expect(importInput).toBeNull();
     expect(document.body.querySelector('button[aria-label="Sort by title"]')).not.toBeNull();
     expect(document.body.querySelector('button[aria-label="Rename title column"]')).not.toBeNull();
     const editable = document.body.querySelector<HTMLTableCellElement>("td.cell-editable")!;
@@ -289,6 +289,46 @@ describe("Daily Workbench UI", () => {
     store.close();
   });
 
+  it("routes a retained import receipt through import-specific undo after the wizard closes", async () => {
+    const store = await taskStore();
+    const created = store.insert("tasks", { title: "Imported", status: "open" });
+    const receipt = store.applyBatch({ source: "import", summary: "Import tasks", mutations: [{
+      kind: "update", table: "tasks", id: String(created.id), patch: { status: "done" },
+    }] });
+    const undoImport = vi.fn(async (id: string) => ({
+      ...store.undoBatch(id), kind: "receipt" as const, durable: true as const,
+      previewDigest: `sha256:${"a".repeat(64)}`, sourceKind: "csv" as const,
+      target: { table: "tasks", label: "Tasks" }, baseVersion: store.headVersion(),
+      sourceTotals: { sourceRows: 1, createRows: 0, updateRows: 1, skipRows: 0, blockedRows: 0,
+        skipReasons: { above_header: 0, blank_row: 0, user_skipped: 0, duplicate_combined: 0,
+          duplicate_skipped: 0, no_change: 0, unmapped_row: 0 } },
+      mutationTotals: { primaryTargetCreates: 0, primaryTargetUpdates: 1,
+        auxiliaryRelatedCreates: 0, changedCount: 1 },
+      warningTotals: { warnings: 0, warningReasons: { trimmed_whitespace: 0,
+        leading_zero_identifier: 0, enum_case_normalized: 0 } },
+      undo: { state: "undone" as const },
+    }));
+    const undoBatch = vi.fn(async () => { throw new Error("generic undo must not run"); });
+    const worker = { ...mutationIdentity,
+      registryTables: async () => [...store.registrySnapshot().values()],
+      semanticTrace: async () => store.semanticSchemaTrace(), sampleCount: async () => 0,
+      operationBatches: async () => [receipt], getSetting: async () => null,
+      restorableRows: async () => [], recordFilter: async () => null,
+      undoImport, undoBatch,
+    } as unknown as WorkerClient;
+    const { unmount } = await mount(<DataView worker={worker}
+      store={new InProcessAsyncStore(store)} initialTable="tasks"
+      onWrite={() => undefined} onClose={() => undefined}
+      onError={message => { throw new Error(message); }} onInfo={() => undefined} />);
+    await waitFor(() => document.body.querySelector(".workbench-undo") !== null);
+    await act(async () => document.body.querySelector<HTMLButtonElement>(".workbench-undo")!.click());
+    await waitFor(() => undoImport.mock.calls.length === 1);
+    expect(undoImport).toHaveBeenCalledWith(receipt.id,
+      { requestId: `req_${"u".repeat(26)}` });
+    expect(undoBatch).not.toHaveBeenCalled();
+    await unmount(); store.close();
+  });
+
   it("guards row creation against double activation", async () => {
     const store = await taskStore();
     let addedResolve!: () => void;
@@ -301,7 +341,7 @@ describe("Daily Workbench UI", () => {
     } as unknown as WorkerClient;
     const { unmount } = await mount(<DataView worker={worker}
       store={new InProcessAsyncStore(store)} initialTable="tasks"
-      onImport={() => undefined} onWrite={() => addedResolve()} onClose={() => undefined}
+      onWrite={() => addedResolve()} onClose={() => undefined}
       onError={message => { throw new Error(message); }} onInfo={() => undefined} />);
     await waitFor(() => document.body.querySelector('.dataview-new input[aria-label="title"]') !== null);
     const input = document.body.querySelector<HTMLInputElement>('.dataview-new input[aria-label="title"]')!;
@@ -327,7 +367,7 @@ describe("Daily Workbench UI", () => {
     let closes = 0;
     const { unmount } = await mount(<DataView worker={worker}
       store={new InProcessAsyncStore(store)} initialTable="tasks"
-      onImport={() => undefined} onWrite={() => undefined} onClose={() => { closes++; }}
+      onWrite={() => undefined} onClose={() => { closes++; }}
       onError={message => { throw new Error(message); }} onInfo={() => undefined} />);
     await waitFor(() => document.body.querySelector('button[aria-label="Rename title column"]') !== null);
     await act(async () => { await initialized; });
