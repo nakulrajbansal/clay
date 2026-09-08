@@ -406,6 +406,8 @@ describe("production Store authority", () => {
       expect(Object.isFrozen(reader)).toBe(true);
       expect(Reflect.ownKeys(reader).sort()).toEqual([
         "attachmentStorage", "attachmentsForRecord", "attemptStats", "automationRuns",
+        "dailyHomeNotificationWatermark", "dailyHomeRecordRevisions",
+        "dailyHomeUnreadNotifications",
         "fieldProvenance", "getSetting", "globalSearch", "headVersion", "history",
         "intakeDeliveryFailures", "intakeInbox", "intakeReceipts", "listAutomations", "listIntakeForms",
         "listNotifications", "livePanels", "operationBatches",
@@ -1393,6 +1395,91 @@ describe("production Store authority", () => {
     }
   });
 
+  it("reserves every Daily Home-owned setting from generic setting routes", async () => {
+    const { driver } = await legacyStore();
+    const authority = ProductionStoreAuthority.adoptLegacy(driver, {
+      inventory: legacyInventory,
+      storageKey: "default",
+      displayName: "My app",
+      appInstanceId: opaque("app", "a"),
+      generationId: opaque("gen", "b"),
+      namespaceId: opaque("ns", "c"),
+      adoptionOperationId: opaque("op", "d"),
+      releaseId: opaque("rel", "e"),
+      nowMs: Date.now(),
+      leaseTtlMs: 60_000,
+    });
+    const keys = [
+      "daily_source_library_v1",
+      "daily_navigation_v1",
+      "daily_time_zone_v1",
+      "quick_capture_last_table_v1",
+      "sample_provenance_v1",
+      "sample_rows",
+    ] as const;
+    const alphabet = "fghijkmnpqrstuvwxyz234";
+    let request = 0;
+    try {
+      for (const key of keys) {
+        const attempts = [{
+          route: "setting.set" as const,
+          payload: { key, value: "malformed" },
+        }, {
+          route: "setting.delete" as const,
+          payload: { key },
+        }, {
+          route: "setting.compareAndSet" as const,
+          payload: { key, expectedRevision: 0, value: { revision: 1 } },
+        }];
+        for (const attempt of attempts) {
+          await expect(Promise.resolve().then(() => authority.executeMutation({
+            requestId: opaque("req", alphabet[request++]!),
+            ...attempt,
+          }))).rejects.toMatchObject({ code: "E_TARGET_AUTHORITY_INVALID" });
+        }
+        expect(authority.readSetting(key)).toBeUndefined();
+      }
+      expect(authority.inspectAuthority().targetReservations).toEqual([]);
+    } finally {
+      authority.close();
+    }
+  });
+
+  it("never lets Daily Home undo target an unrelated operation batch", async () => {
+    const { driver, store: rawStore } = await legacyStore();
+    const rowId = String(rawStore.query({ from: "projects" })[0]!.id);
+    const unrelated = rawStore.applyBatch({
+      source: "user",
+      summary: "Unrelated bulk edit",
+      mutations: [{ kind: "update", table: "projects", id: rowId, patch: { name: "Unrelated" } }],
+    });
+    const authority = ProductionStoreAuthority.adoptLegacy(driver, {
+      inventory: legacyInventory,
+      storageKey: "default",
+      displayName: "My app",
+      appInstanceId: opaque("app", "a"),
+      generationId: opaque("gen", "b"),
+      namespaceId: opaque("ns", "c"),
+      adoptionOperationId: opaque("op", "d"),
+      releaseId: opaque("rel", "e"),
+      nowMs: Date.now(),
+      leaseTtlMs: 60_000,
+    });
+    try {
+      await expect(Promise.resolve().then(() => authority.executeMutation({
+        requestId: opaque("req", "t"),
+        route: "dailyHome.capture.undo",
+        payload: { batchId: unrelated.id },
+      }))).rejects.toMatchObject({ code: "E_TARGET_AUTHORITY_INVALID" });
+      expect(authority.query({ from: "projects" })[0]!.name).toBe("Unrelated");
+      expect(authority.readStore().operationBatches()[0]).toMatchObject({
+        id: unrelated.id, undone: false,
+      });
+      expect(authority.inspectAuthority().targetReservations).toEqual([]);
+    } finally {
+      authority.close();
+    }
+  });
   it("does not expose mutable target evidence to a caller", async () => {
     const { driver } = await legacyStore();
     const authority = ProductionStoreAuthority.adoptLegacy(driver, {

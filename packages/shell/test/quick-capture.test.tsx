@@ -1,0 +1,115 @@
+/** @vitest-environment jsdom */
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import { describe, expect, it } from "vitest";
+import type { AsyncStore, BatchReceipt, RegTable } from "@clay/kernel";
+import {
+  CommandPalette,
+  QUICK_CAPTURE_LAST_TABLE_SETTING,
+} from "../src/app/CommandPalette";
+import type { WorkerClient } from "../src/app/worker-client";
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+async function settle(): Promise<void> {
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+}
+
+function typeInto(input: HTMLInputElement, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  if (!setter) throw new Error("input value setter unavailable");
+  setter.call(input, value);
+  input.dispatchEvent(new window.Event("input", { bubbles: true }));
+}
+
+describe("quick capture", () => {
+  it("opens the last record type and inserts through the authority-backed Store port", async () => {
+    const taskTableId = "tbl_018f4c2a-7b31-7001-8000-000000000001";
+    const tables = [{
+      name: "tasks",
+      semantic: { tableId: taskTableId },
+      columns: [
+        { name: "title", label: "Title", type: "text", required: true },
+        { name: "due_on", label: "Due", type: "date", required: false },
+      ],
+    }, {
+      name: "contacts",
+      semantic: { tableId: "tbl_018f4c2a-7b31-7001-8000-000000000002" },
+      columns: [{ name: "name", type: "text", required: true }],
+    }] as unknown as RegTable[];
+    const captures: Array<{ table: string; row: Record<string, unknown>; tableId: string }> = [];
+    const undone: string[] = [];
+    const receipt: BatchReceipt = {
+      id: "018f4c2a-7b31-7001-8000-000000000091",
+      at: "2026-09-06T12:00:00.000Z",
+      source: "user",
+      summary: "Quick capture in tasks",
+      changed: 1,
+      created: [{ table: "tasks", id: "018f4c2a-7b31-7001-8000-000000000011" }],
+      undone: false,
+    };
+    const worker = {
+      globalSearch: async () => [],
+      getSetting: async (key: string) => key === QUICK_CAPTURE_LAST_TABLE_SETTING ? taskTableId : null,
+      resolveDailyHomeDate: async (value: string) => value === "tomorrow" ? "2026-09-07" : value,
+      quickCapture: async (table: string, row: Record<string, unknown>, tableId: string) => {
+        captures.push({ table, row, tableId });
+        return receipt;
+      },
+      undoQuickCapture: async (batchId: string) => {
+        undone.push(batchId);
+        return { ...receipt, undone: true };
+      },
+    } as unknown as WorkerClient;
+    let directInsertCalled = false;
+    const store = {
+      insert: async () => { directInsertCalled = true; throw new Error("must not insert directly"); },
+    } as unknown as AsyncStore;
+    const opened: Array<{ table: string; id: string }> = [];
+    const writes: string[] = [];
+    let undoAction: { label: string; run: () => void } | undefined;
+    const host = document.createElement("div");
+    document.body.replaceChildren(host);
+    const root = createRoot(host);
+
+    await act(async () => root.render(<CommandPalette
+      worker={worker}
+      store={store}
+      tables={tables}
+      captureMode
+      onClose={() => undefined}
+      onOpenRecord={(table, id) => opened.push({ table, id })}
+      onOpenData={() => undefined}
+      onWrite={table => writes.push(table)}
+      onError={message => { throw new Error(message); }}
+      onInfo={(_message, action) => { undoAction = action; }}
+    />));
+    await settle();
+
+    expect(document.body.textContent).toContain("New Tasks");
+    const title = document.querySelector<HTMLInputElement>('input[aria-label="Title"]')!;
+    const due = document.querySelector<HTMLInputElement>('input[aria-label="Due"]')!;
+    await act(async () => {
+      typeInto(title, "Send quote");
+      typeInto(due, "tomorrow");
+    });
+    const form = document.querySelector<HTMLFormElement>("form.command-create")!;
+    await act(async () => { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    await settle();
+
+    expect(directInsertCalled).toBe(false);
+    expect(captures).toEqual([{
+      table: "tasks",
+      tableId: taskTableId,
+      row: { title: "Send quote", due_on: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) },
+    }]);
+    expect(opened).toEqual([{ table: "tasks", id: receipt.created[0]!.id }]);
+    expect(writes).toEqual(["tasks"]);
+    expect(undoAction?.label).toBe("Undo");
+    await act(async () => { undoAction?.run(); await new Promise(resolve => setTimeout(resolve, 20)); });
+    expect(undone).toEqual([receipt.id]);
+    expect(writes).toEqual(["tasks", "tasks"]);
+
+    await act(async () => root.unmount());
+  });
+});

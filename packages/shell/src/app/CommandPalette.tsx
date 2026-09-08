@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import type { GlobalSearchResult, RegColumn, RegTable } from "@clay/kernel";
+import type { AsyncStore, GlobalSearchResult, RegColumn, RegTable } from "@clay/kernel";
 import type { WorkerClient, WorkerMutationContext } from "./worker-client";
 import { ModalDialog } from "./ModalDialog";
 import "./Operations.css";
@@ -8,6 +8,8 @@ const humanize = (name: string): string => name.replace(/_/g, " ")
   .replace(/^./, character => character.toUpperCase());
 const isDerived = (column: RegColumn): boolean =>
   column.type === "computed" || column.type === "lookup" || column.type === "rollup";
+
+export const QUICK_CAPTURE_LAST_TABLE_SETTING = "quick_capture_last_table_v1";
 
 function coerce(column: RegColumn, value: string): unknown {
   if (value === "") return null;
@@ -18,13 +20,15 @@ function coerce(column: RegColumn, value: string): unknown {
 
 export function CommandPalette(props: {
   worker: WorkerClient;
+  store?: AsyncStore;
   tables: RegTable[];
+  captureMode?: boolean;
   onClose: () => void;
   onOpenRecord: (table: string, id: string) => void;
   onOpenData: (table?: string) => void;
   onWrite: (table: string) => void;
   onError: (message: string) => void;
-  onInfo: (message: string) => void;
+  onInfo: (message: string, action?: { label: string; run: () => void }) => void;
 }): React.JSX.Element {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<GlobalSearchResult[]>([]);
@@ -43,6 +47,21 @@ export function CommandPalette(props: {
   [creating]);
   const quickTables = props.tables.slice(0, 6);
   const quickCount = quickTables.length + 1;
+
+  useEffect(() => {
+    if (!props.captureMode) return;
+    let live = true;
+    void props.worker.getSetting<string>(QUICK_CAPTURE_LAST_TABLE_SETTING)
+      .then(saved => {
+        if (!live) return;
+        const selected = props.tables.find(table =>
+          table.name === saved || String(table.semantic?.tableId ?? "") === saved)
+          ?? props.tables[0] ?? null;
+        setCreating(selected);
+      })
+      .catch(() => { if (live) setCreating(props.tables[0] ?? null); });
+    return () => { live = false; };
+  }, [props.captureMode, props.tables, props.worker]);
 
   useEffect(() => {
     let live = true;
@@ -107,24 +126,45 @@ export function CommandPalette(props: {
     const row: Record<string, unknown> = {};
     for (const column of fields) {
       const value = draft[column.name] ?? "";
-      if (value !== "") row[column.name] = coerce(column, value);
+      if (value !== "") row[column.name] = column.type === "date"
+        ? await props.worker.resolveDailyHomeDate(value)
+        : coerce(column, value);
     }
     const summary = `Create ${humanize(creating.name)} record`;
     const mutations = [{ kind: "insert" as const, table: creating.name, row }];
     const operationKey = JSON.stringify({ summary, mutations });
-    const context = pendingCreate.current?.key === operationKey
-      ? pendingCreate.current.context : props.worker.createMutationContext();
-    pendingCreate.current = { key: operationKey, context };
     setBusy(true);
     try {
-      const receipt = await props.worker.applyBatch(summary, mutations, context);
+      const tableId = creating.semantic?.tableId;
+      if (props.captureMode && !tableId)
+        throw new Error("Quick capture requires a stable record type identity");
+      const context = props.captureMode ? null : pendingCreate.current?.key === operationKey
+        ? pendingCreate.current.context : props.worker.createMutationContext();
+      if (context) pendingCreate.current = { key: operationKey, context };
+      const receipt = props.captureMode
+        ? await props.worker.quickCapture(creating.name, row, String(tableId))
+        : await props.worker.applyBatch(summary, mutations, context!);
       pendingCreate.current = null;
       const created = receipt.created[0];
-      if (!created) throw new Error("Clay did not return the created record");
+      if (!created || created.table !== creating.name)
+        throw new Error("Quick capture did not return its durable created-record receipt");
       props.onWrite(creating.name);
-      props.onInfo(`Created in ${humanize(creating.name)}. Undo is available from the data view.`);
+      props.onInfo(`Created in ${humanize(creating.name)} with a durable undo receipt.`, {
+        label: "Undo",
+        run: () => {
+          const undo = props.captureMode
+            ? props.worker.undoQuickCapture(receipt.id)
+            : props.worker.undoBatch(receipt.id, props.worker.createMutationContext());
+          void undo.then(() => {
+            props.onWrite(creating.name);
+            props.onInfo(`Undid quick capture in ${humanize(creating.name)}.`);
+          }).catch(error => props.onError(
+            `Could not undo quick capture: ${error instanceof Error ? error.message : String(error)}`,
+          ));
+        },
+      });
       props.onClose();
-      props.onOpenRecord(created.table, created.id);
+      props.onOpenRecord(creating.name, created.id);
     } catch (error) {
       props.onError(error instanceof Error ? error.message : String(error));
     } finally { setBusy(false); }
@@ -167,8 +207,9 @@ export function CommandPalette(props: {
                   </select>
                 ) : (
                   <input autoFocus={index === 0} required={column.required}
-                    type={column.type === "date" ? "date"
-                      : column.type === "number" || column.type === "integer" ? "number" : "text"}
+                    aria-label={column.label ?? humanize(column.name)}
+                    type={column.type === "number" || column.type === "integer" ? "number" : "text"}
+                    placeholder={column.type === "date" ? "today, tomorrow, or YYYY-MM-DD" : undefined}
                     value={draft[column.name] ?? ""}
                     onChange={event => setDraft(value => ({ ...value, [column.name]: event.target.value }))} />
                 )}

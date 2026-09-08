@@ -358,3 +358,53 @@ Format-5 export/import must apply this same historical proof.
 Restore-as-new with nonempty provenance remains rejected before opening a fresh
 target until the worker-owned lifecycle can perform private chunked provenance
 rebind operations under fresh target and catalog authority.
+
+## Daily Home projection state
+
+Today and Inbox add no canonical item-copy table. Projection DTOs are recomputed
+from current source rows and trusted system sources and are never imported back as
+authority. Every source, section, and aggregate reports a tagged completeness arm:
+either an exact non-negative total, or a known minimum plus at least one closed,
+named gap. Returned page length is separate and can never stand in for a total.
+
+`DailySourceProfileV1` is app-owned, strictly validated configuration capped at
+32 profiles. Each enabled table profile binds stable table, label-field, and one
+date-field identity plus a closed completion rule. A rename can resolve through
+semantic history; a missing, inactive, ambiguous, or type-changed identity cannot
+be rebound by display name. Profile revision and canonical digest participate in
+the Daily Home snapshot basis. The basis also includes the selected active generation
+and the byte-ordered, disjoint ready/issue profile-resolution partition; changing only
+that partition changes the basis digest and invalidates an older snapshot or cursor.
+
+Snapshot schema parsing proves only that a transport value has the closed shape. The
+trusted kernel builder separately derives its basis digest and aggregate counts, rejects
+section items absent from the source pages, rejects repeated occurrence identities, and
+freezes the complete accepted graph. Source status and completeness form a closed matrix:
+`ready` requires exact counts and a watermark; `partial` requires two source-local partial
+arms; `unavailable` requires an empty end page, null watermark, and zero known minima.
+The D1 item union contains due and automation items only, uses canonical UUID row IDs and
+existing automation/saved-view ID formats, and exposes only Open or Setup/Fix navigation.
+Recovery items and state-changing actions are not members of this version.
+
+Every source occurrence belongs to exactly one fixed section-source set. Cross-source
+record overlap is retained in `sourceOccurrences` but deduplicated in `renderedUnique`;
+the earliest canonical section/rank tuple supplies the representative, with titles
+excluded from ordering. Exact section occurrence counts are sums over only that
+section's contributing sources. Partial gaps likewise name only incomplete contributing
+sources; a section's own bounded page continuation does not manufacture a source gap.
+
+When the state-changing D2 slice is authorized, `sys.inbox_dispositions` will hold
+only presentation state for one exact `(source_key, source_generation)` occurrence:
+seen time, snooze-until time, dismissal time, and a positive integer
+`disposition_revision`. Absence is expected revision 0, first effective insertion
+creates revision 1, and each later effective mutation increments once. A no-op or
+projection inserts nothing and advances neither the row nor its global watermark.
+Canonical work remains in user tables, and automation notices remain in
+`sys.notifications`.
+
+App-owned profile and disposition state is included in authenticated archive
+format 5 after its schema and lifecycle are implemented. Device permission,
+subscription, delivery credential, and opaque remote route state is device-owned
+and excluded. Until the release-bound physical transaction certificate and
+worker-owned write routes pass, the disposition table is a reserved design and no
+production writer may create or mutate it.
