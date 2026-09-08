@@ -7,6 +7,7 @@ export type HostedAuthAccess = Readonly<{
 
 export type HostedAuthAttempt = Readonly<{
   generation: number;
+  epoch: string;
   backendUrl: string;
   state: string;
   signal: AbortSignal;
@@ -17,11 +18,15 @@ export type PersistedHostedAuthAttempt = Readonly<{
   provider: "clay";
   backendUrl: string;
   state: string;
+  epoch: string;
   createdAt: number;
 }>;
 
 const AUTH_ATTEMPT = "clay_hosted_auth_attempt_v1";
+const AUTH_EPOCHS = "clay_hosted_auth_epochs_v1";
+const AUTH_LOCK = "clay_hosted_auth_epoch_lock_v1";
 const AUTH_STATE = /^[0-9a-f]{64}$/;
+const AUTH_EPOCH = /^(?:0|[1-9][0-9]{0,19})$/;
 const AUTH_TOKEN = /^[A-Za-z0-9_-]{32,256}$/;
 const AUTH_ATTEMPT_MAX_AGE_MS = 15 * 60_000;
 export const HOSTED_ACCOUNT_CHANGE_KEY = "clay_hosted_account_change_v1";
@@ -33,18 +38,134 @@ export type HostedAccountChange = Readonly<{
   generation: string;
 }>;
 
+export type HostedAuthEpoch = Readonly<{
+  epoch: string;
+  state: "pending" | "granted" | "revoked";
+}>;
+
+type HostedAuthEpochRecord = {
+  v: 1;
+  sequence: string;
+  origins: Record<string, HostedAuthEpoch>;
+};
+
+type LockManagerLike = {
+  request<T>(
+    name: string,
+    options: { mode: "exclusive" },
+    callback: () => T | PromiseLike<T>,
+  ): Promise<T>;
+};
+
 function authStorage(): Storage | null {
   try { return typeof localStorage === "undefined" ? null : localStorage; }
   catch { return null; }
 }
 
-function clearPersistedHostedAuthAttempt(): void {
-  try { authStorage()?.removeItem(AUTH_ATTEMPT); } catch { /* storage unavailable */ }
+function hostedOrigin(backendUrl: string): string {
+  return new URL(normalizeBackendUrl(backendUrl)).origin;
 }
 
-function persistHostedAuthAttempt(record: PersistedHostedAuthAttempt): void {
-  try { authStorage()?.setItem(AUTH_ATTEMPT, JSON.stringify(record)); }
-  catch { /* storage unavailable; navigation completion will fail closed */ }
+function authLockManager(): LockManagerLike {
+  const locks = typeof navigator === "undefined"
+    ? undefined
+    : (navigator as Navigator & { locks?: LockManagerLike }).locks;
+  if (!locks || typeof locks.request !== "function")
+    throw new Error("cross-tab authentication locking is unavailable");
+  return locks;
+}
+
+function withAuthLock<T>(callback: () => T | PromiseLike<T>): Promise<T> {
+  return authLockManager().request(AUTH_LOCK, { mode: "exclusive" }, callback);
+}
+
+function readEpochRecord(storage: Storage): HostedAuthEpochRecord {
+  const raw = storage.getItem(AUTH_EPOCHS);
+  if (raw === null) return { v: 1, sequence: "0", origins: Object.create(null) };
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); }
+  catch { throw new Error("hosted authentication epoch state is invalid"); }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+    throw new Error("hosted authentication epoch state is invalid");
+  const record = parsed as Record<string, unknown>;
+  if (Reflect.ownKeys(record).length !== 3 || record.v !== 1
+      || typeof record.sequence !== "string" || !AUTH_EPOCH.test(record.sequence)
+      || !record.origins || typeof record.origins !== "object" || Array.isArray(record.origins))
+    throw new Error("hosted authentication epoch state is invalid");
+  const entries = Object.entries(record.origins as Record<string, unknown>);
+  if (entries.length > 64) throw new Error("hosted authentication epoch state is invalid");
+  const origins: Record<string, HostedAuthEpoch> = Object.create(null);
+  for (const [origin, value] of entries) {
+    if (!value || typeof value !== "object" || Array.isArray(value)
+        || Reflect.ownKeys(value).length !== 2
+        || new URL(origin).origin !== origin) {
+      throw new Error("hosted authentication epoch state is invalid");
+    }
+    const epoch = value as Record<string, unknown>;
+    if (typeof epoch.epoch !== "string" || !AUTH_EPOCH.test(epoch.epoch)
+        || BigInt(epoch.epoch) > BigInt(record.sequence)
+        || (epoch.state !== "pending" && epoch.state !== "granted"
+          && epoch.state !== "revoked"))
+      throw new Error("hosted authentication epoch state is invalid");
+    origins[origin] = { epoch: epoch.epoch, state: epoch.state };
+  }
+  return { v: 1, sequence: record.sequence, origins };
+}
+
+function writeEpochRecord(storage: Storage, record: HostedAuthEpochRecord): void {
+  storage.setItem(AUTH_EPOCHS, JSON.stringify(record));
+}
+
+function advanceEpoch(
+  record: HostedAuthEpochRecord,
+  origin: string,
+  state: HostedAuthEpoch["state"],
+): HostedAuthEpoch {
+  if (!Object.hasOwn(record.origins, origin) && Object.keys(record.origins).length >= 64)
+    throw new Error("hosted authentication epoch state is full");
+  const next = BigInt(record.sequence) + 1n;
+  if (next > 18_446_744_073_709_551_615n)
+    throw new Error("hosted authentication epoch is exhausted");
+  record.sequence = next.toString();
+  const epoch = Object.freeze({ epoch: record.sequence, state });
+  record.origins[origin] = epoch;
+  return epoch;
+}
+
+function currentEpoch(record: HostedAuthEpochRecord, origin: string): HostedAuthEpoch {
+  return record.origins[origin] ?? Object.freeze({ epoch: "0", state: "revoked" });
+}
+
+export function reconcileHostedAuthEpoch<T>(
+  backendUrl: string,
+  callback: (epoch: HostedAuthEpoch) => T | PromiseLike<T>,
+): Promise<T> {
+  const origin = hostedOrigin(backendUrl);
+  return withAuthLock(() => {
+    const storage = authStorage();
+    if (!storage) throw new Error("durable authentication storage is unavailable");
+    return callback(currentEpoch(readEpochRecord(storage), origin));
+  });
+}
+
+export function advanceHostedAuthRevocation<T>(
+  backendUrl: string,
+  revokeLocal: (epoch: HostedAuthEpoch) => T | PromiseLike<T>,
+): Promise<T> {
+  const origin = hostedOrigin(backendUrl);
+  return withAuthLock(() => {
+    const storage = authStorage();
+    if (!storage) throw new Error("durable authentication storage is unavailable");
+    const record = readEpochRecord(storage);
+    const epoch = advanceEpoch(record, origin, "revoked");
+    writeEpochRecord(storage, record);
+    storage.removeItem(AUTH_ATTEMPT);
+    return revokeLocal(epoch);
+  });
+}
+
+function clearPersistedHostedAuthAttempt(): void {
+  try { authStorage()?.removeItem(AUTH_ATTEMPT); } catch { /* storage unavailable */ }
 }
 
 function mintAuthState(): string {
@@ -94,28 +215,36 @@ export function observeHostedAccountChanges(
   return () => target.removeEventListener("storage", listener);
 }
 
-export function consumePersistedHostedAuthAttempt(
+export async function consumePersistedHostedAuthAttempt(
   state: string,
   access: HostedAuthAccess,
   nowMs: number = Date.now(),
-): PersistedHostedAuthAttempt | null {
-  const storage = authStorage();
-  let raw: string | null = null;
-  try { raw = storage?.getItem(AUTH_ATTEMPT) ?? null; storage?.removeItem(AUTH_ATTEMPT); }
-  catch { return null; }
-  if (!raw || !AUTH_STATE.test(state)) return null;
-  try {
-    const record = JSON.parse(raw) as PersistedHostedAuthAttempt;
-    if (!record || record.v !== 1 || record.provider !== "clay"
-        || !AUTH_STATE.test(record.state) || record.state !== state
-        || !Number.isSafeInteger(record.createdAt) || record.createdAt > nowMs
-        || nowMs - record.createdAt > AUTH_ATTEMPT_MAX_AGE_MS
-        || access.provider !== "clay" || !access.backendUrl) return null;
-    const backendUrl = normalizeBackendUrl(record.backendUrl);
-    if (backendUrl !== record.backendUrl
-        || normalizeBackendUrl(access.backendUrl) !== backendUrl) return null;
-    return Object.freeze({ ...record });
-  } catch { return null; }
+): Promise<PersistedHostedAuthAttempt | null> {
+  return withAuthLock(() => {
+    const storage = authStorage();
+    if (!storage) return null;
+    let raw: string | null = null;
+    try { raw = storage.getItem(AUTH_ATTEMPT); storage.removeItem(AUTH_ATTEMPT); }
+    catch { return null; }
+    if (!raw || !AUTH_STATE.test(state)) return null;
+    try {
+      const record = JSON.parse(raw) as PersistedHostedAuthAttempt;
+      if (!record || typeof record !== "object" || Array.isArray(record)
+          || Reflect.ownKeys(record).length !== 6
+          || record.v !== 1 || record.provider !== "clay"
+          || !AUTH_STATE.test(record.state) || record.state !== state
+          || !AUTH_EPOCH.test(record.epoch)
+          || !Number.isSafeInteger(record.createdAt) || record.createdAt > nowMs
+          || nowMs - record.createdAt > AUTH_ATTEMPT_MAX_AGE_MS
+          || access.provider !== "clay" || !access.backendUrl) return null;
+      const backendUrl = normalizeBackendUrl(record.backendUrl);
+      if (backendUrl !== record.backendUrl
+          || normalizeBackendUrl(access.backendUrl) !== backendUrl) return null;
+      const epoch = currentEpoch(readEpochRecord(storage), hostedOrigin(backendUrl));
+      if (epoch.epoch !== record.epoch || epoch.state !== "pending") return null;
+      return Object.freeze({ ...record });
+    } catch { return null; }
+  });
 }
 
 export function captureHostedAuthLanding(href: string): Readonly<{
@@ -135,21 +264,31 @@ export class HostedAuthFence {
   #generation = 0;
   #controller: AbortController | null = null;
 
-  begin(backendUrl: string): HostedAuthAttempt {
+  begin(backendUrl: string): Promise<HostedAuthAttempt> {
     this.#controller?.abort(new Error("hosted authentication was superseded"));
     const controller = new AbortController();
     this.#controller = controller;
-    const attempt = Object.freeze({
-      generation: ++this.#generation,
-      backendUrl: normalizeBackendUrl(backendUrl),
-      state: mintAuthState(),
-      signal: controller.signal,
+    const generation = ++this.#generation;
+    const normalized = normalizeBackendUrl(backendUrl);
+    const state = mintAuthState();
+    return withAuthLock(() => {
+      if (controller.signal.aborted || generation !== this.#generation)
+        throw new Error("hosted authentication was superseded");
+      const storage = authStorage();
+      if (!storage) throw new Error("durable authentication storage is unavailable");
+      const record = readEpochRecord(storage);
+      const epoch = advanceEpoch(record, hostedOrigin(normalized), "pending");
+      writeEpochRecord(storage, record);
+      const attempt = Object.freeze({
+        generation, epoch: epoch.epoch, backendUrl: normalized, state,
+        signal: controller.signal,
+      });
+      storage.setItem(AUTH_ATTEMPT, JSON.stringify({
+        v: 1, provider: "clay", backendUrl: attempt.backendUrl,
+        state: attempt.state, epoch: attempt.epoch, createdAt: Date.now(),
+      } satisfies PersistedHostedAuthAttempt));
+      return attempt;
     });
-    persistHostedAuthAttempt({
-      v: 1, provider: "clay", backendUrl: attempt.backendUrl,
-      state: attempt.state, createdAt: Date.now(),
-    });
-    return attempt;
   }
 
   resume(record: PersistedHostedAuthAttempt): HostedAuthAttempt {
@@ -157,7 +296,7 @@ export class HostedAuthFence {
     const controller = new AbortController();
     this.#controller = controller;
     return Object.freeze({
-      generation: ++this.#generation, backendUrl: record.backendUrl,
+      generation: ++this.#generation, epoch: record.epoch, backendUrl: record.backendUrl,
       state: record.state, signal: controller.signal,
     });
   }
@@ -177,6 +316,59 @@ export class HostedAuthFence {
   }
 }
 
+function epochMatchesAttempt(epoch: HostedAuthEpoch, attempt: HostedAuthAttempt): boolean {
+  return epoch.epoch === attempt.epoch && epoch.state === "pending";
+}
+
+async function revokeReturnedSession(
+  attempt: HostedAuthAttempt,
+  session: string,
+  revoke: (backendUrl: string, session: string) => Promise<void>,
+): Promise<void> {
+  try { await revoke(attempt.backendUrl, session); }
+  catch { /* local authorization remains denied even if the network is unavailable */ }
+}
+
+export async function commitHostedAuthAttempt(
+  fence: HostedAuthFence,
+  attempt: HostedAuthAttempt,
+  access: () => HostedAuthAccess,
+  session: string,
+  prepareWorker: () => Promise<boolean>,
+  publishStorage: () => void,
+  revoke: (backendUrl: string, session: string) => Promise<void> = logoutHostedBearerSession,
+): Promise<boolean> {
+  let committed = false;
+  try {
+    await withAuthLock(async () => {
+      const storage = authStorage();
+      if (!storage || !fence.isCurrent(attempt, access())) return;
+      const origin = hostedOrigin(attempt.backendUrl);
+      let record = readEpochRecord(storage);
+      if (!epochMatchesAttempt(currentEpoch(record, origin), attempt)) return;
+      let applied = false;
+      try { applied = await prepareWorker(); } catch { return; }
+      if (!applied || !fence.isCurrent(attempt, access())) return;
+
+      // Re-read immediately before publication. The Web Lock excludes other
+      // cooperating tabs; the re-read also rejects out-of-band storage writes.
+      record = readEpochRecord(storage);
+      if (!epochMatchesAttempt(currentEpoch(record, origin), attempt)) return;
+      record.origins[origin] = Object.freeze({ epoch: attempt.epoch, state: "granted" });
+      writeEpochRecord(storage, record);
+      try {
+        publishStorage();
+        committed = true;
+      } catch {
+        advanceEpoch(record, origin, "revoked");
+        writeEpochRecord(storage, record);
+      }
+    });
+  } catch { /* malformed/unavailable authority fails closed */ }
+  if (!committed) await revokeReturnedSession(attempt, session, revoke);
+  return committed;
+}
+
 export async function redeemHostedAuthAttempt(
   fence: HostedAuthFence,
   attempt: HostedAuthAttempt,
@@ -193,8 +385,16 @@ export async function redeemHostedAuthAttempt(
   const body = await response.json() as { session?: string; error?: string };
   const session = typeof body.session === "string" && AUTH_TOKEN.test(body.session)
     ? body.session : null;
-  if (!fence.isCurrent(attempt, access())) {
-    if (session) await revoke(attempt.backendUrl, session);
+  let current = fence.isCurrent(attempt, access());
+  if (current) {
+    try {
+      current = await reconcileHostedAuthEpoch(
+        attempt.backendUrl, epoch => epochMatchesAttempt(epoch, attempt),
+      );
+    } catch { current = false; }
+  }
+  if (!current) {
+    if (session) await revokeReturnedSession(attempt, session, revoke);
     return null;
   }
   if (!response.ok || !session)

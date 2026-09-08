@@ -11,15 +11,20 @@
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { getCookie, setCookie } from "hono/cookie";
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
+import { extractAcornStaticStrings } from "@clay/kernel/static-javascript-strings";
 import {
   DEFAULT_MODEL, DEFAULT_OPENAI_MODEL, MutationClient, type S1Context,
 } from "@clay/mutation";
 import {
-  FREE_QUOTA, MemoryAuthStore, Sessions, type AuthStore, type SessionStore,
+  DEFAULT_MAGIC_LINK_LIMITS, DEFAULT_MUTATION_CALL_LIMITS, FREE_QUOTA,
+  MemoryAuthStore, Sessions, type AuthStore, type MagicLinkLimits,
+  type MutationCallLimits, type RepairCapabilityBinding, type SessionStore,
 } from "./auth";
 
 const BODY_CAP = 64 * 1024;   // doc 07: body <= 64KB
+const BROWSER_PROVIDER_BODY_CAP = 64 * 1024;
+const PROVIDER_SCAN_WORK_LIMIT = 16 * 1024 * 1024;
 
 export type ModelProvider = "anthropic" | "openai" | "codex";
 export type ModelConfig = { provider: ModelProvider; apiKey?: string; model?: string };
@@ -47,6 +52,7 @@ export type BackendOptions = {
   requireAllowedMutationOrigin?: boolean;
   mutationRate?: { max: number; windowMs: number };
   mutationConcurrency?: number;
+  magicLinkRate?: MagicLinkLimits;
 };
 
 export function makeDevAuth(): NonNullable<BackendOptions["auth"]> {
@@ -60,12 +66,11 @@ export function createApp(opts: BackendOptions): Hono {
   const configuredModel: ModelConfig | null = opts.model
     ?? (opts.apiKey ? { provider: "anthropic", apiKey: opts.apiKey, model: DEFAULT_MODEL } : null);
   const origins = new Set(opts.allowedOrigins ?? []);
-  const recentMutations: number[] = [];
-  let activeMutations = 0;
   app.use("/*", cors({
     origin: (o) => origins.size === 0 ? (o ?? "*") : (o && origins.has(o) ? o : ""),
     credentials: true,
     allowMethods: ["POST", "GET", "OPTIONS"],
+    exposeHeaders: ["x-clay-repair-capability"],
   }));
 
   const readBody = async (c: Context): Promise<unknown> => {
@@ -93,6 +98,100 @@ export function createApp(opts: BackendOptions): Hono {
     return JSON.parse(new TextDecoder().decode(bytes));
   };
 
+  const canonicalJson = (value: unknown): string => {
+    if (value === null || typeof value !== "object") return JSON.stringify(value);
+    if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object).sort().map(key =>
+      `${JSON.stringify(key)}:${canonicalJson(object[key])}`).join(",")}}`;
+  };
+  const digest = (value: string): string =>
+    createHash("sha256").update(value, "utf8").digest("hex");
+  const protectedProviderSecrets = [configuredModel?.apiKey, opts.mutationToken]
+    .filter((secret): secret is string => typeof secret === "string" && secret.length > 0);
+  const reflectsProviderSecret = (text: string): boolean => {
+    if (protectedProviderSecrets.length === 0) return false;
+    const forms = new Set<string>();
+    for (const secret of protectedProviderSecrets) {
+      const bytes = Buffer.from(secret, "utf8");
+      const base64 = bytes.toString("base64");
+      const hex = bytes.toString("hex");
+      const percent = [...bytes]
+        .map(byte => `%${byte.toString(16).padStart(2, "0")}`).join("");
+      for (const form of [
+        secret, base64, base64.replace(/=+$/, ""), hex, hex.toUpperCase(),
+        percent, percent.toUpperCase(),
+      ]) forms.add(form);
+    }
+    const formsList = [...forms];
+    const queue: string[] = [];
+    const seen = new Set<string>();
+    let work = 0;
+    let overflow = false;
+    const enqueue = (candidate: string): void => {
+      if (!candidate || seen.has(candidate)) return;
+      work += Buffer.byteLength(candidate, "utf8");
+      if (work > PROVIDER_SCAN_WORK_LIMIT) { overflow = true; return; }
+      seen.add(candidate);
+      queue.push(candidate);
+    };
+    enqueue(text);
+    for (let cursor = 0; cursor < queue.length; cursor++) {
+      if (overflow) return true;
+      const candidate = queue[cursor]!;
+      if (formsList.some(form => candidate.includes(form))) return true;
+
+      let escaped = candidate
+        .replace(/\\x([0-9a-f]{2})/gi, (_match, hexValue: string) =>
+          String.fromCharCode(Number.parseInt(hexValue, 16)))
+        .replace(/\\u\{([0-9a-f]{1,6})\}/gi, (_match, hexValue: string) => {
+          const point = Number.parseInt(hexValue, 16);
+          return point <= 0x10ffff ? String.fromCodePoint(point) : "";
+        })
+        .replace(/\\u([0-9a-f]{4})/gi, (_match, hexValue: string) =>
+          String.fromCharCode(Number.parseInt(hexValue, 16)))
+        .replace(/\\\\/g, "\\");
+      if (escaped !== candidate) enqueue(escaped);
+      try {
+        escaped = decodeURIComponent(candidate);
+        if (escaped !== candidate) enqueue(escaped);
+      } catch { /* malformed percent data */ }
+
+      const staticStrings = extractAcornStaticStrings(candidate);
+      if (staticStrings === null) return true;
+      for (const value of staticStrings) enqueue(value);
+
+      try {
+        const pending: unknown[] = [JSON.parse(candidate) as unknown];
+        let nodes = 0;
+        while (pending.length > 0) {
+          if (++nodes > 100_000) return true;
+          const value = pending.pop();
+          if (typeof value === "string") enqueue(value);
+          else if (Array.isArray(value)) {
+            for (const item of value) pending.push(item);
+          } else if (value && typeof value === "object") {
+            for (const item of Object.values(value as Record<string, unknown>)) pending.push(item);
+          }
+        }
+      } catch { /* candidate is not standalone JSON */ }
+    }
+    return overflow;
+  };
+  const confinedProviderBody = (raw: unknown): string | null =>
+    typeof raw === "string"
+      && Buffer.byteLength(raw, "utf8") <= BROWSER_PROVIDER_BODY_CAP
+      && !reflectsProviderSecret(raw) ? raw : null;
+  const providerFailure = (c: Context): Response =>
+    c.json({ error: "model request failed" }, 502);
+  const magicLinkSourceDigest = (c: Context): string => {
+    const forwarded = c.req.header("cf-connecting-ip")
+      ?? c.req.header("x-real-ip")
+      ?? c.req.header("x-forwarded-for")?.split(",", 1)[0]
+      ?? "unknown";
+    return digest(`magic-link-source:${forwarded.trim().toLowerCase().slice(0, 256)}`);
+  };
+
   const tokenMatches = (candidate: string | null): boolean => {
     if (!opts.mutationToken || !candidate) return false;
     const expected = Buffer.from(opts.mutationToken);
@@ -113,26 +212,30 @@ export function createApp(opts: BackendOptions): Hono {
       if ((origin && !origins.has(origin)) || site === "cross-site")
         return c.json({ error: "origin is not allowed" }, 403);
     }
-    if (opts.mutationRate) {
-      const now = Date.now();
-      while (recentMutations[0] !== undefined
-          && recentMutations[0] <= now - opts.mutationRate.windowMs) recentMutations.shift();
-      if (recentMutations.length >= opts.mutationRate.max)
-        return c.json({ error: "too many mutation requests" }, 429);
-      recentMutations.push(now);
-    }
     return null;
   };
+  const mutationAuthority = opts.auth?.sessions ?? new Sessions();
+  const mutationLimits: MutationCallLimits = Object.freeze({
+    ...DEFAULT_MUTATION_CALL_LIMITS,
+    ...(opts.mutationRate ? {
+      windowMs: opts.mutationRate.windowMs,
+      maxPerUser: opts.mutationRate.max,
+      maxGlobal: opts.mutationRate.max,
+    } : {}),
+    ...(opts.mutationConcurrency !== undefined ? {
+      maxConcurrentPerUser: opts.mutationConcurrency,
+      maxConcurrentGlobal: opts.mutationConcurrency,
+    } : {}),
+  });
   const withMutationSlot = async (
     c: Context,
+    userId: string,
     run: () => Promise<Response>,
   ): Promise<Response> => {
-    const limit = opts.mutationConcurrency ?? Number.POSITIVE_INFINITY;
-    if (activeMutations >= limit)
-      return c.json({ error: "another mutation is already running" }, 429);
-    activeMutations++;
+    const lease = await mutationAuthority.acquireMutationCall(userId, mutationLimits);
+    if (!lease) return c.json({ error: "mutation capacity is temporarily exhausted" }, 429);
     try { return await run(); }
-    finally { activeMutations--; }
+    finally { await mutationAuthority.releaseMutationCall(lease); }
   };
 
   const client = (): Pick<MutationClient, "rawPlan" | "rawRepair"> => {
@@ -166,10 +269,10 @@ export function createApp(opts: BackendOptions): Hono {
 
   // ---------- Phase 1.2: magic-link auth + quotas (doc 07 §1–3) ----------
   const auth = opts.auth;
-  const sessionId = (c: Context): string | null => {
-    const bearer = c.req.header("authorization")?.replace(/^Bearer\s+/i, "");
-    return bearer ?? getCookie(c, "clay_session") ?? null;
-  };
+  const bearerSessionId = (c: Context): string | null =>
+    c.req.header("authorization")?.match(/^Bearer\s+([^\s]+)$/i)?.[1] ?? null;
+  const cookieSessionId = (c: Context): string | null => getCookie(c, "clay_session") ?? null;
+  const sessionId = (c: Context): string | null => bearerSessionId(c) ?? cookieSessionId(c);
   const writeSessionCookie = (c: Context, sid: string, maxAge: number): void =>
     setCookie(c, "clay_session", sid, {
       httpOnly: true, sameSite: "Lax", secure: new URL(c.req.url).protocol === "https:",
@@ -186,20 +289,35 @@ export function createApp(opts: BackendOptions): Hono {
 
   if (auth) {
     const authState = /^[0-9a-f]{64}$/;
+    const magicLinkLimits = Object.freeze(opts.magicLinkRate ?? DEFAULT_MAGIC_LINK_LIMITS);
     app.post("/auth/magic-link", async (c) => {
+      const contentType = c.req.header("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+      if (contentType !== "application/json")
+        return c.json({ error: "content-type must be application/json" }, 415);
+      const origin = c.req.header("origin");
+      const site = c.req.header("sec-fetch-site");
+      if (site === "cross-site" || (origins.size > 0 && (!origin || !origins.has(origin))))
+        return c.json({ error: "origin is not allowed" }, 403);
       let body: { email?: string; state?: string } | null = null;
       try { body = (await readBody(c)) as { email?: string; state?: string }; }
       catch (e) { if (e instanceof Response) return e; return c.json({ error: "bad JSON" }, 400); }
       const email = body?.email?.trim().toLowerCase();
       const state = body?.state ?? "";
-      if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
+      if (!email || email.length > 254 || email.split("@", 1)[0]!.length > 64
+          || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
         return c.json({ error: "a real email address is required" }, 400);
       if (!authState.test(state)) return c.json({ error: "invalid authentication state" }, 400);
-      const token = await auth.sessions.issueLink(await auth.store.upsertUser(email));
+      const token = await auth.sessions.issueLink(
+        email, magicLinkSourceDigest(c), magicLinkLimits,
+      );
       if (!token) return c.json({ error: "too many links — try again in an hour" }, 429);
       const link = `/auth/callback?token=${encodeURIComponent(token)}&state=${state}`;
       if (auth.devLinks) return c.json({ link });         // dev/tests: no email hop
-      await auth.sendEmail?.(email, link);
+      try { await auth.sendEmail?.(email, link); }
+      catch {
+        await auth.sessions.discardLink(token);
+        return c.json({ error: "sign-in email could not be delivered" }, 502);
+      }
       return c.body(null, 204);
     });
 
@@ -215,8 +333,10 @@ export function createApp(opts: BackendOptions): Hono {
       if (wantsHtml) return c.redirect(
         `/#auth=complete&token=${encodeURIComponent(token)}&state=${state}`, 302,
       );
-      const sid = await auth.sessions.redeem(token);
-      if (!sid) return c.json({ error: "link expired — request a fresh one" }, 401);
+      const email = await auth.sessions.consumeLink(token);
+      if (!email) return c.json({ error: "link expired — request a fresh one" }, 401);
+      const user = await auth.store.upsertUser(email);
+      const sid = await auth.sessions.createSession(user.id);
       writeSessionCookie(c, sid, 30 * 86400);
       // bearer echo: lets a cross-origin client store the session itself
       return c.json({ ok: true, session: sid });
@@ -236,69 +356,102 @@ export function createApp(opts: BackendOptions): Hono {
     });
 
     app.post("/auth/logout", async (c) => {
-      await auth.sessions.revoke(sessionId(c));
+      const presented = [bearerSessionId(c), cookieSessionId(c)]
+        .filter((sid): sid is string => Boolean(sid));
+      await auth.sessions.revokeMany([...new Set(presented)]);
       writeSessionCookie(c, "", 0);
       return c.body(null, 204);
     });
   }
 
-  /** Plan calls are metered; repairs are free (they're Clay's failure, not
-   * the user's). Returns a Response to short-circuit, or null to proceed. */
-  const guard = async (c: Context, metered: boolean): Promise<Response | null> => {
-    if (!auth) return null;                              // Phase 1.1 open mode
-    const userId = await sessionUser(c);
+  type MutationPrincipal = Readonly<{ userId: string; sessionDigest: string }>;
+  type MutationAuthorization =
+    | { principal: MutationPrincipal; denied: null }
+    | { principal: null; denied: Response };
+  /** Plan calls are metered; a repair proves its plan's metered principal. */
+  const authorizeMutation = async (
+    c: Context,
+    metered: boolean,
+  ): Promise<MutationAuthorization> => {
+    const sid = sessionId(c);
+    if (!auth) {
+      const localCredential = sid ?? opts.mutationToken ?? "local-open-proxy";
+      const identity = digest(localCredential);
+      return { principal: { userId: `local:${identity}`, sessionDigest: identity }, denied: null };
+    }
+    const userId = await auth.sessions.userIdFor(sid);
     const user = userId ? await auth.store.getUser(userId) : null;
-    if (!user) return c.json({ error: "sign in first" }, 401);
+    if (!user || !sid) return { principal: null,
+      denied: c.json({ error: "sign in first" }, 401) };
     if (metered && user.plan !== "pro") {
       const consumed = await auth.store.consumeUsage(user.id, FREE_QUOTA);
       if (!consumed.allowed)
-        return c.json({
+        return { principal: null, denied: c.json({
           error: `free plan is ${FREE_QUOTA} reshapes per 30 days — resets `
             + new Date(consumed.usage.periodStart + 30 * 86_400_000).toISOString().slice(0, 10),
           mutations_used: consumed.usage.used, quota: FREE_QUOTA,
-        }, 429);
+        }, 429) };
     }
-    return null;
+    return { principal: { userId: user.id, sessionDigest: digest(sid) }, denied: null };
   };
+  const repairBinding = (
+    principal: MutationPrincipal,
+    context: S1Context,
+    rawPlan: string,
+  ): RepairCapabilityBinding => ({
+    ...principal,
+    contextDigest: digest(canonicalJson(context)),
+    planDigest: digest(rawPlan),
+  });
 
   app.post("/mutations/plan", async (c) => {
     const requestDenied = mutationRequestGuard(c);
     if (requestDenied) return requestDenied;
-    const denied = await guard(c, true);
-    if (denied) return denied;
     let body: { context?: S1Context };
     try { body = (await readBody(c)) as typeof body; }
     catch (e) { if (e instanceof Response) return e; return c.json({ error: "bad JSON" }, 400); }
     if (!body?.context) return c.json({ error: "missing context" }, 400);
-    return withMutationSlot(c, async () => {
+    const authorization = await authorizeMutation(c, true);
+    if (authorization.denied) return authorization.denied;
+    return withMutationSlot(c, authorization.principal.userId, async () => {
       try {
-        const raw = await client().rawPlan(body.context!);
+        const raw = confinedProviderBody(await client().rawPlan(body.context!));
+        if (raw === null) return providerFailure(c);
+        const capability = await mutationAuthority.issueRepairCapability(
+          repairBinding(authorization.principal, body.context!, raw),
+        );
+        c.header("x-clay-repair-capability", capability);
         return c.body(raw, 200, { "content-type": "application/json" });
-      } catch (e) {
-        return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
-      }
+      } catch { return providerFailure(c); }
     });
   });
 
   app.post("/mutations/repair", async (c) => {
     const requestDenied = mutationRequestGuard(c);
     if (requestDenied) return requestDenied;
-    const denied = await guard(c, false);   // repairs never double-charge (doc 07 §3)
-    if (denied) return denied;
     let body: { context?: S1Context; prior_plan?: string; failures?: string[] };
     try { body = (await readBody(c)) as typeof body; }
     catch (e) { if (e instanceof Response) return e; return c.json({ error: "bad JSON" }, 400); }
     if (!body?.context || typeof body.prior_plan !== "string")
       return c.json({ error: "missing context or prior_plan" }, 400);
-    return withMutationSlot(c, async () => {
+    const authorization = await authorizeMutation(c, false);
+    if (authorization.denied) return authorization.denied;
+    const capability = c.req.header("x-clay-repair-capability") ?? "";
+    if (!/^[a-f0-9]{48}$/.test(capability))
+      return c.json({ error: "a bound repair capability is required" }, 403);
+    return withMutationSlot(c, authorization.principal.userId, async () => {
       try {
-        const raw = await client().rawRepair(
-          body.context!, body.prior_plan!, body.failures ?? [],
+        const consumed = await mutationAuthority.consumeRepairCapability(
+          capability,
+          repairBinding(authorization.principal, body.context!, body.prior_plan!),
         );
+        if (!consumed) return c.json({ error: "repair capability is invalid or spent" }, 403);
+        const raw = confinedProviderBody(await client().rawRepair(
+          body.context!, body.prior_plan!, body.failures ?? [],
+        ));
+        if (raw === null) return providerFailure(c);
         return c.body(raw, 200, { "content-type": "application/json" });
-      } catch (e) {
-        return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
-      }
+      } catch { return providerFailure(c); }
     });
   });
 

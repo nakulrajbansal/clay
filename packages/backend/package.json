@@ -14,6 +14,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@clay/kernel": "workspace:*",
     "@clay/mutation": "workspace:*",
     "@clay/schema": "workspace:*",
     "hono": "^4.12.34",
