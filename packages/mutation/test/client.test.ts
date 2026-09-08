@@ -373,12 +373,31 @@ describe("hosted mode (doc 07)", () => {
     expect(call.headers["x-api-key"]).toBeUndefined();   // key never sent to Clay (P3)
   });
 
-  it("repairs post to /mutations/repair with the failure payload", async () => {
-    const { fetchFn, calls } = fakeFetch(200, VALID_PLAN);
+  it("carries only the plan-minted repair capability into its exact repair", async () => {
+    const calls: Captured[] = [];
+    const capability = "a".repeat(48);
+    const fetchFn = async (url: string, init: {
+      method: string; headers: Record<string, string>; body: string;
+      credentials?: RequestCredentials;
+    }): Promise<Response> => {
+      calls.push({ url, headers: init.headers,
+        body: JSON.parse(init.body) as Record<string, unknown>, credentials: init.credentials });
+      return new Response(VALID_PLAN, {
+        status: 200,
+        headers: url.endsWith("/mutations/plan")
+          ? { "x-clay-repair-capability": capability }
+          : undefined,
+      });
+    };
     const client = new MutationClient(
       { mode: "hosted", endpoint: "https://clay.example" }, { fetchFn });
-    await client.requestRepair(ctx(), `{}`, ["V5: bad inverse"]);
-    expect(calls[0]!.url).toBe("https://clay.example/mutations/repair");
-    expect(calls[0]!.body).toMatchObject({ failures: ["V5: bad inverse"] });
+    await client.requestPlan(ctx());
+    await client.requestRepair(ctx(), VALID_PLAN, ["V5: bad inverse"]);
+    expect(calls[1]!.url).toBe("https://clay.example/mutations/repair");
+    expect(calls[1]!.body).toMatchObject({ failures: ["V5: bad inverse"] });
+    expect(calls[1]!.headers["x-clay-repair-capability"]).toBe(capability);
+
+    await client.requestRepair(ctx(), VALID_PLAN, ["V5: replay"]);
+    expect(calls[2]!.headers).not.toHaveProperty("x-clay-repair-capability");
   });
 });

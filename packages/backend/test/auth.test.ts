@@ -1,5 +1,5 @@
 // Phase 1.2 (doc 07 §1-3): magic-link auth, sessions, quotas, /me meter.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createApp, makeDevAuth } from "../src/app";
 import { FREE_QUOTA } from "../src/auth";
 
@@ -36,10 +36,108 @@ describe("magic-link auth (Phase 1.2)", () => {
     expect(body.quota).toBe(FREE_QUOTA);
   });
 
+  it("rejects non-JSON and cross-site issuance before durable or email side effects", async () => {
+    const auth = makeDevAuth();
+    const upsert = vi.spyOn(auth.store, "upsertUser");
+    const issue = vi.spyOn(auth.sessions, "issueLink");
+    const sendEmail = vi.fn(async () => undefined);
+    const protectedApp = createApp({
+      apiKey: "sk-test", makeClient: () => fakeClient,
+      allowedOrigins: ["https://clay.example"],
+      auth: { store: auth.store, sessions: auth.sessions, sendEmail },
+    });
+    const plain = await protectedApp.request("/auth/magic-link", {
+      method: "POST",
+      headers: { "content-type": "text/plain", origin: "https://clay.example" },
+      body: authBody("plain@example.com"),
+    });
+    const crossSite = await protectedApp.request("/auth/magic-link", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "https://evil.example",
+        "sec-fetch-site": "cross-site",
+      },
+      body: authBody("cross-site@example.com"),
+    });
+    const missingOrigin = await protectedApp.request("/auth/magic-link", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: authBody("missing-origin@example.com"),
+    });
+    expect(plain.status).toBe(415);
+    expect(crossSite.status).toBe(403);
+    expect(missingOrigin.status).toBe(403);
+    expect(issue).not.toHaveBeenCalled();
+    expect(upsert).not.toHaveBeenCalled();
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("creates no durable user until the emailed token proves ownership", async () => {
+    const { app, auth } = appWithAuth();
+    const upsert = vi.spyOn(auth.store, "upsertUser");
+    const linkResponse = await app.request("/auth/magic-link", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: authBody("proof@example.com"),
+    });
+    const { link } = await linkResponse.json() as { link: string };
+    expect(linkResponse.status).toBe(200);
+    expect(upsert).not.toHaveBeenCalled();
+    expect((await app.request(link)).status).toBe(200);
+    expect(upsert).toHaveBeenCalledOnce();
+    expect(upsert).toHaveBeenCalledWith("proof@example.com");
+  });
+
+  it("deletes an undelivered token instead of leaving durable redemption authority", async () => {
+    const auth = makeDevAuth();
+    let undeliveredLink = "";
+    const protectedApp = createApp({
+      apiKey: "sk-test", makeClient: () => fakeClient,
+      auth: {
+        store: auth.store,
+        sessions: auth.sessions,
+        sendEmail: async (_email, link) => {
+          undeliveredLink = link;
+          throw new Error("mail provider unavailable");
+        },
+      },
+    });
+    const response = await protectedApp.request("/auth/magic-link", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: authBody("undelivered@example.com"),
+    });
+    expect(response.status).toBe(502);
+    expect(undeliveredLink).toContain("/auth/callback?");
+    expect((await protectedApp.request(undeliveredLink)).status).toBe(401);
+  });
+
+  it("shares per-source and global issuance admission across backend instances", async () => {
+    const auth = makeDevAuth();
+    const options = {
+      apiKey: "sk-test", makeClient: () => fakeClient, auth,
+      magicLinkRate: { windowMs: 60_000, maxPerEmail: 3, maxPerSource: 2, maxGlobal: 3 },
+    } as const;
+    const first = createApp(options);
+    const second = createApp(options);
+    const issue = (app: ReturnType<typeof createApp>, email: string, source: string) =>
+      app.request("/auth/magic-link", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-forwarded-for": source },
+        body: authBody(email),
+      });
+    expect((await issue(first, "one@example.com", "192.0.2.1")).status).toBe(200);
+    expect((await issue(second, "two@example.com", "192.0.2.1")).status).toBe(200);
+    expect((await issue(first, "three@example.com", "192.0.2.1")).status).toBe(429);
+    expect((await issue(second, "three@example.com", "192.0.2.2")).status).toBe(200);
+    expect((await issue(first, "four@example.com", "192.0.2.3")).status).toBe(429);
+  });
+
   it("rejects garbage emails, expired tokens, and enforces 3 links/hour", async () => {
     const { app } = appWithAuth();
     expect((await app.request("/auth/magic-link", { method: "POST",
       body: JSON.stringify({ email: "nope" }),
+      headers: { "content-type": "application/json" } })).status).toBe(400);
+    expect((await app.request("/auth/magic-link", { method: "POST",
+      body: authBody(`${"a".repeat(1_000)}@example.com`),
       headers: { "content-type": "application/json" } })).status).toBe(400);
     expect((await app.request("/auth/magic-link", { method: "POST",
       body: JSON.stringify({ email: "valid@example.com", state: "short" }),
@@ -108,6 +206,28 @@ describe("magic-link auth (Phase 1.2)", () => {
     })).status).toBe(401);
   });
 
+  it("revokes distinct bearer and cookie sessions presented together", async () => {
+    const { app } = appWithAuth();
+    const cookieSession = await signIn(app, "dual-session@example.com");
+    const bearerSession = await signIn(app, "dual-session@example.com");
+    expect(cookieSession).not.toBe(bearerSession);
+
+    const logout = await app.request("https://clay.example/auth/logout", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${bearerSession}`,
+        cookie: `clay_session=${cookieSession}`,
+      },
+    });
+    expect(logout.status).toBe(204);
+    expect(logout.headers.get("set-cookie")).toMatch(/clay_session=;.*Max-Age=0/i);
+    for (const session of [bearerSession, cookieSession]) {
+      expect((await app.request("/me", {
+        headers: { authorization: `Bearer ${session}` },
+      })).status).toBe(401);
+    }
+  });
+
   it("refuses an auth configuration that cannot deliver links", () => {
     const dev = makeDevAuth();
     expect(() => createApp({ apiKey: "sk-test", auth: {
@@ -139,24 +259,113 @@ describe("quotas (Phase 1.2)", () => {
     expect(res.status).toBe(401);
   });
 
+  it("binds exactly one repair to the metered session, context, and returned plan", async () => {
+    let repairs = 0;
+    const auth = makeDevAuth();
+    const bound = createApp({
+      apiKey: "sk-test",
+      auth,
+      makeClient: () => ({
+        rawPlan: async () => "{\"plan\":\"bound\"}",
+        rawRepair: async () => { repairs++; return "{\"plan\":\"repaired\"}"; },
+      }),
+    });
+    const owner = await signIn(bound, "repair-owner@example.com");
+    const other = await signIn(bound, "repair-other@example.com");
+    const planResponse = await plan(bound, owner);
+    const priorPlan = await planResponse.text();
+    const capability = planResponse.headers.get("x-clay-repair-capability");
+    expect(planResponse.status).toBe(200);
+    expect(capability).toMatch(/^[a-f0-9]{48}$/);
+
+    const repair = (session: string, context: unknown, prior: string, token = capability) =>
+      bound.request("/mutations/repair", {
+        method: "POST",
+        body: JSON.stringify({ context, prior_plan: prior, failures: ["V4: hostile"] }),
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${session}`,
+          ...(token ? { "x-clay-repair-capability": token } : {}),
+        },
+      });
+    const exactContext = CTX.context;
+    expect((await repair(owner, exactContext, priorPlan, null)).status).toBe(403);
+    expect((await repair(other, exactContext, priorPlan)).status).toBe(403);
+    expect((await repair(owner, { ...exactContext, intent: "different" }, priorPlan)).status).toBe(403);
+    expect((await repair(owner, exactContext, priorPlan + " ")).status).toBe(403);
+    expect(repairs).toBe(0);
+
+    expect((await repair(owner, exactContext, priorPlan)).status).toBe(200);
+    expect((await repair(owner, exactContext, priorPlan)).status).toBe(403);
+    expect(repairs).toBe(1);
+    const me = await bound.request("/me", {
+      headers: { authorization: `Bearer ${owner}` },
+    });
+    expect((await me.json() as { mutations_used: number }).mutations_used).toBe(1);
+  });
+
+  it("shares rate and concurrency admission across fresh backend instances", async () => {
+    const auth = makeDevAuth();
+    let release!: () => void;
+    let entered!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const options = {
+      apiKey: "sk-test",
+      auth,
+      mutationRate: { max: 2, windowMs: 60_000 },
+      mutationConcurrency: 1,
+    } as const;
+    const firstInstance = createApp({
+      ...options,
+      makeClient: () => ({
+        rawPlan: async () => { entered(); await held; return "{}"; },
+        rawRepair: async () => "{}",
+      }),
+    });
+    const secondInstance = createApp({
+      ...options,
+      makeClient: () => fakeClient,
+    });
+    const sid = await signIn(firstInstance, "admission@example.com");
+    const first = plan(firstInstance, sid);
+    await started;
+    const concurrent = await plan(secondInstance, sid);
+    expect(concurrent.status).toBe(429);
+    release();
+    expect((await first).status).toBe(200);
+    expect((await plan(secondInstance, sid)).status).toBe(200);
+    expect((await plan(firstInstance, sid)).status).toBe(429);
+  });
+
   it("meters plan calls, refuses at the quota, and repairs stay free", async () => {
     const { app } = appWithAuth();
     const sid = await signIn(app, "q@example.com");
-    for (let i = 0; i < FREE_QUOTA; i++) expect((await plan(app, sid)).status).toBe(200);
+    let repairCapability: string | null = null;
+    for (let i = 0; i < FREE_QUOTA; i++) {
+      const response = await plan(app, sid);
+      expect(response.status).toBe(200);
+      repairCapability = response.headers.get("x-clay-repair-capability");
+    }
     const over = await plan(app, sid);
     expect(over.status).toBe(429);
     expect(((await over.json()) as { error: string }).error).toContain("free plan");
     // repairs don't double-charge — still allowed past the quota
     const repair = await app.request("/mutations/repair", { method: "POST",
       body: JSON.stringify({ ...CTX, prior_plan: "{}", failures: ["x"] }),
-      headers: { "content-type": "application/json", authorization: `Bearer ${sid}` } });
+      headers: { "content-type": "application/json", authorization: `Bearer ${sid}`,
+        "x-clay-repair-capability": repairCapability! } });
     expect(repair.status).toBe(200);
     const me = await app.request("/me", { headers: { authorization: `Bearer ${sid}` } });
     expect(((await me.json()) as { mutations_used: number }).mutations_used).toBe(FREE_QUOTA);
   });
 
   it("atomically admits at most the free quota under concurrent requests", async () => {
-    const { app } = appWithAuth();
+    const auth = makeDevAuth();
+    const app = createApp({
+      apiKey: "sk-test", makeClient: () => fakeClient, auth,
+      mutationConcurrency: FREE_QUOTA + 8,
+    });
     const sid = await signIn(app, "race@example.com");
     const results = await Promise.all(Array.from({ length: FREE_QUOTA + 8 }, () => plan(app, sid)));
     expect(results.filter(response => response.status === 200)).toHaveLength(FREE_QUOTA);

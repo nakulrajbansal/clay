@@ -3,3 +3,4 @@
 export { Bridge } from "./bridge";
 export { StoreRpcClient, portFromMessagePort } from "./asyncstore";
 export { deriveSafeDiffKind } from "./private-metrics";
+export { extractAcornStaticStrings } from "./static-javascript-strings";

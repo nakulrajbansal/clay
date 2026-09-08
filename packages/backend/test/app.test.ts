@@ -93,7 +93,7 @@ describe("/mutations/plan", () => {
       body: JSON.stringify({ context: ctx }),
     });
     expect(res.status).toBe(502);
-    expect((await res.json() as { error: string }).error).toContain("529");
+    expect(await res.json()).toEqual({ error: "model request failed" });
   });
 
   it("500s cleanly when the server has no key", async () => {
@@ -102,15 +102,24 @@ describe("/mutations/plan", () => {
       body: JSON.stringify({ context: ctx }),
     });
     expect(res.status).toBe(502);
-    expect((await res.json() as { error: string }).error).toContain("not configured");
+    expect(await res.json()).toEqual({ error: "model request failed" });
   });
 });
 
 describe("/mutations/repair", () => {
   it("relays the repaired raw plan", async () => {
     const repaired = JSON.stringify({ ...JSON.parse(RAW_PLAN), summary: "Fixed." });
-    const res = await app({ repair: repaired }).request("/mutations/repair", {
+    const bound = app({ repair: repaired });
+    const plan = await bound.request("/mutations/plan", {
       method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ context: ctx }),
+    });
+    const capability = plan.headers.get("x-clay-repair-capability")!;
+    const res = await bound.request("/mutations/repair", {
+      method: "POST", headers: {
+        "content-type": "application/json",
+        "x-clay-repair-capability": capability,
+      },
       body: JSON.stringify({ context: ctx, prior_plan: RAW_PLAN, failures: ["V4: x"] }),
     });
     expect(res.status).toBe(200);
@@ -123,6 +132,141 @@ describe("/mutations/repair", () => {
       body: JSON.stringify({ context: ctx }),
     });
     expect(res.status).toBe(400);
+  });
+});
+
+describe("backend provider response confinement", () => {
+  for (const provider of ["anthropic", "openai"] as const) {
+    it(`confines a ${provider} success body that reflects the configured key`, async () => {
+      const key = `${provider}-provider-secret-123456789`;
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async () => new Response(JSON.stringify(provider === "anthropic"
+        ? { content: [{ type: "text", text: `{"reflected":"${key}"}` }],
+          usage: { input_tokens: 1, output_tokens: 1 } }
+        : { output: [{ type: "message", content: [
+          { type: "output_text", text: `{"reflected":"${key}"}` },
+        ] }], usage: { input_tokens: 1, output_tokens: 1 } }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+      try {
+        const response = await createApp({ model: { provider, apiKey: key } })
+          .request("/mutations/plan", {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ context: ctx }),
+          });
+        const browserBody = await response.text();
+        expect(response.status).toBe(502);
+        expect(browserBody).toBe('{"error":"model request failed"}');
+        expect(browserBody).not.toContain(key);
+      } finally { globalThis.fetch = originalFetch; }
+    });
+
+    it(`confines a ${provider} error body that reflects the configured key`, async () => {
+      const key = `${provider}-provider-error-secret-123456789`;
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async () => new Response(`upstream diagnostic leaked ${key}`, {
+        status: 500, headers: { "content-type": "text/plain" },
+      });
+      try {
+        const response = await createApp({ model: { provider, apiKey: key } })
+          .request("/mutations/plan", {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ context: ctx }),
+          });
+        const browserBody = await response.text();
+        expect(response.status).toBe(502);
+        expect(browserBody).toBe('{"error":"model request failed"}');
+        expect(browserBody).not.toContain(key);
+      } finally { globalThis.fetch = originalFetch; }
+    });
+  }
+
+  it("confines a server-held key reconstructed by executable plan code", async () => {
+    const key = "server-provider-secret-canary";
+    const fragments = ["server-", "provider-", "secret-", "canary"];
+    const raw = JSON.stringify({
+      ...JSON.parse(RAW_PLAN) as Record<string, unknown>,
+      user_facing_diff: [{ kind: "add_panel", detail: "Hostile panel" }],
+      panels: [{
+        panel_id: "hostile_panel",
+        title: "Hostile",
+        placement: { region: "main", order: 0 },
+        code: `export default function(clay){const k=[${fragments
+          .map(fragment => JSON.stringify(fragment)).join(",")}].join("");clay.ui.render({type:"text",text:k});}`,
+        declared_queries: [],
+        declared_writes: [],
+      }],
+    });
+    expect(raw).not.toContain(key);
+    const guarded = createApp({
+      model: { provider: "anthropic", apiKey: key },
+      makeClient: () => ({
+        rawPlan: async () => raw,
+        rawRepair: async () => raw,
+      }),
+    });
+    const response = await guarded.request("/mutations/plan", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ context: ctx }),
+    });
+    expect(response.status).toBe(502);
+    expect(await response.text()).toBe('{"error":"model request failed"}');
+  });
+
+  it("confines a reflected provider key on the bound repair path", async () => {
+    const key = "repair-provider-secret-123456789";
+    const bound = createApp({
+      model: { provider: "anthropic", apiKey: key },
+      makeClient: () => ({
+        rawPlan: async () => RAW_PLAN,
+        rawRepair: async () => `{"reflected":"${key}"}`,
+      }),
+    });
+    const plan = await bound.request("/mutations/plan", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ context: ctx }),
+    });
+    const response = await bound.request("/mutations/repair", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-clay-repair-capability": plan.headers.get("x-clay-repair-capability")!,
+      },
+      body: JSON.stringify({ context: ctx, prior_plan: RAW_PLAN, failures: ["V4"] }),
+    });
+    expect(response.status).toBe(502);
+    expect(await response.text()).toBe('{"error":"model request failed"}');
+  });
+
+  it("rejects an oversized provider result without forwarding any prefix", async () => {
+    const response = await app({ plan: "provider-prefix:" + "x".repeat(70 * 1024) })
+      .request("/mutations/plan", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ context: ctx }),
+      });
+    const browserBody = await response.text();
+    expect(response.status).toBe(502);
+    expect(browserBody).toBe('{"error":"model request failed"}');
+    expect(browserBody).not.toContain("provider-prefix");
+  });
+
+  it("does not coerce attacker-controlled thrown provider values", async () => {
+    let coerced = false;
+    const hostile = createApp({
+      apiKey: "sk-test",
+      makeClient: () => ({
+        rawPlan: async () => { throw { toString: () => { coerced = true; return "secret"; } }; },
+        rawRepair: async () => "{}",
+      }),
+    });
+    const response = await hostile.request("/mutations/plan", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ context: ctx }),
+    });
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({ error: "model request failed" });
+    expect(coerced).toBe(false);
   });
 });
 
@@ -217,6 +361,10 @@ describe("local connector mutation boundary", () => {
     expect(concurrent.status).toBe(429);
     release();
     expect((await first).status).toBe(200);
+    const second = await guarded.request("/mutations/plan", {
+      method: "POST", headers, body: JSON.stringify({ context: ctx }),
+    });
+    expect(second.status).toBe(200);
     const rateLimited = await guarded.request("/mutations/plan", {
       method: "POST", headers, body: JSON.stringify({ context: ctx }),
     });

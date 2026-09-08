@@ -1,9 +1,13 @@
 // Postgres AuthStore (doc 07 §2): the deploy-time adapter behind the same
-// interface MemoryAuthStore implements. Only accounts and usage counters
-// live here — never intent text, never schema payloads (design commitment,
-// doc 06 §1: a curious operator can't read what isn't retained).
+// interface MemoryAuthStore implements. It retains accounts, usage, and
+// bounded security authority metadata — never intent text, schema payloads,
+// or raw source addresses (doc 06 §1: don't retain what isn't required).
 import pg from "pg";
-import type { AuthStore, SessionStore, Usage, User } from "./auth";
+import { createHash } from "node:crypto";
+import type {
+  AuthStore, MagicLinkLimits, MutationCallLimits, RepairCapabilityBinding,
+  SessionStore, Usage, User,
+} from "./auth";
 import { SHARE_RELAY_SCHEMA_SQL } from "./share-pg-store";
 
 export const SCHEMA_SQL = `
@@ -20,7 +24,7 @@ CREATE TABLE IF NOT EXISTS usage (
 );
 CREATE TABLE IF NOT EXISTS login_tokens (
   token TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES users(id),
+  user_id TEXT REFERENCES users(id),
   email TEXT NOT NULL,
   expires TIMESTAMPTZ NOT NULL,
   used BOOLEAN NOT NULL DEFAULT false,
@@ -31,6 +35,39 @@ CREATE TABLE IF NOT EXISTS sessions (
   user_id TEXT NOT NULL REFERENCES users(id),
   expires TIMESTAMPTZ NOT NULL
 );
+ALTER TABLE login_tokens ALTER COLUMN user_id DROP NOT NULL;
+CREATE TABLE IF NOT EXISTS magic_link_issuances (
+  id TEXT PRIMARY KEY,
+  email_digest TEXT NOT NULL,
+  source_digest TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS magic_link_issuances_created_idx
+  ON magic_link_issuances(created_at);
+CREATE INDEX IF NOT EXISTS magic_link_issuances_email_created_idx
+  ON magic_link_issuances(email_digest, created_at);
+CREATE INDEX IF NOT EXISTS magic_link_issuances_source_created_idx
+  ON magic_link_issuances(source_digest, created_at);
+CREATE TABLE IF NOT EXISTS mutation_calls (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  lease_expires TIMESTAMPTZ NOT NULL,
+  released_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS mutation_calls_started_idx
+  ON mutation_calls(started_at);
+CREATE INDEX IF NOT EXISTS mutation_calls_user_started_idx
+  ON mutation_calls(user_id, started_at);
+CREATE TABLE IF NOT EXISTS repair_capabilities (
+  token TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  session_digest TEXT NOT NULL,
+  context_digest TEXT NOT NULL,
+  plan_digest TEXT NOT NULL,
+  expires TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ
+);
 ${SHARE_RELAY_SCHEMA_SQL.trim()}`;
 
 const PERIOD_MS = 30 * 86_400_000;
@@ -39,8 +76,14 @@ const rand = (): string =>
     .map(b => b.toString(16).padStart(2, "0")).join("");
 
 /** Minimal query surface so tests can inject a fake pool. */
+export type QueryableClient = {
+  query(sql: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
+  release(): void;
+};
+
 export type Queryable = {
   query(sql: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
+  connect?: () => Promise<QueryableClient>;
 };
 
 export class PostgresAuthStore implements AuthStore {
@@ -129,34 +172,86 @@ void PERIOD_MS;
 export class PgSessions implements SessionStore {
   constructor(private readonly pool: Queryable) {}
 
-  async issueLink(user: User): Promise<string | null> {
-    const recent = await this.pool.query(
-      `SELECT COUNT(*) AS n FROM login_tokens
-       WHERE email = $1 AND created_at > now() - interval '1 hour'`, [user.email]);
-    if (Number(recent.rows[0]!.n) >= 3) return null;
-    const token = rand();
-    await this.pool.query(
-      `INSERT INTO login_tokens(token, user_id, email, expires)
-       VALUES ($1, $2, $3, now() + interval '15 minutes')`,
-      [token, user.id, user.email]);
-    return token;
+  private async admissionTransaction<T>(
+    lockId: number,
+    run: (client: QueryableClient) => Promise<T>,
+  ): Promise<T> {
+    if (!this.pool.connect)
+      throw new Error("transactional database admission is unavailable");
+    const client = await this.pool.connect();
+    let began = false;
+    try {
+      await client.query("BEGIN ISOLATION LEVEL READ COMMITTED");
+      began = true;
+      await client.query("SELECT pg_advisory_xact_lock($1)", [lockId]);
+      const result = await run(client);
+      await client.query("COMMIT");
+      began = false;
+      return result;
+    } catch (error) {
+      if (began) {
+        try { await client.query("ROLLBACK"); } catch { /* preserve the admission failure */ }
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
-  async redeem(token: string): Promise<string | null> {
-    // mark-used (not delete) so a redeemed link still counts toward the
-    // 3/hour rate limit, matching the in-memory Sessions semantics; the
-    // conditional UPDATE wins single-use races atomically
+  async issueLink(
+    email: string,
+    sourceDigest: string,
+    limits: MagicLinkLimits,
+  ): Promise<string | null> {
+    const token = rand();
+    const issuanceId = rand();
+    const emailDigest = createHash("sha256").update(email, "utf8").digest("hex");
+    const admitted = await this.admissionTransaction(2026090802, client => client.query(
+      `WITH purged_tokens AS (
+         DELETE FROM login_tokens WHERE expires <= now()
+       ), purged_issuances AS (
+         DELETE FROM magic_link_issuances
+          WHERE created_at <= now() - ($4 * interval '1 millisecond')
+       ), counts AS (
+         SELECT COUNT(*) AS global_recent,
+           COUNT(*) FILTER (WHERE email_digest = $9) AS email_recent,
+           COUNT(*) FILTER (WHERE source_digest = $3) AS source_recent
+         FROM magic_link_issuances
+          WHERE created_at > now() - ($4 * interval '1 millisecond')
+       ), issuance AS (
+         INSERT INTO magic_link_issuances(id, email_digest, source_digest)
+         SELECT $5, $9, $3 FROM counts
+          WHERE email_recent < $6 AND source_recent < $7 AND global_recent < $8
+         RETURNING id
+       )
+       INSERT INTO login_tokens(token, email, expires)
+       SELECT $1, $2, now() + interval '15 minutes' FROM issuance
+       RETURNING token`,
+      [token, email, sourceDigest, limits.windowMs, issuanceId,
+        limits.maxPerEmail, limits.maxPerSource, limits.maxGlobal, emailDigest],
+    ));
+    return admitted.rows[0] ? token : null;
+  }
+
+  async consumeLink(token: string): Promise<string | null> {
     const r = await this.pool.query(
-      `UPDATE login_tokens SET used = true
-       WHERE token = $1 AND used = false RETURNING user_id,
-        (expires > now()) AS live`, [token]);
+      `DELETE FROM login_tokens WHERE token = $1 AND used = false
+       RETURNING email, (expires > now()) AS live`, [token]);
     const row = r.rows[0];
     if (!row || !row.live) return null;
+    return String(row.email);
+  }
+
+  async createSession(userId: string): Promise<string> {
     const sid = rand();
     await this.pool.query(
       `INSERT INTO sessions(id, user_id, expires)
-       VALUES ($1, $2, now() + interval '30 days')`, [sid, String(row.user_id)]);
+       VALUES ($1, $2, now() + interval '30 days')`, [sid, userId]);
     return sid;
+  }
+
+  async discardLink(token: string): Promise<void> {
+    await this.pool.query("DELETE FROM login_tokens WHERE token = $1", [token]);
   }
 
   async userIdFor(sid: string | undefined | null): Promise<string | null> {
@@ -168,6 +263,84 @@ export class PgSessions implements SessionStore {
   }
 
   async revoke(sid: string | undefined | null): Promise<void> {
-    if (sid) await this.pool.query("DELETE FROM sessions WHERE id = $1", [sid]);
+    await this.revokeMany(sid ? [sid] : []);
+  }
+
+  async revokeMany(sessionIds: readonly string[]): Promise<void> {
+    const distinct = [...new Set(sessionIds.filter(Boolean))];
+    if (distinct.length > 0)
+      await this.pool.query("DELETE FROM sessions WHERE id = ANY($1::text[])", [distinct]);
+  }
+
+  async acquireMutationCall(userId: string, limits: MutationCallLimits): Promise<string | null> {
+    const leaseId = rand();
+    // A dedicated transaction acquires its advisory lock before the
+    // count-and-insert statement obtains a fresh READ COMMITTED snapshot.
+    // Provider work starts only after COMMIT releases this short lock.
+    const admitted = await this.admissionTransaction(2026090801, client => client.query(
+      `WITH purged AS (
+         DELETE FROM mutation_calls
+          WHERE started_at <= now() - ($3 * interval '1 millisecond')
+            AND (released_at IS NOT NULL OR lease_expires <= now())
+       ), counts AS (
+         SELECT
+           COUNT(*) FILTER (WHERE started_at > now() - ($3 * interval '1 millisecond'))
+             AS global_recent,
+           COUNT(*) FILTER (WHERE user_id = $2
+             AND started_at > now() - ($3 * interval '1 millisecond')) AS user_recent,
+           COUNT(*) FILTER (WHERE released_at IS NULL AND lease_expires > now())
+             AS global_active,
+           COUNT(*) FILTER (WHERE user_id = $2
+             AND released_at IS NULL AND lease_expires > now()) AS user_active
+         FROM mutation_calls
+       )
+       INSERT INTO mutation_calls(id, user_id, lease_expires)
+       SELECT $1, $2, now() + ($4 * interval '1 millisecond') FROM counts
+        WHERE global_recent < $6 AND user_recent < $5
+          AND global_active < $8 AND user_active < $7
+       RETURNING id`,
+      [leaseId, userId, limits.windowMs, limits.leaseMs,
+        limits.maxPerUser, limits.maxGlobal,
+        limits.maxConcurrentPerUser, limits.maxConcurrentGlobal],
+    ));
+    return admitted.rows[0] ? leaseId : null;
+  }
+
+  async releaseMutationCall(leaseId: string): Promise<void> {
+    await this.pool.query(
+      `UPDATE mutation_calls SET released_at = COALESCE(released_at, now()) WHERE id = $1`,
+      [leaseId],
+    );
+  }
+
+  async issueRepairCapability(binding: RepairCapabilityBinding): Promise<string> {
+    const token = rand();
+    await this.pool.query(
+      `WITH purged AS (
+         DELETE FROM repair_capabilities WHERE expires <= now() OR consumed_at IS NOT NULL
+       )
+       INSERT INTO repair_capabilities(
+         token, user_id, session_digest, context_digest, plan_digest, expires
+       ) VALUES ($1, $2, $3, $4, $5, now() + interval '15 minutes')`,
+      [token, binding.userId, binding.sessionDigest,
+        binding.contextDigest, binding.planDigest],
+    );
+    return token;
+  }
+
+  async consumeRepairCapability(
+    token: string,
+    binding: RepairCapabilityBinding,
+  ): Promise<boolean> {
+    const consumed = await this.pool.query(
+      `UPDATE repair_capabilities SET consumed_at = now()
+        WHERE token = $1 AND user_id = $2 AND session_digest = $3
+          AND context_digest = $4 AND plan_digest = $5
+          AND expires > now() AND consumed_at IS NULL
+       RETURNING token`,
+      [token, binding.userId, binding.sessionDigest,
+        binding.contextDigest, binding.planDigest],
+    );
+    return Boolean(consumed.rows[0]);
   }
 }

@@ -8,6 +8,7 @@
     "./expr": "./src/expr.ts",
     "./errors": "./src/errors.ts",
     "./shell-runtime": "./src/shell-runtime.ts",
+    "./static-javascript-strings": "./src/static-javascript-strings.ts",
     "./worker-rpc": "./src/worker-rpc.ts",
     "./planner-pipeline": "./src/planner-pipeline-entry.ts",
     "./projection": "./src/projection.ts",

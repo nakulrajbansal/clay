@@ -77,6 +77,42 @@ function harness(reply?: (message: Posted) => unknown): {
   return { client: new WorkerClient(worker as unknown as Worker), posted, transfers };
 }
 
+async function plannerResultForProvider(
+  outcome: { raw: string } | { failure: unknown },
+  access: ModelAccess,
+): Promise<Record<string, unknown>> {
+  if ("raw" in outcome) modelBridge.rawPlan.mockResolvedValueOnce(outcome.raw);
+  else modelBridge.rawPlan.mockRejectedValueOnce(outcome.failure);
+  let plannerPort: MessagePort | null = null;
+  const worker = {
+    onmessage: null as ((event: { data: unknown }) => void) | null,
+    postMessage(_message: Posted, transfer: Transferable[] = []): void {
+      plannerPort = transfer[0] as MessagePort;
+    },
+    terminate(): void {},
+  };
+  const client = new WorkerClient(worker as unknown as Worker);
+  await client.setModelAccess(access);
+  const pending = client.intent("add a board");
+  const response = new Promise<Record<string, unknown>>(resolve => {
+    plannerPort!.onmessage = event => resolve(event.data as Record<string, unknown>);
+    plannerPort!.start();
+  });
+  plannerPort!.postMessage({
+    v: 1, kind: "planner.request", epoch: `boot_${"a".repeat(26)}`,
+    generation: 1, contextId: `ctx_${"b".repeat(26)}`, attempt: 0, sequence: 0,
+    context: { registry: [], panels: [], recentSummaries: [], intent: "add a board" },
+    repair: null,
+  });
+  const result = await response;
+  client.terminate();
+  await expect(pending).rejects.toThrow(/terminated/i);
+  return result;
+}
+
+const plannerResultForRaw = (raw: string, access: ModelAccess) =>
+  plannerResultForProvider({ raw }, access);
+
 describe("WorkerClient boot boundary", () => {
   it("returns a canonical catalog projection and sends bounded cache hints", async () => {
     const bootInfo = {
@@ -250,7 +286,13 @@ describe("WorkerClient local export boundary", () => {
   });
 
   it("forwards AbortSignal cancellation to the in-flight worker projection", async () => {
-    const { client, posted } = harness();
+    const posted: Posted[] = [];
+    const worker = {
+      onmessage: null as ((event: { data: unknown }) => void) | null,
+      postMessage(message: Posted): void { posted.push(message); },
+      terminate(): void {},
+    };
+    const client = new WorkerClient(worker as unknown as Worker);
     const controller = new AbortController();
     const pending = client.projectExport({
       schema: 1,
@@ -262,11 +304,19 @@ describe("WorkerClient local export boundary", () => {
       options: { includeRecordIds: false, redactedFieldIds: [] },
     }, controller.signal);
     controller.abort();
-    await expect(pending).rejects.toMatchObject({ code: "E_CANCELLED" });
     expect(posted).toHaveLength(2);
     expect(posted[1]).toMatchObject({
       op: "cancelProjectionV1", payload: { targetId: posted[0]!.id },
     });
+    worker.onmessage?.({ data: {
+      id: posted[1]!.id, ok: true,
+      result: { targetId: posted[0]!.id, quiescent: true, outcome: "cancelled" },
+    } });
+    worker.onmessage?.({ data: {
+      id: posted[0]!.id, ok: false,
+      error: { code: "E_CANCELLED", message: "projection stopped" },
+    } });
+    await expect(pending).rejects.toMatchObject({ code: "E_CANCELLED" });
   });
 });
 
@@ -361,6 +411,9 @@ describe("WorkerClient model credential boundary", () => {
 
   it("generation-fences hosted sign-in before publishing credentials", () => {
     const source = readFileSync(new URL("../src/app/App.tsx", import.meta.url), "utf8");
+    const prepare = source.slice(
+      source.indexOf("async function prepareWorkerModelAccess"), source.indexOf("function withTimeout"),
+    );
     const authFlow = source.slice(source.indexOf("const redeemHostedAuth"),
       source.indexOf("const signOut"));
     const redeem = authFlow.slice(0, authFlow.indexOf("\n  useEffect"));
@@ -371,6 +424,7 @@ describe("WorkerClient model credential boundary", () => {
     expect(signIn).toContain("consumePersistedHostedAuthAttempt");
     expect(signIn).toContain('credentials: "omit"');
     expect(authFlow).toContain("logoutHostedBearerSession");
+    expect(authFlow).toContain("commitHostedAuthAttempt");
     expect(redeem.lastIndexOf("stillCurrent()"))
       .toBeLessThan(redeem.indexOf("setSessionToken"));
     expect(source).toContain("captureHostedAuthLanding");
@@ -380,6 +434,15 @@ describe("WorkerClient model credential boundary", () => {
       source.indexOf("const saveKey"))).toContain("authFence.invalidate()");
     expect(source.slice(source.indexOf("const saveBackend"),
       source.indexOf("// Hosted-mode account"))).toContain("authFence.invalidate()");
+    expect(source.slice(source.indexOf("const signOut"), source.indexOf("const head =")))
+      .toContain("advanceHostedAuthRevocation");
+    expect(source.slice(source.lastIndexOf("observeHostedAccountChanges("),
+      source.indexOf("  useEffect(() => {", source.lastIndexOf("observeHostedAccountChanges("))))
+      .toContain("reconcileHostedAuthEpoch");
+    expect(prepare).toContain("protectedSecrets");
+    expect(prepare).toContain("getApiKey()");
+    expect(prepare).toContain("getSessionToken(getBackendUrl())");
+    expect(prepare).toContain("providerToken");
   });
 
   it("removes explicit ambient-cookie authority on account revocation", async () => {
@@ -747,6 +810,80 @@ describe("WorkerClient model credential boundary", () => {
     expect(JSON.stringify(reflected)).not.toContain(credentialCanary);
     client.terminate();
     await expect(pending).rejects.toThrow(/terminated/i);
+  });
+
+  it.each([
+    ["JavaScript hex escapes", (secret: string) => `"${[...secret]
+      .map(character => `\\x${character.charCodeAt(0).toString(16).padStart(2, "0")}`).join("")}"`],
+    ["JavaScript code-point escapes", (secret: string) => `"${[...secret]
+      .map(character => `\\u{${character.codePointAt(0)!.toString(16)}}`).join("")}"`],
+    ["static literal concatenation", (secret: string) => secret.match(/.{1,5}/g)!
+      .map(part => JSON.stringify(part)).join(" + ")],
+    ["static template concatenation", (secret: string) => secret.match(/.{1,5}/g)!
+      .map(part => `\`${part}\``).join(" + ")],
+    ["static template interpolation", (secret: string) => {
+      const parts = secret.match(/.{1,5}/g)!;
+      return `\`${parts[0]}${parts.slice(1)
+        .map(part => `\${${JSON.stringify(part)}}`).join("")}\``;
+    }],
+    ["static array join", (secret: string) =>
+      `[${secret.match(/.{1,5}/g)!.map(part => JSON.stringify(part)).join(",")}].join("")`],
+    ["base64", (secret: string) => JSON.stringify(
+      Buffer.from(secret, "utf8").toString("base64"))],
+    ["hex", (secret: string) => JSON.stringify(
+      Buffer.from(secret, "utf8").toString("hex"))],
+    ["percent encoding", (secret: string) => JSON.stringify([...secret]
+      .map(character => `%${character.charCodeAt(0).toString(16).padStart(2, "0")}`).join(""))],
+    ["static character codes", (secret: string) =>
+      `String.fromCharCode(${[...secret].map(character => character.charCodeAt(0)).join(",")})`],
+  ] as const)("rejects provider output deriving a credential through %s", async (_name, encode) => {
+    const credential = "semantic-credential-canary";
+    const derived = encode(credential);
+    const raw = JSON.stringify({
+      panels: [{ code: `const reflected = ${derived};` }],
+    });
+    expect(raw).not.toContain(credential);
+    const result = await plannerResultForRaw(raw, withCredential(
+      { provider: "anthropic", backendUrl: null, session: null }, credential,
+    ));
+    expect(result).toMatchObject({
+      kind: "planner.response", result: { ok: false, error: { code: "E_MODEL" } },
+    });
+    expect(JSON.stringify(result)).not.toContain(credential);
+  });
+
+  it("screens inactive credentials still held elsewhere on the device", async () => {
+    const active = "active-credential-canary";
+    const inactive = "inactive-device-credential-canary";
+    const raw = JSON.stringify({
+      panels: [{ code: Buffer.from(inactive, "utf8").toString("base64") }],
+    });
+    const access = Object.assign(withCredential(
+      { provider: "anthropic", backendUrl: null, session: null }, active,
+    ), { protectedSecrets: [active, inactive] }) as ModelAccess;
+    const result = await plannerResultForRaw(raw, access);
+    expect(result).toMatchObject({
+      kind: "planner.response", result: { ok: false, error: { code: "E_MODEL" } },
+    });
+  });
+
+  it("never invokes accessors on an attacker-controlled provider error", async () => {
+    let invoked = false;
+    const hostile = Object.defineProperties({}, {
+      code: { enumerable: true, get: () => { invoked = true; return "E_MODEL"; } },
+      message: { enumerable: true, get: () => { invoked = true; return "credential"; } },
+      toString: { value: () => { invoked = true; return "credential"; } },
+    });
+    const result = await plannerResultForProvider({ failure: hostile }, withCredential(
+      { provider: "anthropic", backendUrl: null, session: null }, "credential",
+    ));
+    expect(result).toMatchObject({
+      result: {
+        ok: false,
+        error: { code: "E_NET", message: "model request failed without transferable diagnostic" },
+      },
+    });
+    expect(invoked).toBe(false);
   });
 
   it("discards a preview returned after model access invalidates its planner", async () => {

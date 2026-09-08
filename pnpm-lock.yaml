@@ -30,6 +30,9 @@ importers:
 
   packages/backend:
     dependencies:
+      '@clay/kernel':
+        specifier: workspace:*
+        version: link:../kernel
       '@clay/mutation':
         specifier: workspace:*
         version: link:../mutation

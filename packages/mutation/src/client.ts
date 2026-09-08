@@ -171,6 +171,9 @@ export class MutationClient {
   private readonly modelRepair: boolean;
   private readonly signal?: AbortSignal;
   private readonly requestTimeoutMs: number;
+  private hostedRepairCapability: Readonly<{
+    endpoint: string; contextJson: string; priorPlanRaw: string; token: string;
+  }> | null = null;
   readonly systemPrompt: string;
 
   constructor(private readonly transport: Transport, opts: MutationClientOptions = {}) {
@@ -402,12 +405,25 @@ export class MutationClient {
     // shapes + intent only (B2). Repairs count against the same attempt.
     const path = repair ? "/mutations/repair" : "/mutations/plan";
     const session = this.transport.mode === "hosted" ? this.transport.session : undefined;
+    const contextJson = JSON.stringify(ctx);
+    let repairCapability: string | null = null;
+    if (repair) {
+      const minted = this.hostedRepairCapability;
+      this.hostedRepairCapability = null;
+      if (minted?.endpoint === endpoint && minted.contextJson === contextJson
+          && minted.priorPlanRaw === repair.priorPlanRaw) repairCapability = minted.token;
+    } else {
+      // A later plan supersedes any capability from an earlier attempt.
+      this.hostedRepairCapability = null;
+    }
     const { response: res, text } = await this.postForText(`${endpoint}${path}`, {
       method: "POST",
       credentials: this.transport.mode === "hosted" && this.transport.credentials === "include"
         ? "include" : "omit",
       headers: { "content-type": "application/json",
-        ...(session ? { authorization: `Bearer ${session}` } : {}) },
+        ...(session ? { authorization: `Bearer ${session}` } : {}),
+        ...(repairCapability
+          ? { "x-clay-repair-capability": repairCapability } : {}) },
       body: JSON.stringify(repair
         ? { context: ctx, prior_plan: repair.priorPlanRaw, failures: repair.failures }
         : { context: ctx }),
@@ -415,6 +431,14 @@ export class MutationClient {
     if (!res.ok)
       throw new MutationRequestError("E_MODEL",
         `backend ${res.status}: ${text.slice(0, 400)}`);
+    if (!repair) {
+      const capability = res.headers.get("x-clay-repair-capability");
+      if (capability && /^[a-f0-9]{48}$/.test(capability)) {
+        this.hostedRepairCapability = Object.freeze({
+          endpoint, contextJson, priorPlanRaw: text, token: capability,
+        });
+      }
+    }
     return text;
   }
 }

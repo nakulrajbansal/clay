@@ -13,9 +13,10 @@ import type {
 import { WorkerClient } from "./worker-client";
 import { fetchModelHealth } from "./model-health";
 import {
-  HostedAuthFence, captureHostedAuthLanding, consumePersistedHostedAuthAttempt,
-  logoutHostedBearerSession, logoutHostedSession, redeemHostedAuthAttempt,
-  observeHostedAccountChanges, publishHostedAccountChange,
+  HostedAuthFence, advanceHostedAuthRevocation, captureHostedAuthLanding,
+  commitHostedAuthAttempt, consumePersistedHostedAuthAttempt,
+  logoutHostedBearerSession, logoutHostedSession, reconcileHostedAuthEpoch,
+  redeemHostedAuthAttempt, observeHostedAccountChanges, publishHostedAccountChange,
   type HostedAuthAttempt,
 } from "./account-auth";
 import type { IntentOutcome, PreviewInfo } from "../worker/db-worker";
@@ -93,6 +94,7 @@ async function prepareWorkerModelAccess(
   allowAmbientCredentials = false,
 ): Promise<ReturnType<typeof getActiveModelAccess> & {
   session: string | null; providerToken?: string | null; allowAmbientCredentials: boolean;
+  protectedSecrets: readonly string[];
 }> {
   let providerToken: string | null = null;
   if (access.provider === "codex" && access.backendUrl) {
@@ -107,10 +109,14 @@ async function prepareWorkerModelAccess(
           && health.connector_token.length <= 1_024) providerToken = health.connector_token;
     } catch { /* the status surface reports an unreachable connector */ }
   }
+  const protectedSecrets = [
+    getApiKey(), getSessionToken(getBackendUrl()), claySession, providerToken,
+  ].filter((secret): secret is string => typeof secret === "string" && secret.length > 0);
   return {
     ...access,
     session: access.provider === "clay" ? claySession : null,
     allowAmbientCredentials: access.provider === "clay" && allowAmbientCredentials,
+    protectedSecrets: Object.freeze([...new Set(protectedSecrets)]),
     ...(access.provider === "codex" ? { providerToken } : {}),
   };
 }
@@ -880,14 +886,30 @@ export function App(): React.JSX.Element {
   const [meter, setMeter] = useState<{ used: number; quota: number | null } | null>(null);
   const [account, setAccount] = useState<{ email: string } | null>(null);
   const [accountN, setAccountN] = useState(0);   // bump to refetch
-  useEffect(() => observeHostedAccountChanges(() => {
-    authFence.invalidate();
-    const worker = workerRef.current;
-    if (!worker) return;
-    worker.revokeAccountSession();
-    setAccount(null); setMeter(null);
-    void applyModelAccess().then(applied => {
+  useEffect(() => observeHostedAccountChanges(change => {
+    void reconcileHostedAuthEpoch(change.backendOrigin, async epoch => {
+      const access = getActiveModelAccess();
+      if (access.provider !== "clay" || !access.backendUrl
+          || new URL(normalizeBackendUrl(access.backendUrl)).origin !== change.backendOrigin) return;
+      authFence.invalidate();
+      const worker = workerRef.current;
+      if (!worker) return;
+      worker.revokeAccountSession();
+      if (epoch.state !== "granted") {
+        setSessionToken(null, access.backendUrl);
+        setAmbientSessionAllowed(false, access.backendUrl);
+        setAccount(null); setMeter(null);
+        return;
+      }
+      const applied = await applyModelAccess();
       if (applied) setAccountN(value => value + 1);
+    }).catch(() => {
+      authFence.invalidate();
+      const access = getActiveModelAccess();
+      setSessionToken(null, access.backendUrl);
+      setAmbientSessionAllowed(false, access.backendUrl);
+      workerRef.current?.revokeAccountSession();
+      setAccount(null); setMeter(null);
     });
   }), [authFence]);
   useEffect(() => {
@@ -921,18 +943,27 @@ export function App(): React.JSX.Element {
       authFence, attempt, token, getActiveModelAccess,
     );
     if (!session) return;
-    const access = getActiveModelAccess();
-    const applied = await client().setModelAccess(prepareWorkerModelAccess(
-      access, session, false,
-    ));
-    if (!applied || !stillCurrent()) {
-      try { await logoutHostedBearerSession(attempt.backendUrl, session); }
-      catch { /* stale local authorization remains revoked */ }
+    const committed = await commitHostedAuthAttempt(
+      authFence,
+      attempt,
+      getActiveModelAccess,
+      session,
+      async () => {
+        if (!stillCurrent()) return false;
+        const access = getActiveModelAccess();
+        return client().setModelAccess(prepareWorkerModelAccess(access, session, false));
+      },
+      () => {
+        setAmbientSessionAllowed(false, attempt.backendUrl);
+        setSessionToken(session, attempt.backendUrl);
+        publishHostedAccountChange(attempt.backendUrl, "granted");
+      },
+      logoutHostedBearerSession,
+    );
+    if (!committed) {
+      client().revokeAccountSession();
       return;
     }
-    setAmbientSessionAllowed(false, attempt.backendUrl);
-    setSessionToken(session, attempt.backendUrl);
-    publishHostedAccountChange(attempt.backendUrl, "granted");
     setAccountN(n => n + 1);
     pushToast("Signed in — your reshapes now count against your plan", "success");
   };
@@ -940,17 +971,22 @@ export function App(): React.JSX.Element {
   useEffect(() => {
     if (phase !== "main" || !authLanding || !workerRef.current) return;
     setAuthLanding(null);
-    const persisted = consumePersistedHostedAuthAttempt(
-      authLanding.state, getActiveModelAccess(),
-    );
-    if (!persisted) {
-      pushToast("That sign-in link no longer matches this backend", "danger");
-      return;
-    }
-    const attempt = authFence.resume(persisted);
-    void redeemHostedAuth(attempt, authLanding.token).catch(error => {
-      if (authFence.isCurrent(attempt, getActiveModelAccess()))
-        pushToast("Sign-in failed: " + (error as Error).message, "danger");
+    void (async () => {
+      const persisted = await consumePersistedHostedAuthAttempt(
+        authLanding.state, getActiveModelAccess(),
+      );
+      if (!persisted) {
+        pushToast("That sign-in link no longer matches this backend", "danger");
+        return;
+      }
+      const attempt = authFence.resume(persisted);
+      try { await redeemHostedAuth(attempt, authLanding.token); }
+      catch (error) {
+        if (authFence.isCurrent(attempt, getActiveModelAccess()))
+          pushToast("Sign-in failed: " + (error as Error).message, "danger");
+      }
+    })().catch(error => {
+      pushToast("Sign-in failed closed: " + (error as Error).message, "danger");
     });
   }, [phase, authLanding]);
 
@@ -958,7 +994,12 @@ export function App(): React.JSX.Element {
     const initialAccess = getActiveModelAccess();
     const url = initialAccess.provider === "clay" ? initialAccess.backendUrl : null;
     if (!url) { pushToast("Set the backend URL first", "danger"); return; }
-    const attempt = authFence.begin(url);
+    let attempt: HostedAuthAttempt;
+    try { attempt = await authFence.begin(url); }
+    catch (error) {
+      pushToast("Sign-in unavailable: " + (error as Error).message, "danger");
+      return;
+    }
     const stillCurrent = (): boolean => authFence.isCurrent(attempt, getActiveModelAccess());
     try {
       const res = await fetch(attempt.backendUrl + "/auth/magic-link", {
@@ -984,7 +1025,7 @@ export function App(): React.JSX.Element {
           || [...callbackUrl.searchParams.keys()].length !== 2
           || !/^[A-Za-z0-9_-]{32,256}$/.test(token) || state !== attempt.state)
         throw new Error("Sign-in callback did not match the requested backend and state");
-      if (!consumePersistedHostedAuthAttempt(
+      if (!await consumePersistedHostedAuthAttempt(
         attempt.state, getActiveModelAccess(),
       )) return;
       await redeemHostedAuth(attempt, token);
@@ -996,13 +1037,33 @@ export function App(): React.JSX.Element {
   const signOut = async (): Promise<void> => {
     authFence.invalidate();
     const backend = getActiveModelAccess().backendUrl;
-    const session = getSessionToken(backend);
-    setSessionToken(null);
-    setAmbientSessionAllowed(false, backend);
-    client().revokeAccountSession();
-    if (backend) publishHostedAccountChange(backend, "revoked");
-    setAccount(null); setMeter(null); setAccountN(n => n + 1);
-    pushToast("Signed out on this device", "default");
+    let session: string | null = null;
+    const clearLocalAuthorization = (): string | null => {
+      const current = getSessionToken(backend);
+      setSessionToken(null);
+      setAmbientSessionAllowed(false, backend);
+      client().revokeAccountSession();
+      if (backend) publishHostedAccountChange(backend, "revoked");
+      setAccount(null); setMeter(null); setAccountN(n => n + 1);
+      return current;
+    };
+    let globallyOrdered = !backend;
+    if (backend) {
+      try {
+        session = await advanceHostedAuthRevocation(
+          backend, () => clearLocalAuthorization(),
+        );
+        globallyOrdered = true;
+      } catch {
+        session = clearLocalAuthorization();
+      }
+    } else {
+      session = clearLocalAuthorization();
+    }
+    pushToast(globallyOrdered
+      ? "Signed out on this device"
+      : "Signed out locally; cross-tab revocation could not be recorded", globallyOrdered
+      ? "default" : "danger");
     if (backend) {
       try { await logoutHostedSession(backend, session); }
       catch { /* local revocation already completed */ }

@@ -16,6 +16,7 @@ import {
   type ProjectionTransportV1,
 } from "@clay/kernel/projection";
 import { ClayError } from "@clay/kernel/errors";
+import { extractAcornStaticStrings } from "@clay/kernel/shell-runtime";
 import type { IntentOutcome } from "../worker/db-worker";
 import { fetchModelHealth } from "./model-health";
 
@@ -159,6 +160,7 @@ export type ModelAccess = {
   session: string | null;
   providerToken?: string | null;
   allowAmbientCredentials?: boolean;
+  protectedSecrets?: readonly string[];
 };
 
 const MODEL_SECRET_MAX = 8 * 1024;
@@ -174,7 +176,7 @@ function captureModelAccess(value: unknown): Readonly<ModelAccess> {
   const keys = Reflect.ownKeys(descriptors);
   const required = ["provider", "apiKey", "backendUrl", "session"] as const;
   const allowed = new Set<PropertyKey>([
-    ...required, "providerToken", "allowAmbientCredentials",
+    ...required, "providerToken", "allowAmbientCredentials", "protectedSecrets",
   ]);
   if (keys.some(key => !allowed.has(key)) || required.some(key => !(key in descriptors)))
     throw new Error("invalid model access");
@@ -193,6 +195,8 @@ function captureModelAccess(value: unknown): Readonly<ModelAccess> {
   const ambientDescriptor = descriptors.allowAmbientCredentials;
   const allowAmbientCredentials = ambientDescriptor
     ? field("allowAmbientCredentials") : false;
+  const protectedDescriptor = descriptors.protectedSecrets;
+  const rawProtectedSecrets = protectedDescriptor ? field("protectedSecrets") : [];
   const validSecret = (candidate: unknown): candidate is string | null | undefined =>
     candidate === null || candidate === undefined
       || (typeof candidate === "string" && candidate.length > 0
@@ -203,6 +207,23 @@ function captureModelAccess(value: unknown): Readonly<ModelAccess> {
       || (backendUrl !== null && (typeof backendUrl !== "string"
         || backendUrl.length < 1 || backendUrl.length > MODEL_ENDPOINT_MAX)))
     throw new Error("invalid model access");
+  if (!Array.isArray(rawProtectedSecrets) || rawProtectedSecrets.length > 32)
+    throw new Error("invalid model access");
+  const secretDescriptors = Object.getOwnPropertyDescriptors(rawProtectedSecrets);
+  const arrayKeys = Reflect.ownKeys(secretDescriptors);
+  if (arrayKeys.some(key => key !== "length"
+      && (typeof key !== "string" || !/^(?:0|[1-9][0-9]*)$/.test(key))))
+    throw new Error("invalid model access");
+  const protectedSecrets: string[] = [];
+  for (let index = 0; index < rawProtectedSecrets.length; index++) {
+    const descriptor = secretDescriptors[String(index)];
+    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable
+        || !validSecret(descriptor.value) || descriptor.value === null
+        || descriptor.value === undefined) throw new Error("invalid model access");
+    protectedSecrets.push(descriptor.value);
+  }
+  for (const secret of [apiKey, session, providerToken])
+    if (typeof secret === "string") protectedSecrets.push(secret);
   return Object.freeze({
     provider: provider as ModelAccess["provider"],
     apiKey: provider === "anthropic" ? apiKey as string | null : null,
@@ -210,6 +231,7 @@ function captureModelAccess(value: unknown): Readonly<ModelAccess> {
     session: provider === "clay" ? session as string | null : null,
     allowAmbientCredentials: provider === "clay" && allowAmbientCredentials,
     ...(provider === "codex" ? { providerToken: providerToken ?? null } : {}),
+    protectedSecrets: Object.freeze([...new Set(protectedSecrets)]),
   });
 }
 
@@ -220,27 +242,204 @@ type PlannerBinding = {
 
 const ESCAPE_SCAN_WORK_LIMIT = 16 * 1024 * 1024;
 
-function containsProtectedSecret(text: string, access: Readonly<ModelAccess>): boolean {
-  const secrets = [access.apiKey, access.session, access.providerToken]
-    .filter((secret): secret is string => typeof secret === "string" && secret.length > 0);
-  if (secrets.length === 0) return false;
-  let decoded = text;
-  let scanned = 0;
-  for (;;) {
-    if (secrets.some(secret => decoded.includes(secret))) return true;
-    scanned += decoded.length;
-    if (scanned > ESCAPE_SCAN_WORK_LIMIT) return true;
-    const collapsed = decoded.replace(/\\\\/g, "\\");
-    const next = collapsed !== decoded ? collapsed : decoded
-      .replace(/\\u([0-9a-f]{4})/gi, (_match, hex: string) =>
-        String.fromCharCode(Number.parseInt(hex, 16)))
-      .replace(/\\(["/bfnrt])/g, (_match, code: string) => ({
-        "\"": "\"", "/": "/", b: "\b", f: "\f",
-        n: "\n", r: "\r", t: "\t",
-      })[code] ?? code);
-    if (next === decoded) return false;
-    decoded = next;
+function decodeJavaScriptEscapes(input: string): string {
+  let output = "";
+  for (let index = 0; index < input.length; index++) {
+    const character = input[index]!;
+    if (character !== "\\" || index + 1 >= input.length) {
+      output += character;
+      continue;
+    }
+    const code = input[++index]!;
+    if (code === "x" && /^[0-9a-f]{2}$/i.test(input.slice(index + 1, index + 3))) {
+      output += String.fromCharCode(Number.parseInt(input.slice(index + 1, index + 3), 16));
+      index += 2;
+      continue;
+    }
+    if (code === "u" && input[index + 1] === "{") {
+      const close = input.indexOf("}", index + 2);
+      const hex = close >= 0 ? input.slice(index + 2, close) : "";
+      if (/^[0-9a-f]{1,6}$/i.test(hex)) {
+        const point = Number.parseInt(hex, 16);
+        if (point <= 0x10ffff) {
+          output += String.fromCodePoint(point);
+          index = close;
+          continue;
+        }
+      }
+    }
+    if (code === "u" && /^[0-9a-f]{4}$/i.test(input.slice(index + 1, index + 5))) {
+      output += String.fromCharCode(Number.parseInt(input.slice(index + 1, index + 5), 16));
+      index += 4;
+      continue;
+    }
+    const simple: Record<string, string> = {
+      "\\": "\\", "\"": "\"", "'": "'", "/": "/",
+      b: "\b", f: "\f", n: "\n", r: "\r", t: "\t", v: "\v", "0": "\0",
+    };
+    if (Object.hasOwn(simple, code)) output += simple[code];
+    else if (code === "\n") { /* escaped line continuation */ }
+    else if (code === "\r") {
+      if (input[index + 1] === "\n") index++;
+    } else output += code;
   }
+  return output;
+}
+
+type StaticLiteral = { start: number; end: number; value: string };
+
+function extractStaticJavaScriptStrings(source: string): string[] {
+  const literals: StaticLiteral[] = [];
+  for (let index = 0; index < source.length; index++) {
+    const quote = source[index];
+    if (quote !== "\"" && quote !== "'" && quote !== "`") continue;
+    const start = index;
+    let raw = "";
+    let complete = false;
+    let dynamic = false;
+    for (index++; index < source.length; index++) {
+      const character = source[index]!;
+      if (character === "\\" && index + 1 < source.length) {
+        raw += character + source[++index]!;
+        continue;
+      }
+      if (quote === "`" && character === "$" && source[index + 1] === "{") {
+        dynamic = true;
+        break;
+      }
+      if (character === quote) { complete = true; break; }
+      if (quote !== "`" && (character === "\n" || character === "\r")) break;
+      raw += character;
+    }
+    if (complete && !dynamic) literals.push({
+      start, end: index + 1, value: decodeJavaScriptEscapes(raw),
+    });
+  }
+  const values = literals.map(literal => literal.value);
+  let folded = "";
+  let previous: StaticLiteral | null = null;
+  for (const literal of literals) {
+    if (!previous) {
+      folded = literal.value;
+    } else {
+      const separator = source.slice(previous.end, literal.start)
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/\/\/[^\n\r]*/g, "")
+        .replace(/\s/g, "");
+      if (separator === "+" || separator === "") folded += literal.value;
+      else folded = literal.value;
+    }
+    if (folded !== literal.value) values.push(folded);
+    previous = literal;
+  }
+  for (const match of source.matchAll(
+    /String\.from(?:CharCode|CodePoint)\s*\(([\s\d,a-fx]+)\)/gi,
+  )) {
+    const rawValues = match[1]!.split(",").map(value => value.trim());
+    if (rawValues.length < 1 || rawValues.length > 8_192
+        || rawValues.some(value => !/^(?:0x[0-9a-f]+|[0-9]+)$/i.test(value))) continue;
+    const points = rawValues.map(value => Number.parseInt(value, value.startsWith("0x") ? 16 : 10));
+    if (points.some(point => !Number.isSafeInteger(point) || point < 0 || point > 0x10ffff)) continue;
+    try { values.push(String.fromCodePoint(...points)); } catch { /* malformed surrogate */ }
+  }
+  return values;
+}
+
+function utf8Base64(value: string): string {
+  let binary = "";
+  for (const byte of new TextEncoder().encode(value)) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function fullyPercentEncode(value: string): string {
+  return [...new TextEncoder().encode(value)]
+    .map(byte => `%${byte.toString(16).padStart(2, "0")}`).join("");
+}
+
+function decodeBase64(value: string): string | null {
+  try {
+    const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+    if (!/^[a-z0-9+/]+={0,2}$/i.test(normalized) || normalized.length % 4 === 1) return null;
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    const binary = atob(padded);
+    const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch { return null; }
+}
+
+function containsProtectedSecret(text: string, secretsInput: Iterable<string>): boolean {
+  const secrets = [...new Set(secretsInput)].filter(secret => secret.length > 0);
+  if (secrets.length === 0) return false;
+  const encoded = new Set<string>();
+  for (const secret of secrets) {
+    const bytes = new TextEncoder().encode(secret);
+    const hex = [...bytes].map(byte => byte.toString(16).padStart(2, "0")).join("");
+    const base64 = utf8Base64(secret);
+    for (const value of [
+      secret, hex, hex.toUpperCase(), base64, base64.replace(/=+$/, ""),
+      base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""),
+      fullyPercentEncode(secret), fullyPercentEncode(secret).toUpperCase(),
+    ]) if (value) encoded.add(value);
+  }
+
+  const queue: string[] = [];
+  const seen = new Set<string>();
+  let queuedWork = 0;
+  let overflow = false;
+  const enqueue = (candidate: string): void => {
+    if (!candidate || seen.has(candidate)) return;
+    queuedWork += candidate.length;
+    if (queuedWork > ESCAPE_SCAN_WORK_LIMIT) { overflow = true; return; }
+    seen.add(candidate);
+    queue.push(candidate);
+  };
+  enqueue(text);
+  while (queue.length > 0) {
+    if (overflow) return true;
+    const candidate = queue.shift()!;
+    if ([...encoded].some(form => candidate.includes(form))) return true;
+
+    const escaped = decodeJavaScriptEscapes(candidate);
+    if (escaped !== candidate) enqueue(escaped);
+    try {
+      const percent = decodeURIComponent(candidate);
+      if (percent !== candidate) enqueue(percent);
+    } catch { /* malformed percent data */ }
+    for (const match of candidate.matchAll(/(?:%[0-9a-f]{2}){4,}/gi)) {
+      try { enqueue(decodeURIComponent(match[0])); } catch { /* malformed UTF-8 */ }
+    }
+    for (const match of candidate.matchAll(/\b(?:[0-9a-f]{2}){4,}\b/gi)) {
+      const bytes = new Uint8Array(match[0].length / 2);
+      for (let index = 0; index < bytes.length; index++)
+        bytes[index] = Number.parseInt(match[0].slice(index * 2, index * 2 + 2), 16);
+      try { enqueue(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
+      catch { /* not UTF-8 text */ }
+    }
+    for (const match of candidate.matchAll(/\b[a-z0-9+/_-]{12,}={0,2}\b/gi)) {
+      const decoded = decodeBase64(match[0]);
+      if (decoded !== null) enqueue(decoded);
+    }
+    for (const value of extractStaticJavaScriptStrings(candidate)) enqueue(value);
+    const staticStrings = extractAcornStaticStrings(candidate);
+    if (staticStrings === null) return true;
+    for (const value of staticStrings) enqueue(value);
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      const values: unknown[] = [parsed];
+      let nodes = 0;
+      while (values.length > 0 && nodes++ < 100_000) {
+        const value = values.pop();
+        if (typeof value === "string") enqueue(value);
+        else if (Array.isArray(value)) {
+          for (let index = 0; index < value.length; index++) values.push(value[index]);
+        } else if (value && typeof value === "object") {
+          for (const child of Object.values(value as Record<string, unknown>)) values.push(child);
+        }
+      }
+      if (values.length > 0) return true;
+    } catch { /* candidate is not standalone JSON */ }
+  }
+  return overflow;
 }
 
 type ActivePlanner = {
@@ -276,8 +475,9 @@ function exactRecord(value: unknown, keys: readonly string[]): value is Record<s
 export class WorkerClient {
   #modelAccess: Readonly<ModelAccess> = Object.freeze({
     provider: "clay", apiKey: null, backendUrl: null, session: null,
-    allowAmbientCredentials: false,
+    allowAmbientCredentials: false, protectedSecrets: Object.freeze([]),
   });
+  #protectedSecrets = new Set<string>();
   #terminated = false;
   #accepting = true;
   #lifecycle = 0;
@@ -502,11 +702,13 @@ export class WorkerClient {
       session: null,
       providerToken: current.providerToken,
       allowAmbientCredentials: false,
+      protectedSecrets: current.protectedSecrets,
     });
     this.#publishModelAccess(access, generation);
   }
 
   #publishModelAccess(access: Readonly<ModelAccess>, generation: number): void {
+    for (const secret of access.protectedSecrets ?? []) this.#protectedSecrets.add(secret);
     this.#modelAccess = access;
     this.#modelAccessGeneration = generation;
     this.#cancelPlannersForAccessChange(generation);
@@ -557,25 +759,32 @@ export class WorkerClient {
     }
   }
 
-  #redactPlannerError(error: unknown, access: Readonly<ModelAccess>): {
+  #redactPlannerError(error: unknown): {
     code: "E_NET" | "E_MODEL"; message: string;
   } {
-    const candidate = typeof error === "object" && error !== null
-      ? error as { code?: unknown; message?: unknown } : {};
-    const code = candidate.code === "E_MODEL" ? "E_MODEL" : "E_NET";
-    let message = typeof candidate.message === "string" ? candidate.message : String(error);
-    if (containsProtectedSecret(message, access)) {
+    const descriptors = typeof error === "object" && error !== null
+      ? Object.getOwnPropertyDescriptors(error) : {};
+    const codeValue = descriptors.code && "value" in descriptors.code
+      ? descriptors.code.value : undefined;
+    const messageValue = descriptors.message && "value" in descriptors.message
+      ? descriptors.message.value : undefined;
+    const code = codeValue === "E_MODEL" ? "E_MODEL" : "E_NET";
+    let message = typeof messageValue === "string"
+      ? messageValue : "model request failed without transferable diagnostic";
+    if (containsProtectedSecret(message, this.#protectedSecrets)) {
       message = "model request failed without transferable diagnostic";
     } else {
-      for (const secret of [access.apiKey, access.session, access.providerToken]) {
-        if (secret) message = message.replaceAll(secret, "[redacted]");
-      }
+      for (const secret of this.#protectedSecrets)
+        message = message.replaceAll(secret, "[redacted]");
     }
     return { code, message: message.slice(0, 512) };
   }
 
   #servePlanner(active: ActivePlanner, access: Readonly<ModelAccess>, lifecycle: number): void {
     let initial: { epoch: string; generation: number; contextId: string; contextJson: string } | null = null;
+    let client: Pick<
+      import("@clay/mutation/client").MutationClient, "rawPlan" | "rawRepair"
+    > | null = null;
     let expectedSequence = 0;
     let busy = false;
     let finalized = false;
@@ -663,7 +872,7 @@ export class WorkerClient {
       }
       if (containsProtectedSecret(JSON.stringify({
         context: message.context, repair: message.repair,
-      }), access)) {
+      }), this.#protectedSecrets)) {
         failClosed(binding);
         return;
       }
@@ -675,25 +884,29 @@ export class WorkerClient {
             new Error("No model connection. Add an API key or connect a backend in Settings."),
             { code: "E_MODEL" },
           );
-          const { MutationClient } = await import("@clay/mutation/client");
-          if (active.closed || this.#terminated || lifecycle !== this.#lifecycle) return;
-          const transport = access.apiKey
-            ? { mode: "byo" as const, apiKey: access.apiKey }
-            : {
-              mode: "hosted" as const,
-              endpoint: access.backendUrl!,
-              ...(access.allowAmbientCredentials ? { credentials: "include" as const } : {}),
-              ...((access.provider === "clay" ? access.session : access.providerToken)
-                ? { session: (access.provider === "clay" ? access.session : access.providerToken)! }
-                : {}),
-            };
-          const client = new MutationClient(transport, {
-            modelRepair: true, signal: active.controller.signal,
-          });
+          let requestClient = client;
+          if (!requestClient) {
+            const { MutationClient } = await import("@clay/mutation/client");
+            if (active.closed || this.#terminated || lifecycle !== this.#lifecycle) return;
+            const transport = access.apiKey
+              ? { mode: "byo" as const, apiKey: access.apiKey }
+              : {
+                mode: "hosted" as const,
+                endpoint: access.backendUrl!,
+                ...(access.allowAmbientCredentials ? { credentials: "include" as const } : {}),
+                ...((access.provider === "clay" ? access.session : access.providerToken)
+                  ? { session: (access.provider === "clay" ? access.session : access.providerToken)! }
+                  : {}),
+              };
+            requestClient = new MutationClient(transport, {
+              modelRepair: true, signal: active.controller.signal,
+            });
+            client = requestClient;
+          }
           const context = message.context as never;
           const raw = binding.attempt === 0
-            ? await client.rawPlan(context)
-            : await client.rawRepair(
+            ? await requestClient.rawPlan(context)
+            : await requestClient.rawRepair(
               context,
               (message.repair as { priorRaw: string }).priorRaw,
               (message.repair as { diagnostics: string[] }).diagnostics,
@@ -702,7 +915,7 @@ export class WorkerClient {
           if (raw.length > 64 * 1024) throw Object.assign(
             new Error("model output exceeds the planner bridge limit"), { code: "E_MODEL" },
           );
-          if (containsProtectedSecret(raw, access)) throw Object.assign(
+          if (containsProtectedSecret(raw, this.#protectedSecrets)) throw Object.assign(
             new Error("model response contained protected credential material"), { code: "E_MODEL" },
           );
           active.port.postMessage({
@@ -713,7 +926,7 @@ export class WorkerClient {
           if (active.closed || this.#terminated || lifecycle !== this.#lifecycle) return;
           active.port.postMessage({
             v: 1, kind: "planner.response", ...binding,
-            result: { ok: false, error: this.#redactPlannerError(error, access) },
+            result: { ok: false, error: this.#redactPlannerError(error) },
           });
         } finally {
           busy = false;
@@ -899,7 +1112,7 @@ export class WorkerClient {
   panelsAt(version: number): Promise<LivePanel[]> { return this.call("panelsAt", { version }); }
   makeLatest(version: number): Promise<LivePanel[]> { return this.call("makeLatest", { version }); }
   intent(text: string): Promise<IntentOutcome> {
-    if (typeof text !== "string" || containsProtectedSecret(text, this.#modelAccess))
+    if (typeof text !== "string" || containsProtectedSecret(text, this.#protectedSecrets))
       return Promise.reject(new ClayError(
         "E_VALIDATION", "Intent cannot contain active credential material",
       ));
