@@ -154,7 +154,9 @@ export class TargetCommitCoordinator {
     this.#writeAuthority = session.authority;
   }
 
-  recoverExpiredReservation(input: RecoverExpiredReservationInput): CatalogReservationRecovery {
+  private recoverExpiredReservationInCurrentTransaction(
+    input: RecoverExpiredReservationInput,
+  ): CatalogReservationRecovery {
     const operation = OperationId.safeParse(input.operationId);
     if (!operation.success)
       throw new ClayError("E_TARGET_AUTHORITY_INVALID", "reservation recovery operation is invalid");
@@ -189,26 +191,132 @@ export class TargetCommitCoordinator {
         || entry.currentProtectionRevision !== current.protectionRevision
         || entry.stateSha256 !== current.stateSha256)
       throw new ClayError("E_TARGET_AUTHORITY_INVALID", "mirrored reservation recovery is inconsistent");
-    return this.#writeAuthority.run(() => {
-      const recovery = catalog.recoverExpiredSelectedReservation({
-        expectedAuthorityIncarnationId: input.expectedAuthorityIncarnationId,
-        expectedCatalogGeneration: input.expectedCatalogGeneration,
-        expectedWriteEpoch: input.expectedWriteEpoch,
-        operationId: operation.data,
-        releaseId: input.releaseId,
-        nowMs: recoveryTime.milliseconds,
-        ttlMs: input.ttlMs,
-      });
-      const abandoned = target.abandonProtectionRevision(operation.data, recoveryTime.instant);
-      const after = target.reservations()
-        .find(candidate => candidate.operationId === operation.data);
-      if (abandoned.state !== "abandoned" || abandoned.revision !== catalogReservation.revision
-          || !after || after.state !== "abandoned"
-          || after.revision !== recovery.abandonedReservation.revision
-          || after.finalizedAt !== recovery.abandonedReservation.finalizedAt)
-        throw new ClayError("E_TARGET_AUTHORITY_INVALID", "mirrored reservation recovery failed read-back");
-      return recovery;
+    const recovery = catalog.recoverExpiredSelectedReservation({
+      expectedAuthorityIncarnationId: input.expectedAuthorityIncarnationId,
+      expectedCatalogGeneration: input.expectedCatalogGeneration,
+      expectedWriteEpoch: input.expectedWriteEpoch,
+      operationId: operation.data,
+      releaseId: input.releaseId,
+      nowMs: recoveryTime.milliseconds,
+      ttlMs: input.ttlMs,
     });
+    const abandoned = target.abandonProtectionRevision(operation.data, recoveryTime.instant);
+    const after = target.reservations()
+      .find(candidate => candidate.operationId === operation.data);
+    if (abandoned.state !== "abandoned" || abandoned.revision !== catalogReservation.revision
+        || !after || after.state !== "abandoned"
+        || after.revision !== recovery.abandonedReservation.revision
+        || after.finalizedAt !== recovery.abandonedReservation.finalizedAt)
+      throw new ClayError("E_TARGET_AUTHORITY_INVALID", "mirrored reservation recovery failed read-back");
+    return recovery;
+  }
+
+  recoverExpiredReservation(input: RecoverExpiredReservationInput): CatalogReservationRecovery {
+    return this.#writeAuthority.run(() =>
+      this.recoverExpiredReservationInCurrentTransaction(input));
+  }
+
+  /** Boot already owns the one outer physical transaction. */
+  recoverExpiredReservationInBootTransaction(
+    input: RecoverExpiredReservationInput,
+  ): CatalogReservationRecovery {
+    return this.recoverExpiredReservationInCurrentTransaction(input);
+  }
+
+  /**
+   * Boot already owns one outer physical transaction. Reserve, mutate, and
+   * publish the selected target inside that transaction so a temporary
+   * selection used for multi-target recovery can never become externally
+   * visible on its own.
+   */
+  commitSelectedInBootTransaction(input: TargetCommitInput): TargetCommitResult {
+    let captured: TargetCommitInput;
+    try {
+      captured = {
+        expectedTarget: input.expectedTarget,
+        expectedCatalogGeneration: input.expectedCatalogGeneration,
+        fence: input.fence,
+        operationId: input.operationId,
+        changes: input.changes,
+        mutate: input.mutate,
+      };
+    } catch {
+      throw new ClayError("E_TARGET_AUTHORITY_INVALID", "boot target commit input is invalid");
+    }
+    const expected = TargetEvidenceV1.safeParse(captured.expectedTarget);
+    const catalogGeneration = UInt64Decimal.safeParse(captured.expectedCatalogGeneration);
+    const fence = WriteFenceV1.safeParse(captured.fence);
+    const operation = OperationId.safeParse(captured.operationId);
+    if (!expected.success || !catalogGeneration.success || !fence.success || !operation.success
+        || !Array.isArray(captured.changes) || typeof captured.mutate !== "function"
+        || !this.registry)
+      throw new ClayError("E_TARGET_AUTHORITY_INVALID", "boot target commit input is invalid");
+    let preparedChanges: StateMerkleChange[];
+    let fingerprint: string;
+    try {
+      preparedChanges = captureChanges(captured.changes);
+      fingerprint = requestFingerprint(expected.data, preparedChanges);
+    } catch {
+      throw new ClayError("E_TARGET_AUTHORITY_INVALID", "boot target fingerprint is invalid");
+    }
+
+    const now = trustedInstant(this.clock);
+    const catalog = DeviceCatalog.openExisting(this.#driver);
+    const target = TargetAuthorityStore.open(this.#driver);
+    catalog.assertWriteFence(fence.data, now.milliseconds);
+    if (catalog.snapshot().catalogGeneration !== catalogGeneration.data
+        || !sameTarget(catalog.selectedTargetStorage().target, expected.data)
+        || !sameTarget(target.evidence(), expected.data))
+      throw new ClayError("E_GENERATION_NOT_SELECTED", "boot recovery target is not selected");
+    const index = StateMerkleIndex.open(this.#driver);
+    if (!index.wouldChange(preparedChanges))
+      return { changed: false, evidence: target.evidence() };
+
+    const targetReservation = target.reserveProtectionRevision(
+      operation.data, now.instant, expected.data, fingerprint,
+    );
+    const catalogReservation = catalog.reserveSelectedProtectionRevision({
+      expectedCatalogGeneration: catalogGeneration.data,
+      expectedTarget: expected.data,
+      operationId: operation.data,
+      requestSha256: fingerprint,
+      fence: fence.data,
+      nowMs: now.milliseconds,
+    });
+    if (targetReservation.state !== "reserved" || catalogReservation.state !== "reserved"
+        || targetReservation.revision !== catalogReservation.revision)
+      throw new ClayError("E_TARGET_AUTHORITY_INVALID", "boot recovery reservation diverged");
+
+    const committed = target.commitReservedProtectionRevision({
+      operationId: operation.data,
+      expectedTarget: expected.data,
+      finalizedAt: now.instant,
+      changes: preparedChanges,
+      requestSha256: fingerprint,
+      mutate: captured.mutate,
+      registry: this.registry,
+    });
+    catalog.publishSelectedTarget({
+      expectedCatalogGeneration: catalogReservation.reservedCatalogGeneration,
+      expectedTarget: expected.data,
+      publishedTarget: committed,
+      operationId: operation.data,
+      requestSha256: fingerprint,
+      fence: fence.data,
+      nowMs: now.milliseconds,
+    });
+    const targetJournal = target.reservations()
+      .find(candidate => candidate.operationId === operation.data);
+    const catalogJournal = catalog.revisionReservations()
+      .find(candidate => candidate.operationId === operation.data);
+    if (!targetJournal || !catalogJournal
+        || targetJournal.state !== "committed" || catalogJournal.state !== "committed"
+        || targetJournal.revision !== catalogJournal.revision
+        || targetJournal.revision !== committed.protectionRevision
+        || !sameTarget(target.evidence(), committed)
+        || !sameTarget(catalog.selectedTargetStorage().target, committed))
+      throw new ClayError("E_TARGET_AUTHORITY_INVALID", "boot recovery commit failed read-back");
+    return { changed: true, evidence: committed };
   }
 
   commit(input: TargetCommitInput): TargetCommitResult {

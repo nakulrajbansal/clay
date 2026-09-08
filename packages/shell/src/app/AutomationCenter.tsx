@@ -171,7 +171,8 @@ export function AutomationCenter(props: {
   const saveAndSimulate = async (): Promise<void> => {
     setBusy(true);
     try {
-      const saved = await props.worker.upsertAutomation(definition());
+      const saved = await props.worker.upsertAutomation(
+        definition(), props.worker.createMutationContext());
       const nextSimulation = await props.worker.simulateAutomation(saved.id);
       setSimulation(nextSimulation); setSimulatedRule(saved);
       setSimulatedDraft(JSON.stringify(draft));
@@ -189,7 +190,8 @@ export function AutomationCenter(props: {
     }
     setBusy(true);
     try {
-      await props.worker.upsertAutomation({ ...simulatedRule, enabled: true });
+      await props.worker.upsertAutomation(
+        { ...simulatedRule, enabled: true }, props.worker.createMutationContext());
       props.onInfo(`Enabled “${simulatedRule.name}”. It runs locally while Clay is open.`);
       setBuilding(false); setSimulation(null); setSimulatedRule(null); setSimulatedDraft(null);
       setDraft(defaultDraft(props.tables));
@@ -206,7 +208,8 @@ export function AutomationCenter(props: {
         setPendingEnable({ rule, simulation: preview });
         return;
       }
-      await props.worker.upsertAutomation({ ...rule, enabled: false });
+      await props.worker.upsertAutomation(
+        { ...rule, enabled: false }, props.worker.createMutationContext());
       await refresh();
     } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
@@ -216,7 +219,8 @@ export function AutomationCenter(props: {
     if (!pendingEnable) return;
     setBusy(true);
     try {
-      await props.worker.upsertAutomation({ ...pendingEnable.rule, enabled: true });
+      await props.worker.upsertAutomation(
+        { ...pendingEnable.rule, enabled: true }, props.worker.createMutationContext());
       props.onInfo(`Enabled “${pendingEnable.rule.name}”. It runs locally while Clay is open.`);
       setPendingEnable(null);
       await refresh();
@@ -230,7 +234,8 @@ export function AutomationCenter(props: {
       const preview = await props.worker.simulateAutomation(rule.id);
       if (preview.plannedMutations > 100)
         throw new Error("This run would change more than 100 records. Narrow the rule first.");
-      const run = await props.worker.runAutomationNow(rule.id);
+      const run = await props.worker.runAutomationNow(
+        rule.id, props.worker.createMutationContext());
       const affected = new Set<string>();
       if (rule.trigger.kind !== "schedule") affected.add(rule.trigger.table);
       for (const action of rule.actions)
@@ -246,7 +251,7 @@ export function AutomationCenter(props: {
   const undoRun = async (run: AutomationRun): Promise<void> => {
     setBusy(true);
     try {
-      await props.worker.undoAutomationRun(run.id);
+      await props.worker.undoAutomationRun(run.id, props.worker.createMutationContext());
       props.onInfo("Automation changes were undone.");
       await refresh();
       for (const table of props.tables) props.onWrite(table.name);
@@ -428,7 +433,9 @@ export function AutomationCenter(props: {
                   onClick={() => void (async () => {
                     if (props.onConfirm && !await props.onConfirm(
                       `Delete “${rule.name}”? Existing run history remains visible.`)) return;
-                    await props.worker.deleteAutomation(rule.id); await refresh();
+                    await props.worker.deleteAutomation(
+                      rule.id, props.worker.createMutationContext());
+                    await refresh();
                   })()}>Delete</button>
               </article>)}
           </section>
@@ -440,9 +447,11 @@ export function AutomationCenter(props: {
               <div><strong>{notification.title}</strong><p>{notification.body}</p>
                 <small>{notification.at.slice(0,16).replace("T"," ")}</small></div>
               {notification.table && notification.recordId ? <button onClick={() => {
-                void props.worker.markNotificationRead(notification.id).then(refresh);
+                void props.worker.markNotificationRead(
+                  notification.id, props.worker.createMutationContext()).then(refresh);
                 props.onClose(); props.onOpenRecord(notification.table!, notification.recordId!);
-              }}>Open record</button> : <button onClick={() => void props.worker.markNotificationRead(notification.id).then(refresh)}>
+              }}>Open record</button> : <button onClick={() => void props.worker.markNotificationRead(
+                notification.id, props.worker.createMutationContext()).then(refresh)}>
                 Mark read</button>}
             </article>)}
         </section> : <section className="automation-history">

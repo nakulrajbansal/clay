@@ -91,6 +91,7 @@ describe("operational views", () => {
     let calls = 0;
     const storage = {
       getSetting: async <T,>() => current as T,
+      createMutationContext: () => ({ requestId: `req_${"a".repeat(26)}` }),
       compareAndSetSetting: async <T,>(_key: string, expected: number, value: T) => {
         calls++;
         if (calls === 1) {

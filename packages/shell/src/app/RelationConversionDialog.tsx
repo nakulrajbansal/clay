@@ -47,7 +47,8 @@ export function RelationConversionDialog(props: {
     if (!preview) return;
     setBusy(true);
     try {
-      const result = await props.worker.convertTextToRelation({ ...preview, cardinality: "one" });
+      const result = await props.worker.convertTextToRelation(
+        { ...preview, cardinality: "one" }, props.worker.createMutationContext());
       props.onCommitted(result);
     } catch (error) {
       props.onError(error instanceof Error ? error.message : String(error));

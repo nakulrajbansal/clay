@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } 
 import type {
   AsyncStore, AttachmentMetadata, QueryRow, QueryValue, RecordLink, RegColumn, RegTable,
 } from "@clay/kernel";
+import { createStoreMutationContext } from "@clay/kernel/shell-runtime";
 import type { WorkerClient } from "./worker-client";
 import { loadAllTableRows } from "./paged-query";
 import { ModalDialog } from "./ModalDialog";
@@ -222,9 +223,12 @@ export function RecordDetail(props: {
   const save = async (column: RegColumn, value: unknown): Promise<void> => {
     if (!row || isDerived(column) || column.type === "attachment") return;
     setSaving(column.name);
+    const context = createStoreMutationContext();
     try {
       const write = async (): Promise<void> => {
-        await props.store.update(props.table.name, props.recordId, { [column.name]: value });
+        await props.store.update(
+          props.table.name, props.recordId, { [column.name]: value }, context,
+        );
         await reload();
         props.onWrite(props.table.name);
       };
@@ -247,8 +251,9 @@ export function RecordDetail(props: {
         values[column.name] = column.relation?.cardinality === "one" ? ids[0] ?? null : ids;
       } else values[column.name] = value;
     }
+    const context = createStoreMutationContext();
     try {
-      const copy = await props.store.insert(props.table.name, values);
+      const copy = await props.store.insert(props.table.name, values, context);
       props.onWrite(props.table.name);
       props.onInfo("Record duplicated. You can edit the copy now.");
       props.onNavigate(props.table.name, String(copy.id));
@@ -258,8 +263,9 @@ export function RecordDetail(props: {
   const archive = async (): Promise<void> => {
     if (props.onConfirm && !await props.onConfirm(
       "Archive this record? Its links and history remain recoverable.")) return;
+    const context = createStoreMutationContext();
     try {
-      await props.store.softDelete(props.table.name, props.recordId);
+      await props.store.softDelete(props.table.name, props.recordId, context);
       props.onWrite(props.table.name);
       props.onInfo("Record archived. Its history and links are preserved.");
       props.onClose();
@@ -280,8 +286,9 @@ export function RecordDetail(props: {
       const value = creating.draft[column.name] ?? "";
       if (value !== "") values[column.name] = coerce(column, value);
     }
+    const context = createStoreMutationContext();
     try {
-      const created = await props.store.insert(creating.table.name, values);
+      const created = await props.store.insert(creating.table.name, values, context);
       props.onWrite(creating.table.name);
       props.onInfo(`Created a related ${creating.table.name.replace(/_/g, " ")} record.`);
       setCreating(null);
@@ -299,7 +306,7 @@ export function RecordDetail(props: {
       await props.worker.addAttachment({
         table: props.table.name, rowId: props.recordId, field: column.name,
         name: file.name, mime: file.type, bytes: await file.arrayBuffer(),
-      });
+      }, props.worker.createMutationContext());
       await reload(); props.onWrite(props.table.name);
       props.onInfo(`Added ${file.name}. It is included in Clay backups.`);
     } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
@@ -324,7 +331,9 @@ export function RecordDetail(props: {
       `Remove ${file.name}? Its bytes remain recoverable for 30 days.`)) return;
     try {
       await props.worker.removeAttachment(
-        props.table.name, props.recordId, column.name, file.id);
+        props.table.name, props.recordId, column.name, file.id,
+        props.worker.createMutationContext(),
+      );
       await reload(); props.onWrite(props.table.name);
       props.onInfo(`${file.name} removed. Bytes remain recoverable for 30 days.`);
     } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }

@@ -36,7 +36,8 @@ import {
 } from "./planner-authority";
 import { assertLiveSampleProvenance } from "./sample-provenance-proof";
 import { activeSampleRowCount } from "./production-samples";
-import { StateMerkleIndex } from "./state-merkle-index";
+import { stateLeafHashV1 } from "./state-merkle";
+import { StateMerkleIndex, type StateMerkleChange } from "./state-merkle-index";
 import { ClayStore } from "./store";
 import { TargetCommitCoordinator } from "./target-commit-coordinator";
 import { TargetAuthorityStore } from "./target-authority";
@@ -189,6 +190,8 @@ const PINNED_READS = Object.freeze({
 });
 const STORE_PENDING_PLANNER_ATTEMPTS: ClayStore["pendingPlannerAttempts"] =
   ClayStore.prototype.pendingPlannerAttempts;
+const STORE_FINISH_PLANNER_ATTEMPT: ClayStore["finishAttempt"] =
+  ClayStore.prototype.finishAttempt;
 
 function createStoreReader(
   store: ClayStore, projectionSnapshot: () => string,
@@ -238,7 +241,272 @@ function sameTarget(left: TargetEvidence, right: TargetEvidence): boolean {
     && left.stateSha256 === right.stateSha256;
 }
 
-function acquireBootFence(
+type ActiveCatalogTarget = ReturnType<
+  DeviceCatalog["activeTargetStorageInventory"]
+>[number];
+
+function resolveExistingTarget(
+  driver: DbDriver,
+  input: Pick<ExistingOpenInput, "inventory" | "storageKey">,
+  expected?: ActiveCatalogTarget,
+): ActiveCatalogTarget {
+  const catalog = DeviceCatalog.openExisting(driver);
+  const snapshot = catalog.snapshot();
+  const active = catalog.activeTargetStorageInventory();
+  const requested = active.find(candidate => candidate.storageKey === input.storageKey);
+  if (!requested) throw invalid("requested physical namespace is not active");
+  if (expected && (requested.namespaceId !== expected.namespaceId
+      || !sameTarget(requested.target, expected.target)))
+    throw invalid("requested catalog target changed while it was opening");
+  resolveCatalogInventory(snapshot, active, requested.storageKey, input.inventory);
+  return requested;
+}
+
+function authenticateExistingTarget(
+  driver: DbDriver,
+  input: Pick<ExistingOpenInput, "inventory" | "storageKey">,
+  expected?: ActiveCatalogTarget,
+): { store: ClayStore; target: TargetEvidence; requested: ActiveCatalogTarget } {
+  const requested = resolveExistingTarget(driver, input, expected);
+  const store = ClayStore.fromDriver(driver);
+  removeLegacyCredentialSettingsForAuthorityBoot(driver);
+  const target = TargetAuthorityStore.open(driver).evidence();
+  if (!sameTarget(target, requested.target))
+    throw invalid("catalog and target authority disagree");
+  const census = enumerateCanonicalStateV1(driver, store.validationRegistrySnapshot());
+  const merkle = StateMerkleIndex.open(driver).audit();
+  if (census.stateSha256 !== target.stateSha256
+      || census.stateSha256 !== merkle.stateSha256
+      || census.leaves.length !== merkle.leafCount)
+    throw invalid("existing target failed canonical read-back");
+  return { store, target, requested };
+}
+
+type PendingPlannerAttempt = Readonly<{ id: string; intent: string }>;
+
+const PREFLIGHT_ROLLBACK = Object.freeze({ kind: "authenticated-target-preflight" });
+
+function inspectExistingTarget(
+  session: LiveWriteSession,
+  input: Pick<ExistingOpenInput, "inventory" | "storageKey">,
+  expected: ActiveCatalogTarget,
+): PendingPlannerAttempt[] {
+  let pending: PendingPlannerAttempt[] | null = null;
+  try {
+    session.authority.run(() => {
+      const authenticated = authenticateExistingTarget(session.driver, input, expected);
+      pending = STORE_PENDING_PLANNER_ATTEMPTS.call(authenticated.store)
+        .map(attempt => Object.freeze({ id: attempt.id, intent: attempt.intent }));
+      // ClayStore schema repair and credential scrubbing are authenticated as
+      // part of inspection but cannot become durable before every target passes.
+      throw PREFLIGHT_ROLLBACK;
+    });
+  } catch (error) {
+    if (error !== PREFLIGHT_ROLLBACK) throw error;
+  }
+  if (pending === null)
+    throw invalid("existing target preflight did not complete");
+  return pending;
+}
+
+function preflightExistingTarget(
+  driver: DbDriver,
+  input: Pick<ExistingOpenInput, "inventory" | "storageKey">,
+  expected: ActiveCatalogTarget,
+): PendingPlannerAttempt[] {
+  let pending: PendingPlannerAttempt[] | null = null;
+  try {
+    driver.tx(() => {
+      const authenticated = authenticateExistingTarget(driver, input, expected);
+      pending = STORE_PENDING_PLANNER_ATTEMPTS.call(authenticated.store)
+        .map(attempt => Object.freeze({ id: attempt.id, intent: attempt.intent }));
+      throw PREFLIGHT_ROLLBACK;
+    });
+  } catch (error) {
+    if (error !== PREFLIGHT_ROLLBACK) throw error;
+  }
+  if (pending === null)
+    throw invalid("existing target preflight did not complete");
+  return pending;
+}
+
+function bootCanonicalChanges(
+  before: ReturnType<typeof enumerateCanonicalStateV1>,
+  after: ReturnType<typeof enumerateCanonicalStateV1>,
+): StateMerkleChange[] {
+  const beforeByKey = new Map(before.leaves.map(entry =>
+    [entry.seed.key, stateLeafHashV1(entry.seed.key, entry.seed.fields)]));
+  const changes: StateMerkleChange[] = [];
+  for (const entry of after.leaves) {
+    const prior = beforeByKey.get(entry.seed.key);
+    const next = stateLeafHashV1(entry.seed.key, entry.seed.fields);
+    if (prior !== next) changes.push({ key: entry.seed.key, fields: entry.seed.fields });
+    beforeByKey.delete(entry.seed.key);
+  }
+  for (const key of beforeByKey.keys()) changes.push({ key, fields: null });
+  changes.sort((left, right) => left.key < right.key ? -1 : left.key > right.key ? 1 : 0);
+  if (changes.length === 0 && before.stateSha256 !== after.stateSha256)
+    throw invalid("boot recovery canonical diff is inconsistent");
+  return changes;
+}
+
+async function prepareInterruptedPlannerRecovery(
+  session: LiveWriteSession,
+  input: Pick<ExistingOpenInput, "inventory" | "storageKey">,
+  expected: ActiveCatalogTarget,
+): Promise<{ attempts: PendingPlannerAttempt[]; changes: StateMerkleChange[] }> {
+  const attempts = inspectExistingTarget(session, input, expected);
+  if (attempts.length === 0) return { attempts, changes: [] };
+  const shadowDriver = await session.driver.snapshot();
+  let shadow: ClayStore | null = null;
+  try {
+    shadow = ClayStore.fromDriver(shadowDriver);
+    removeLegacyCredentialSettingsForAuthorityBoot(shadowDriver);
+    const before = enumerateCanonicalStateV1(
+      shadowDriver, shadow.validationRegistrySnapshot(),
+    );
+    for (const attempt of attempts) STORE_FINISH_PLANNER_ATTEMPT.call(
+      shadow, attempt.id, "failed", "E_VALIDATION",
+    );
+    const after = enumerateCanonicalStateV1(
+      shadowDriver, shadow.validationRegistrySnapshot(),
+    );
+    const changes = bootCanonicalChanges(before, after);
+    if (changes.length === 0)
+      throw invalid("pending planner recovery did not change canonical state");
+    return { attempts, changes };
+  } finally {
+    try {
+      if (shadow) shadow.close();
+      else shadowDriver.close();
+    } catch { /* disposable recovery shadow */ }
+  }
+}
+
+type BootTargetRecovery = {
+  store: ClayStore;
+  target: ActiveCatalogTarget;
+  catalog: ReturnType<DeviceCatalog["snapshot"]>;
+  catalogGeneration: string;
+  reconciled: number;
+};
+
+async function recoverInterruptedPlannerAttemptsInBoot(
+  session: LiveWriteSession,
+  input: Pick<ExistingOpenInput, "inventory" | "storageKey" | "nowMs">,
+  expected: ActiveCatalogTarget,
+  expectedAttempts: readonly PendingPlannerAttempt[],
+  expectedCatalogGeneration: string,
+  fence: WriteFence,
+  expectedSelectedAppInstanceId: string,
+  finalSelectedAppInstanceId: string,
+): Promise<BootTargetRecovery> {
+  const prepared = await prepareInterruptedPlannerRecovery(session, input, expected);
+  if (JSON.stringify(prepared.attempts) !== JSON.stringify(expectedAttempts))
+    throw invalid("planner recovery census changed before the boot fence");
+  let recovered: BootTargetRecovery | null = null;
+  session.authority.run(() => {
+    const authenticated = authenticateExistingTarget(session.driver, input, expected);
+    const exactPending = STORE_PENDING_PLANNER_ATTEMPTS.call(authenticated.store)
+      .map(attempt => ({ id: attempt.id, intent: attempt.intent }));
+    if (JSON.stringify(exactPending) !== JSON.stringify(prepared.attempts))
+      throw invalid("planner recovery census changed after the boot fence");
+    let catalog = DeviceCatalog.openExisting(session.driver);
+    const before = catalog.snapshot();
+    catalog.assertWriteFence(fence, input.nowMs);
+    if (before.catalogGeneration !== expectedCatalogGeneration
+        || before.selectedAppInstanceId !== expectedSelectedAppInstanceId)
+      throw invalid("boot recovery catalog authority changed");
+
+    if (authenticated.target.appInstanceId !== expectedSelectedAppInstanceId) {
+      catalog.selectApp({
+        expectedCatalogGeneration: before.catalogGeneration,
+        appInstanceId: authenticated.target.appInstanceId,
+        operationId: mintProductionAuthorityId("op"),
+        fence,
+        nowMs: input.nowMs,
+      });
+      catalog = DeviceCatalog.openExisting(session.driver);
+    }
+
+    let target = authenticated.target;
+    if (prepared.attempts.length > 0) {
+      const committed = new TargetCommitCoordinator(
+        session, authenticated.store.validationRegistrySnapshot(), () => input.nowMs,
+      ).commitSelectedInBootTransaction({
+        expectedTarget: authenticated.target,
+        expectedCatalogGeneration: catalog.snapshot().catalogGeneration,
+        fence,
+        operationId: mintProductionAuthorityId("op"),
+        changes: prepared.changes,
+        mutate: () => {
+          for (const attempt of prepared.attempts) STORE_FINISH_PLANNER_ATTEMPT.call(
+            authenticated.store, attempt.id, "failed", "E_VALIDATION",
+          );
+        },
+      });
+      if (!committed.changed)
+        throw invalid("pending planner recovery became a canonical no-op");
+      target = committed.evidence;
+      catalog = DeviceCatalog.openExisting(session.driver);
+    }
+
+    if (catalog.snapshot().selectedAppInstanceId !== finalSelectedAppInstanceId) {
+      catalog.selectApp({
+        expectedCatalogGeneration: catalog.snapshot().catalogGeneration,
+        appInstanceId: finalSelectedAppInstanceId,
+        operationId: mintProductionAuthorityId("op"),
+        fence,
+        nowMs: input.nowMs,
+      });
+      catalog = DeviceCatalog.openExisting(session.driver);
+    }
+    const finalCatalog = catalog.snapshot();
+    const finalTarget = catalog.activeTargetStorageInventory().find(candidate =>
+      candidate.storageKey === authenticated.requested.storageKey);
+    if (finalCatalog.selectedAppInstanceId !== finalSelectedAppInstanceId || !finalTarget
+        || !sameTarget(finalTarget.target, target)
+        || STORE_PENDING_PLANNER_ATTEMPTS.call(authenticated.store).length !== 0)
+      throw invalid("boot target recovery failed final read-back");
+    recovered = {
+      store: authenticated.store,
+      target: finalTarget,
+      catalog: finalCatalog,
+      catalogGeneration: finalCatalog.catalogGeneration,
+      reconciled: prepared.attempts.length,
+    };
+  });
+  if (!recovered) throw invalid("boot target recovery did not complete");
+  return recovered;
+}
+
+const BOOT_CATALOG_DRIFT = Object.freeze({ kind: "boot-catalog-census-drift" });
+
+function acquireCatalogRecoveryFence(
+  session: LiveWriteSession,
+  expected: ReturnType<DeviceCatalog["snapshot"]>,
+  input: Pick<ExistingOpenInput, "releaseId" | "nowMs" | "leaseTtlMs">,
+): { fence: WriteFence; catalogGeneration: string } {
+  let result: { fence: WriteFence; catalogGeneration: string } | null = null;
+  session.authority.run(() => {
+    const catalog = DeviceCatalog.openExisting(session.driver);
+    const current = catalog.snapshot();
+    if (current.authorityIncarnationId !== expected.authorityIncarnationId
+        || current.catalogGeneration !== expected.catalogGeneration
+        || current.writeEpoch !== expected.writeEpoch
+        || current.selectedAppInstanceId !== expected.selectedAppInstanceId)
+      throw BOOT_CATALOG_DRIFT;
+    const fence = acquireBootFenceInTransaction(session, input);
+    result = {
+      fence,
+      catalogGeneration: DeviceCatalog.openExisting(session.driver).snapshot().catalogGeneration,
+    };
+  });
+  if (!result) throw invalid("browser boot recovery fence was not acquired");
+  return result;
+}
+
+function acquireBootFenceInTransaction(
   session: LiveWriteSession,
   input: Pick<ExistingOpenInput, "releaseId" | "nowMs" | "leaseTtlMs">,
 ): WriteFence {
@@ -249,20 +517,20 @@ function acquireBootFence(
   const catalogReserved = catalog.revisionReservations()
     .filter(reservation => reservation.state === "reserved");
   if (targetReserved.length === 0 && catalogReserved.length === 0)
-    return session.authority.run(() => catalog.acquireWriteLease({
+    return catalog.acquireWriteLease({
       expectedAuthorityIncarnationId: snapshot.authorityIncarnationId,
       expectedCatalogGeneration: snapshot.catalogGeneration,
       expectedWriteEpoch: snapshot.writeEpoch,
       releaseId: input.releaseId,
       nowMs: input.nowMs,
       ttlMs: input.leaseTtlMs,
-    }));
+    });
   if (targetReserved.length !== 1 || catalogReserved.length !== 1
       || targetReserved[0]!.operationId !== catalogReserved[0]!.operationId)
     throw invalid("boot found incomplete mirrored reservation recovery evidence");
   return new TargetCommitCoordinator(
     session, undefined, () => input.nowMs,
-  ).recoverExpiredReservation({
+  ).recoverExpiredReservationInBootTransaction({
     expectedAuthorityIncarnationId: snapshot.authorityIncarnationId,
     expectedCatalogGeneration: snapshot.catalogGeneration,
     expectedWriteEpoch: snapshot.writeEpoch,
@@ -270,6 +538,13 @@ function acquireBootFence(
     releaseId: input.releaseId,
     ttlMs: input.leaseTtlMs,
   }).fence;
+}
+
+function acquireBootFence(
+  session: LiveWriteSession,
+  input: Pick<ExistingOpenInput, "releaseId" | "nowMs" | "leaseTtlMs">,
+): WriteFence {
+  return session.authority.run(() => acquireBootFenceInTransaction(session, input));
 }
 
 export function planLegacyBootstrap(
@@ -358,7 +633,16 @@ async function resumeBrowserLegacyBootstrap(
     else authority.close();
   }
   if (!selectedAuthority) throw invalid("legacy bootstrap did not select an app");
-  return selectedAuthority;
+  const selectedAppInstanceId = selectedAuthority.bootInfo().selectedAppInstanceId;
+  selectedAuthority.close();
+  // Manifest adoption is only the catalog migration phase. Re-enter ordinary
+  // catalog boot so its complete active inventory is authenticated and every
+  // durable pending planner attempt (including already-adopted targets from a
+  // prior partial run) is reconciled before an authority can be published.
+  return ProductionStoreAuthority.bootBrowser({
+    requestedAppId: selectedAppInstanceId,
+    appCache: [],
+  });
 }
 
 export function resolveCatalogInventory(
@@ -510,12 +794,17 @@ export class ProductionStoreAuthority {
     const leaseTtlMs = 60_000;
 
     if (inventory.catalogPresent) {
-      const probeSession = createLiveWriteGuard(await openBrowserCatalogProbe());
+      const probe = await openBrowserCatalogProbe();
       let storageKey: string | null = null;
-      let namespace: DurableNamespaceInventoryEntry | null = null;
+      let initialStorageKey: string | null = null;
+      let initialCatalogSnapshot: ReturnType<DeviceCatalog["snapshot"]> | null = null;
+      let candidates: Array<{
+        catalog: ActiveCatalogTarget;
+        namespace: DurableNamespaceInventoryEntry;
+      }> = [];
       let resumeBootstrap = false;
       try {
-        const catalog = DeviceCatalog.openExisting(probeSession.driver);
+        const catalog = DeviceCatalog.openExisting(probe);
         const manifest = catalog.legacyBootstrapManifest();
         if (manifest.length > 0) {
           const desired = manifest.find(entry => entry.selected);
@@ -526,52 +815,169 @@ export class ProductionStoreAuthority {
             throw invalid("requested app conflicts with the durable bootstrap selection");
           resumeBootstrap = true;
         } else {
+          const active = catalog.activeTargetStorageInventory();
+          initialCatalogSnapshot = catalog.snapshot();
           let selected = catalog.selectedTargetStorage();
+          initialStorageKey = selected.storageKey;
           if (bootInput.requestedAppId !== null) {
-            const desired = catalog.activeTargetStorageInventory().find(item =>
+            const desired = active.find(item =>
               item.target.appInstanceId === bootInput.requestedAppId
               || item.storageKey === bootInput.requestedAppId);
             if (!desired) throw invalid("requested app is not in the authoritative catalog");
-            if (desired.target.appInstanceId !== selected.target.appInstanceId) {
-              const beforeLease = catalog.snapshot();
-              const fence = probeSession.authority.run(() => catalog.acquireWriteLease({
-                expectedAuthorityIncarnationId: beforeLease.authorityIncarnationId,
-                expectedCatalogGeneration: beforeLease.catalogGeneration,
-                expectedWriteEpoch: beforeLease.writeEpoch,
-                releaseId,
-                nowMs,
-                ttlMs: leaseTtlMs,
-              }));
-              probeSession.authority.run(() => catalog.selectApp({
-                expectedCatalogGeneration: catalog.snapshot().catalogGeneration,
-                appInstanceId: desired.target.appInstanceId,
-                operationId: mintProductionAuthorityId("op"),
-                fence,
-                nowMs,
-              }));
-              selected = catalog.selectedTargetStorage();
-            }
+            selected = desired;
           }
           storageKey = resolveCatalogInventory(
-            catalog.snapshot(), catalog.activeTargetStorageInventory(),
+            initialCatalogSnapshot, active,
             selected.storageKey, inventory,
           );
-          const observed = inventory.namespaces.find(candidate =>
-            candidate.storageKey === storageKey);
-          if (!observed) throw invalid("selected physical namespace is unavailable");
-          namespace = observed;
+          candidates = active.map(item => {
+            const observed = inventory.namespaces.find(candidate =>
+              candidate.storageKey === item.storageKey);
+            if (!observed) throw invalid("active physical namespace is unavailable");
+            return { catalog: item, namespace: observed };
+          });
         }
       } finally {
-        probeSession.driver.close();
+        probe.close();
       }
       if (resumeBootstrap)
         return resumeBrowserLegacyBootstrap(inventory, releaseId, nowMs, leaseTtlMs);
-      if (!namespace || storageKey === null)
+      if (storageKey === null || initialStorageKey === null || initialCatalogSnapshot === null
+          || candidates.length === 0)
         throw invalid("selected physical namespace is unavailable");
-      const driver = await openBrowserProductionTarget(namespace);
-      return ProductionStoreAuthority.openExisting(driver, {
-        inventory, storageKey, releaseId, nowMs, leaseTtlMs,
-      });
+
+      // Authenticate every active physical namespace before any lease or
+      // selection write. The deliberate rollback makes preflight read-only
+      // even when opening ClayStore has an idempotent schema upgrade to stage.
+      const inspected: Array<typeof candidates[number] & {
+        pending: PendingPlannerAttempt[];
+      }> = [];
+      for (const candidate of candidates) {
+        const driver = await openBrowserProductionTarget(candidate.namespace);
+        try {
+          inspected.push({
+            ...candidate,
+            pending: preflightExistingTarget(driver, {
+              inventory, storageKey: candidate.namespace.storageKey,
+            }, candidate.catalog),
+          });
+        } finally {
+          driver.close();
+        }
+      }
+
+      const desired = inspected.find(candidate =>
+        candidate.namespace.storageKey === storageKey);
+      const initiallySelected = inspected.find(candidate =>
+        candidate.namespace.storageKey === initialStorageKey);
+      if (!desired || !initiallySelected)
+        throw invalid("selected physical namespace is unavailable");
+
+      // Retain and authenticate the publishable target before the first durable
+      // boot write. If this open fails, the pre-existing selection and fence are
+      // untouched. Subsequent non-desired recoveries use one transaction each:
+      // temporary selection, journalled target commit, and restoration of the
+      // original selection become one rollback unit. A crash can therefore
+      // leave only completed target journals, never an exposed intermediate
+      // selection, and the next boot resumes the remaining pending attempts.
+      const desiredDriver = await openBrowserProductionTarget(desired.namespace);
+      const desiredSession = createLiveWriteGuard(desiredDriver);
+      try {
+        const retainedDesiredAttempts = inspectExistingTarget(desiredSession, {
+          inventory, storageKey: desired.namespace.storageKey,
+        }, desired.catalog);
+        if (JSON.stringify(retainedDesiredAttempts) !== JSON.stringify(desired.pending))
+          throw invalid("desired target changed after all-target preflight");
+
+        let fenceSession = desiredSession;
+        let separateFenceSession: LiveWriteSession | null = null;
+        const selectedReservationNeedsRecovery = DeviceCatalog.openExisting(desiredSession.driver)
+          .revisionReservations().some(reservation => reservation.state === "reserved");
+        if (selectedReservationNeedsRecovery
+            && desired.namespace.storageKey !== initiallySelected.namespace.storageKey) {
+          const initialDriver = await openBrowserProductionTarget(initiallySelected.namespace);
+          separateFenceSession = createLiveWriteGuard(initialDriver);
+          try {
+            const retainedInitialAttempts = inspectExistingTarget(separateFenceSession, {
+              inventory, storageKey: initiallySelected.namespace.storageKey,
+            }, initiallySelected.catalog);
+            if (JSON.stringify(retainedInitialAttempts) !== JSON.stringify(initiallySelected.pending))
+              throw invalid("selected target changed after all-target preflight");
+            fenceSession = separateFenceSession;
+          } catch (error) {
+            separateFenceSession.driver.close();
+            separateFenceSession = null;
+            throw error;
+          }
+        }
+
+        let recoveryFence: { fence: WriteFence; catalogGeneration: string };
+        try {
+          recoveryFence = acquireCatalogRecoveryFence(fenceSession, initialCatalogSnapshot, {
+            releaseId, nowMs, leaseTtlMs,
+          });
+        } catch (error) {
+          if (error === BOOT_CATALOG_DRIFT)
+            throw invalid("catalog authority changed after all-target preflight");
+          throw error;
+        } finally {
+          if (separateFenceSession) separateFenceSession.driver.close();
+        }
+
+        const originalSelectedAppInstanceId = initiallySelected.catalog.target.appInstanceId;
+        const desiredAppInstanceId = desired.catalog.target.appInstanceId;
+        const recoveredDesired = await recoverInterruptedPlannerAttemptsInBoot(
+          desiredSession,
+          { inventory, storageKey: desired.namespace.storageKey, nowMs },
+          desired.catalog,
+          desired.pending,
+          recoveryFence.catalogGeneration,
+          recoveryFence.fence,
+          originalSelectedAppInstanceId,
+          desiredAppInstanceId,
+        );
+        let catalogGeneration = recoveredDesired.catalogGeneration;
+        let finalCatalog = recoveredDesired.catalog;
+
+        for (const candidate of inspected) {
+          if (candidate.namespace.storageKey === desired.namespace.storageKey
+              || candidate.pending.length === 0)
+            continue;
+          const driver = await openBrowserProductionTarget(candidate.namespace);
+          const session = createLiveWriteGuard(driver);
+          try {
+            const recovered = await recoverInterruptedPlannerAttemptsInBoot(
+              session,
+              { inventory, storageKey: candidate.namespace.storageKey, nowMs },
+              candidate.catalog,
+              candidate.pending,
+              catalogGeneration,
+              recoveryFence.fence,
+              desiredAppInstanceId,
+              desiredAppInstanceId,
+            );
+            catalogGeneration = recovered.catalogGeneration;
+            finalCatalog = recovered.catalog;
+          } finally {
+            session.driver.close();
+          }
+        }
+
+        if (finalCatalog.catalogGeneration !== catalogGeneration
+            || finalCatalog.selectedAppInstanceId !== desiredAppInstanceId)
+          throw invalid("desired target publication failed final read-back");
+        return new ProductionStoreAuthority(
+          desiredSession,
+          recoveredDesired.store,
+          bootInfoFromCatalog(recoveredDesired.store, finalCatalog, false),
+          recoveryFence.fence,
+          catalogGeneration,
+          leaseTtlMs,
+        );
+      } catch (error) {
+        try { desiredSession.driver.close(); } catch { /* retained target was never published */ }
+        throw error;
+      }
     }
 
     if (inventory.namespaces.length > 1
@@ -818,51 +1224,54 @@ export class ProductionStoreAuthority {
     if (input.inventory.state !== "complete" || !input.inventory.catalogPresent)
       throw invalid("existing boot requires a complete catalog inventory");
 
-    // Validate the catalog and its selected physical namespace before claiming
-    // or mutating the target connection.
-    const catalogBeforeGuard = DeviceCatalog.openExisting(driver);
-    const selected = catalogBeforeGuard.selectedTargetStorage();
-    resolveCatalogInventory(
-      catalogBeforeGuard.snapshot(), catalogBeforeGuard.activeTargetStorageInventory(),
-      selected.storageKey, input.inventory,
-    );
-    if (selected.storageKey !== input.storageKey)
-      throw invalid("durable inventory does not match the catalog-selected namespace");
+    // Capture the requested catalog target before claiming the connection.
+    const requested = resolveExistingTarget(driver, input);
 
     const session = createLiveWriteGuard(driver);
     try {
-      const fence = acquireBootFence(session, input);
       let store: ClayStore | null = null;
+      let fence: WriteFence | null = null;
+      let finalCatalog: ReturnType<DeviceCatalog["snapshot"]> | null = null;
       session.authority.run(() => {
-        const currentCatalog = DeviceCatalog.openExisting(session.driver);
-        currentCatalog.assertWriteFence(fence, input.nowMs);
-        const currentSelected = currentCatalog.selectedTargetStorage();
-        if (currentSelected.storageKey !== selected.storageKey
-            || !sameTarget(currentSelected.target, selected.target))
-          throw invalid("catalog selection changed while the target was opening");
-        store = ClayStore.fromDriver(session.driver);
-        removeLegacyCredentialSettingsForAuthorityBoot(session.driver);
-        const target = TargetAuthorityStore.open(session.driver).evidence();
-        if (!sameTarget(target, selected.target))
-          throw invalid("catalog and target authority disagree");
-        const census = enumerateCanonicalStateV1(
-          session.driver, store.validationRegistrySnapshot(),
-        );
-        const merkle = StateMerkleIndex.open(session.driver).audit();
-        if (census.stateSha256 !== target.stateSha256
-            || census.stateSha256 !== merkle.stateSha256
-            || census.leaves.length !== merkle.leafCount)
-          throw invalid("existing target failed canonical read-back");
+        const authenticated = authenticateExistingTarget(session.driver, input, requested);
+        store = authenticated.store;
+        const target = authenticated.target;
+        const currentRequested = authenticated.requested;
+
+        // Authentication above precedes every durable lease/selection write.
+        // The outer write-authority transaction makes the fence, selection CAS,
+        // target verification, and final read-back one rollback unit.
+        fence = acquireBootFenceInTransaction(session, input);
+        const afterLease = DeviceCatalog.openExisting(session.driver);
+        const selected = afterLease.selectedTargetStorage();
+        if (selected.target.appInstanceId !== currentRequested.target.appInstanceId) {
+          afterLease.selectApp({
+            expectedCatalogGeneration: afterLease.snapshot().catalogGeneration,
+            appInstanceId: currentRequested.target.appInstanceId,
+            operationId: mintProductionAuthorityId("op"),
+            fence,
+            nowMs: input.nowMs,
+          });
+        }
+        const final = DeviceCatalog.openExisting(session.driver);
+        final.assertWriteFence(fence, input.nowMs);
+        const finalSelected = final.selectedTargetStorage();
+        if (finalSelected.storageKey !== currentRequested.storageKey
+            || !sameTarget(finalSelected.target, target))
+          throw invalid("catalog selection failed authenticated target read-back");
+        finalCatalog = final.snapshot();
       });
-      if (!store) throw invalid("existing target did not produce a Store");
+      if (!store || !fence || !finalCatalog)
+        throw invalid("existing target did not produce a complete authority");
       const openedStore = store as ClayStore;
-      const afterLease = DeviceCatalog.openExisting(session.driver).snapshot();
+      const openedFence = fence as WriteFence;
+      const openedCatalog = finalCatalog as ReturnType<DeviceCatalog["snapshot"]>;
       return new ProductionStoreAuthority(
         session,
         openedStore,
-        bootInfoFromCatalog(openedStore, afterLease, false),
-        fence,
-        afterLease.catalogGeneration,
+        bootInfoFromCatalog(openedStore, openedCatalog, false),
+        openedFence,
+        openedCatalog.catalogGeneration,
         input.leaseTtlMs,
       );
     } catch (error) {
@@ -946,6 +1355,21 @@ export class ProductionStoreAuthority {
     return this.#coordinator.execute(input);
   }
 
+  async replayPlannerDecision(
+    requestId: unknown,
+    decision: unknown,
+  ): Promise<number | null> {
+    const replayed = await this.#coordinator.replayPlannerDecision(requestId, decision);
+    if (decision === "keep") {
+      if (typeof replayed.result !== "number" || !Number.isSafeInteger(replayed.result))
+        throw invalid("durable planner Keep result is invalid");
+      return replayed.result;
+    }
+    if (replayed.result !== null)
+      throw invalid("durable planner Discard result is invalid");
+    return null;
+  }
+
   async reconcileInterruptedPlannerAttempts(): Promise<number> {
     const attempts = STORE_PENDING_PLANNER_ATTEMPTS.call(this.#store);
     for (const attempt of attempts) await this.#coordinator.execute({
@@ -953,6 +1377,8 @@ export class ProductionStoreAuthority {
       route: "planner.finalize",
       payload: { attemptId: attempt.id, outcome: "failed", errorCode: "E_VALIDATION" },
     });
+    if (STORE_PENDING_PLANNER_ATTEMPTS.call(this.#store).length !== 0)
+      throw invalid("interrupted planner attempt reconciliation is incomplete");
     return attempts.length;
   }
 
@@ -978,8 +1404,11 @@ export class ProductionStoreAuthority {
   }
 
   asyncStore(): AsyncStore {
-    const requestId = (context?: StoreMutationContext): string =>
-      context?.requestId ?? this.#coordinator.mintRequestId();
+    const requestId = (context: StoreMutationContext): string => {
+      if (!context || !/^req_[a-z2-7]{26}$/.test(context.requestId))
+        throw invalid("Store mutation request identity is invalid");
+      return context.requestId;
+    };
     const adapter: AsyncStore = {
       query: async q => this.#reader.query(q),
       insert: async (table, row, context) => {

@@ -71,7 +71,8 @@ describe("WorkerClient hosted repair integration", () => {
     };
     const client = new WorkerClient(worker as unknown as Worker);
     await client.setModelAccess(hostedAccess());
-    const pending = client.intent(context.intent).catch(error => error as Error);
+    const pending = client.intent(context.intent, client.createMutationContext())
+      .catch(error => error as Error);
 
     const nextPlannerMessage = (): Promise<PlannerMessage> => new Promise(resolve => {
       plannerPort!.onmessage = event => resolve(event.data as PlannerMessage);

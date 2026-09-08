@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import * as browserDb from "../src/db";
 import {
   Bridge, ClayStore, StoreRpcClient, deriveInverse, openMemoryDriver, serveStore,
   type DbDriver, type ForwardOpT, type MessagePortLike,
@@ -14,6 +15,7 @@ import {
   planLegacyBootstrap,
   resolveCatalogInventory,
 } from "../src/production-authority";
+import { physicalNamespaceEntry } from "../src/durable-inventory";
 import { productionOperationIdV1 } from "../src/production-operation-id";
 import { sha256HexSync } from "../src/state-digest";
 import { StateMerkleIndex } from "../src/state-merkle-index";
@@ -130,10 +132,56 @@ async function cataloguedStore(): Promise<DbDriver> {
   return driver;
 }
 
+async function twoAppCataloguedStore(): Promise<{
+  driver: DbDriver;
+  secondAppId: string;
+  secondNamespaceId: string;
+}> {
+  const driver = await cataloguedStore();
+  const catalog = DeviceCatalog.openExisting(driver);
+  const first = catalog.selectedTargetStorage();
+  const secondAppId = opaque("app", "y");
+  const secondGenerationId = opaque("gen", "z");
+  const secondNamespaceId = opaque("ns", "x");
+  const beforeLease = catalog.snapshot();
+  const fence = catalog.acquireWriteLease({
+    expectedAuthorityIncarnationId: beforeLease.authorityIncarnationId,
+    expectedCatalogGeneration: beforeLease.catalogGeneration,
+    expectedWriteEpoch: beforeLease.writeEpoch,
+    releaseId: opaque("rel", "x"),
+    nowMs: 1_000,
+    ttlMs: 5_000,
+  });
+  catalog.addAppTarget({
+    expectedCatalogGeneration: catalog.snapshot().catalogGeneration,
+    target: {
+      ...first.target,
+      appInstanceId: secondAppId,
+      activeGenerationId: secondGenerationId,
+    },
+    namespaceId: secondNamespaceId,
+    storageKey: secondNamespaceId,
+    displayName: "Second app",
+    shellId: "blank",
+    operationId: opaque("op", "x"),
+    fence,
+    nowMs: 1_001,
+    select: true,
+  });
+  catalog.selectApp({
+    expectedCatalogGeneration: catalog.snapshot().catalogGeneration,
+    appInstanceId: first.target.appInstanceId,
+    operationId: opaque("op", "y"),
+    fence,
+    nowMs: 1_002,
+  });
+  return { driver, secondAppId, secondNamespaceId };
+}
+
 const CATALOG_TABLE_COPY_ORDER = [
   "id_registry", "catalog_root", "generations", "app_entries", "leases",
   "lineage_reservations", "pending_jobs", "revision_reservations",
-  "catalog_generation_events", "production_request_receipts",
+  "catalog_generation_events", "production_request_receipts", "legacy_bootstrap_manifest",
 ] as const;
 
 const AUTHORITY_SYSTEM_TABLES = [
@@ -153,20 +201,68 @@ function copyRows(source: DbDriver, copy: DbDriver, schema: "sys" | "catalog", t
   }
 }
 
-async function snapshotAuthorityDriver(source: DbDriver): Promise<DbDriver> {
+let sharedCatalogSequence = 0;
+
+function nextSharedCatalogFile(): string {
+  sharedCatalogSequence++;
+  return `/production-authority-shared-catalog-${sharedCatalogSequence}.db`;
+}
+
+async function snapshotAuthorityDriver(
+  source: DbDriver,
+  sharedCatalogFile?: string,
+): Promise<DbDriver> {
   const copy = await source.snapshot();
   StateMerkleIndex.createSchema(copy);
   TargetAuthorityStore.createSchema(copy);
   for (const table of AUTHORITY_SYSTEM_TABLES) copyRows(source, copy, "sys", table);
-  copy.exec("ATTACH DATABASE ':memory:' AS catalog");
-  DeviceCatalog.initializeFresh(copy);
-  copy.tx(() => {
-    for (let index = CATALOG_TABLE_COPY_ORDER.length - 1; index >= 0; index--)
-      copy.exec(`DELETE FROM catalog.${CATALOG_TABLE_COPY_ORDER[index]!}`);
-    for (const table of CATALOG_TABLE_COPY_ORDER) copyRows(source, copy, "catalog", table);
-  });
+  copy.exec(sharedCatalogFile === undefined
+    ? "ATTACH DATABASE ':memory:' AS catalog"
+    : `ATTACH DATABASE '${sharedCatalogFile}' AS catalog`);
+  if (DeviceCatalog.isAbsent(copy)) {
+    DeviceCatalog.initializeFresh(copy);
+    copy.tx(() => {
+      for (let index = CATALOG_TABLE_COPY_ORDER.length - 1; index >= 0; index--)
+        copy.exec(`DELETE FROM catalog.${CATALOG_TABLE_COPY_ORDER[index]!}`);
+      for (const table of CATALOG_TABLE_COPY_ORDER) copyRows(source, copy, "catalog", table);
+    });
+  }
   DeviceCatalog.openExisting(copy);
   return copy;
+}
+
+function replaceCatalogRows(source: DbDriver, target: DbDriver): void {
+  target.tx(() => {
+    for (let index = CATALOG_TABLE_COPY_ORDER.length - 1; index >= 0; index--)
+      target.exec(`DELETE FROM catalog.${CATALOG_TABLE_COPY_ORDER[index]!}`);
+    for (const table of CATALOG_TABLE_COPY_ORDER) copyRows(source, target, "catalog", table);
+  });
+  DeviceCatalog.openExisting(target);
+}
+
+async function independentCatalogTarget(
+  appInstanceId: string,
+  generationId: string,
+  shellId: string,
+): Promise<{ driver: DbDriver; target: ReturnType<TargetAuthorityStore["evidence"]> }> {
+  const { driver, store } = await legacyStore();
+  store.setSetting("shell_id", shellId);
+  const census = enumerateCanonicalStateV1(driver, store.validationRegistrySnapshot());
+  StateMerkleIndex.createSchema(driver);
+  StateMerkleIndex.initialize(driver, census.leaves.map(entry => entry.seed));
+  TargetAuthorityStore.createSchema(driver);
+  const target = TargetAuthorityStore.initialize(driver, {
+    schema: 1,
+    appInstanceId,
+    activeGenerationId: generationId,
+    lineageEpoch: "0",
+    lineageEpochHighWater: "0",
+    protectionRevision: "0",
+    protectionRevisionHighWater: "0",
+    digestSchema: 1,
+  }).evidence();
+  DeviceCatalog.initializeFresh(driver);
+  return { driver, target };
 }
 
 describe("production Store authority", () => {
@@ -2205,6 +2301,604 @@ describe("production Store authority", () => {
     })).toThrowError(expect.objectContaining({ code: "E_CATALOG_UNAVAILABLE" }));
     expect(DeviceCatalog.openExisting(mismatched).snapshot().catalogGeneration).toBe("1");
     mismatched.close();
+  });
+
+  it("does not fence or select an unavailable requested browser target", async () => {
+    const { driver, secondAppId, secondNamespaceId } = await twoAppCataloguedStore();
+    const emptyProbe = await snapshotAuthorityDriver(driver);
+    const selectionProbe = await snapshotAuthorityDriver(driver);
+    const availableFirstTarget = await snapshotAuthorityDriver(driver);
+    const inventory = {
+      state: "complete" as const,
+      catalogPresent: true,
+      namespaces: [
+        legacyInventory.namespaces[0]!,
+        physicalNamespaceEntry(secondNamespaceId, secondNamespaceId),
+      ],
+    };
+    const emptyClose = vi.spyOn(emptyProbe, "close").mockImplementation(() => undefined);
+    const selectionClose = vi.spyOn(selectionProbe, "close").mockImplementation(() => undefined);
+    const inventoryRead = vi.spyOn(browserDb, "browserDurableInventory")
+      .mockResolvedValue(inventory);
+    const probeOpen = vi.spyOn(browserDb, "openBrowserCatalogProbe")
+      .mockResolvedValueOnce(emptyProbe)
+      .mockResolvedValueOnce(selectionProbe);
+    const targetOpen = vi.spyOn(browserDb, "openBrowserProductionTarget")
+      .mockImplementation(async namespace => {
+        if (namespace.storageKey === "default") return availableFirstTarget;
+        throw new Error("requested target unavailable");
+      });
+    const before = DeviceCatalog.openExisting(selectionProbe).snapshot();
+    try {
+      await expect(ProductionStoreAuthority.bootBrowser({
+        requestedAppId: secondAppId,
+        appCache: [],
+      })).rejects.toThrow("requested target unavailable");
+      expect(DeviceCatalog.openExisting(selectionProbe).snapshot()).toEqual(before);
+    } finally {
+      targetOpen.mockRestore();
+      probeOpen.mockRestore();
+      inventoryRead.mockRestore();
+      emptyClose.mockRestore();
+      selectionClose.mockRestore();
+      emptyProbe.close();
+      selectionProbe.close();
+      try { availableFirstTarget.close(); } catch { /* already closed by preflight */ }
+      driver.close();
+    }
+  });
+
+  it("preserves the selected target and live fence when final browser open fails", async () => {
+    const driver = await cataloguedStore();
+    const catalog = DeviceCatalog.openExisting(driver);
+    const beforeLease = catalog.snapshot();
+    const nowMs = Date.now();
+    const liveFence = catalog.acquireWriteLease({
+      expectedAuthorityIncarnationId: beforeLease.authorityIncarnationId,
+      expectedCatalogGeneration: beforeLease.catalogGeneration,
+      expectedWriteEpoch: beforeLease.writeEpoch,
+      releaseId: opaque("rel", "v"),
+      nowMs,
+      ttlMs: 60_000,
+    });
+    const centralCatalog = await snapshotAuthorityDriver(driver);
+    const before = DeviceCatalog.openExisting(centralCatalog).snapshot();
+    const inventory = { ...legacyInventory, catalogPresent: true };
+    const probes: Array<{ driver: DbDriver; close: ReturnType<typeof vi.spyOn> }> = [];
+    const opened: Array<{ driver: DbDriver; close: ReturnType<typeof vi.spyOn> }> = [];
+    const inventoryRead = vi.spyOn(browserDb, "browserDurableInventory")
+      .mockResolvedValue(inventory);
+    const probeOpen = vi.spyOn(browserDb, "openBrowserCatalogProbe")
+      .mockImplementation(async () => {
+        const probe = await snapshotAuthorityDriver(centralCatalog);
+        replaceCatalogRows(centralCatalog, probe);
+        const close = vi.spyOn(probe, "close").mockImplementation(() => undefined);
+        probes.push({ driver: probe, close });
+        return probe;
+      });
+    let targetOpenCount = 0;
+    const targetOpen = vi.spyOn(browserDb, "openBrowserProductionTarget")
+      .mockImplementation(async () => {
+        targetOpenCount++;
+        if (targetOpenCount === 2) throw new Error("final selected target open failed");
+        const candidate = await snapshotAuthorityDriver(driver);
+        replaceCatalogRows(centralCatalog, candidate);
+        const close = vi.spyOn(candidate, "close").mockImplementation(() => {
+          replaceCatalogRows(candidate, centralCatalog);
+        });
+        opened.push({ driver: candidate, close });
+        return candidate;
+      });
+    try {
+      await expect(ProductionStoreAuthority.bootBrowser({
+        requestedAppId: opaque("app", "a"),
+        appCache: [],
+      })).rejects.toThrow("final selected target open failed");
+      expect(targetOpenCount).toBe(2);
+      expect(DeviceCatalog.openExisting(centralCatalog).snapshot()).toEqual(before);
+      expect(() => DeviceCatalog.openExisting(centralCatalog)
+        .assertWriteFence(liveFence, nowMs + 1)).not.toThrow();
+    } finally {
+      targetOpen.mockRestore();
+      probeOpen.mockRestore();
+      inventoryRead.mockRestore();
+      for (const item of [...opened, ...probes]) {
+        item.close.mockRestore();
+        try { item.driver.close(); } catch { /* already closed */ }
+      }
+      centralCatalog.close();
+      driver.close();
+    }
+  });
+
+  it("preserves the selected fence when a desired open fails after a non-desired pending census", async () => {
+    const firstAppId = opaque("app", "a");
+    const firstGenerationId = opaque("gen", "b");
+    const firstNamespaceId = opaque("ns", "c");
+    const secondAppId = opaque("app", "y");
+    const secondGenerationId = opaque("gen", "z");
+    const secondNamespaceId = opaque("ns", "x");
+    const first = await independentCatalogTarget(firstAppId, firstGenerationId, "tracker");
+    const second = await independentCatalogTarget(secondAppId, secondGenerationId, "blank");
+    const nowMs = Date.now();
+    const catalog = DeviceCatalog.openExisting(first.driver);
+    catalog.seedSelectedTarget({
+      target: first.target,
+      namespaceId: firstNamespaceId,
+      storageKey: "default",
+      displayName: "First app",
+      shellId: "tracker",
+      operationId: opaque("op", "a"),
+      at: new Date(nowMs - 10).toISOString(),
+    });
+    const setupFence = catalog.acquireWriteLease({
+      expectedAuthorityIncarnationId: catalog.snapshot().authorityIncarnationId,
+      expectedCatalogGeneration: catalog.snapshot().catalogGeneration,
+      expectedWriteEpoch: catalog.snapshot().writeEpoch,
+      releaseId: opaque("rel", "a"),
+      nowMs: nowMs - 9,
+      ttlMs: 60_000,
+    });
+    catalog.addAppTarget({
+      expectedCatalogGeneration: catalog.snapshot().catalogGeneration,
+      target: second.target,
+      namespaceId: secondNamespaceId,
+      storageKey: secondNamespaceId,
+      displayName: "Second app",
+      shellId: "blank",
+      operationId: opaque("op", "b"),
+      fence: setupFence,
+      nowMs: nowMs - 8,
+      select: true,
+    });
+    replaceCatalogRows(first.driver, second.driver);
+    const secondAuthority = ProductionStoreAuthority.openExisting(second.driver, {
+      inventory: {
+        state: "complete",
+        catalogPresent: true,
+        namespaces: [
+          legacyInventory.namespaces[0]!,
+          physicalNamespaceEntry(secondNamespaceId, secondNamespaceId),
+        ],
+      },
+      storageKey: secondNamespaceId,
+      releaseId: opaque("rel", "b"),
+      nowMs: nowMs - 7,
+      leaseTtlMs: 60_000,
+    });
+    const pendingAttemptId = await secondAuthority.plannerMutations()
+      .beginAttempt("interrupted in non-desired app");
+    const secondMaster = await snapshotAuthorityDriver(second.driver);
+    secondAuthority.close();
+    const currentCatalog = DeviceCatalog.openExisting(secondMaster);
+    const beforeLiveFence = currentCatalog.snapshot();
+    const liveFence = currentCatalog.acquireWriteLease({
+      expectedAuthorityIncarnationId: beforeLiveFence.authorityIncarnationId,
+      expectedCatalogGeneration: beforeLiveFence.catalogGeneration,
+      expectedWriteEpoch: beforeLiveFence.writeEpoch,
+      releaseId: opaque("rel", "v"),
+      nowMs,
+      ttlMs: 60_000,
+    });
+    currentCatalog.selectApp({
+      expectedCatalogGeneration: currentCatalog.snapshot().catalogGeneration,
+      appInstanceId: firstAppId,
+      operationId: opaque("op", "c"),
+      fence: liveFence,
+      nowMs,
+    });
+    replaceCatalogRows(secondMaster, first.driver);
+    const firstMaster = await snapshotAuthorityDriver(first.driver);
+    const centralCatalog = await snapshotAuthorityDriver(firstMaster);
+    const before = DeviceCatalog.openExisting(centralCatalog).snapshot();
+    const inventory = {
+      state: "complete" as const,
+      catalogPresent: true,
+      namespaces: [
+        legacyInventory.namespaces[0]!,
+        physicalNamespaceEntry(secondNamespaceId, secondNamespaceId),
+      ],
+    };
+    const opened: Array<{
+      storageKey: string;
+      driver: DbDriver;
+      close: ReturnType<typeof vi.spyOn>;
+    }> = [];
+    const probes: Array<{ driver: DbDriver; close: ReturnType<typeof vi.spyOn> }> = [];
+    const inventoryRead = vi.spyOn(browserDb, "browserDurableInventory")
+      .mockResolvedValue(inventory);
+    const probeOpen = vi.spyOn(browserDb, "openBrowserCatalogProbe")
+      .mockImplementation(async () => {
+        const probe = await snapshotAuthorityDriver(centralCatalog);
+        replaceCatalogRows(centralCatalog, probe);
+        const close = vi.spyOn(probe, "close").mockImplementation(() => undefined);
+        probes.push({ driver: probe, close });
+        return probe;
+      });
+    let desiredOpenCount = 0;
+    const targetOpen = vi.spyOn(browserDb, "openBrowserProductionTarget")
+      .mockImplementation(async namespace => {
+        if (namespace.storageKey === "default" && ++desiredOpenCount === 2)
+          throw new Error("final desired target open failed");
+        const master = namespace.storageKey === "default" ? firstMaster : secondMaster;
+        const candidate = await snapshotAuthorityDriver(master);
+        replaceCatalogRows(centralCatalog, candidate);
+        const close = vi.spyOn(candidate, "close").mockImplementation(() => {
+          replaceCatalogRows(candidate, centralCatalog);
+        });
+        opened.push({ storageKey: namespace.storageKey, driver: candidate, close });
+        return candidate;
+      });
+    try {
+      await expect(ProductionStoreAuthority.bootBrowser({
+        requestedAppId: firstAppId,
+        appCache: [],
+      })).rejects.toThrow("final desired target open failed");
+      expect(desiredOpenCount).toBe(2);
+      expect(DeviceCatalog.openExisting(centralCatalog).snapshot()).toEqual(before);
+      expect(() => DeviceCatalog.openExisting(centralCatalog)
+        .assertWriteFence(liveFence, nowMs + 1)).not.toThrow();
+      const openedSecond = opened.filter(item => item.storageKey === secondNamespaceId);
+      expect(openedSecond).not.toHaveLength(0);
+      expect(openedSecond.every(item => item.driver.select(
+        "SELECT outcome FROM sys.attempts WHERE id = ?", [pendingAttemptId],
+      )[0]?.outcome === "pending")).toBe(true);
+    } finally {
+      targetOpen.mockRestore();
+      probeOpen.mockRestore();
+      inventoryRead.mockRestore();
+      for (const item of [...opened, ...probes]) {
+        item.close.mockRestore();
+        try { item.driver.close(); } catch { /* already closed */ }
+      }
+      centralCatalog.close();
+      firstMaster.close();
+      secondMaster.close();
+      first.driver.close();
+    }
+  });
+
+  it("opens the selected target once after read-only all-target preflight", async () => {
+    const firstAppId = opaque("app", "a");
+    const firstGenerationId = opaque("gen", "b");
+    const firstNamespaceId = opaque("ns", "c");
+    const secondAppId = opaque("app", "y");
+    const secondGenerationId = opaque("gen", "z");
+    const secondNamespaceId = opaque("ns", "x");
+    const first = await independentCatalogTarget(firstAppId, firstGenerationId, "tracker");
+    const second = await independentCatalogTarget(secondAppId, secondGenerationId, "blank");
+    const nowMs = Date.now();
+    const catalog = DeviceCatalog.openExisting(first.driver);
+    catalog.seedSelectedTarget({
+      target: first.target,
+      namespaceId: firstNamespaceId,
+      storageKey: "default",
+      displayName: "First app",
+      shellId: "tracker",
+      operationId: opaque("op", "a"),
+      at: new Date(nowMs).toISOString(),
+    });
+    const beforeLease = catalog.snapshot();
+    const liveFence = catalog.acquireWriteLease({
+      expectedAuthorityIncarnationId: beforeLease.authorityIncarnationId,
+      expectedCatalogGeneration: beforeLease.catalogGeneration,
+      expectedWriteEpoch: beforeLease.writeEpoch,
+      releaseId: opaque("rel", "a"),
+      nowMs: nowMs + 1,
+      ttlMs: 60_000,
+    });
+    catalog.addAppTarget({
+      expectedCatalogGeneration: catalog.snapshot().catalogGeneration,
+      target: second.target,
+      namespaceId: secondNamespaceId,
+      storageKey: secondNamespaceId,
+      displayName: "Second app",
+      shellId: "blank",
+      operationId: opaque("op", "b"),
+      fence: liveFence,
+      nowMs: nowMs + 2,
+      select: true,
+    });
+    catalog.selectApp({
+      expectedCatalogGeneration: catalog.snapshot().catalogGeneration,
+      appInstanceId: firstAppId,
+      operationId: opaque("op", "c"),
+      fence: liveFence,
+      nowMs: nowMs + 3,
+    });
+    const inventory = {
+      state: "complete" as const,
+      catalogPresent: true,
+      namespaces: [
+        legacyInventory.namespaces[0]!,
+        physicalNamespaceEntry(secondNamespaceId, secondNamespaceId),
+      ],
+    };
+    replaceCatalogRows(first.driver, second.driver);
+    const centralCatalog = await snapshotAuthorityDriver(first.driver);
+    const opened: Array<{ driver: DbDriver; close: ReturnType<typeof vi.spyOn> }> = [];
+    const probes: Array<{ driver: DbDriver; close: ReturnType<typeof vi.spyOn> }> = [];
+    const inventoryRead = vi.spyOn(browserDb, "browserDurableInventory")
+      .mockResolvedValue(inventory);
+    const probeOpen = vi.spyOn(browserDb, "openBrowserCatalogProbe")
+      .mockImplementation(async () => {
+        const probe = await snapshotAuthorityDriver(centralCatalog);
+        replaceCatalogRows(centralCatalog, probe);
+        const close = vi.spyOn(probe, "close").mockImplementation(() => undefined);
+        probes.push({ driver: probe, close });
+        return probe;
+      });
+    let targetOpenCount = 0;
+    const targetOpen = vi.spyOn(browserDb, "openBrowserProductionTarget")
+      .mockImplementation(async namespace => {
+        targetOpenCount++;
+        if (targetOpenCount > 3) throw new Error("unexpected intermediate target open");
+        const master = namespace.storageKey === "default" ? first.driver : second.driver;
+        const candidate = await snapshotAuthorityDriver(master);
+        replaceCatalogRows(centralCatalog, candidate);
+        const close = vi.spyOn(candidate, "close").mockImplementation(() => {
+          replaceCatalogRows(candidate, centralCatalog);
+        });
+        opened.push({ driver: candidate, close });
+        return candidate;
+      });
+    const reconcile = vi.spyOn(
+      ProductionStoreAuthority.prototype, "reconcileInterruptedPlannerAttempts",
+    ).mockRejectedValue(new Error("zero-pending reconciliation must not run"));
+    let booted: ProductionStoreAuthority | null = null;
+    try {
+      booted = await ProductionStoreAuthority.bootBrowser({
+        requestedAppId: firstAppId,
+        appCache: [],
+      });
+      expect(booted.bootInfo().selectedAppInstanceId).toBe(firstAppId);
+      expect(targetOpenCount).toBe(3);
+      expect(reconcile).not.toHaveBeenCalled();
+      booted.close();
+      booted = null;
+      expect(DeviceCatalog.openExisting(centralCatalog).snapshot())
+        .toMatchObject({ selectedAppInstanceId: firstAppId });
+    } finally {
+      try { booted?.close(); } catch { /* test cleanup */ }
+      reconcile.mockRestore();
+      targetOpen.mockRestore();
+      probeOpen.mockRestore();
+      inventoryRead.mockRestore();
+      for (const item of [...opened, ...probes]) {
+        item.close.mockRestore();
+        try { item.driver.close(); } catch { /* already closed */ }
+      }
+      centralCatalog.close();
+      first.driver.close();
+      second.driver.close();
+    }
+  });
+
+  it("reconciles interrupted attempts in every active browser target before publication", async () => {
+    const firstAppId = opaque("app", "a");
+    const firstGenerationId = opaque("gen", "b");
+    const firstNamespaceId = opaque("ns", "c");
+    const secondAppId = opaque("app", "y");
+    const secondGenerationId = opaque("gen", "z");
+    const secondNamespaceId = opaque("ns", "x");
+    const first = await independentCatalogTarget(firstAppId, firstGenerationId, "tracker");
+    const second = await independentCatalogTarget(secondAppId, secondGenerationId, "blank");
+    const nowMs = Date.now();
+    const catalog = DeviceCatalog.openExisting(first.driver);
+    catalog.seedSelectedTarget({
+      target: first.target,
+      namespaceId: firstNamespaceId,
+      storageKey: "default",
+      displayName: "First app",
+      shellId: "tracker",
+      operationId: opaque("op", "a"),
+      at: new Date(nowMs).toISOString(),
+    });
+    const beforeLease = catalog.snapshot();
+    const fence = catalog.acquireWriteLease({
+      expectedAuthorityIncarnationId: beforeLease.authorityIncarnationId,
+      expectedCatalogGeneration: beforeLease.catalogGeneration,
+      expectedWriteEpoch: beforeLease.writeEpoch,
+      releaseId: opaque("rel", "a"),
+      nowMs: nowMs + 1,
+      ttlMs: 60_000,
+    });
+    catalog.addAppTarget({
+      expectedCatalogGeneration: catalog.snapshot().catalogGeneration,
+      target: second.target,
+      namespaceId: secondNamespaceId,
+      storageKey: secondNamespaceId,
+      displayName: "Second app",
+      shellId: "blank",
+      operationId: opaque("op", "b"),
+      fence,
+      nowMs: nowMs + 2,
+      select: true,
+    });
+    catalog.selectApp({
+      expectedCatalogGeneration: catalog.snapshot().catalogGeneration,
+      appInstanceId: firstAppId,
+      operationId: opaque("op", "c"),
+      fence,
+      nowMs: nowMs + 3,
+    });
+    const inventory = {
+      state: "complete" as const,
+      catalogPresent: true,
+      namespaces: [
+        legacyInventory.namespaces[0]!,
+        physicalNamespaceEntry(secondNamespaceId, secondNamespaceId),
+      ],
+    };
+    const firstAuthority = ProductionStoreAuthority.openExisting(first.driver, {
+      inventory,
+      storageKey: "default",
+      releaseId: opaque("rel", "b"),
+      nowMs: nowMs + 4,
+      leaseTtlMs: 60_000,
+    });
+    await firstAuthority.plannerMutations().beginAttempt("interrupted in first app");
+    const firstMaster = await snapshotAuthorityDriver(first.driver);
+    firstAuthority.close();
+    replaceCatalogRows(firstMaster, second.driver);
+    const sharedCatalogFile = nextSharedCatalogFile();
+    const centralCatalog = await snapshotAuthorityDriver(firstMaster, sharedCatalogFile);
+    const opened: Array<{
+      storageKey: string;
+      driver: DbDriver;
+      close: ReturnType<typeof vi.spyOn>;
+    }> = [];
+    const probes: Array<{
+      driver: DbDriver;
+      close: ReturnType<typeof vi.spyOn>;
+    }> = [];
+    const inventoryRead = vi.spyOn(browserDb, "browserDurableInventory")
+      .mockResolvedValue(inventory);
+    const probeOpen = vi.spyOn(browserDb, "openBrowserCatalogProbe")
+      .mockImplementation(async () => {
+        const probe = await snapshotAuthorityDriver(centralCatalog, sharedCatalogFile);
+        const close = vi.spyOn(probe, "close").mockImplementation(() => undefined);
+        probes.push({ driver: probe, close });
+        return probe;
+      });
+    const targetOpen = vi.spyOn(browserDb, "openBrowserProductionTarget")
+      .mockImplementation(async namespace => {
+        const master = namespace.storageKey === "default" ? firstMaster : second.driver;
+        const candidate = await snapshotAuthorityDriver(master, sharedCatalogFile);
+        const close = vi.spyOn(candidate, "close").mockImplementation(() => undefined);
+        opened.push({ storageKey: namespace.storageKey, driver: candidate, close });
+        return candidate;
+      });
+    let booted: ProductionStoreAuthority | null = null;
+    try {
+      booted = await ProductionStoreAuthority.bootBrowser({
+        requestedAppId: secondAppId,
+        appCache: [],
+      });
+      expect(booted.bootInfo().selectedAppInstanceId).toBe(secondAppId);
+      const reconciledFirst = opened.filter(item => item.storageKey === "default")
+        .find(item => item.driver.select(
+          "SELECT outcome FROM sys.attempts WHERE intent_text = 'interrupted in first app'",
+        ).some(row => row.outcome === "failed"));
+      expect(reconciledFirst, "the non-selected active target was reconciled").toBeDefined();
+    } finally {
+      try { booted?.close(); } catch { /* test cleanup */ }
+      targetOpen.mockRestore();
+      probeOpen.mockRestore();
+      inventoryRead.mockRestore();
+      for (const item of [...opened, ...probes]) {
+        item.close.mockRestore();
+        try { item.driver.close(); } catch { /* already closed */ }
+      }
+      centralCatalog.close();
+      firstMaster.close();
+      second.driver.close();
+    }
+  });
+
+  it("reconciles already-adopted targets while resuming a partial legacy bootstrap", async () => {
+    const legacyA = await legacyStore();
+    const legacyB = await legacyStore();
+    const inventory = {
+      state: "complete" as const,
+      catalogPresent: false,
+      namespaces: [legacyInventory.namespaces[0]!, {
+        storageKey: "field",
+        userFile: "/app-field-user.db",
+        systemFile: "/app-field-system.db",
+        kind: "legacy" as const,
+      }],
+    };
+    const appCache = [
+      { id: "default", name: "Tracker", shellId: "tracker" },
+      { id: "field", name: "Field Service", shellId: "blank" },
+    ];
+    const manifest = planLegacyBootstrap(inventory, {
+      requestedAppId: "field",
+      appCache,
+    });
+    const firstEntry = manifest.find(entry => entry.storageKey === "default")!;
+    const secondEntry = manifest.find(entry => entry.storageKey === "field")!;
+    const nowMs = Date.now();
+    DeviceCatalog.initializeFresh(legacyA.driver)
+      .beginLegacyBootstrap(manifest, new Date(nowMs).toISOString());
+    const catalogInventory = { ...inventory, catalogPresent: true };
+    const firstAuthority = ProductionStoreAuthority.adoptManifestTarget(legacyA.driver, {
+      inventory: catalogInventory,
+      entry: firstEntry,
+      releaseId: opaque("rel", "l"),
+      nowMs: nowMs + 1,
+      leaseTtlMs: 60_000,
+      select: true,
+    });
+    await firstAuthority.plannerMutations()
+      .beginAttempt("interrupted before bootstrap restart");
+    const firstMaster = await snapshotAuthorityDriver(legacyA.driver);
+    firstAuthority.close();
+    DeviceCatalog.initializeFresh(legacyB.driver);
+    replaceCatalogRows(firstMaster, legacyB.driver);
+    const sharedCatalogFile = nextSharedCatalogFile();
+    const centralCatalog = await snapshotAuthorityDriver(firstMaster, sharedCatalogFile);
+    const bootInventory = { ...inventory, catalogPresent: true };
+    const opened: Array<{
+      storageKey: string;
+      driver: DbDriver;
+      close: ReturnType<typeof vi.spyOn>;
+    }> = [];
+    const probes: Array<{ driver: DbDriver; close: ReturnType<typeof vi.spyOn> }> = [];
+    const inventoryRead = vi.spyOn(browserDb, "browserDurableInventory")
+      .mockResolvedValue(bootInventory);
+    const probeOpen = vi.spyOn(browserDb, "openBrowserCatalogProbe")
+      .mockImplementation(async () => {
+        const probe = await snapshotAuthorityDriver(centralCatalog, sharedCatalogFile);
+        const close = vi.spyOn(probe, "close").mockImplementation(() => undefined);
+        probes.push({ driver: probe, close });
+        return probe;
+      });
+    let openedLegacyB = false;
+    const targetOpen = vi.spyOn(browserDb, "openBrowserProductionTarget")
+      .mockImplementation(async namespace => {
+        let candidate: DbDriver;
+        if (namespace.storageKey === secondEntry.storageKey && !openedLegacyB) {
+          openedLegacyB = true;
+          candidate = legacyB.driver;
+          replaceCatalogRows(centralCatalog, candidate);
+        } else {
+          const master = namespace.storageKey === firstEntry.storageKey
+            ? firstMaster : legacyB.driver;
+          candidate = await snapshotAuthorityDriver(master, sharedCatalogFile);
+        }
+        const close = vi.spyOn(candidate, "close").mockImplementation(() => {
+          if (candidate === legacyB.driver) replaceCatalogRows(candidate, centralCatalog);
+        });
+        opened.push({ storageKey: namespace.storageKey, driver: candidate, close });
+        return candidate;
+      });
+    let booted: ProductionStoreAuthority | null = null;
+    try {
+      booted = await ProductionStoreAuthority.bootBrowser({
+        requestedAppId: "field",
+        appCache,
+      });
+      expect(booted.bootInfo().selectedAppInstanceId).toBe(secondEntry.appInstanceId);
+      const reconciledFirst = opened.filter(item => item.storageKey === firstEntry.storageKey)
+        .find(item => item.driver.select(
+          "SELECT outcome FROM sys.attempts WHERE intent_text = 'interrupted before bootstrap restart'",
+        ).some(row => row.outcome === "failed"));
+      expect(reconciledFirst, "the already-adopted target was reconciled").toBeDefined();
+    } finally {
+      try { booted?.close(); } catch { /* test cleanup */ }
+      targetOpen.mockRestore();
+      probeOpen.mockRestore();
+      inventoryRead.mockRestore();
+      for (const item of [...opened, ...probes]) {
+        item.close.mockRestore();
+        try { item.driver.close(); } catch { /* already closed */ }
+      }
+      centralCatalog.close();
+      firstMaster.close();
+      try { legacyB.driver.close(); } catch { /* already closed */ }
+    }
   });
 
   it("reconciles every live app namespace without rejecting a valid multi-app catalog", async () => {

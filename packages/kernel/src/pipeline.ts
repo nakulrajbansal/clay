@@ -208,25 +208,39 @@ export class MutationPipeline {
 
   async run(intent: string): Promise<AttemptResult> {
     const attemptId = await this.authority.beginAttempt(intent); // S0
+    let repairUsed = false;
+    let finalizationStarted = false;
+    let activePreview: PreparedMutationPreview | null = null;
+    const debug = (ev: DebugEvent): void => this.onDebug?.(ev);
+    const finalizeAttempt = async (
+      outcome: "clarify" | "failed",
+      errorCode?: string,
+    ): Promise<void> => {
+      if (finalizationStarted)
+        throw new ClayError("E_INTERNAL", "planner attempt finalization was already started");
+      // Mark first so a failed durable acknowledgement is surfaced rather
+      // than being hidden by a second, ambiguous finalization attempt.
+      finalizationStarted = true;
+      await this.authority.finalizeAttempt(attemptId, outcome, errorCode);
+    };
+
+    try {
     const capture = this.authority.capturePlanningBase();        // S1
     const ctx = this.buildContextFromCapture(intent, capture);
-    let repairUsed = false;
-    const debug = (ev: DebugEvent): void => this.onDebug?.(ev);
     debug({ stage: "intake", intent,
       registryTables: ctx.registry.map(t => (t as { name: string }).name),
       panelCount: ctx.panels.length });
 
     const fail = async (stage: "plan" | "validate" | "dry_run", reasons: string[],
       code: string): Promise<AttemptResult> => {
-      await this.authority.finalizeAttempt(attemptId, "failed", code);
+      await finalizeAttempt("failed", code);
       debug({ stage: "outcome", status: `failed@${stage}`, repaired: repairUsed });
       return { status: "failed", stage, reasons, attemptId, repaired: repairUsed };
     };
     const callPlanner = async (operation: () => Promise<PlannerResult>): Promise<PlannerResult> => {
       try { return await operation(); }
       catch (error) {
-        await this.authority.finalizeAttempt(attemptId, "failed",
-          error instanceof ClayError ? error.code : "E_MODEL");
+        await finalizeAttempt("failed", error instanceof ClayError ? error.code : "E_MODEL");
         debug({ stage: "outcome", status: "failed@plan", repaired: repairUsed });
         throw error;
       }
@@ -372,7 +386,7 @@ export class MutationPipeline {
 
       const plan = MutationPlanSchema.parse(result.plan);
       if (plan.clarifying_question) {
-        await this.authority.finalizeAttempt(attemptId, "clarify");
+        await finalizeAttempt("clarify");
         debug({ stage: "outcome", status: "clarify", repaired: repairUsed });
         return {
           status: "clarify", question: plan.clarifying_question,
@@ -390,18 +404,23 @@ export class MutationPipeline {
           intent,
           plan,
         });
+        activePreview = preview;
         await this.smokeTest(preview.shadow, preview.plan);
         try {
           this.authority.assertPlanningBase(capture.base);
         } catch {
-          preview.shadow.close();
+          try { preview.shadow.close(); }
+          finally { if (activePreview === preview) activePreview = null; }
           return await fail("dry_run", [
             "App changed during validation. Reshape again from the latest version.",
           ], "E_CONFLICT");
         }
         debug({ stage: "dry_run", ok: true });
       } catch (e) {
-        preview?.shadow.close();
+        if (preview) {
+          try { preview.shadow.close(); }
+          finally { if (activePreview === preview) activePreview = null; }
+        }
         const reason = e instanceof ClayError ? `${e.code}: ${e.message}` : String(e);
         debug({ stage: "dry_run", ok: false, error: reason });
         if (e instanceof ClayError && e.code === "E_CONFLICT")
@@ -421,6 +440,18 @@ export class MutationPipeline {
       if (!preview) throw new ClayError("E_INTERNAL", "preview preparation returned no state");
       debug({ stage: "outcome", status: "preview", repaired: repairUsed });
       return { status: "preview", preview, attemptId, repaired: repairUsed };
+    }
+    } catch (error) {
+      const disposable = activePreview;
+      activePreview = null;
+      if (disposable) {
+        try { disposable.shadow.close(); }
+        catch { /* durable finalization has precedence over disposable cleanup */ }
+      }
+      if (!finalizationStarted) await finalizeAttempt(
+        "failed", error instanceof ClayError ? error.code : "E_INTERNAL",
+      );
+      throw error;
     }
   }
 }

@@ -3,7 +3,8 @@
 import { describe, expect, it } from "vitest";
 import {
   Bridge, InProcessAsyncStore, queryMatchesDeclared,
-  type MessagePortLike, type PanelManifest, type Query,
+  type AsyncStore, type MessagePortLike, type PanelManifest, type Query,
+  type StoreMutationContext,
 } from "../src/index";
 import { seededStore } from "./helpers";
 
@@ -125,6 +126,43 @@ describe("declared query enforcement (V4 runtime)", () => {
 });
 
 describe("write enforcement (ADR-014)", () => {
+  it("reuses an admitted panel write identity after its gesture grant expires", async () => {
+    const contexts: StoreMutationContext[] = [];
+    const store: AsyncStore = {
+      query: async () => [],
+      registryTables: async () => [],
+      insert: async (_table, row, context) => {
+        contexts.push(context);
+        return { id: "018f0000-0000-7000-8000-000000000001", ...row };
+      },
+      update: async (_table, id, patch, context) => {
+        contexts.push(context);
+        return { id, ...patch };
+      },
+      softDelete: async (_table, _id, context) => {
+        contexts.push(context);
+        return Promise.resolve();
+      },
+    };
+    const bridge = new Bridge(store, {}, { gestureTtlMs: 50, writesPerGesture: 1 });
+    const [bridgeSide, panelSide] = portPair();
+    const panel = client(panelSide, "test_panel");
+    await bridge.attachPanel(manifest({ declaredWrites: ["projects"] }), bridgeSide);
+    const request = {
+      v: 1, panel: "test_panel", seq: 0, call: "db.insert",
+      args: ["projects", { name: "One", status: "red" }],
+    };
+    panel.send({ v: 1, kind: "user_gesture" });
+    await sleep(1);
+    panel.send(request);
+    await sleep(60);
+    panel.send(request);
+    await sleep(5);
+
+    expect(contexts).toHaveLength(2);
+    expect(contexts[1]?.requestId).toBe(contexts[0]?.requestId);
+  });
+
   it("writes require both declared_writes membership and a recent user gesture", async () => {
     const { c, store } = await setup({ declaredWrites: ["projects"] });
     await expect(c.call("db.insert", ["projects", { name: "Boot write", status: "red" }]))

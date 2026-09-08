@@ -12,7 +12,8 @@ import type {
   AsyncStore, BatchReceipt, Query, QueryRow, QueryValue, RegTable,
   SemanticSchemaTraceV1,
 } from "@clay/kernel";
-import type { WorkerClient } from "./worker-client";
+import { createStoreMutationContext } from "@clay/kernel/shell-runtime";
+import type { WorkerClient, WorkerMutationContext } from "./worker-client";
 import { loadAllTableRows } from "./paged-query";
 import { ModalDialog } from "./ModalDialog";
 import {
@@ -130,6 +131,10 @@ export function DataView(props: {
   const [bulkField, setBulkField] = useState("");
   const [bulkValue, setBulkValue] = useState("");
   const [lastBatch, setLastBatch] = useState<BatchReceipt | null>(null);
+  const pendingBatch = useRef<{
+    key: string;
+    context: WorkerMutationContext;
+  } | null>(null);
   const [viewLibrary, setViewLibrary] = useState<OperationalViewLibrary>({
     format: 1, revision: 0, views: [],
   });
@@ -210,9 +215,10 @@ export function DataView(props: {
           unique_targets: false, ...(display ? { display_field: display.name } : {}),
         };
       }
+      const context = worker.createMutationContext();
       const nextTables = await (addingCol.type === "relation"
-        ? worker.addRelationColumn(selected, column as never)
-        : worker.addColumn(selected, column as never));
+        ? worker.addRelationColumn(selected, column as never, context)
+        : worker.addColumn(selected, column as never, context));
       acceptRegistry(nextTables, await worker.semanticTrace());
       setAddingCol(null);
       await reload(selected);
@@ -238,7 +244,8 @@ export function DataView(props: {
     setRenamingCol(null);
     if (value.trim() === "" || value === from) return;
     try {
-      const nextTables = await worker.renameColumn(selected, from, value);
+      const nextTables = await worker.renameColumn(
+        selected, from, value, worker.createMutationContext());
       acceptRegistry(nextTables, await worker.semanticTrace());
       await reload(selected);
       props.onWrite(selected);
@@ -358,8 +365,9 @@ export function DataView(props: {
     setEditing(null);
     if (!col || isDerived(col.type) || col.type === "relation"
         || col.type === "rich_text" || col.type === "attachment") return;
+    const context = createStoreMutationContext();
     const saved = await act(() => store.update(selected, cell.rowId,
-      { [cell.col]: coerceDraft(col.type, cell.draft) }));
+      { [cell.col]: coerceDraft(col.type, cell.draft) }, context));
     if (!saved) setEditing(cell);
   };
 
@@ -375,7 +383,8 @@ export function DataView(props: {
       row[c.name] = coerceDraft(c.type, draft);
     }
     try {
-      if (await act(() => store.insert(selected, row))) setDraftRow({});
+      const context = createStoreMutationContext();
+      if (await act(() => store.insert(selected, row, context))) setDraftRow({});
     } finally {
       addRowPendingRef.current = false;
       setAddingRow(false);
@@ -432,7 +441,7 @@ export function DataView(props: {
   // anything the user typed or imported.
   const fillSamples = async (): Promise<void> => {
     try {
-      const res = await worker.fillSamples();
+      const res = await worker.fillSamples(worker.createMutationContext());
       setSamples(await worker.sampleCount());
       if (selected) await reload(selected);
       for (const t of tables) props.onWrite(t.name);
@@ -445,7 +454,7 @@ export function DataView(props: {
     if (props.onConfirm && !await props.onConfirm(
       "Clear all generated sample rows? Your own records stay untouched, and samples remain restorable.")) return;
     try {
-      const result = await worker.removeSamples();
+      const result = await worker.removeSamples(worker.createMutationContext());
       setSamples(await worker.sampleCount());
       if (selected) await reload(selected);
       for (const t of tables) props.onWrite(t.name);
@@ -507,14 +516,18 @@ export function DataView(props: {
     if (!selected || !bulkField || selectedRows.size === 0) return;
     const column = allColumns.find(candidate => candidate.name === bulkField);
     if (!column) return;
+    const summary = `Update ${selectedRows.size} ${selected.replace(/_/g, " ")} records`;
+    const mutations = [...selectedRows].map(id => ({
+      kind: "update" as const, table: selected, id,
+      patch: { [bulkField]: coerceDraft(column.type, bulkValue) },
+    }));
+    const operationKey = JSON.stringify({ summary, mutations });
+    const context = pendingBatch.current?.key === operationKey
+      ? pendingBatch.current.context : worker.createMutationContext();
+    pendingBatch.current = { key: operationKey, context };
     try {
-      const receipt = await worker.applyBatch(
-        `Update ${selectedRows.size} ${selected.replace(/_/g, " ")} records`,
-        [...selectedRows].map(id => ({
-          kind: "update" as const, table: selected, id,
-          patch: { [bulkField]: coerceDraft(column.type, bulkValue) },
-        })),
-      );
+      const receipt = await worker.applyBatch(summary, mutations, context);
+      pendingBatch.current = null;
       setLastBatch(receipt); setSelectedRows(new Set()); setBulkValue("");
       await reload(selected); props.onWrite(selected);
       props.onInfo(`Updated ${receipt.changed} records. Undo is available here.`);
@@ -525,11 +538,16 @@ export function DataView(props: {
     if (!selected || selectedRows.size === 0) return;
     if (props.onConfirm && !await props.onConfirm(
       `Archive ${selectedRows.size} selected record${selectedRows.size === 1 ? "" : "s"}? You can undo this batch.`)) return;
+    const summary = `Archive ${selectedRows.size} selected ${selected.replace(/_/g, " ")}`;
+    const mutations = [...selectedRows]
+      .map(id => ({ kind: "soft_delete" as const, table: selected, id }));
+    const operationKey = JSON.stringify({ summary, mutations });
+    const context = pendingBatch.current?.key === operationKey
+      ? pendingBatch.current.context : worker.createMutationContext();
+    pendingBatch.current = { key: operationKey, context };
     try {
-      const receipt = await worker.applyBatch(
-        `Archive ${selectedRows.size} selected ${selected.replace(/_/g, " ")}`,
-        [...selectedRows].map(id => ({ kind: "soft_delete" as const, table: selected, id })),
-      );
+      const receipt = await worker.applyBatch(summary, mutations, context);
+      pendingBatch.current = null;
       setLastBatch(receipt); setSelectedRows(new Set());
       await reload(selected); props.onWrite(selected);
       props.onInfo(`Archived ${receipt.changed} records. Undo is available here.`);
@@ -539,7 +557,7 @@ export function DataView(props: {
   const undoLastBatch = async (): Promise<void> => {
     if (!lastBatch || lastBatch.undone) return;
     try {
-      const undone = await worker.undoBatch(lastBatch.id);
+      const undone = await worker.undoBatch(lastBatch.id, worker.createMutationContext());
       setLastBatch(undone);
       if (selected) { await reload(selected); props.onWrite(selected); }
       props.onInfo(`Undid “${undone.summary}”.`);
@@ -1056,7 +1074,8 @@ export function DataView(props: {
                       onClick={() => void (async () => {
                         if (props.onConfirm && !await props.onConfirm(
                           "Archive this record? Its history remains recoverable.")) return;
-                        await act(() => store.softDelete(selected!, String(r.id)));
+                        const context = createStoreMutationContext();
+                        await act(() => store.softDelete(selected!, String(r.id), context));
                       })()}>
                       delete
                     </button>
@@ -1072,7 +1091,8 @@ export function DataView(props: {
                         This record’s history — newest first
                         <button className="link"
                           onClick={() => void act(async () => {
-                            await worker.restoreRow(selected!, String(r.id));
+                            await worker.restoreRow(
+                              selected!, String(r.id), worker.createMutationContext());
                             setHistFor(null);
                           }, true)}>
                           ↩ restore previous values
@@ -1124,7 +1144,8 @@ export function DataView(props: {
                 <div key={String(r.id)} className="dataview-deleted-row">
                   <span>{columns.slice(0, 3).map(c => displayValue(r[c.name])).join(" · ")}</span>
                   <button className="link"
-                    onClick={() => void act(async () => worker.restoreRow(selected!, String(r.id)), true)}>
+                    onClick={() => void act(async () => worker.restoreRow(
+                      selected!, String(r.id), worker.createMutationContext()), true)}>
                     restore
                   </button>
                 </div>

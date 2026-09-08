@@ -262,7 +262,7 @@ describe("production mutation route census", () => {
     expect(body).toContain('runAuthorityMutation("addRelationColumn"');
     expect(body).not.toContain("failClosedMutation(");
     expect(worker).toContain('route: "schema.addRelationColumn"');
-    expect(dataView).toContain("worker.addRelationColumn(selected, column as never)");
+    expect(dataView).toContain("worker.addRelationColumn(selected, column as never, context)");
   });
 
   it("routes preview discard through durable authority and closes shadow separately", () => {
@@ -272,6 +272,7 @@ describe("production mutation route census", () => {
     const start = worker.indexOf('case "discard"');
     const end = worker.indexOf('case "removeSamples"', start);
     expect(worker.slice(start, end)).toContain("discardPendingPreview(req)");
+    expect(worker).toContain('replayPlannerDecision(req.requestId, "discard")');
     expect(worker).toContain("await planner.discard(requestId, current.preview.command)");
     expect(worker).toContain("current.preview.shadow.close()");
     const discardHelper = worker.slice(worker.indexOf("async function discardPendingPreview"),
@@ -294,6 +295,7 @@ describe("production mutation route census", () => {
   it("keeps the UI protocol while excluding model I/O from DB-worker authority", () => {
     const worker = source("packages/shell/src/worker/db-worker.ts");
     expect(worker).not.toContain("PreviewHandle");
+    expect(worker).not.toContain("settledDecision");
     expect(worker).not.toContain("InProcessAsyncStore");
     expect(worker).not.toContain("let store: ClayStore");
     expect(worker).toContain("PreparedMutationPreview");
