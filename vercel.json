@@ -8,6 +8,10 @@
     { "source": "/mutations/:path*", "destination": "/api" },
     { "source": "/shares/:path*", "destination": "/api" },
     { "source": "/share/:path*", "destination": "/index.html" },
+    { "source": "/intake/:path*", "destination": "/api" },
     { "source": "/healthz", "destination": "/api" }
+  ],
+  "crons": [
+    { "path": "/api/internal/intake/cleanup", "schedule": "0 * * * *" }
   ]
 }

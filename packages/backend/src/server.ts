@@ -12,6 +12,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { createApp, makeDevAuth, type BackendOptions } from "./app";
 import { MemoryAuthStore, Sessions } from "./auth";
 import { PgSessions, PostgresAuthStore } from "./pg-store";
+import { MemoryIntakeRelayStore, PostgresIntakeRelayStore } from "./intake-relay";
 import { PostgresShareRelayStore } from "./share-pg-store";
 import { MemoryShareRelayStore } from "./share-store";
 import { resolveModelConfig, resolveProductionConfig } from "./model-config";
@@ -30,11 +31,15 @@ async function main(): Promise<void> {
   const model = productionConfig?.model ?? resolveModelConfig(process.env);
   let auth: BackendOptions["auth"];
   let shares: BackendOptions["shares"];
+  let intakeRelay: BackendOptions["intakeRelay"];
   const devLinks = !production && process.env.AUTH === "dev";
   if (dbUrl) {
     const store = PostgresAuthStore.connect(dbUrl);
     await store.ensureSchema();
     shares = new PostgresShareRelayStore(store.db);
+    const durableRelay = new PostgresIntakeRelayStore(store.transactionalDb);
+    await durableRelay.ensureSchema();
+    intakeRelay = durableRelay;
     auth = {
       store, sessions: new PgSessions(store.db),
       devLinks,
@@ -59,10 +64,17 @@ async function main(): Promise<void> {
     shares = new MemoryShareRelayStore();
     if (devLinks) auth = makeDevAuth();
   }
+  intakeRelay ??= new MemoryIntakeRelayStore();
+  await intakeRelay.cleanupExpired();
+  const cleanupTimer = setInterval(() => {
+    void intakeRelay?.cleanupExpired().catch(error =>
+      console.error("intake relay TTL cleanup failed", error));
+  }, 15 * 60_000);
+  cleanupTimer.unref();
   void MemoryAuthStore;
 
   const app = createApp({
-    model, auth, shares,
+    model, auth, shares, intakeRelay,
     allowedOrigins: production ? [appOrigin] : undefined,
   });
   const staticDir = process.env.STATIC_DIR;
