@@ -93,14 +93,26 @@ export function seedStarterShell(store: ClayStore, id: StarterShellId): void {
     sampleIds[table.name] = table.sampleRows.map(row =>
       String(store.insert(table.name, materializeSampleRow(table, row, seedInstant)).id));
   }
-  store.setSetting("sample_rows", sampleIds);
+  store.setSetting("sample_rows", { format: 1, tables: sampleIds });
   store.setSetting("shell_id", bundle.shellId);
+}
+
+function sampleMarkerTables(value: unknown): Record<string, string[]> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const record = value as Record<string, unknown>;
+  const candidate = record.format === 1 ? record.tables : record;
+  if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) return {};
+  const tables: Record<string, string[]> = {};
+  for (const [table, ids] of Object.entries(candidate)) {
+    if (Array.isArray(ids) && ids.every(id => typeof id === "string")) tables[table] = [...ids];
+  }
+  return tables;
 }
 
 /** One-click sample removal (G9): kernel-local, soft-deleted (reversible). */
 export function removeSampleRows(store: ClayStore): void {
-  const marker = store.getSetting<Record<string, string[]>>("sample_rows") ?? {};
+  const marker = sampleMarkerTables(store.getSetting<unknown>("sample_rows"));
   for (const [table, ids] of Object.entries(marker))
     for (const id of ids) store.softDelete(table, id);
-  store.setSetting("sample_rows", {});
+  store.setSetting("sample_rows", { format: 1, tables: {} });
 }
