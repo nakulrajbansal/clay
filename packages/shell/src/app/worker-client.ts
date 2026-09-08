@@ -9,6 +9,12 @@ import type {
   RelationFieldSpec,
   RelationConversionRequest, RelationConversionResult, SemanticSchemaTraceV1, Suggestion,
 } from "@clay/kernel";
+import {
+  decodeProjectionTransportV1,
+  type ProjectionArtifactV1,
+  type ProjectionRequestV1,
+  type ProjectionTransportV1,
+} from "@clay/kernel/projection";
 import { ClayError } from "@clay/kernel/errors";
 import type { IntentOutcome } from "../worker/db-worker";
 import { fetchModelHealth } from "./model-health";
@@ -262,7 +268,7 @@ export class WorkerClient {
   #activePlanners = new Set<ActivePlanner>();
   private nextId = 1;
   private readonly pending = new Map<number, {
-    resolve: (v: unknown) => void; reject: (e: Error) => void;
+    resolve: (v: unknown) => void; reject: (e: Error) => void; cleanup: () => void;
   }>();
 
   constructor(private readonly worker: Worker) {
@@ -274,6 +280,7 @@ export class WorkerClient {
       const entry = this.pending.get(msg.id);
       if (!entry) return;
       this.pending.delete(msg.id);
+      entry.cleanup();
       if (msg.ok) entry.resolve(msg.result);
       else if (typeof msg.error === "object" && msg.error !== null) entry.reject(new ClayError(
         (msg.error.code ?? "E_INTERNAL") as ClayError["code"],
@@ -283,17 +290,37 @@ export class WorkerClient {
     };
   }
 
-  private call<T>(op: string, payload?: Record<string, unknown>, transfer?: Transferable[]): Promise<T> {
+  private call<T>(
+    op: string,
+    payload?: Record<string, unknown>,
+    transfer?: Transferable[],
+    signal?: AbortSignal,
+  ): Promise<T> {
     if (this.#terminated) return Promise.reject(new Error("DB worker was terminated"));
     if (!this.#accepting && op !== "shutdown")
       return Promise.reject(new Error("DB worker shutdown is in progress"));
+    if (signal?.aborted)
+      return Promise.reject(new ClayError("E_CANCELLED", "The local export projection was cancelled."));
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
+      const abort = (): void => {
+        if (!this.pending.delete(id)) return;
+        signal?.removeEventListener("abort", abort);
+        const cancelId = this.nextId++;
+        this.worker.postMessage({
+          id: cancelId, requestId: mintWorkerRequestId(), op: "cancelProjectionV1",
+          payload: { targetId: id },
+        });
+        reject(new ClayError("E_CANCELLED", "The local export projection was cancelled."));
+      };
+      const cleanup = (): void => signal?.removeEventListener("abort", abort);
+      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject, cleanup });
       try {
+        signal?.addEventListener("abort", abort, { once: true });
         this.worker.postMessage({ id, requestId: mintWorkerRequestId(), op, payload }, transfer ?? []);
       } catch (error) {
         this.pending.delete(id);
+        cleanup();
         reject(error instanceof Error ? error : new Error(String(error)));
       }
     });
@@ -338,7 +365,10 @@ export class WorkerClient {
     this.#modelAccessPreparationGeneration++;
     this.#modelAccessGeneration++;
     const error = new Error("DB worker was terminated");
-    for (const entry of this.pending.values()) entry.reject(error);
+    for (const entry of this.pending.values()) {
+      entry.cleanup();
+      entry.reject(error);
+    }
     this.pending.clear();
     for (const active of this.#activePlanners) {
       if (active.binding && !active.closed) {
@@ -799,6 +829,19 @@ export class WorkerClient {
   sampleCount(): Promise<number> { return this.call("sampleCount"); }
   reset(): Promise<null> { return this.call("reset"); }
   registryTables(): Promise<RegTable[]> { return this.call("registryTables"); }
+  async projectExport(
+    request: ProjectionRequestV1, signal?: AbortSignal,
+  ): Promise<ProjectionArtifactV1> {
+    const transported = await this.call<ProjectionTransportV1>(
+      "projectPlaintextV1", request, undefined, signal,
+    );
+    const canonicalProjection = decodeProjectionTransportV1(transported);
+    return Object.freeze({
+      projection: canonicalProjection,
+      plaintext: transported.plaintext,
+      csv: transported.csv,
+    });
+  }
   restoreRow(table: string, id: string): Promise<Record<string, unknown>> {
     return this.call("restoreRow", { table, id });
   }

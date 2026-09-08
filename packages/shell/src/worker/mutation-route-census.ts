@@ -49,6 +49,8 @@ export const DB_WORKER_ROUTE_CENSUS = Object.freeze({
   panelsAt: route("read", "none"),
   makeLatest: route("authority", "live"),
   registryTables: route("read", "none"),
+  projectPlaintextV1: route("read", "none"),
+  cancelProjectionV1: route("ephemeral", "none"),
   storePort: route("authority-store-port", "live"),
   intent: route("planner-authority", "live"),
   repairPanel: route("planner-authority", "live"),

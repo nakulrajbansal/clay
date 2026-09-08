@@ -151,13 +151,13 @@ type ProductionStoreReaderMethod =
   | "fieldProvenance" | "getSetting" | "globalSearch" | "headVersion" | "history"
   | "listAutomations" | "listNotifications" | "livePanels" | "operationBatches"
   | "panelProvenance" | "previewRelationConversion"
-  | "privateMetricsSummary" | "query" | "readAttachment" | "registrySnapshot"
+  | "privateMetricsSummary" | "query" | "queryBounded" | "readAttachment" | "registrySnapshot"
   | "restorableRows" | "rowHistory" | "semanticSchemaTrace" | "simulateAutomation"
   | "suggestions";
 
 export type ProductionStoreReader = Readonly<Pick<
   ClayStore, ProductionStoreReaderMethod
->>;
+> & { projectionSnapshot(): string }>;
 
 const PINNED_READS = Object.freeze({
   attachmentStorage: ClayStore.prototype.attachmentStorage,
@@ -178,6 +178,7 @@ const PINNED_READS = Object.freeze({
   previewRelationConversion: ClayStore.prototype.previewRelationConversion,
   privateMetricsSummary: ClayStore.prototype.privateMetricsSummary,
   query: ClayStore.prototype.query,
+  queryBounded: ClayStore.prototype.queryBounded,
   readAttachment: ClayStore.prototype.readAttachment,
   registrySnapshot: ClayStore.prototype.registrySnapshot,
   restorableRows: ClayStore.prototype.restorableRows,
@@ -189,7 +190,9 @@ const PINNED_READS = Object.freeze({
 const STORE_PENDING_PLANNER_ATTEMPTS: ClayStore["pendingPlannerAttempts"] =
   ClayStore.prototype.pendingPlannerAttempts;
 
-function createStoreReader(store: ClayStore): ProductionStoreReader {
+function createStoreReader(
+  store: ClayStore, projectionSnapshot: () => string,
+): ProductionStoreReader {
   const reader: ProductionStoreReader = {
     attachmentStorage: PINNED_READS.attachmentStorage.bind(store),
     attachmentsForRecord: PINNED_READS.attachmentsForRecord.bind(store),
@@ -205,10 +208,12 @@ function createStoreReader(store: ClayStore): ProductionStoreReader {
     livePanels: PINNED_READS.livePanels.bind(store),
     operationBatches: PINNED_READS.operationBatches.bind(store),
     panelProvenance: PINNED_READS.panelProvenance.bind(store),
+    projectionSnapshot,
 
     previewRelationConversion: PINNED_READS.previewRelationConversion.bind(store),
     privateMetricsSummary: PINNED_READS.privateMetricsSummary.bind(store),
     query: PINNED_READS.query.bind(store),
+    queryBounded: PINNED_READS.queryBounded.bind(store),
     readAttachment: PINNED_READS.readAttachment.bind(store),
     registrySnapshot: PINNED_READS.registrySnapshot.bind(store),
     restorableRows: PINNED_READS.restorableRows.bind(store),
@@ -429,7 +434,8 @@ export class ProductionStoreAuthority {
   ) {
     this.#driver = session.driver;
     this.#store = store;
-    this.#reader = createStoreReader(store);
+    const target = TargetAuthorityStore.open(session.driver);
+    this.#reader = createStoreReader(store, () => JSON.stringify(target.evidence()));
     this.#boot = boot;
     this.#connectionAuthority = session.authority;
     this.#coordinator = new ProductionMutationCoordinator(
@@ -438,7 +444,7 @@ export class ProductionStoreAuthority {
       store,
       fence,
       catalogGeneration,
-      TargetAuthorityStore.open(session.driver).evidence(),
+      target.evidence(),
       leaseTtlMs,
       () => Date.now(),
     );

@@ -1,6 +1,6 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { join, posix } from "node:path";
+import { join, posix, relative } from "node:path";
 import { gzipSync } from "node:zlib";
 
 const requireFromKernel = createRequire(
@@ -113,6 +113,23 @@ export function mergeFiles(...fileGroups) {
   return [...new Set(fileGroups.flat())].sort();
 }
 
+// Vite's manifest describes the build but is not fetched by the browser.
+// Every other regular file emitted under shell/dist is runtime payload.
+const DOCUMENTED_BUILD_METADATA = new Set([".vite/manifest.json"]);
+
+export async function collectEmittedRuntimeFiles(root, current = root) {
+  const files = [];
+  for (const entry of await readdir(current, { withFileTypes: true })) {
+    const path = join(current, entry.name);
+    if (entry.isDirectory()) files.push(...await collectEmittedRuntimeFiles(root, path));
+    else if (entry.isFile()) {
+      const file = relative(root, path).replaceAll("\\", "/");
+      if (!DOCUMENTED_BUILD_METADATA.has(file)) files.push(file);
+    } else throw new Error(`bundle runtime inventory contains unsupported entry ${path}`);
+  }
+  return files.sort();
+}
+
 export async function measureFiles(root, files) {
   const measured = [];
   for (const file of mergeFiles(files)) {
@@ -154,10 +171,14 @@ function normalizeSource(value) {
 
 function sourceMatches(key, record, expectedSource) {
   const expected = normalizeSource(expectedSource);
-  return [key, record.src]
+  const direct = [key, record.src]
     .filter(value => typeof value === "string")
     .map(normalizeSource)
     .some(value => value === expected || value.endsWith(`/${expected}`));
+  if (direct) return true;
+  const filename = expected.split("/").at(-1) ?? "";
+  const stem = filename.replace(/\.[^.]+$/, "");
+  return typeof record.name === "string" && record.name === stem;
 }
 
 export function resolveSemanticLazyChunks(manifest, expectedChunks) {
@@ -186,19 +207,74 @@ export function resolveSemanticLazyChunks(manifest, expectedChunks) {
   });
 }
 
+function dynamicChildren(manifest, closureKeys, loadedKeys) {
+  const children = new Set();
+  for (const key of closureKeys) {
+    if (loadedKeys.has(key)) continue;
+    for (const child of manifest[key].dynamicImports ?? []) {
+      if (!manifest[child]) {
+        throw new Error(`bundle manifest: missing dynamically imported record ${child}`);
+      }
+      children.add(child);
+    }
+  }
+  return [...children].sort();
+}
+
+function intersectPathSets(paths, field) {
+  const common = new Set(paths[0][field]);
+  for (const path of paths.slice(1)) {
+    for (const value of common) if (!path[field].has(value)) common.delete(value);
+  }
+  return common;
+}
+
+function collectGuaranteedPriorClosure(manifest, entryKey, targetKey) {
+  const paths = [];
+
+  function visit(rootKey, prior, activeRoots) {
+    if (rootKey === targetKey) {
+      paths.push(prior);
+      return;
+    }
+    const closure = collectStaticClosure(manifest, rootKey);
+    const loaded = {
+      keys: new Set([...prior.keys, ...closure.keys]),
+      files: new Set([...prior.files, ...closure.files]),
+    };
+    const nextActiveRoots = new Set(activeRoots).add(rootKey);
+    for (const child of dynamicChildren(manifest, closure.keys, prior.keys)) {
+      if (!nextActiveRoots.has(child)) visit(child, loaded, nextActiveRoots);
+    }
+  }
+
+  visit(entryKey, { keys: new Set(), files: new Set() }, new Set());
+  if (paths.length === 0) {
+    throw new Error(`bundle manifest: lazy chunk ${targetKey} is not reachable from the entry`);
+  }
+
+  // Only subtract assets loaded on every activation path. This handles nested
+  // lazy boundaries without understating a chunk that has alternate parents.
+  return {
+    keys: intersectPathSets(paths, "keys"),
+    files: intersectPathSets(paths, "files"),
+  };
+}
+
 export function analyzeManifest(manifest, { expectedLazyChunks = [] } = {}) {
   const entry = findEntry(manifest);
   const entryClosure = collectStaticClosure(manifest, entry.key);
   const lazyChunks = resolveSemanticLazyChunks(manifest, expectedLazyChunks)
     .map(({ label, source, key }) => {
       const fullClosure = collectStaticClosure(manifest, key);
+      const priorClosure = collectGuaranteedPriorClosure(manifest, entry.key, key);
       return {
         label,
         source,
         key,
         closure: {
-          keys: fullClosure.keys.filter(item => !entryClosure.keys.includes(item)),
-          files: fullClosure.files.filter(file => !entryClosure.files.includes(file)),
+          keys: fullClosure.keys.filter(item => !priorClosure.keys.has(item)),
+          files: fullClosure.files.filter(file => !priorClosure.files.has(file)),
         },
       };
     });

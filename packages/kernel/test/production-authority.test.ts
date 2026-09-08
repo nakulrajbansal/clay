@@ -312,7 +312,7 @@ describe("production Store authority", () => {
         "fieldProvenance", "getSetting", "globalSearch", "headVersion", "history",
         "listAutomations", "listNotifications", "livePanels", "operationBatches",
         "panelProvenance", "previewRelationConversion",
-        "privateMetricsSummary", "query", "readAttachment", "registrySnapshot",
+        "privateMetricsSummary", "query", "queryBounded", "readAttachment", "registrySnapshot",
         "restorableRows", "rowHistory", "semanticSchemaTrace", "simulateAutomation",
         "suggestions",
       ].sort());
@@ -1192,6 +1192,7 @@ describe("production Store authority", () => {
       leaseTtlMs: 60_000,
     });
     try {
+      const initialProjectionSnapshot = authority.readStore().projectionSnapshot();
       const staleCas = await authority.executeMutation({
         requestId: opaque("req", "h"),
         route: "setting.compareAndSet",
@@ -1203,6 +1204,7 @@ describe("production Store authority", () => {
       });
       expect(staleCas.operationId).toMatch(/^op_[a-z2-7]{26}$/);
       expect(authority.inspectAuthority().targetReservations).toEqual([]);
+      expect(authority.readStore().projectionSnapshot()).toBe(initialProjectionSnapshot);
 
       const setRequest = {
         requestId: opaque("req", "i"),
@@ -1214,6 +1216,8 @@ describe("production Store authority", () => {
         changed: true, replayed: false,
         result: { ok: true, current: { revision: 2, value: "new" } },
       });
+      const committedProjectionSnapshot = authority.readStore().projectionSnapshot();
+      expect(committedProjectionSnapshot).not.toBe(initialProjectionSnapshot);
       expect(await authority.executeMutation(setRequest)).toEqual({ ...set, replayed: true });
       await expect(authority.executeMutation({
         requestId: setRequest.requestId,
@@ -1228,6 +1232,7 @@ describe("production Store authority", () => {
       } as const;
       const sameSet = await authority.executeMutation(sameRequest);
       expect(sameSet).toMatchObject({ changed: false, replayed: false });
+      expect(authority.readStore().projectionSnapshot()).toBe(committedProjectionSnapshot);
       expect(sameSet.operationId).toMatch(/^op_[a-z2-7]{26}$/);
       await expect(authority.executeMutation(sameRequest))
         .resolves.toEqual({ ...sameSet, replayed: true });

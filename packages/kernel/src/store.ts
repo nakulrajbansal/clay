@@ -23,7 +23,9 @@ import {
   applyForwardOps, applyInverseOps, createTableSql, deriveInverse, validateMigrationPlan,
   type MigrationPlanT,
 } from "./migrate";
-import { rowMatchesConditions, runQuery, type QueryRow } from "./query";
+import {
+  rowMatchesConditions, runQuery, type QueryByteBudget, type QueryRow,
+} from "./query";
 import { exprFields, parseExpr } from "./expr";
 import { Observer, type Suggestion, type UsageEvent } from "./observe";
 import {
@@ -3333,6 +3335,11 @@ export class ClayStore {
 
   query(q: QueryT, now: Date = new Date()): QueryRow[] {
     return runQuery(this.#driver, this.reg, q, now);
+  }
+
+  /** Trusted projection read with SQL-side byte preflight before JS materialization. */
+  queryBounded(q: QueryT, budget: QueryByteBudget, now: Date = new Date()): QueryRow[] {
+    return runQuery(this.#driver, this.reg, q, now, budget);
   }
 
   private mustExist(table: string, id: string): void {

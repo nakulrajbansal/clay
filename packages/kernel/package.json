@@ -10,6 +10,7 @@
     "./shell-runtime": "./src/shell-runtime.ts",
     "./worker-rpc": "./src/worker-rpc.ts",
     "./planner-pipeline": "./src/planner-pipeline-entry.ts",
+    "./projection": "./src/projection.ts",
     "./worker-authority": "./src/worker-authority.ts"
   },
   "scripts": {

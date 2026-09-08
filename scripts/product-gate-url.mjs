@@ -17,7 +17,23 @@ export function assertProductGateOrigin(expectedUrl, finalUrl) {
     throw new Error(`product gate navigated to unexpected origin ${actual.origin}`);
 }
 
+const BLOB_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isLocalBlobRequest(expectedUrl, requestUrl) {
+  if (!requestUrl.startsWith("blob:")) return false;
+  const inner = requestUrl.slice(5);
+  if (inner.startsWith("null/")) return BLOB_ID.test(inner.slice(5));
+  try {
+    const parsed = new URL(inner);
+    return parsed.origin === new URL(expectedUrl).origin
+      && BLOB_ID.test(parsed.pathname.slice(1));
+  } catch {
+    return false;
+  }
+}
+
 export function isExpectedProductGateRequest(expectedUrl, requestUrl) {
+  if (isLocalBlobRequest(expectedUrl, requestUrl)) return true;
   try {
     return new URL(requestUrl).origin === new URL(expectedUrl).origin;
   } catch {

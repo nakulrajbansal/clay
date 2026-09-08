@@ -1695,7 +1695,7 @@ export function App(): React.JSX.Element {
         </LazySurfaceBoundary>
       ) : null}
       {confirmDialog}
-      {createPortal(<div className="toasts" aria-live="polite" aria-atomic="true">
+      <div className="toasts" aria-live="polite" aria-atomic="true">
         {toasts.map(t => (
           <div key={t.id} className={`toast toast-${t.kind}`}
             role={t.kind === "danger" ? "alert" : "status"}>
@@ -1708,7 +1708,7 @@ export function App(): React.JSX.Element {
             ) : null}
           </div>
         ))}
-      </div>, document.body)}
+      </div>
     </div>
   );
 }
