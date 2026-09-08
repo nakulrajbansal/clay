@@ -28,6 +28,9 @@ const RecordDetail = lazy(() => import("./RecordDetail").then(module => ({
 const RelationConversionDialog = lazy(() => import("./RelationConversionDialog").then(module => ({
   default: module.RelationConversionDialog,
 })));
+const ImportWizard = lazy(() => import("./ImportWizard").then(module => ({
+  default: module.ImportWizard,
+})));
 
 type EditingCell = { rowId: string; col: string; draft: string };
 type ActiveFilter = NonNullable<Query["where"]>[number];
@@ -104,6 +107,7 @@ function matchesFilter(row: QueryRow, filter: ActiveFilter): boolean {
 export function DataView(props: {
   worker: WorkerClient;
   store: AsyncStore;
+  appInstanceId?: string | null;
   initialTable?: string | null;
   initialRecordId?: string | null;
   onWrite: (table: string) => void;
@@ -146,6 +150,7 @@ export function DataView(props: {
   const [viewName, setViewName] = useState("");
   const [detailStack, setDetailStack] = useState<{ table: string; id: string }[]>([]);
   const [showRelationDialog, setShowRelationDialog] = useState(false);
+  const [showImportWizard, setShowImportWizard] = useState(false);
   const [samples, setSamples] = useState(0);
   // ADR-027: per-record history + local schema edits (no model call)
   const [histFor, setHistFor] = useState<{ id: string;
@@ -277,7 +282,7 @@ export function DataView(props: {
   // then closes the data workspace.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== "Escape" || showRelationDialog) return;
+      if (e.key !== "Escape" || showRelationDialog || showImportWizard) return;
       if (detailStack.length > 0) {
         setDetailStack(stack => stack.slice(0, -1)); return;
       }
@@ -286,7 +291,7 @@ export function DataView(props: {
     };
     window.addEventListener("keydown", onKey);
     return (): void => window.removeEventListener("keydown", onKey);
-  }, [detailStack.length, editing, props.onClose, showRelationDialog]);
+  }, [detailStack.length, editing, props.onClose, showImportWizard, showRelationDialog]);
 
   const pick = async (name: string): Promise<void> => {
     setSelected(name);
@@ -514,7 +519,9 @@ export function DataView(props: {
   const undoLastBatch = async (): Promise<void> => {
     if (!lastBatch || lastBatch.undone) return;
     try {
-      const undone = await worker.undoBatch(lastBatch.id);
+      const undone = lastBatch.source === "import"
+        ? await worker.undoImport(lastBatch.id)
+        : await worker.undoBatch(lastBatch.id);
       setLastBatch(undone);
       if (selected) { await reload(selected); props.onWrite(selected); }
       props.onInfo(`Undid “${undone.summary}”.`);
@@ -578,9 +585,13 @@ export function DataView(props: {
               Clear samples ({samples})
             </button>
           ) : null}
+          {table && props.appInstanceId ? (
+            <button className="dataview-import" title={`Import CSV or pasted cells into “${table.name}”`}
+              onClick={() => setShowImportWizard(true)}>⇧ Import data</button>
+          ) : null}
           {table ? (
             <button
-              className="dataview-import"
+              className="dataview-import dataview-export"
               title={`Download “${table.name}” as a spreadsheet — your data is always yours`}
               onClick={() => {
                 const esc = (v: unknown): string => {
@@ -1033,6 +1044,22 @@ export function DataView(props: {
           </p>
         </div>
       )}
+      {showImportWizard && selected && props.appInstanceId ? (
+        <Suspense fallback={<div className="import-dialog-loading" role="status">Opening import…</div>}>
+          <ImportWizard
+            appInstanceId={props.appInstanceId}
+            targetTable={selected}
+            worker={worker}
+            onClose={() => setShowImportWizard(false)}
+            onCommitted={changedTable => {
+              void reload(changedTable);
+              props.onWrite(changedTable);
+              props.onInfo("Import receipt saved. Undo remains available in this review.");
+            }}
+            onError={props.onError}
+          />
+        </Suspense>
+      ) : null}
       {detail && detailTable ? (
         <Suspense fallback={<div className="record-detail-loading" role="status">Loading record…</div>}>
         <RecordDetail

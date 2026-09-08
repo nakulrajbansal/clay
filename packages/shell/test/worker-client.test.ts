@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { WorkerClient } from "../src/app/worker-client";
+import { IMPORT_ACQUISITION_LIMITS, type ImportSourceDescriptor } from "@clay/kernel/import-contracts";
 
 type Posted = { id: number; op: string; payload: Record<string, unknown> };
 
@@ -89,6 +90,55 @@ describe("WorkerClient daily-work boundary", () => {
     expect(posted[1]?.payload).toMatchObject({ source: "user", summary: "Complete selected" });
   });
 });
+
+describe("WorkerClient Release C import boundary", () => {
+  it("uses bounded staged commands and sends only opaque preview authority at commit", async () => {
+    const { client, posted } = harness();
+    const sessionId = opaque("import", "a");
+    const descriptor: ImportSourceDescriptor = {
+      version: 1,
+      sessionId,
+      appInstanceId: opaque("app", "b"),
+      kind: "csv" as const,
+      sourceDigest: `sha256:${"c".repeat(64)}`,
+      sheets: [{ sheetId: "source", label: "Delimited text", visibility: "visible" as const,
+        range: { rows: 2, columns: 1 } }],
+      limits: IMPORT_ACQUISITION_LIMITS,
+    };
+    const chunk = {
+      sessionId, cursor: 0, startRow: 1, rows: [["Name"], ["Alice"]],
+      nextCursor: null, serializedBytes: 128,
+    };
+    await client.beginImport(descriptor, "contacts");
+    await client.stageImportChunk(descriptor.appInstanceId, chunk);
+    await client.importStructure(sessionId);
+    await client.configureImport({
+      sessionId, header: { mode: "header", sourceRow: 1 }, mode: { kind: "append" },
+      mappings: [{ sourceColumn: 1, targetField: "name" }],
+    });
+    await client.previewImport(sessionId);
+    await client.commitImport({
+      sessionId, previewId: opaque("preview", "d"),
+      previewDigest: `sha256:${"e".repeat(64)}`, idempotencyKey: opaque("req", "f"),
+    });
+    await client.cancelImport(sessionId);
+    await client.undoImport("018f0000-0000-7000-8000-000000000001");
+
+    expect(posted.map(message => message.op)).toEqual([
+      "beginImport", "stageImportChunk", "importStructure", "configureImport",
+      "previewImport", "commitImport", "cancelImport", "undoImport",
+    ]);
+    expect(posted[5]?.payload).toEqual({
+      sessionId, previewId: opaque("preview", "d"),
+      previewDigest: `sha256:${"e".repeat(64)}`, idempotencyKey: opaque("req", "f"),
+    });
+    expect(JSON.stringify(posted[5]?.payload)).not.toContain("Alice");
+  });
+});
+
+function opaque(prefix: string, char: string): string {
+  return `${prefix}_${char.repeat(26)}`;
+}
 
 describe("WorkerClient connected-record boundary", () => {
   it("serializes relation previews and commits as explicit bounded operations", async () => {

@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   ClayStore, InProcessAsyncStore, deriveInverse,
   type AutomationDefinition, type AutomationDefinitionInput, type AsyncStore,
@@ -237,6 +237,45 @@ describe("Daily Workbench UI", () => {
     expect(store.operationBatches(1)[0]).toMatchObject({ changed: 2, summary: "Archive 2 selected tasks" });
     await unmount();
     store.close();
+  });
+
+  it("routes a retained import receipt through import-specific undo after the wizard closes", async () => {
+    const store = await taskStore();
+    const created = store.insert("tasks", { title: "Imported", status: "open" });
+    const receipt = store.applyBatch({ source: "import", summary: "Import tasks", mutations: [{
+      kind: "update", table: "tasks", id: String(created.id), patch: { status: "done" },
+    }] });
+    const undoImport = vi.fn(async (id: string) => ({
+      ...store.undoBatch(id), kind: "receipt" as const, durable: true as const,
+      previewDigest: `sha256:${"a".repeat(64)}`, sourceKind: "csv" as const,
+      target: { table: "tasks", label: "Tasks" }, baseVersion: store.headVersion(),
+      sourceTotals: { sourceRows: 1, createRows: 0, updateRows: 1, skipRows: 0, blockedRows: 0,
+        skipReasons: { above_header: 0, blank_row: 0, user_skipped: 0, duplicate_combined: 0,
+          duplicate_skipped: 0, no_change: 0, unmapped_row: 0 } },
+      mutationTotals: { primaryTargetCreates: 0, primaryTargetUpdates: 1,
+        auxiliaryRelatedCreates: 0, changedCount: 1 },
+      warningTotals: { warnings: 0, warningReasons: { trimmed_whitespace: 0,
+        leading_zero_identifier: 0, enum_case_normalized: 0 } },
+      undo: { state: "undone" as const },
+    }));
+    const undoBatch = vi.fn(async () => { throw new Error("generic undo must not run"); });
+    const worker = {
+      registryTables: async () => [...store.registrySnapshot().values()],
+      semanticTrace: async () => store.semanticSchemaTrace(), sampleCount: async () => 0,
+      operationBatches: async () => [receipt], getSetting: async () => null,
+      restorableRows: async () => [], recordFilter: async () => null,
+      undoImport, undoBatch,
+    } as unknown as WorkerClient;
+    const { unmount } = await mount(<DataView worker={worker}
+      store={new InProcessAsyncStore(store)} initialTable="tasks"
+      onWrite={() => undefined} onClose={() => undefined}
+      onError={message => { throw new Error(message); }} onInfo={() => undefined} />);
+    await waitFor(() => document.body.querySelector(".workbench-undo") !== null);
+    await act(async () => document.body.querySelector<HTMLButtonElement>(".workbench-undo")!.click());
+    await waitFor(() => undoImport.mock.calls.length === 1);
+    expect(undoImport).toHaveBeenCalledWith(receipt.id);
+    expect(undoBatch).not.toHaveBeenCalled();
+    await unmount(); store.close();
   });
 
   it("guards row creation against double activation", async () => {

@@ -138,6 +138,7 @@ export class ReleaseCParserWorkerClient {
   readImportChunk(input: {
     appInstanceId: string;
     sessionId: string;
+    sheetId?: string;
     cursor: number;
   }): Promise<ImportParserChunk> {
     const id = this.nextId++;

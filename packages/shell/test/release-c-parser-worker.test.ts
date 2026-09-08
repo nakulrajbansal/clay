@@ -7,6 +7,7 @@ import {
 } from "@clay/kernel/import-contracts";
 import { handleImportParserWorkerRequest } from "../src/worker/release-c/import-worker-runtime";
 import { ImportParserSessionStore } from "../src/worker/release-c/parser-session";
+import { worksheetXml, xlsxFixture } from "./fixtures/xlsx-fixture";
 
 const APP = `app_${"a".repeat(26)}`;
 const SESSION = `import_${"j".repeat(26)}`;
@@ -100,6 +101,32 @@ describe("Release C parser worker protocol", () => {
 
     expect(encoder.encode(JSON.stringify(response)).byteLength)
       .toBeLessThanOrEqual(IMPORT_ACQUISITION_LIMITS.maxChunkBytes);
+  });
+
+  it("C-FR-006 validates worksheet selection across the worker protocol", async () => {
+    const store = new ImportParserSessionStore({ sessionId: () => SESSION });
+    const source = xlsxFixture({ sheets: [
+      { name: "Primary", xml: worksheetXml(
+        `<row r="1"><c r="A1" t="inlineStr"><is><t>one</t></is></c></row>`,
+      ) },
+      { name: "Secondary", state: "hidden", xml: worksheetXml(
+        `<row r="1"><c r="A1" t="inlineStr"><is><t>two</t></is></c></row>`,
+      ) },
+    ] });
+    const open = await handleImportParserWorkerRequest({
+      version: 1, id: 40, op: "openImportSource",
+      payload: { appInstanceId: APP, kind: "xlsx", bytes: source },
+    }, store);
+    expect(open).toMatchObject({ ok: true, result: { sheets: [
+      { sheetId: "sheet_1", visibility: "visible" },
+      { sheetId: "sheet_2", visibility: "hidden" },
+    ] } });
+
+    const read = await handleImportParserWorkerRequest({
+      version: 1, id: 41, op: "readImportChunk",
+      payload: { appInstanceId: APP, sessionId: SESSION, sheetId: "sheet_2", cursor: 0 },
+    }, store);
+    expect(read).toMatchObject({ ok: true, result: { rows: [["two"]] } });
   });
 
   it("C-NFR-003 fails a forged worker message closed with no attacker value in the error", async () => {

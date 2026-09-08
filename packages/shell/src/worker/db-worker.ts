@@ -9,12 +9,17 @@ import {
 } from "@clay/kernel";
 import { ClayError } from "@clay/kernel/errors";
 import type {
+  ExistingTableImportMapping, ExistingTableImportMode, ImportHeaderChoice,
+  ImportParserChunk, ImportSourceDescriptor,
+} from "@clay/kernel/import-staging-contracts";
+import type {
   ProductionStoreAuthority,
   ProductionStoreReader,
 } from "@clay/kernel/worker-authority";
 import { createStarterSeedBundle } from "../shells/seed";
 import { sampleRowCount } from "./samples";
 import { DB_WORKER_ROUTE_CENSUS } from "./mutation-route-census";
+import type { ImportSessionCoordinator } from "./release-c/import-session-coordinator";
 
 export type PreviewInfo = {
   summary: string;
@@ -43,6 +48,7 @@ let authorityBoot: Promise<ProductionStoreAuthority> | null = null;
 let store: ProductionStoreReader | null = null;
 let persistent = false;
 let pending: PreviewHandle | null = null;
+let importCoordinator: Promise<ImportSessionCoordinator> | null = null;
 // Device-global model access (B1): set by the main thread from localStorage,
 // shared across every app, never persisted in an app DB.
 type ModelProviderId = "clay" | "openai" | "anthropic" | "codex";
@@ -71,6 +77,11 @@ function mustStore(): ProductionStoreReader {
 function mustAuthority(): ProductionStoreAuthority {
   if (!authority) throw new ClayError("E_CATALOG_UNAVAILABLE", "worker authority is not booted");
   return authority;
+}
+
+function mustImportCoordinator(): Promise<ImportSessionCoordinator> {
+  return importCoordinator ??= import("./release-c/import-session-coordinator")
+    .then(({ ImportSessionCoordinator: Coordinator }) => new Coordinator(mustAuthority()));
 }
 
 function failClosedMutation(route: string): never {
@@ -116,12 +127,21 @@ function authorityRequestId(req: Request): string {
 }
 
 async function runAuthorityMutation(
-  route: "seed" | "setSetting" | "deleteSetting" | "compareAndSetSetting" | "commitLayout",
+  route: "seed" | "setSetting" | "deleteSetting" | "compareAndSetSetting" | "commitLayout"
+    | "commitImport" | "undoImport",
   payload: Record<string, unknown>,
   req: Request,
 ): Promise<unknown> {
   const target = mustAuthority();
   const requestId = authorityRequestId(req);
+  if (route === "commitImport") return (await mustImportCoordinator()).commitImport({
+    sessionId: String(payload.sessionId),
+    previewId: String(payload.previewId),
+    previewDigest: String(payload.previewDigest),
+    idempotencyKey: String(payload.idempotencyKey),
+  });
+  if (route === "undoImport")
+    return (await mustImportCoordinator()).undoImport(String(payload.id), requestId);
   if (route === "seed") return (await target.executeMutation({
     requestId,
     route: "starter.seed",
@@ -192,6 +212,35 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "deleteApp":
     case "importTable":
       return failClosedMutation(req.op);
+    case "beginImport":
+      return (await mustImportCoordinator()).beginImport({
+        descriptor: p.descriptor as ImportSourceDescriptor,
+        targetTable: String(p.targetTable),
+        ...(p.sheetId === undefined ? {} : { sheetId: String(p.sheetId) }),
+      });
+    case "stageImportChunk":
+      return (await mustImportCoordinator()).stageImportChunk({
+        appInstanceId: String(p.appInstanceId), chunk: p.chunk as ImportParserChunk,
+      });
+    case "importStructure":
+      return (await mustImportCoordinator()).importStructure(String(p.sessionId),
+        p.header === undefined ? undefined : p.header as ImportHeaderChoice);
+    case "configureImport":
+      (await mustImportCoordinator()).configureImport({
+        sessionId: String(p.sessionId),
+        header: p.header as ImportHeaderChoice,
+        mode: p.mode as ExistingTableImportMode,
+        mappings: p.mappings as ExistingTableImportMapping[],
+      });
+      return null;
+    case "previewImport":
+      return (await mustImportCoordinator()).previewImport(String(p.sessionId));
+    case "commitImport":
+      return runAuthorityMutation("commitImport", p, req);
+    case "cancelImport":
+      return (await mustImportCoordinator()).cancelImport(String(p.sessionId));
+    case "undoImport":
+      return runAuthorityMutation("undoImport", p, req);
     case "seed":
       return runAuthorityMutation("seed", createStarterSeedBundle(p.shellId), req);
     case "panels":

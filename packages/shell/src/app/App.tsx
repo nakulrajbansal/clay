@@ -1494,6 +1494,7 @@ export function App(): React.JSX.Element {
         <DataView
           worker={workerRef.current}
           store={dataStoreRef.current}
+          appInstanceId={currentId}
           initialTable={dataTable}
           initialRecordId={dataRecord}
           returnFocusRef={surfaceReturnFocus}

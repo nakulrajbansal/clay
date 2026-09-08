@@ -8,6 +8,7 @@
     "./expr": "./src/expr.ts",
     "./errors": "./src/errors.ts",
     "./import-contracts": "./src/import-contracts.ts",
+    "./import-staging-contracts": "./src/import-staging-contracts.ts",
     "./worker-authority": "./src/worker-authority.ts"
   },
   "scripts": {

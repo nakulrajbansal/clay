@@ -2,14 +2,20 @@
 import type {
   AttachmentFile, AttachmentMetadata, AttachmentStorageSummary,
   AutomationDefinition, AutomationDefinitionInput, AutomationRun, AutomationSimulation,
-  BatchMutation, BatchReceipt, ClayNotification, DebugEvent, FieldProvenance,
+  BatchMutation, BatchReceipt, ClayNotification, CommitImportResult, DebugEvent, FieldProvenance,
   GlobalSearchResult,
-  HistoryEntry, LivePanel, PanelProvenance,
+  HistoryEntry, ImportReceipt, LivePanel, PanelProvenance,
   PrivateMetricEvent, PrivateMetricsSummary, RegTable, RelationConversionPreview,
   RelationConversionRequest, RelationConversionResult, SemanticSchemaTraceV1, Suggestion,
 } from "@clay/kernel";
 import { ClayError } from "@clay/kernel/errors";
 import type { IntentOutcome } from "../worker/db-worker";
+import type { ImportHeaderChoice, ImportParserChunk, ImportSourceDescriptor } from "@clay/kernel/import-contracts";
+import type {
+  ConfigureImportInput,
+  ImportCoordinatorPreview,
+  ImportStructure,
+} from "../worker/release-c/import-session-coordinator";
 
 export type TraceEntry = { at: string; intent: string; events: DebugEvent[] };
 
@@ -266,6 +272,38 @@ export class WorkerClient {
   }
   undoBatch(id: string): Promise<BatchReceipt> {
     return this.call("undoBatch", { id });
+  }
+  beginImport(
+    descriptor: ImportSourceDescriptor,
+    targetTable: string,
+    sheetId?: string,
+  ): Promise<ImportStructure> {
+    return this.call("beginImport", {
+      descriptor, targetTable, ...(sheetId === undefined ? {} : { sheetId }),
+    });
+  }
+  stageImportChunk(appInstanceId: string, chunk: ImportParserChunk): Promise<ImportStructure> {
+    return this.call("stageImportChunk", { appInstanceId, chunk });
+  }
+  importStructure(sessionId: string, header?: ImportHeaderChoice): Promise<ImportStructure> {
+    return this.call("importStructure", { sessionId, ...(header ? { header } : {}) });
+  }
+  configureImport(input: ConfigureImportInput): Promise<null> {
+    return this.call("configureImport", input);
+  }
+  previewImport(sessionId: string): Promise<ImportCoordinatorPreview> {
+    return this.call("previewImport", { sessionId });
+  }
+  commitImport(input: {
+    sessionId: string; previewId: string; previewDigest: string; idempotencyKey: string;
+  }): Promise<CommitImportResult> {
+    return this.call("commitImport", input);
+  }
+  cancelImport(sessionId: string): Promise<{ disposed: true }> {
+    return this.call("cancelImport", { sessionId });
+  }
+  undoImport(id: string): Promise<ImportReceipt> {
+    return this.call("undoImport", { id });
   }
   rowHistory(table: string, id: string):
     Promise<{ at: string; values: Record<string, unknown> }[]> {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { IMPORT_ACQUISITION_LIMITS } from "@clay/kernel/import-contracts";
 import { ImportParserSessionStore } from "../src/worker/release-c/parser-session";
+import { worksheetXml, xlsxFixture } from "./fixtures/xlsx-fixture";
 
 const utf8 = (value: string): ArrayBuffer => new TextEncoder().encode(value).buffer;
 const APP_A = `app_${"a".repeat(26)}`;
@@ -22,7 +23,7 @@ describe("Release C parser sessions", () => {
     const chunks = [];
     let cursor: number | null = 0;
     while (cursor !== null) {
-      const chunk = store.readImportChunk({
+      const chunk = await store.readImportChunk({
         appInstanceId: APP_A,
         sessionId: descriptor.sessionId,
         cursor,
@@ -57,11 +58,11 @@ describe("Release C parser sessions", () => {
       sessionId: descriptor.sessionId,
       reason: "cancel",
     })).toEqual({ disposed: true });
-    expect(() => store.readImportChunk({
+    await expect(store.readImportChunk({
       appInstanceId: APP_A,
       sessionId: descriptor.sessionId,
       cursor: 0,
-    })).toThrow(expect.objectContaining({ code: "E_IMPORT_SESSION_UNKNOWN" }));
+    })).rejects.toEqual(expect.objectContaining({ code: "E_IMPORT_SESSION_UNKNOWN" }));
   });
 
   it("C-FR-005 disposes the prior app session before accepting a switched app", async () => {
@@ -74,12 +75,12 @@ describe("Release C parser sessions", () => {
       appInstanceId: APP_B, kind: "csv", bytes: utf8("private-b"),
     });
 
-    expect(() => store.readImportChunk({
+    await expect(store.readImportChunk({
       appInstanceId: APP_A, sessionId: first.sessionId, cursor: 0,
-    })).toThrow(expect.objectContaining({ code: "E_IMPORT_SESSION_UNKNOWN" }));
-    expect(store.readImportChunk({
+    })).rejects.toEqual(expect.objectContaining({ code: "E_IMPORT_SESSION_UNKNOWN" }));
+    expect((await store.readImportChunk({
       appInstanceId: APP_B, sessionId: second.sessionId, cursor: 0,
-    }).rows).toEqual([["private-b"]]);
+    })).rows).toEqual([["private-b"]]);
   });
 
   it("C-FR-005 rejects a superseded concurrent app open", async () => {
@@ -102,9 +103,9 @@ describe("Release C parser sessions", () => {
     expect([...new Uint8Array(firstBytes)]).toEqual(Array(firstBytes.byteLength).fill(0));
     expect(second.status).toBe("fulfilled");
     if (second.status === "fulfilled") {
-      expect(store.readImportChunk({
+      expect((await store.readImportChunk({
         appInstanceId: APP_B, sessionId: second.value.sessionId, cursor: 0,
-      }).rows).toEqual([["private-b"]]);
+      })).rows).toEqual([["private-b"]]);
     }
   });
 
@@ -134,9 +135,9 @@ describe("Release C parser sessions", () => {
 
     store.restart();
 
-    expect(() => store.readImportChunk({
+    await expect(store.readImportChunk({
       appInstanceId: APP_A, sessionId: descriptor.sessionId, cursor: 0,
-    })).toThrow(expect.objectContaining({ code: "E_IMPORT_SESSION_UNKNOWN" }));
+    })).rejects.toEqual(expect.objectContaining({ code: "E_IMPORT_SESSION_UNKNOWN" }));
   });
 
   it("C-NFR-006 keeps only one staged parser session per app", async () => {
@@ -149,12 +150,12 @@ describe("Release C parser sessions", () => {
       appInstanceId: APP_A, kind: "paste", bytes: utf8("second-private"),
     });
 
-    expect(() => store.readImportChunk({
+    await expect(store.readImportChunk({
       appInstanceId: APP_A, sessionId: first.sessionId, cursor: 0,
-    })).toThrow(expect.objectContaining({ code: "E_IMPORT_SESSION_UNKNOWN" }));
-    expect(store.readImportChunk({
+    })).rejects.toEqual(expect.objectContaining({ code: "E_IMPORT_SESSION_UNKNOWN" }));
+    expect((await store.readImportChunk({
       appInstanceId: APP_A, sessionId: second.sessionId, cursor: 0,
-    }).rows).toEqual([["second-private"]]);
+    })).rows).toEqual([["second-private"]]);
   });
 
   it("C-FR-005 expires an idle session at the explicit five-minute timeout", async () => {
@@ -168,9 +169,9 @@ describe("Release C parser sessions", () => {
     });
     now += 5 * 60 * 1_000 + 1;
 
-    expect(() => store.readImportChunk({
+    await expect(store.readImportChunk({
       appInstanceId: APP_A, sessionId: descriptor.sessionId, cursor: 0,
-    })).toThrow(expect.objectContaining({ code: "E_IMPORT_SESSION_UNKNOWN" }));
+    })).rejects.toEqual(expect.objectContaining({ code: "E_IMPORT_SESSION_UNKNOWN" }));
   });
 
   it("C-FR-005 proactively zeroes idle sessions when the worker timeout sweep runs", async () => {
@@ -185,12 +186,41 @@ describe("Release C parser sessions", () => {
     now = 5 * 60 * 1_000 + 1;
 
     expect(store.expireIdleSessions()).toBe(1);
-    expect(() => store.readImportChunk({
+    await expect(store.readImportChunk({
       appInstanceId: APP_A, sessionId: descriptor.sessionId, cursor: 0,
-    })).toThrow(expect.objectContaining({ code: "E_IMPORT_SESSION_UNKNOWN" }));
+    })).rejects.toEqual(expect.objectContaining({ code: "E_IMPORT_SESSION_UNKNOWN" }));
   });
 
-  it("C-FR-002 fails XLSX closed after enforcing the compressed acquisition cap", async () => {
+  it("C-FR-002 parses XLSX lazily and reads an explicitly selected hidden sheet", async () => {
+    const source = xlsxFixture({
+      sheets: [
+        { name: "Visible", xml: worksheetXml(
+          `<row r="1"><c r="A1" t="inlineStr"><is><t>Visible value</t></is></c></row>`,
+        ) },
+        { name: "Hidden", state: "hidden", xml: worksheetXml(
+          `<row r="1"><c r="A1" t="inlineStr"><is><t>Hidden value</t></is></c></row>`,
+        ) },
+      ],
+    });
+    const store = new ImportParserSessionStore({
+      sessionId: () => `import_${"x".repeat(26)}`,
+    });
+
+    const descriptor = await store.openImportSource({
+      appInstanceId: APP_A, kind: "xlsx", bytes: source,
+    });
+    expect(descriptor.sheets.map(sheet => [sheet.label, sheet.visibility])).toEqual([
+      ["Visible", "visible"], ["Hidden", "hidden"],
+    ]);
+    await expect(store.readImportChunk({
+      appInstanceId: APP_A,
+      sessionId: descriptor.sessionId,
+      sheetId: "sheet_2",
+      cursor: 0,
+    })).resolves.toMatchObject({ rows: [["Hidden value"]], nextCursor: null });
+  });
+
+  it("C-FR-002 fails malformed XLSX closed after enforcing the compressed acquisition cap", async () => {
     const store = new ImportParserSessionStore();
     await expect(store.openImportSource({
       appInstanceId: APP_A,
@@ -207,7 +237,7 @@ describe("Release C parser sessions", () => {
       kind: "xlsx",
       bytes: new Uint8Array([0x50, 0x4b, 0x03, 0x04]).buffer,
     })).rejects.toMatchObject({
-      code: "E_IMPORT_XLSX_UNAVAILABLE",
+      code: "E_IMPORT_XLSX_INVALID",
       stage: "acquire",
     });
   });

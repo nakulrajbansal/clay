@@ -1,7 +1,6 @@
-import {
-  HeaderCandidateSchema,
-  type HeaderCandidate,
-  type HeaderCandidateReason,
+import type {
+  HeaderCandidate,
+  HeaderCandidateReason,
 } from "./import-contracts";
 
 const NEUTRAL_NUMBER = /^[+-]?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/;
@@ -22,11 +21,11 @@ export function recommendHeaderCandidate(rows: readonly (readonly string[])[]): 
   const sample = rows.slice(0, 10);
   const candidateIndex = sample.findIndex(row => row.some(value => !isBlank(value)));
   if (candidateIndex < 0) {
-    return HeaderCandidateSchema.parse({
+    return {
       recommendedRow: null,
       confidence: "none",
       reasons: ["no_non_blank_row"],
-    });
+    };
   }
 
   const candidate = sample[candidateIndex]!;
@@ -47,9 +46,9 @@ export function recommendHeaderCandidate(rows: readonly (readonly string[])[]): 
     ? "no_following_data"
     : contrast ? "data_shape_contrast" : "no_data_shape_contrast");
 
-  return HeaderCandidateSchema.parse({
+  return {
     recommendedRow: candidateIndex + 1,
     confidence: allPresent && unique && textual && contrast ? "high" : "low",
     reasons,
-  });
+  };
 }

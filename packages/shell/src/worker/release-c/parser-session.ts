@@ -8,7 +8,6 @@ import {
   ImportParserError,
   parseDelimitedSource,
 } from "./csv-parser";
-import { rejectUnavailableXlsx } from "./xlsx-adapter";
 
 export type OpenImportSourceInput = {
   appInstanceId: string;
@@ -19,6 +18,7 @@ export type OpenImportSourceInput = {
 export type ReadImportChunkInput = {
   appInstanceId: string;
   sessionId: string;
+  sheetId?: string;
   cursor: number;
 };
 
@@ -41,7 +41,11 @@ type ParserSession = {
   appInstanceId: string;
   descriptor: ImportSourceDescriptor;
   sourceBytes: Uint8Array;
-  rows: string[][];
+  rows: string[][] | null;
+  activeSheetId: string | null;
+  xlsx: {
+    readSheet(sheetId: string): Promise<string[][]>;
+  } | null;
   lastAccessAt: number;
 };
 
@@ -104,8 +108,11 @@ export class ImportParserSessionStore {
 
   private disposeSession(sessionId: string, session: ParserSession): void {
     session.sourceBytes.fill(0);
-    for (const row of session.rows) row.fill("");
-    session.rows.length = 0;
+    if (session.rows !== null) {
+      for (const row of session.rows) row.fill("");
+      session.rows.length = 0;
+      session.rows = null;
+    }
     this.sessions.delete(sessionId);
   }
 
@@ -122,7 +129,33 @@ export class ImportParserSessionStore {
     let parsedRows: string[][] | null = null;
     let retained = false;
     try {
-      if (input.kind === "xlsx") return rejectUnavailableXlsx(input.bytes);
+      if (input.kind === "xlsx") {
+        const { openXlsxWorkbook } = await import("./xlsx-adapter");
+        const workbook = await openXlsxWorkbook(sourceBytes);
+        if (epoch !== this.openEpoch || this.activeAppInstanceId !== input.appInstanceId)
+          throw new ImportParserError("E_IMPORT_SESSION_UNKNOWN", "session");
+        const sessionId = this.nextSessionId();
+        const descriptor = ImportSourceDescriptorSchema.parse({
+          version: 1,
+          sessionId,
+          appInstanceId: input.appInstanceId,
+          kind: input.kind,
+          sourceDigest: workbook.sourceDigest,
+          sheets: workbook.sheets,
+          limits: IMPORT_ACQUISITION_LIMITS,
+        });
+        this.sessions.set(sessionId, {
+          appInstanceId: input.appInstanceId,
+          descriptor,
+          sourceBytes,
+          rows: null,
+          activeSheetId: null,
+          xlsx: workbook,
+          lastAccessAt: this.now(),
+        });
+        retained = true;
+        return descriptor;
+      }
       const parsed = await parseDelimitedSource({
         kind: input.kind,
         bytes: sourceBytes,
@@ -150,6 +183,8 @@ export class ImportParserSessionStore {
         descriptor,
         sourceBytes,
         rows: parsed.rows,
+        activeSheetId: "source",
+        xlsx: null,
         lastAccessAt: this.now(),
       });
       retained = true;
@@ -166,33 +201,27 @@ export class ImportParserSessionStore {
     }
   }
 
-  readImportChunk(input: ReadImportChunkInput): ImportParserChunk {
-    const session = this.sessions.get(input.sessionId);
-    if (!session || session.appInstanceId !== input.appInstanceId)
-      throw new ImportParserError("E_IMPORT_SESSION_UNKNOWN", "session");
-    if (this.now() - session.lastAccessAt > IMPORT_SESSION_IDLE_TIMEOUT_MS) {
-      this.disposeSession(input.sessionId, session);
-      throw new ImportParserError("E_IMPORT_SESSION_UNKNOWN", "session");
-    }
-    session.lastAccessAt = this.now();
-    if (!Number.isSafeInteger(input.cursor) || input.cursor < 0 || input.cursor >= session.rows.length)
+  private chunk(session: ParserSession, input: ReadImportChunkInput): ImportParserChunk {
+    if (session.rows === null) throw new ImportParserError("E_IMPORT_SESSION_UNKNOWN", "session");
+    const rows = session.rows;
+    if (!Number.isSafeInteger(input.cursor) || input.cursor < 0 || input.cursor >= rows.length)
       throw new ImportParserError("E_IMPORT_SESSION_UNKNOWN", "session");
 
     const selected: string[][] = [];
     let end = input.cursor;
-    while (end < session.rows.length && selected.length < IMPORT_ACQUISITION_LIMITS.maxChunkRows) {
-      const candidateRows = [...selected, session.rows[end]!];
+    while (end < rows.length && selected.length < IMPORT_ACQUISITION_LIMITS.maxChunkRows) {
+      const candidateRows = [...selected, rows[end]!];
       const candidate: ImportParserChunk = {
         sessionId: input.sessionId,
         cursor: input.cursor,
         startRow: input.cursor + 1,
         rows: candidateRows,
-        nextCursor: end + 1 < session.rows.length ? end + 1 : null,
+        nextCursor: end + 1 < rows.length ? end + 1 : null,
         serializedBytes: 0,
       };
       if (measureChunk(candidate) + IMPORT_CHUNK_ENVELOPE_RESERVE_BYTES
           > IMPORT_ACQUISITION_LIMITS.maxChunkBytes) break;
-      selected.push(session.rows[end]!);
+      selected.push(rows[end]!);
       end++;
     }
     if (selected.length === 0)
@@ -202,11 +231,60 @@ export class ImportParserSessionStore {
       cursor: input.cursor,
       startRow: input.cursor + 1,
       rows: selected,
-      nextCursor: end < session.rows.length ? end : null,
+      nextCursor: end < rows.length ? end : null,
       serializedBytes: 0,
     };
     chunk.serializedBytes = measureChunk(chunk);
     return chunk;
+  }
+
+  private async loadXlsxSheet(
+    session: ParserSession,
+    input: ReadImportChunkInput,
+    sheetId: string,
+  ): Promise<ImportParserChunk> {
+    if (!session.xlsx) throw new ImportParserError("E_IMPORT_SESSION_UNKNOWN", "session");
+    const rows = await session.xlsx.readSheet(sheetId);
+    if (this.sessions.get(input.sessionId) !== session
+        || this.activeAppInstanceId !== input.appInstanceId) {
+      for (const row of rows) row.fill("");
+      rows.length = 0;
+      throw new ImportParserError("E_IMPORT_SESSION_UNKNOWN", "session");
+    }
+    session.rows = rows;
+    session.activeSheetId = sheetId;
+    session.lastAccessAt = this.now();
+    return this.chunk(session, input);
+  }
+
+  async readImportChunk(input: ReadImportChunkInput): Promise<ImportParserChunk> {
+    const session = this.sessions.get(input.sessionId);
+    if (!session || session.appInstanceId !== input.appInstanceId)
+      throw new ImportParserError("E_IMPORT_SESSION_UNKNOWN", "session");
+    if (this.now() - session.lastAccessAt > IMPORT_SESSION_IDLE_TIMEOUT_MS) {
+      this.disposeSession(input.sessionId, session);
+      throw new ImportParserError("E_IMPORT_SESSION_UNKNOWN", "session");
+    }
+    session.lastAccessAt = this.now();
+    if (session.xlsx === null) {
+      if (input.sheetId !== undefined && input.sheetId !== "source")
+        throw new ImportParserError("E_IMPORT_SESSION_UNKNOWN", "session");
+      return this.chunk(session, input);
+    }
+    const sheetId = input.sheetId
+      ?? session.descriptor.sheets.find(sheet => sheet.visibility === "visible")?.sheetId;
+    if (!sheetId || !session.descriptor.sheets.some(sheet => sheet.sheetId === sheetId))
+      throw new ImportParserError("E_IMPORT_SESSION_UNKNOWN", "session");
+    if (session.activeSheetId !== sheetId) {
+      if (input.cursor !== 0) throw new ImportParserError("E_IMPORT_SESSION_UNKNOWN", "session");
+      if (session.rows !== null) {
+        for (const row of session.rows) row.fill("");
+        session.rows.length = 0;
+        session.rows = null;
+      }
+      return this.loadXlsxSheet(session, input, sheetId);
+    }
+    return this.chunk(session, input);
   }
 
   closeImportSource(input: CloseImportSourceInput): { disposed: true } {

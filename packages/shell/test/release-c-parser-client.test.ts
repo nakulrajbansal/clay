@@ -5,6 +5,7 @@ import {
   ReleaseCParserWorkerClient,
   type ImportParserWorkerLike,
 } from "../src/worker/release-c/import-worker-client";
+import { worksheetXml, xlsxFixture } from "./fixtures/xlsx-fixture";
 
 const APP = `app_${"a".repeat(26)}`;
 
@@ -58,5 +59,32 @@ describe("Release C parser worker client", () => {
     })).toEqual({ disposed: true });
     client.dispose();
     expect(runtime.terminated).toBe(true);
+  });
+
+  it("C-FR-006 carries an XLSX worksheet choice through the typed client", async () => {
+    const runtime = new RuntimeWorker(new ImportParserSessionStore({
+      sessionId: () => `import_${"c".repeat(26)}`,
+    }));
+    const client = new ReleaseCParserWorkerClient(() => runtime);
+    const bytes = xlsxFixture({ sheets: [
+      { name: "First", xml: worksheetXml(
+        `<row r="1"><c r="A1" t="inlineStr"><is><t>first</t></is></c></row>`,
+      ) },
+      { name: "Second", xml: worksheetXml(
+        `<row r="1"><c r="A1" t="inlineStr"><is><t>second</t></is></c></row>`,
+      ) },
+    ] });
+    const descriptor = await client.openImportSource({ appInstanceId: APP, kind: "xlsx", bytes });
+
+    const chunk = await client.readImportChunk({
+      appInstanceId: APP,
+      sessionId: descriptor.sessionId,
+      sheetId: "sheet_2",
+      cursor: 0,
+    });
+    expect(chunk.rows).toEqual([["second"]]);
+    expect(runtime.posted[1]?.message).toMatchObject({
+      payload: { sheetId: "sheet_2" },
+    });
   });
 });

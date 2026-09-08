@@ -6,6 +6,7 @@ import {
   type WriteFenceV1 as WriteFence,
 } from "@clay/schema/catalog";
 import { enumerateCanonicalStateV1 } from "./canonical-state";
+import { canonicalJson } from "./canonical-json";
 import { isThenable, type DbDriver } from "./db";
 import { DeviceCatalog } from "./device-catalog";
 import { ClayError } from "./errors";
@@ -39,6 +40,8 @@ type CapturedProductionMutation = Readonly<{
   }
   | { route: "store.softDelete"; payload: Readonly<{ table: string; id: string }> }
   | { route: "store.commit"; payload: Readonly<{ plan: Readonly<JsonRecord> }> }
+  | { route: "import.commit"; payload: Readonly<JsonRecord> }
+  | { route: "import.undo"; payload: Readonly<{ receiptId: string }> }
   | { route: "starter.seed"; payload: CapturedStarterSeedBundle }
   | { route: "setting.set"; payload: Readonly<{ key: string; value: JsonValue }> }
   | { route: "setting.delete"; payload: Readonly<{ key: string }> }
@@ -164,11 +167,20 @@ const MAX_CAPTURE_STRING = 1_000_000;
 const MAX_CAPTURE_BYTES = 2_000_000;
 const CAPTURE_ENCODER = new TextEncoder();
 
-type CaptureBudget = { nodes: number; bytes: number };
+type CaptureBudget = {
+  nodes: number;
+  bytes: number;
+  nodeLimit: number;
+  byteLimit: number;
+};
+
+function defaultCaptureBudget(): CaptureBudget {
+  return { nodes: 0, bytes: 0, nodeLimit: MAX_CAPTURE_NODES, byteLimit: MAX_CAPTURE_BYTES };
+}
 
 function consumeCaptureBytes(budget: CaptureBudget, bytes: number): void {
   budget.bytes += bytes;
-  if (!Number.isSafeInteger(budget.bytes) || budget.bytes > MAX_CAPTURE_BYTES)
+  if (!Number.isSafeInteger(budget.bytes) || budget.bytes > budget.byteLimit)
     throw unavailable("production mutation payload exceeds limits");
 }
 
@@ -176,9 +188,9 @@ function captureJsonValue(
   input: unknown,
   seen: WeakSet<object>,
   depth = 0,
-  budget: CaptureBudget = { nodes: 0, bytes: 0 },
+  budget: CaptureBudget = defaultCaptureBudget(),
 ): JsonValue {
-  if (depth > MAX_CAPTURE_DEPTH || ++budget.nodes > MAX_CAPTURE_NODES)
+  if (depth > MAX_CAPTURE_DEPTH || ++budget.nodes > budget.nodeLimit)
     throw unavailable("production mutation payload exceeds limits");
   if (input === null || typeof input === "boolean") {
     consumeCaptureBytes(budget, input === null ? 4 : input ? 4 : 5);
@@ -240,8 +252,11 @@ function captureJsonValue(
   }
 }
 
-function captureJsonRecord(input: unknown): Readonly<JsonRecord> {
-  const captured = captureJsonValue(input, new WeakSet());
+function captureJsonRecord(
+  input: unknown,
+  budget: CaptureBudget = defaultCaptureBudget(),
+): Readonly<JsonRecord> {
+  const captured = captureJsonValue(input, new WeakSet(), 0, budget);
   if (typeof captured !== "object" || captured === null || Array.isArray(captured))
     throw new Error("expected record");
   return captured;
@@ -286,6 +301,27 @@ function captureMutation(input: unknown): CapturedProductionMutation {
         const p = captureExactFields(payload, ["plan"]);
         return Object.freeze({ requestId, route, payload: Object.freeze({
           plan: captureJsonRecord(p.plan),
+        }) });
+      }
+      case "import.commit": {
+        const fields = [
+          "appInstanceId", "sessionId", "previewId", "previewDigest", "sourceKind",
+          "sourceDigest", "baseVersion", "target", "dispositions", "mutations",
+          "sourceTotals", "mutationTotals", "warningTotals", "receiptId", "summary",
+        ] as const;
+        const p = captureExactFields(payload, fields);
+        return Object.freeze({
+          requestId,
+          route,
+          payload: captureJsonRecord(p, { nodes: 0, bytes: 0,
+            nodeLimit: 500_000, byteLimit: 36 * 1024 * 1024 }),
+        });
+      }
+      case "import.undo": {
+        const p = captureExactFields(payload, ["receiptId"]);
+        if (typeof p.receiptId !== "string") throw new Error();
+        return Object.freeze({ requestId, route, payload: Object.freeze({
+          receiptId: p.receiptId,
         }) });
       }
       case "starter.seed":
@@ -334,23 +370,6 @@ function captureMutation(input: unknown): CapturedProductionMutation {
   }
 }
 
-function stableJson(input: JsonValue): string {
-  if (input === null || typeof input !== "object") return JSON.stringify(input);
-  if (Array.isArray(input)) {
-    let output = "[";
-    for (let index = 0; index < input.length; index++)
-      output += `${index === 0 ? "" : ","}${stableJson(input[index]!)}`;
-    return `${output}]`;
-  }
-  const keys = Object.keys(input).sort();
-  let output = "{";
-  for (let index = 0; index < keys.length; index++) {
-    const key = keys[index]!;
-    output += `${index === 0 ? "" : ","}${JSON.stringify(key)}:${stableJson(input[key]!)}`;
-  }
-  return `${output}}`;
-}
-
 function requestFingerprint(expected: TargetEvidence, request: CapturedProductionMutation): string {
   const payload: JsonValue = {
     schema: 1,
@@ -364,7 +383,7 @@ function requestFingerprint(expected: TargetEvidence, request: CapturedProductio
     },
     request: request as unknown as JsonValue,
   };
-  return `sha256:${sha256HexSync(new TextEncoder().encode(stableJson(payload)))}`;
+  return `sha256:${sha256HexSync(new TextEncoder().encode(canonicalJson(payload)))}`;
 }
 
 type AuthorityIdPrefix = "app" | "gen" | "ns" | "op" | "rel" | "req";
@@ -424,6 +443,8 @@ const STORE_INSERT: ClayStore["insert"] = ClayStore.prototype.insert;
 const STORE_UPDATE: ClayStore["update"] = ClayStore.prototype.update;
 const STORE_SOFT_DELETE: ClayStore["softDelete"] = ClayStore.prototype.softDelete;
 const STORE_COMMIT: ClayStore["commit"] = ClayStore.prototype.commit;
+const STORE_COMMIT_IMPORT: ClayStore["commitImport"] = ClayStore.prototype.commitImport;
+const STORE_UNDO_IMPORT: ClayStore["undoImport"] = ClayStore.prototype.undoImport;
 const STORE_GET_SETTING: ClayStore["getSetting"] = ClayStore.prototype.getSetting;
 const STORE_SET_SETTING: ClayStore["setSetting"] = ClayStore.prototype.setSetting;
 const STORE_DELETE_SETTING: ClayStore["deleteSetting"] = ClayStore.prototype.deleteSetting;
@@ -455,6 +476,16 @@ function executeCapturedMutation(
         store,
         request.payload.plan as unknown as Parameters<ClayStore["commit"]>[0],
       );
+    case "import.commit":
+      return captureJsonValue(STORE_COMMIT_IMPORT.call(
+        store,
+        request.payload as unknown as Parameters<ClayStore["commitImport"]>[0],
+      ), new WeakSet());
+    case "import.undo":
+      return captureJsonValue(STORE_UNDO_IMPORT.call(
+        store,
+        request.payload.receiptId,
+      ), new WeakSet());
     case "starter.seed":
       if (starterSeedInstant === null)
         throw invalid("trusted starter seed instant is unavailable");
