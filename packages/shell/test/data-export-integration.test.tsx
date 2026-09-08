@@ -22,6 +22,68 @@ async function waitFor(condition: () => boolean): Promise<void> {
 }
 
 describe("Data view local projection integration", () => {
+  it("keeps relation IDs redacted when explicit Clay IDs are enabled", async () => {
+    const store = await ClayStore.openMemory();
+    const operations: ForwardOpT[] = [
+      { op: "create_table", table: "customers", columns: [
+        { name: "name", label: "Name", type: "text", required: true },
+      ] },
+      { op: "create_table", table: "jobs", columns: [
+        { name: "title", label: "Title", type: "text", required: true },
+        { name: "customer", label: "Customer", type: "relation", required: false,
+          relation: { target_table: "customers", cardinality: "one",
+            unique_targets: false, display_field: "name" } },
+      ] },
+    ];
+    store.commit({ intent: "jobs", summary: "Jobs.", migration: {
+      operations, inverse: deriveInverse(operations, store.registrySnapshot()),
+    } });
+    const customer = store.insert("customers", { name: "Acme" });
+    store.insert("jobs", { title: "Install", customer: customer.id });
+    const projectExport = vi.fn(async (projectionRequest: ProjectionRequestV1) =>
+      projectPlaintextV1(store, projectionRequest));
+    const worker = {
+      registryTables: async () => [...store.registrySnapshot().values()],
+      semanticTrace: async () => store.semanticSchemaTrace(),
+      getSetting: async () => null,
+      sampleCount: async () => 0,
+      operationBatches: async () => [],
+      restorableRows: async () => [],
+      projectExport,
+    } as unknown as WorkerClient;
+    const host = document.createElement("div"); document.body.replaceChildren(host);
+    const root = createRoot(host);
+    await act(async () => root.render(<DataView
+      worker={worker} store={new InProcessAsyncStore(store)} initialTable="jobs"
+      onImport={() => undefined} onWrite={() => undefined} onClose={() => undefined}
+      onError={message => { throw new Error(message); }} onInfo={() => undefined}
+    />));
+    await waitFor(() => document.body.textContent?.includes("Install") ?? false);
+    await act(async () => document.body.querySelector<HTMLButtonElement>(
+      'button[aria-label="Preview Print / CSV for current Data view"]',
+    )!.click());
+    await waitFor(() => document.body.querySelector(".export-dialog tbody") !== null);
+    const dialog = document.body.querySelector<HTMLElement>(".export-dialog")!;
+    const includeIds = [...dialog.querySelectorAll<HTMLLabelElement>(".export-options > label")]
+      .find(label => label.textContent?.includes("Include Clay record IDs"))!
+      .querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    await act(async () => includeIds.click());
+    await waitFor(() => projectExport.mock.calls.length >= 2
+      && [...dialog.querySelectorAll("thead th")].some(header =>
+        header.textContent?.includes("Customer Clay record IDs") ?? false));
+    const redactCustomer = dialog.querySelector<HTMLInputElement>(
+      'input[aria-label^="Redact Customer values"]',
+    )!;
+    await act(async () => redactCustomer.click());
+    await waitFor(() => projectExport.mock.calls.length >= 3
+      && [...dialog.querySelectorAll("tbody td .projection-cell-value")]
+        .filter(cell => cell.textContent === "[redacted]").length === 2);
+    expect(dialog.textContent).not.toContain(String(customer.id));
+    expect(dialog.textContent).toContain("RedactionsCustomer");
+    await act(async () => root.unmount());
+    store.close();
+  });
+
   it("previews the exact filtered, sorted, visible view instead of all loaded rows", async () => {
     const store = await ClayStore.openMemory();
     const operations: ForwardOpT[] = [{ op: "create_table", table: "tasks", columns: [

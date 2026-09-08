@@ -67,6 +67,7 @@ function safeFilename(table: string, kind: ProjectionRequestV1["kind"]): string 
 
 export function ExportDialog(props: {
   worker: ExportWorker;
+  runProjection: <T>(operation: () => Promise<T>) => Promise<T>;
   request: ProjectionRequestV1;
   fieldChoices: readonly ProjectionFieldChoiceV1[];
   onClose: () => void;
@@ -105,7 +106,7 @@ export function ExportDialog(props: {
       ...props.request,
       options: { includeRecordIds, redactedFieldIds: [...redactedFieldIds] },
     } as ProjectionRequestV1;
-    void props.worker.projectExport(request, controller.signal).then(result => {
+    void props.runProjection(() => props.worker.projectExport(request, controller.signal)).then(result => {
       if (!active) return;
       setArtifact(result);
     }).catch(reason => {
@@ -113,7 +114,7 @@ export function ExportDialog(props: {
       setError(reason instanceof Error ? reason.message : "The local export preview failed.");
     });
     return () => { active = false; controller.abort(); };
-  }, [props.worker, props.request, includeRecordIds, redactionKey, retry]);
+  }, [props.worker, props.runProjection, props.request, includeRecordIds, redactionKey, retry]);
 
   useEffect(() => {
     mountedRef.current = true;
