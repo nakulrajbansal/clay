@@ -11,7 +11,20 @@
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { getCookie, setCookie } from "hono/cookie";
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
+import {
+  IntakeFormId,
+  IntakeRelayFormRegistrationV1,
+  IntakeRelaySubmissionV1,
+  IntakeSubmissionId,
+  IntakeToken,
+  MAX_INTAKE_CIPHERTEXT_BYTES,
+} from "@clay/schema/intake";
+import {
+  IntakeRelayError,
+  MAX_INTAKE_DELIVERY_PAGE_BYTES,
+  type IntakeRelayStore,
+} from "./intake-relay";
 import {
   DEFAULT_MODEL, DEFAULT_OPENAI_MODEL, MutationClient, type S1Context,
 } from "@clay/mutation";
@@ -47,6 +60,13 @@ export type BackendOptions = {
   requireAllowedMutationOrigin?: boolean;
   mutationRate?: { max: number; windowMs: number };
   mutationConcurrency?: number;
+  /** Ciphertext-only public intake relay. Omitted keeps all intake routes absent. */
+  intakeRelay?: IntakeRelayStore;
+  /** Per-process edge controls complement the relay store's transactional durable quotas. */
+  intakeRate?: { maxRequests: number; maxBytes: number; windowMs: number };
+  intakeConcurrency?: number;
+  /** Deployment scheduler capability for durable relay TTL cleanup. */
+  intakeCleanupToken?: string;
 };
 
 export function makeDevAuth(): NonNullable<BackendOptions["auth"]> {
@@ -56,6 +76,9 @@ export function makeDevAuth(): NonNullable<BackendOptions["auth"]> {
 export function createApp(opts: BackendOptions): Hono {
   if (opts.auth && !opts.auth.devLinks && !opts.auth.sendEmail)
     throw new Error("magic-link delivery is not configured");
+  if (opts.intakeCleanupToken !== undefined
+      && (opts.intakeCleanupToken.length < 16 || opts.intakeCleanupToken.length > 256))
+    throw new Error("intake cleanup capability must be 16 to 256 characters");
   const app = new Hono();
   const configuredModel: ModelConfig | null = opts.model
     ?? (opts.apiKey ? { provider: "anthropic", apiKey: opts.apiKey, model: DEFAULT_MODEL } : null);
@@ -65,12 +88,13 @@ export function createApp(opts: BackendOptions): Hono {
   app.use("/*", cors({
     origin: (o) => origins.size === 0 ? (o ?? "*") : (o && origins.has(o) ? o : ""),
     credentials: true,
-    allowMethods: ["POST", "GET", "OPTIONS"],
+    allowMethods: ["POST", "GET", "DELETE", "OPTIONS"],
+    allowHeaders: ["Content-Type", "Authorization"],
   }));
 
-  const readBody = async (c: Context): Promise<unknown> => {
+  const readBody = async (c: Context, cap = BODY_CAP): Promise<unknown> => {
     const len = Number(c.req.header("content-length") ?? "0");
-    if (Number.isFinite(len) && len > BODY_CAP)
+    if (Number.isFinite(len) && len > cap)
       throw new Response("body too large", { status: 413 });
     const stream = c.req.raw.body;
     if (!stream) throw new SyntaxError("empty body");
@@ -81,7 +105,7 @@ export function createApp(opts: BackendOptions): Hono {
       const { done, value } = await reader.read();
       if (done) break;
       total += value.byteLength;
-      if (total > BODY_CAP) {
+      if (total > cap) {
         await reader.cancel("body too large");
         throw new Response("body too large", { status: 413 });
       }
@@ -163,6 +187,207 @@ export function createApp(opts: BackendOptions): Hono {
       ...(exposeConnectorToken ? { connector_token: opts.mutationToken } : {}),
     });
   });
+
+  // ---------- Release F: bounded ciphertext-only public intake relay ----------
+  const intakeRelay = opts.intakeRelay;
+  if (intakeRelay) {
+    const intakeBodyCap = Math.ceil(MAX_INTAKE_CIPHERTEXT_BYTES * 4 / 3) + 16 * 1024;
+    const intakeRate = opts.intakeRate ?? {
+      maxRequests: 60, maxBytes: 64 * 1024 * 1024, windowMs: 60_000,
+    };
+    const intakeConcurrency = opts.intakeConcurrency ?? 4;
+    if (![intakeRate.maxRequests, intakeRate.maxBytes, intakeRate.windowMs, intakeConcurrency]
+      .every(value => Number.isSafeInteger(value) && value > 0))
+      throw new Error("intake request limits must be positive integers");
+    const intakeEvents = new Map<string, Array<{ at: number; bytes: number }>>();
+    let activeIntakeSubmissions = 0;
+    const tokenHash = (token: string): string =>
+      createHash("sha256").update(token, "utf8").digest("hex");
+    const bearerToken = (c: Context): string | null => {
+      const match = c.req.header("authorization")?.match(/^Bearer ([A-Za-z0-9_-]{43})$/u);
+      if (!match || !IntakeToken.safeParse(match[1]).success) return null;
+      return match[1]!;
+    };
+    const jsonContent = (c: Context): boolean =>
+      c.req.header("content-type")?.split(";", 1)[0]?.trim().toLowerCase() === "application/json";
+    const requestSource = (c: Context): string => {
+      const forwarded = c.req.header("cf-connecting-ip")
+        ?? c.req.header("x-real-ip")
+        ?? c.req.header("x-forwarded-for")?.split(",", 1)[0]
+        ?? "unknown";
+      const canonical = forwarded.trim().toLowerCase();
+      return canonical.length > 0 && canonical.length <= 128 ? canonical : "unknown";
+    };
+    const reserveIntakeRate = (c: Context, bodyCap: number): Response | null => {
+      const now = Date.now();
+      const source = tokenHash(requestSource(c));
+      const recent = (intakeEvents.get(source) ?? [])
+        .filter(event => event.at > now - intakeRate.windowMs);
+      const declaredText = c.req.header("content-length");
+      const declared = declaredText === undefined ? bodyCap : Number(declaredText);
+      if (!Number.isSafeInteger(declared) || declared < 1 || declared > bodyCap)
+        return c.json({ error: "body too large" }, 413);
+      const bytes = recent.reduce((total, event) => total + event.bytes, 0);
+      if (recent.length >= intakeRate.maxRequests || bytes + declared > intakeRate.maxBytes)
+        return c.json({ error: "intake submission rate limit reached" }, 429);
+      recent.push({ at: now, bytes: declared });
+      intakeEvents.set(source, recent);
+      return null;
+    };
+    const ciphertextByteLength = (value: string): number => {
+      if (!/^[A-Za-z0-9_-]+$/u.test(value)) throw new Error("invalid ciphertext encoding");
+      const bytes = Buffer.from(value, "base64url");
+      if (bytes.toString("base64url") !== value) throw new Error("non-canonical ciphertext encoding");
+      return bytes.byteLength;
+    };
+    const relayFailure = (c: Context, error: unknown): Response => {
+      if (!(error instanceof IntakeRelayError))
+        return c.json({ error: "intake relay failed safely" }, 500);
+      switch (error.relayCode) {
+        case "unauthorized": return c.json({ error: error.message }, 401);
+        case "not_found": return c.json({ error: error.message }, 404);
+        case "expired": return c.json({ error: error.message }, 410);
+        case "conflict": return c.json({ error: error.message }, 409);
+        case "item_too_large": return c.json({ error: error.message }, 413);
+        case "queue_full": case "capacity": return c.json({ error: error.message }, 429);
+        case "invalid": return c.json({ error: error.message }, 400);
+      }
+    };
+
+    const cleanupTokenMatches = (candidate: string | null): boolean => {
+      if (!opts.intakeCleanupToken || !candidate || candidate.length > 256) return false;
+      const expected = createHash("sha256").update(opts.intakeCleanupToken, "utf8").digest();
+      const actual = createHash("sha256").update(candidate, "utf8").digest();
+      return timingSafeEqual(expected, actual);
+    };
+    if (opts.intakeCleanupToken) app.get("/internal/intake/cleanup", async (c) => {
+      c.header("Cache-Control", "no-store");
+      const candidate = c.req.header("authorization")?.match(/^Bearer\s+(.+)$/iu)?.[1] ?? null;
+      if (!cleanupTokenMatches(candidate)) return c.json({ error: "cleanup capability required" }, 401);
+      try { return c.json({ ok: true, ...(await intakeRelay.cleanupExpired()) }); }
+      catch { return c.json({ error: "intake cleanup failed safely" }, 500); }
+    });
+
+    app.post("/intake/forms", async (c) => {
+      c.header("Cache-Control", "no-store");
+      if (!jsonContent(c)) return c.json({ error: "content-type must be application/json" }, 415);
+      const publisherId = auth ? await sessionUser(c) : "local-open-intake";
+      if (!publisherId) return c.json({ error: "sign in before publishing a form" }, 401);
+      let raw: unknown;
+      try { raw = await readBody(c, 8 * 1024); }
+      catch (error) {
+        if (error instanceof Response) return error;
+        return c.json({ error: "bad JSON" }, 400);
+      }
+      const parsed = IntakeRelayFormRegistrationV1.safeParse(raw);
+      if (!parsed.success) return c.json({ error: "invalid intake form registration" }, 400);
+      try {
+        const result = await intakeRelay.register({
+          formId: parsed.data.formId,
+          ownerTokenSha256: tokenHash(parsed.data.ownerToken),
+          submitTokenSha256: tokenHash(parsed.data.submitToken),
+          publisherIdSha256: tokenHash(publisherId),
+          sourceSha256: tokenHash(requestSource(c)),
+          expiresAt: parsed.data.expiresAt,
+          maxCiphertextBytes: parsed.data.maxCiphertextBytes,
+        });
+        return c.json({ formId: parsed.data.formId, expiresAt: parsed.data.expiresAt },
+          result.created ? 201 : 200);
+      } catch (error) { return relayFailure(c, error); }
+    });
+
+    app.post("/intake/forms/:formId/submissions", async (c) => {
+      c.header("Cache-Control", "no-store");
+      const form = IntakeFormId.safeParse(c.req.param("formId"));
+      const token = bearerToken(c);
+      if (!form.success) return c.json({ error: "intake form was not found" }, 404);
+      if (!token) return c.json({ error: "submit capability required" }, 401);
+      if (!jsonContent(c)) return c.json({ error: "content-type must be application/json" }, 415);
+      let authorized: { maxCiphertextBytes: number };
+      try { authorized = await intakeRelay.authorizeSubmission(form.data, tokenHash(token)); }
+      catch (error) { return relayFailure(c, error); }
+      const authorizedBodyCap = Math.min(
+        intakeBodyCap,
+        Math.ceil(authorized.maxCiphertextBytes * 4 / 3) + 16 * 1024,
+      );
+      const rateDenied = reserveIntakeRate(c, authorizedBodyCap);
+      if (rateDenied) return rateDenied;
+      if (activeIntakeSubmissions >= intakeConcurrency)
+        return c.json({ error: "too many concurrent intake submissions" }, 429);
+      activeIntakeSubmissions++;
+      try {
+        let raw: unknown;
+        try { raw = await readBody(c, authorizedBodyCap); }
+        catch (error) {
+          if (error instanceof Response) return error;
+          return c.json({ error: "bad JSON" }, 400);
+        }
+        const parsed = IntakeRelaySubmissionV1.safeParse(raw);
+        if (!parsed.success) return c.json({ error: "invalid encrypted submission" }, 400);
+        let ciphertextBytes: number;
+        try { ciphertextBytes = ciphertextByteLength(parsed.data.envelope.ciphertext); }
+        catch { return c.json({ error: "invalid encrypted submission" }, 400); }
+        try {
+          const result = await intakeRelay.putSubmission(tokenHash(token), {
+            formId: form.data,
+            submissionId: parsed.data.submissionId,
+            envelope: parsed.data.envelope,
+            ciphertextBytes,
+          });
+          return c.json({ submissionId: result.item.submissionId,
+            receivedAt: result.item.receivedAt }, result.created ? 201 : 200);
+        } catch (error) { return relayFailure(c, error); }
+      } finally { activeIntakeSubmissions--; }
+    });
+
+    app.get("/intake/forms/:formId/submissions", async (c) => {
+      c.header("Cache-Control", "no-store");
+      const form = IntakeFormId.safeParse(c.req.param("formId"));
+      const token = bearerToken(c);
+      if (!form.success) return c.json({ error: "intake form was not found" }, 404);
+      if (!token) return c.json({ error: "owner capability required" }, 401);
+      const limitText = c.req.query("limit") ?? "25";
+      if (!/^(?:[1-9]|[1-4][0-9]|50)$/u.test(limitText))
+        return c.json({ error: "list limit must be between 1 and 50" }, 400);
+      const afterText = c.req.query("after") ?? null;
+      if (afterText !== null && !IntakeSubmissionId.safeParse(afterText).success)
+        return c.json({ error: "list cursor is invalid" }, 400);
+      try {
+        return c.json(await intakeRelay.listSubmissions(
+          form.data, tokenHash(token), Number(limitText), afterText,
+          MAX_INTAKE_DELIVERY_PAGE_BYTES,
+        ));
+      } catch (error) { return relayFailure(c, error); }
+    });
+
+    app.delete("/intake/forms/:formId/submissions/:submissionId", async (c) => {
+      c.header("Cache-Control", "no-store");
+      const form = IntakeFormId.safeParse(c.req.param("formId"));
+      const submission = IntakeSubmissionId.safeParse(c.req.param("submissionId"));
+      const token = bearerToken(c);
+      if (!form.success || !submission.success)
+        return c.json({ error: "intake delivery was not found" }, 404);
+      if (!token) return c.json({ error: "owner capability required" }, 401);
+      try {
+        const removed = await intakeRelay.deleteSubmission(
+          form.data, submission.data, tokenHash(token),
+        );
+        return removed ? c.body(null, 204) : c.json({ error: "intake delivery was not found" }, 404);
+      } catch (error) { return relayFailure(c, error); }
+    });
+
+    app.delete("/intake/forms/:formId", async (c) => {
+      c.header("Cache-Control", "no-store");
+      const form = IntakeFormId.safeParse(c.req.param("formId"));
+      const token = bearerToken(c);
+      if (!form.success) return c.json({ error: "intake form was not found" }, 404);
+      if (!token) return c.json({ error: "owner capability required" }, 401);
+      try {
+        await intakeRelay.revokeForm(form.data, tokenHash(token));
+        return c.body(null, 204);
+      } catch (error) { return relayFailure(c, error); }
+    });
+  }
 
   // ---------- Phase 1.2: magic-link auth + quotas (doc 07 §1–3) ----------
   const auth = opts.auth;

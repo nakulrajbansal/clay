@@ -19,6 +19,7 @@ export function AppSwitcher(props: {
   onDelete: (id: string) => void;
   onOpenSearch: () => void;
   onOpenAutomations: () => void;
+  onOpenIntake?: () => void;
   unreadNotifications: number;
   onOpenData: () => void;
   onOpenShapeMap: () => void;
@@ -241,6 +242,15 @@ export function AppSwitcher(props: {
           </ModalDialog>
         ) : null}
       </div>
+      <button
+        className="appbar-action appbar-intake-btn"
+        aria-label="Open public intake"
+        title="Publish secure forms and review encrypted submissions"
+        onClick={props.onOpenIntake}
+      >
+        <span className="appbar-action-icon" aria-hidden="true">⇣</span>
+        <span className="appbar-action-label">Intake</span>
+      </button>
       <button
         className="appbar-action appbar-search-btn"
         aria-label="Search and act"

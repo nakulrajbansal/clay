@@ -6,6 +6,10 @@
     { "source": "/auth/:path*", "destination": "/api" },
     { "source": "/me", "destination": "/api" },
     { "source": "/mutations/:path*", "destination": "/api" },
+    { "source": "/intake/:path*", "destination": "/api" },
     { "source": "/healthz", "destination": "/api" }
+  ],
+  "crons": [
+    { "path": "/api/internal/intake/cleanup", "schedule": "0 * * * *" }
   ]
 }

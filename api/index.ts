@@ -5,6 +5,7 @@ import { Hono } from "hono";
 import { handle } from "hono/vercel";
 import { createApp } from "../packages/backend/src/app";
 import { PgSessions, PostgresAuthStore } from "../packages/backend/src/pg-store";
+import { PostgresIntakeRelayStore } from "../packages/backend/src/intake-relay";
 import { resolveProductionConfig } from "../packages/backend/src/model-config";
 
 export type ServerlessEnv = {
@@ -18,6 +19,7 @@ export type ServerlessEnv = {
   OPENAI_MODEL?: string;
   MODEL_PROVIDER?: string;
   AUTH?: string;
+  CRON_SECRET?: string;
 };
 
 function unavailable(): Hono {
@@ -33,9 +35,13 @@ export async function buildServerlessApp(env: ServerlessEnv): Promise<Hono> {
 
   const store = PostgresAuthStore.connect(config.databaseUrl);
   await store.ensureSchema();
+  const intakeRelay = new PostgresIntakeRelayStore(store.transactionalDb);
+  await intakeRelay.ensureSchema();
   const app = createApp({
     model: config.model,
+    intakeRelay,
     allowedOrigins: [config.appOrigin],
+    ...(env.CRON_SECRET ? { intakeCleanupToken: env.CRON_SECRET } : {}),
     auth: {
       store,
       sessions: new PgSessions(store.db),

@@ -4,6 +4,7 @@
 // doc 06 §1: a curious operator can't read what isn't retained).
 import pg from "pg";
 import type { AuthStore, SessionStore, Usage, User } from "./auth";
+import type { IntakeRelayPgPool } from "./intake-relay";
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS users (
@@ -46,6 +47,14 @@ export class PostgresAuthStore implements AuthStore {
 
   /** shared pool for PgSessions (one connection budget, doc 07 thinness) */
   get db(): Queryable { return this.pool; }
+
+  /** Transaction-capable view used by the bounded intake relay adapter. */
+  get transactionalDb(): IntakeRelayPgPool {
+    const candidate = this.pool as Queryable & Partial<IntakeRelayPgPool>;
+    if (typeof candidate.connect !== "function")
+      throw new Error("Postgres pool does not expose transactions");
+    return candidate as IntakeRelayPgPool;
+  }
 
   static connect(databaseUrl: string): PostgresAuthStore {
     return new PostgresAuthStore(new pg.Pool({ connectionString: databaseUrl }));

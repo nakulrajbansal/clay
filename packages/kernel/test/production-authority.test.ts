@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { LocalIntakeFormV1 as LocalIntakeFormSchema } from "@clay/schema/intake";
 import {
   Bridge, ClayStore, StoreRpcClient, deriveInverse, openMemoryDriver, serveStore,
   type DbDriver, type ForwardOpT, type MessagePortLike,
@@ -247,7 +248,8 @@ describe("production Store authority", () => {
       expect(Reflect.ownKeys(reader).sort()).toEqual([
         "attachmentStorage", "attachmentsForRecord", "attemptStats", "automationRuns",
         "fieldProvenance", "getSetting", "globalSearch", "headVersion", "history",
-        "listAutomations", "listNotifications", "livePanels", "operationBatches",
+        "intakeDeliveryFailures", "intakeInbox", "intakeReceipts", "listAutomations", "listIntakeForms",
+        "listNotifications", "livePanels", "operationBatches",
         "panelProvenance", "previewRelationConversion",
         "privateMetricsSummary", "query", "queryBounded", "readAttachment", "registrySnapshot",
         "restorableRows", "rowHistory", "semanticSchemaTrace", "simulateAutomation",
@@ -255,6 +257,11 @@ describe("production Store authority", () => {
       ].sort());
       for (const forbidden of [
         "insert", "update", "softDelete", "setSetting", "deleteSetting", "commit",
+        "saveIntakeForm", "markIntakeFormPublished", "revokeIntakeForm", "markIntakeFormExpired",
+        "recordIntakeDeliveryFailure", "authorizeIntakeDeliveryDiscard", "resolveIntakeDeliveryFailure",
+        "stageIntakeSubmission", "rejectIntakeSubmission", "simulateIntakeAutoAccept",
+        "enableIntakeAutoAccept", "disableIntakeAutoAccept", "processIntakeAutoAccept",
+        "acceptIntakeSubmission", "undoIntakeReceipt",
         "driver", "close", "snapshot", "shadowCopy", "observer", "privateMetrics",
       ]) expect((reader as unknown as Record<string, unknown>)[forbidden]).toBeUndefined();
       expect(reader.query({ from: "projects" })).toHaveLength(1);
@@ -1391,6 +1398,88 @@ describe("production Store authority", () => {
       expect(authority.query({ from: "projects" })).toHaveLength(1);
       expect(authority.inspectAuthority().targetReservations.map(row => row.state))
         .toEqual(["committed", "committed", "committed"]);
+    } finally {
+      authority.close();
+    }
+  });
+
+  it("routes intake staging, trusted acceptance, and undo through production authority", async () => {
+    const driver = await cataloguedStore();
+    const authority = ProductionStoreAuthority.openExisting(driver, {
+      inventory: { ...legacyInventory, catalogPresent: true },
+      storageKey: "default",
+      releaseId: opaque("rel", "i"),
+      nowMs: Date.now(),
+      leaseTtlMs: 60_000,
+    });
+    try {
+      const trace = authority.readStore().semanticSchemaTrace();
+      const table = trace.tables.find(candidate => candidate.name === "projects")!;
+      const name = trace.fields.find(candidate =>
+        candidate.tableId === table.tableId && candidate.fieldName === "name")!;
+      const form = {
+        schema: 1 as const,
+        publicForm: {
+          schema: 1 as const,
+          formId: "form_abcdefghijklmnopqrstuvwxyz",
+          revision: 1,
+          title: "Project request",
+          description: "Request a project.",
+          target: { tableId: table.tableId, expectedSchemaVersion: 1 },
+          fields: [{
+            fieldId: name.fieldId,
+            label: "Name",
+            type: "text" as const,
+            required: true,
+            maxLength: 100,
+            options: [],
+          }],
+          fileRequests: [],
+          encryption: {
+            algorithm: "ECDH-P256-HKDF-SHA256-AES-256-GCM" as const,
+            ownerPublicKey: "A".repeat(87),
+          },
+          delivery: {
+            submitToken: "s".repeat(43),
+            expiresAt: "2026-10-01T00:00:00.000Z",
+          },
+        },
+        ownerPrivateKey: "A".repeat(184),
+        ownerToken: "o".repeat(43),
+        relayBaseUrl: "https://relay.example.test",
+        publishedAt: "2026-09-07T12:00:00.000Z",
+        revokedAt: null,
+      };
+      expect(LocalIntakeFormSchema.parse(form)).toEqual(form);
+      await authority.executeMutation({
+        requestId: opaque("req", "a"), route: "intake.saveForm", payload: { form },
+      });
+      const submission = {
+        schema: 1 as const,
+        formId: form.publicForm.formId,
+        formRevision: 1,
+        submissionId: "sub_abcdefghijklmnopqrstuvwxyz",
+        submittedAt: "2026-09-07T12:01:00.000Z",
+        values: [{ fieldId: name.fieldId, value: "Ada" }],
+        files: [],
+      };
+      await authority.executeMutation({
+        requestId: opaque("req", "b"), route: "intake.stageSubmission", payload: { submission },
+      });
+      expect(authority.query({ from: "projects" })).toHaveLength(1);
+      const accepted = await authority.executeMutation({
+        requestId: opaque("req", "c"), route: "intake.acceptSubmission",
+        payload: { submissionId: submission.submissionId, mode: "manual", approvedFileIds: [] },
+      });
+      const receipt = accepted.result as { id: string; rowId: string };
+      expect(authority.query({ from: "projects" }).map(row => row.name)).toContain("Ada");
+      await authority.executeMutation({
+        requestId: opaque("req", "d"), route: "intake.undoReceipt",
+        payload: { receiptId: receipt.id },
+      });
+      expect(authority.query({ from: "projects" }).map(row => row.name)).toEqual(["Preserved"]);
+      expect(authority.inspectAuthority().targetReservations.map(row => row.state))
+        .toEqual(["committed", "committed", "committed", "committed"]);
     } finally {
       authority.close();
     }

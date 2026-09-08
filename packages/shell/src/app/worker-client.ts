@@ -4,7 +4,9 @@ import type {
   AutomationDefinition, AutomationDefinitionInput, AutomationRun, AutomationSimulation,
   BatchMutation, BatchReceipt, ClayNotification, DebugEvent, FieldProvenance,
   GlobalSearchResult,
-  HistoryEntry, LivePanel, PanelProvenance,
+  HistoryEntry, IntakeAcceptanceReceipt, IntakeAutoAcceptSimulation, IntakeDeliveryFailure,
+  IntakeInboxItem,
+  LivePanel, PanelProvenance,
   PrivateMetricEvent, PrivateMetricsSummary, RegTable, RelationConversionPreview,
   RelationConversionRequest, RelationConversionResult, SemanticSchemaTraceV1, Suggestion,
 } from "@clay/kernel";
@@ -14,6 +16,10 @@ import {
   type ProjectionRequestV1,
 } from "@clay/kernel/projection";
 import { ClayError } from "@clay/kernel/errors";
+import type {
+  IntakeAutoAcceptDraftV1, IntakeAutoAcceptRuleV1,
+  IntakeSubmissionPlaintextV1, LocalIntakeFormV1,
+} from "@clay/schema/intake";
 import type { IntentOutcome } from "../worker/db-worker";
 
 export type TraceEntry = { at: string; intent: string; events: DebugEvent[] };
@@ -253,6 +259,79 @@ export class WorkerClient {
   }
   purgeDeletedAttachments(): Promise<{ files: number; bytes: number }> {
     return this.call("purgeDeletedAttachments", {});
+  }
+  listIntakeForms(): Promise<LocalIntakeFormV1[]> {
+    return this.call("listIntakeForms", {});
+  }
+  saveIntakeForm(form: LocalIntakeFormV1): Promise<LocalIntakeFormV1> {
+    return this.call("saveIntakeForm", { form });
+  }
+  markIntakeFormPublished(formId: string, publishedAt: string): Promise<LocalIntakeFormV1> {
+    return this.call("markIntakeFormPublished", { formId, publishedAt });
+  }
+  revokeIntakeForm(formId: string, revokedAt: string): Promise<LocalIntakeFormV1> {
+    return this.call("revokeIntakeForm", { formId, revokedAt });
+  }
+  markIntakeFormExpired(formId: string, expiredAt: string): Promise<LocalIntakeFormV1> {
+    return this.call("markIntakeFormExpired", { formId, expiredAt });
+  }
+  intakeInbox(): Promise<IntakeInboxItem[]> {
+    return this.call("intakeInbox", {});
+  }
+  intakeReceipts(): Promise<IntakeAcceptanceReceipt[]> {
+    return this.call("intakeReceipts", {});
+  }
+  intakeDeliveryFailures(): Promise<IntakeDeliveryFailure[]> {
+    return this.call("intakeDeliveryFailures", {});
+  }
+  recordIntakeDeliveryFailure(input: {
+    formId: string; submissionId: string; envelopeSha256: string; failedAt: string;
+  }): Promise<IntakeDeliveryFailure> {
+    return this.call("recordIntakeDeliveryFailure", { failure: input });
+  }
+  authorizeIntakeDeliveryDiscard(
+    formId: string, submissionId: string, authorizedAt: string,
+  ): Promise<IntakeDeliveryFailure> {
+    return this.call("authorizeIntakeDeliveryDiscard", { formId, submissionId, authorizedAt });
+  }
+  resolveIntakeDeliveryFailure(
+    formId: string, submissionId: string, resolution: "staged" | "discarded", resolvedAt: string,
+  ): Promise<IntakeDeliveryFailure | null> {
+    return this.call("resolveIntakeDeliveryFailure", {
+      formId, submissionId, resolution, resolvedAt,
+    });
+  }
+  stageIntakeSubmission(submission: IntakeSubmissionPlaintextV1): Promise<IntakeInboxItem> {
+    return this.call("stageIntakeSubmission", { submission });
+  }
+  rejectIntakeSubmission(submissionId: string): Promise<IntakeInboxItem> {
+    return this.call("rejectIntakeSubmission", { submissionId });
+  }
+  simulateIntakeAutoAccept(draft: IntakeAutoAcceptDraftV1): Promise<IntakeAutoAcceptSimulation> {
+    return this.call("simulateIntakeAutoAccept", { draft });
+  }
+  enableIntakeAutoAccept(
+    draft: IntakeAutoAcceptDraftV1,
+    simulationFingerprint: string,
+  ): Promise<IntakeAutoAcceptRuleV1> {
+    return this.call("enableIntakeAutoAccept", { draft, simulationFingerprint });
+  }
+  disableIntakeAutoAccept(formId: string): Promise<null> {
+    return this.call("disableIntakeAutoAccept", { formId });
+  }
+  processIntakeAutoAccept(formId: string): Promise<IntakeAcceptanceReceipt[]> {
+    return this.call("processIntakeAutoAccept", { formId });
+  }
+  acceptIntakeSubmission(
+    submissionId: string,
+    approvedFileIds: string[],
+  ): Promise<IntakeAcceptanceReceipt> {
+    return this.call("acceptIntakeSubmission", {
+      submissionId, mode: "manual", approvedFileIds,
+    });
+  }
+  undoIntakeReceipt(receiptId: string): Promise<IntakeAcceptanceReceipt> {
+    return this.call("undoIntakeReceipt", { receiptId });
   }
   listAutomations(): Promise<AutomationDefinition[]> {
     return this.call("listAutomations", {});

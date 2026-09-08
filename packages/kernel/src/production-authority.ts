@@ -142,7 +142,8 @@ export function captureBrowserBootInput(value: unknown): ProductionBrowserBootIn
 type ProductionStoreReaderMethod =
   | "attachmentStorage" | "attachmentsForRecord" | "attemptStats" | "automationRuns"
   | "fieldProvenance" | "getSetting" | "globalSearch" | "headVersion" | "history"
-  | "listAutomations" | "listNotifications" | "livePanels" | "operationBatches"
+  | "listAutomations" | "listNotifications" | "listIntakeForms" | "intakeInbox"
+  | "intakeDeliveryFailures" | "intakeReceipts" | "livePanels" | "operationBatches"
   | "panelProvenance" | "previewRelationConversion"
   | "privateMetricsSummary" | "query" | "queryBounded" | "readAttachment" | "registrySnapshot"
   | "restorableRows" | "rowHistory" | "semanticSchemaTrace" | "simulateAutomation"
@@ -164,6 +165,10 @@ const PINNED_READS = Object.freeze({
   history: ClayStore.prototype.history,
   listAutomations: ClayStore.prototype.listAutomations,
   listNotifications: ClayStore.prototype.listNotifications,
+  listIntakeForms: ClayStore.prototype.listIntakeForms,
+  intakeInbox: ClayStore.prototype.intakeInbox,
+  intakeDeliveryFailures: ClayStore.prototype.intakeDeliveryFailures,
+  intakeReceipts: ClayStore.prototype.intakeReceipts,
   livePanels: ClayStore.prototype.livePanels,
   operationBatches: ClayStore.prototype.operationBatches,
   panelProvenance: ClayStore.prototype.panelProvenance,
@@ -194,6 +199,10 @@ function createStoreReader(store: ClayStore): ProductionStoreReader {
     history: PINNED_READS.history.bind(store),
     listAutomations: PINNED_READS.listAutomations.bind(store),
     listNotifications: PINNED_READS.listNotifications.bind(store),
+    listIntakeForms: PINNED_READS.listIntakeForms.bind(store),
+    intakeInbox: PINNED_READS.intakeInbox.bind(store),
+    intakeDeliveryFailures: PINNED_READS.intakeDeliveryFailures.bind(store),
+    intakeReceipts: PINNED_READS.intakeReceipts.bind(store),
     livePanels: PINNED_READS.livePanels.bind(store),
     operationBatches: PINNED_READS.operationBatches.bind(store),
     panelProvenance: PINNED_READS.panelProvenance.bind(store),

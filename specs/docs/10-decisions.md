@@ -905,3 +905,26 @@ ADR-049 (2026-09-04) Catalog schema 1 proceeds; raw SQLite-pair target digests a
   starter seeding are authority-routed. Remaining lifecycle, preview, automation, import,
   attachment, undo, restore, and archive routes remain fail-closed and therefore block
   protection publication and release certification.
+
+ADR-050 (2026-09-07) Public intake is a ciphertext delivery boundary with local commit authority
+  CONTEXT: Release F adds public forms and secure file requests without turning the
+  hosted service into a record store or giving a relay canonical-write authority.
+  DECISION: freeze strict version-1 schemas at `@clay/schema/intake`. Public forms
+  expose only stable target/field IDs, bounded presentation metadata, a submit-only
+  capability, and an ECDH P-256 public key. Each submission is encrypted in the
+  submitter's browser with ephemeral ECDH, HKDF-SHA-256, and AES-256-GCM. The relay
+  accepts only a closed ciphertext envelope plus bounded delivery identifiers and
+  timestamps, hashes owner/submit capabilities at rest, caps item/count/retention,
+  and never receives the owner private key or decrypted field/file content.
+  Decrypted submissions remain untrusted local inbox items. The local kernel resolves
+  stable IDs against the exact form schema version, validates scalar values and every
+  file's size, type, signature, active-content markers, and SHA-256, and keeps bytes
+  quarantined until an explicit acceptance. Manual acceptance is the default. An
+  auto-accept rule is a separately enabled finite equals/is-present predicate over
+  allowlisted scalar fields, requires a deterministic local simulation fingerprint,
+  cannot accept forms containing file requests, and is rechecked at commit. Accepted
+  rows and reviewed files activate in one trusted transaction with a conflict-checked,
+  undoable receipt; undo deactivates both the row and activated file bytes.
+  CONSEQUENCE: public users need no Clay account and the hosted operator cannot read
+  submissions. Form/schema changes intentionally stale old acceptance authority and
+  require re-authoring/republication rather than silently widening scope.
