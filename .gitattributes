@@ -20,3 +20,6 @@
 *.jpg  binary
 *.ico  binary
 *.wasm binary
+
+# Canonical export fixture includes required CRLF record separators.
+packages/kernel/test/fixtures/projection-current-view-v1.csv binary
