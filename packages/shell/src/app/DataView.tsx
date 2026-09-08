@@ -12,6 +12,7 @@ import type {
   SemanticSchemaTraceV1,
 } from "@clay/kernel";
 import type { WorkerClient } from "./worker-client";
+import type { FirstSuccessState } from "./first-success-state";
 import { loadAllTableRows } from "./paged-query";
 import { ModalDialog } from "./ModalDialog";
 export { loadAllTableRows } from "./paged-query";
@@ -107,6 +108,7 @@ export function DataView(props: {
   initialTable?: string | null;
   initialRecordId?: string | null;
   onWrite: (table: string) => void;
+  onEverydayAction?: (state: FirstSuccessState) => void;
   onImport: (file: File) => void;
   onClose: () => void;
   returnFocusRef?: RefObject<HTMLElement | null>;
@@ -588,7 +590,7 @@ export function DataView(props: {
           {table ? (
             <button
               className="dataview-import"
-              title={`Download “${table.name}” as a spreadsheet — your data is always yours`}
+              title={`Download “${table.name}” as a CSV file — your data is always yours`}
               onClick={() => {
                 const esc = (v: unknown): string => {
                   const s = typeof v === "object" && v !== null
@@ -1035,11 +1037,11 @@ export function DataView(props: {
       ) : (
         <div className="dataview-empty">
           <p>No data yet.</p>
-          <p className="dataview-empty-sub">Import a spreadsheet, or describe an app and Clay creates the tables for you.</p>
+          <p className="dataview-empty-sub">Import a CSV, TSV, or JSON data file, or describe an app and Clay creates the tables for you.</p>
           <label className="empty-upload file-label">
-            ⬆ Upload a spreadsheet (CSV or JSON)
+            ⬆ Upload a CSV, TSV, or JSON data file
             <input className="visually-hidden-file" type="file"
-              aria-label="Upload a CSV or JSON spreadsheet" accept=".csv,.tsv,.txt,.json"
+              aria-label="Upload a CSV, TSV, or JSON data file" accept=".csv,.tsv,.txt,.json"
               onChange={e => { const f = e.target.files?.[0]; if (f) props.onImport(f); e.target.value = ""; }} />
           </label>
         </div>
@@ -1060,6 +1062,7 @@ export function DataView(props: {
             props.onWrite(changedTable);
             if (changedTable === selected) void reload(changedTable);
           }}
+          onEverydayAction={props.onEverydayAction}
           onError={props.onError}
           onInfo={props.onInfo}
           onConfirm={props.onConfirm}

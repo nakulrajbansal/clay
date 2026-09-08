@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ClayError, createSystemTables, openMemoryDriver, type DbDriver } from "../src/index";
-import { LiveWriteGuard } from "../src/live-write-guard";
+import { createLiveWriteGuard } from "../src/live-write-guard";
 
 function expectCode(run: () => unknown, code: string): void {
   try {
@@ -13,10 +13,34 @@ function expectCode(run: () => unknown, code: string): void {
 }
 
 describe("live SQLite write guard", () => {
+  it("returns a guarded driver and a separate frozen authority capability", async () => {
+    const raw = await openMemoryDriver();
+    raw.exec("CREATE TABLE guarded_items(id TEXT PRIMARY KEY)");
+    const session = createLiveWriteGuard(raw);
+    try {
+      expect(Object.isFrozen(session)).toBe(true);
+      expect(Object.isFrozen(session.authority)).toBe(true);
+      expect("runAuthorized" in session.driver).toBe(false);
+      expect("run" in session.driver).toBe(false);
+      expectCode(
+        () => session.driver.exec("INSERT INTO guarded_items VALUES ('ambient')"),
+        "E_STALE_WRITE_EPOCH",
+      );
+      session.authority.run(() => {
+        session.driver.exec("INSERT INTO guarded_items VALUES ('authorized')");
+      });
+      expect(session.driver.select("SELECT id FROM guarded_items"))
+        .toEqual([{ id: "authorized" }]);
+    } finally {
+      session.driver.close();
+    }
+  });
+
   it("denies ambient writes and permits one synchronous outer transaction", async () => {
     const raw = await openMemoryDriver();
     raw.exec("CREATE TABLE guarded_items(id TEXT PRIMARY KEY, value TEXT NOT NULL)");
-    const driver = new LiveWriteGuard(raw);
+    const session = createLiveWriteGuard(raw);
+    const driver = session.driver;
     try {
       expect(driver.select("SELECT * FROM guarded_items")).toEqual([]);
       expectCode(
@@ -40,7 +64,7 @@ describe("live SQLite write guard", () => {
       }), "E_STALE_WRITE_EPOCH");
       expect(driver.select("SELECT * FROM guarded_items")).toEqual([]);
 
-      driver.runAuthorized(() => {
+      session.authority.run(() => {
         driver.exec("INSERT INTO guarded_items VALUES ('allowed', 'committed')");
         driver.tx(() => driver.exec(
           "UPDATE guarded_items SET value = 'nested savepoint' WHERE id = 'allowed'",
@@ -61,18 +85,19 @@ describe("live SQLite write guard", () => {
         close: raw.close.bind(raw), snapshot: raw.snapshot.bind(raw),
         exportDatabases: raw.exportDatabases.bind(raw),
       };
-      expectCode(() => new LiveWriteGuard(forwarded), "E_STALE_WRITE_EPOCH");
+      expectCode(() => createLiveWriteGuard(forwarded), "E_STALE_WRITE_EPOCH");
     } finally { raw.close(); }
   });
 
   it("rejects opening write authority inside an ambient transaction", async () => {
     const raw = await openMemoryDriver();
     raw.exec("CREATE TABLE guarded_items(id TEXT PRIMARY KEY)");
-    const driver = new LiveWriteGuard(raw);
+    const session = createLiveWriteGuard(raw);
+    const driver = session.driver;
     try {
       let escaped = false;
       expectCode(() => driver.tx(() => {
-        const receipt = driver.runAuthorized(() => {
+        const receipt = session.authority.run(() => {
           driver.exec("INSERT INTO guarded_items VALUES ('must-rollback')");
           return "SUCCESS_RECEIPT";
         });
@@ -88,14 +113,19 @@ describe("live SQLite write guard", () => {
   it("enforces authority ownership on the physical driver", async () => {
     const raw = await openMemoryDriver();
     raw.exec("CREATE TABLE guarded_items(id TEXT PRIMARY KEY)");
-    const driver = new LiveWriteGuard(raw);
+    const session = createLiveWriteGuard(raw);
+    const driver = session.driver;
     try {
-      expect(Reflect.ownKeys(driver)).toEqual([]);
+      expect(Reflect.ownKeys(driver).sort()).toEqual([
+        "close", "exec", "exportDatabases", "select", "snapshot", "tx",
+      ]);
+      expect((driver as unknown as Record<string, unknown>).run).toBeUndefined();
+      expect((driver as unknown as Record<string, unknown>).runAuthorized).toBeUndefined();
       for (const method of ["execute", "query", "control", "internalTx", "isAutocommit"])
         expect(Reflect.get(raw, method), method).toBeUndefined();
       let escaped = false;
       expectCode(() => raw.tx(() => {
-        const receipt = driver.runAuthorized(() => {
+        const receipt = session.authority.run(() => {
           driver.exec("INSERT INTO guarded_items VALUES ('must-rollback')");
           return "SUCCESS_RECEIPT";
         });
@@ -107,20 +137,20 @@ describe("live SQLite write guard", () => {
         () => raw.exec("INSERT INTO guarded_items VALUES ('raw-bypass')"),
         "E_STALE_WRITE_EPOCH",
       );
-      expectCode(() => driver.runAuthorized(() => {
+      expectCode(() => session.authority.run(() => {
         raw.exec("INSERT INTO guarded_items VALUES ('raw-during-authority')");
       }), "E_STALE_WRITE_EPOCH");
       for (const [index, statement] of [
         "COMMIT", "ROLLBACK", "ROLLBACK TO clay_sp_0",
         "RELEASE clay_sp_0", "SAVEPOINT nested",
       ].entries()) {
-        expectCode(() => driver.runAuthorized(() => {
+        expectCode(() => session.authority.run(() => {
           driver.exec("INSERT INTO guarded_items VALUES (?)", [`control-${index}`]);
           driver.exec(statement);
         }), "E_STALE_WRITE_EPOCH");
       }
       expect(driver.select("SELECT * FROM guarded_items")).toEqual([]);
-      expectCode(() => new LiveWriteGuard(raw), "E_STALE_WRITE_EPOCH");
+      expectCode(() => createLiveWriteGuard(raw), "E_STALE_WRITE_EPOCH");
     } finally {
       driver.close();
     }
@@ -142,7 +172,8 @@ describe("live SQLite write guard", () => {
   it("rejects sqlite-wasm options objects before they can replace transaction SQL", async () => {
     const raw = await openMemoryDriver();
     raw.exec("CREATE TABLE guarded_items(id TEXT PRIMARY KEY)");
-    const driver = new LiveWriteGuard(raw);
+    const session = createLiveWriteGuard(raw);
+    const driver = session.driver;
     try {
       const smuggled = {
         sql: "ROLLBACK; SAVEPOINT clay_sp_0",
@@ -150,7 +181,7 @@ describe("live SQLite write guard", () => {
       };
       let escaped = false;
       expectCode(() => {
-        const receipt = driver.runAuthorized(() => {
+        const receipt = session.authority.run(() => {
           driver.exec("INSERT INTO guarded_items VALUES ('smuggled')");
           (driver.exec as unknown as (sql: unknown) => void)(smuggled);
           return "SUCCESS_RECEIPT";
@@ -167,11 +198,12 @@ describe("live SQLite write guard", () => {
   it("rejects transaction control appended to trigger DDL", async () => {
     const raw = await openMemoryDriver();
     raw.exec("CREATE TABLE guarded_items(id TEXT PRIMARY KEY)");
-    const driver = new LiveWriteGuard(raw);
+    const session = createLiveWriteGuard(raw);
+    const driver = session.driver;
     try {
       let escaped = false;
       expectCode(() => {
-        const receipt = driver.runAuthorized(() => {
+        const receipt = session.authority.run(() => {
           driver.exec("INSERT INTO guarded_items VALUES ('trigger-smuggled')");
           driver.exec(`CREATE TRIGGER injected AFTER INSERT ON guarded_items
             BEGIN SELECT 1; END; ROLLBACK; SAVEPOINT clay_sp_0`);
@@ -192,14 +224,15 @@ describe("live SQLite write guard", () => {
   it("rejects malformed bind containers before forwarding to sqlite-wasm", async () => {
     const raw = await openMemoryDriver();
     raw.exec("CREATE TABLE guarded_items(id TEXT PRIMARY KEY)");
-    const driver = new LiveWriteGuard(raw);
+    const session = createLiveWriteGuard(raw);
+    const driver = session.driver;
     try {
-      expectCode(() => driver.runAuthorized(() => {
+      expectCode(() => session.authority.run(() => {
         (driver.exec as unknown as (sql: unknown, params: unknown) => void)(
           "INSERT INTO guarded_items VALUES (?)", { length: 0 },
         );
       }), "E_STALE_WRITE_EPOCH");
-      expectCode(() => driver.runAuthorized(() => {
+      expectCode(() => session.authority.run(() => {
         (driver.exec as unknown as (sql: unknown, params: unknown) => void)(
           "INSERT INTO guarded_items VALUES (?)", [{}],
         );
@@ -213,20 +246,21 @@ describe("live SQLite write guard", () => {
   it("rolls back failures, drops authorization afterward, and rejects async scope", async () => {
     const raw = await openMemoryDriver();
     raw.exec("CREATE TABLE guarded_items(id TEXT PRIMARY KEY)");
-    const driver = new LiveWriteGuard(raw);
+    const session = createLiveWriteGuard(raw);
+    const driver = session.driver;
     try {
-      expect(() => driver.runAuthorized(() => {
+      expect(() => session.authority.run(() => {
         driver.exec("INSERT INTO guarded_items VALUES ('rolled-back')");
         throw new Error("fail the write");
       })).toThrow("fail the write");
       expect(driver.select("SELECT * FROM guarded_items")).toEqual([]);
       expectCode(() => driver.exec("INSERT INTO guarded_items VALUES ('after')"), "E_STALE_WRITE_EPOCH");
       expectCode(
-        () => driver.runAuthorized(() => Promise.resolve("not synchronous")),
+        () => session.authority.run(() => Promise.resolve("not synchronous")),
         "E_STALE_WRITE_EPOCH",
       );
       expectCode(
-        () => driver.runAuthorized(() => driver.runAuthorized(() => undefined)),
+        () => session.authority.run(() => session.authority.run(() => undefined)),
         "E_STALE_WRITE_EPOCH",
       );
     } finally {
@@ -237,14 +271,15 @@ describe("live SQLite write guard", () => {
   it("rejects callable thenables and rolls back their synchronous writes", async () => {
     const raw = await openMemoryDriver();
     raw.exec("CREATE TABLE guarded_items(id TEXT PRIMARY KEY)");
-    const driver = new LiveWriteGuard(raw);
+    const session = createLiveWriteGuard(raw);
+    const driver = session.driver;
     try {
       const callableThenable = Object.assign(
         () => "SUCCESS_RECEIPT",
         { then: (_resolve: unknown, reject: (reason: unknown) => void) =>
           reject(new Error("nested callback rejected")) },
       );
-      expectCode(() => driver.runAuthorized(() => {
+      expectCode(() => session.authority.run(() => {
         driver.exec("INSERT INTO guarded_items VALUES ('committed-before-rejection')");
         return callableThenable;
       }), "E_STALE_WRITE_EPOCH");
@@ -258,7 +293,8 @@ describe("live SQLite write guard", () => {
     const raw = await openMemoryDriver();
     createSystemTables(raw);
     raw.exec("CREATE TABLE guarded_items(id TEXT PRIMARY KEY)");
-    const driver = new LiveWriteGuard(raw);
+    const session = createLiveWriteGuard(raw);
+    const driver = session.driver;
     try {
       const preview = await driver.snapshot();
       preview.exec("INSERT INTO guarded_items VALUES ('preview')");

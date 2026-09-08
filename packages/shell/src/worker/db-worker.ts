@@ -3,22 +3,30 @@
 // run here. The main thread gets: a command protocol (below) plus
 // serveStore RPC ports for the Bridge's AsyncStore (live and shadow).
 // Records never leave this worker except over those ports to the Bridge.
-import {
-  ClayStore, MutationPipeline, deleteAppStorage, openBrowserDriver,
-  portFromMessagePort, serveStore, wipeBrowserStorage,
-  type DbDriver, type DebugEvent, type LivePanel,
-  type PanelProvenance, type PreviewHandle, type PrivateMetricEvent,
+import type {
+  CheckpointObservation, DebugEvent, DeviceStateResult, LivePanel, PanelProvenance,
+  PreparedMutationPreview, TargetIdentityV1,
 } from "@clay/kernel";
-import { MutationClient } from "@clay/mutation";
-import { removeSampleRows } from "../shells/seed";
+import { deriveDeviceState, targetIdentityEquals } from "@clay/kernel";
+import { portFromMessagePort, serveStore } from "@clay/kernel/worker-rpc";
+import type { StoreServerControl } from "@clay/kernel/worker-rpc";
+import { ClayError } from "@clay/kernel/errors";
+import type {
+  ProductionStoreAuthority,
+  ProductionStoreReader,
+} from "@clay/kernel/worker-authority";
+import type {
+  Planner, PlannerContext, PlannerResult,
+} from "@clay/kernel/planner-pipeline";
+import { createStarterSeedBundle } from "../shells/seed";
+import { parseSampleProvenanceLedger } from "../shells/sample-provenance";
 import {
-  fillSampleRows, recordProvenanceSummary, sampleRowCount,
-} from "./samples";
-import { addColumnCommit, renameColumnCommit } from "./schema-ops";
-import {
-  activateImportedAppAtomically, activateStarterAtomically, importTableAtomically,
-  readFirstRunPublication, undoFirstRunImportAtomically,
-} from "./first-run-activation";
+  applyFirstSuccessEvent,
+  emptyFirstSuccessState,
+  parseFirstSuccessState,
+} from "../app/first-success-state";
+import { createSampleFillBundle } from "./samples";
+import { DB_WORKER_ROUTE_CENSUS } from "./mutation-route-census";
 
 export type PreviewInfo = {
   summary: string;
@@ -34,22 +42,338 @@ export type IntentOutcome =
   | { status: "preview"; preview: PreviewInfo }
   | { status: "failed"; stage: string; reasons: string[]; repaired: boolean };
 
-type Request = { id: number; op: string; payload?: Record<string, unknown> };
+export type DeviceProtectionProjection = Readonly<{
+  result: DeviceStateResult;
+  target: TargetIdentityV1 | null;
+  checkpoint: CheckpointObservation;
+}>;
 
-let store: ClayStore | null = null;
-let storeDriver: DbDriver | null = null;
+type Request = {
+  id: number;
+  requestId?: string;
+  op: string;
+  payload?: unknown;
+};
+
+
+let authority: ProductionStoreAuthority | null = null;
+type WorkerBootProjection = {
+  persistent: true; seeded: boolean; shellId: string | null;
+  selectedAppInstanceId: string; catalogGeneration: string;
+  apps: Array<{ id: string; name: string; shellId: string }>;
+};
+type AuthorityBoot = Readonly<{
+  key: string;
+  promise: Promise<WorkerBootProjection>;
+}>;
+let authorityBoot: AuthorityBoot | null = null;
+let openedBootAliases: ReadonlySet<string> | null = null;
+let store: ProductionStoreReader | null = null;
 let persistent = false;
-let persistRequested = false;
-let pending: PreviewHandle | null = null;
+type PendingPreview = {
+  preview: PreparedMutationPreview;
+  decision: "open" | "keeping" | "discarding";
+};
+let pending: PendingPreview | null = null;
 let pipelineRun: Promise<IntentOutcome> | null = null;
-let currentAppId: string | undefined;   // which app's OPFS files are open (G4)
-// Device-global model access (B1): set by the main thread from localStorage,
-// shared across every app, never persisted in an app DB.
-type ModelProviderId = "clay" | "openai" | "anthropic" | "codex";
-let modelAccess: {
-  provider?: ModelProviderId; apiKey?: string; backendUrl?: string;
-  session?: string; providerToken?: string;
-} = {};
+let shuttingDown = false;
+let shutdownRun: Promise<null> | null = null;
+let activeOperations = 0;
+let storeAdmissionClosed = false;
+const idleWaiters = new Set<() => void>();
+const storePorts = new Set<MessagePort>();
+const storeServers = new Set<StoreServerControl>();
+
+function beginCountedOperation(closed: boolean): () => void {
+  if (closed)
+    throw new ClayError("E_CONFLICT", "worker shutdown is already in progress");
+  activeOperations++;
+  let finished = false;
+  return () => {
+    if (finished) return;
+    finished = true;
+    activeOperations--;
+    if (activeOperations === 0) {
+      for (const resolve of idleWaiters) resolve();
+      idleWaiters.clear();
+    }
+  };
+}
+
+function beginWorkerOperation(): () => void {
+  return beginCountedOperation(shuttingDown);
+}
+
+function beginStoreOperation(): () => void {
+  return beginCountedOperation(storeAdmissionClosed);
+}
+
+function waitForWorkerIdle(): Promise<void> {
+  if (activeOperations === 0) return Promise.resolve();
+  return new Promise(resolve => idleWaiters.add(resolve));
+}
+
+const PLANNER_RAW_CAP = 64 * 1024;
+const PLANNER_DIAGNOSTIC_CAP = 24;
+const PLANNER_DIAGNOSTIC_LENGTH = 512;
+const PLANNER_BRIDGE_TIMEOUT_MS = 180_000;
+const PLANNER_CONTEXT_CAP = 64 * 1024;
+
+function mintPlannerId(prefix: "boot" | "ctx" | "fin"): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(17));
+  const alphabet = "abcdefghijklmnopqrstuvwxyz234567";
+  let bits = 0;
+  let value = 0;
+  let encoded = "";
+  for (let index = 0; index < bytes.length && encoded.length < 26; index++) {
+    value = (value << 8) | bytes[index]!;
+    bits += 8;
+    while (bits >= 5 && encoded.length < 26) {
+      bits -= 5;
+      encoded += alphabet[(value >>> bits) & 31];
+      value &= (1 << bits) - 1;
+    }
+  }
+  return `${prefix}_${encoded}`;
+}
+
+const plannerBootEpoch = mintPlannerId("boot");
+let plannerGeneration = 0;
+
+function exactRecord(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const actual = Object.keys(value);
+  return actual.length === keys.length && actual.every(key => keys.includes(key));
+}
+
+function freezePlannerValue<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const nested of Object.values(value as Record<string, unknown>)) freezePlannerValue(nested);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+function capturePlannerContext(value: PlannerContext): PlannerContext {
+  const captured = freezePlannerValue(structuredClone(value));
+  if (JSON.stringify(captured).length > PLANNER_CONTEXT_CAP)
+    throw new ClayError("E_VALIDATION", "planner context exceeds the closed bridge limit");
+  return captured;
+}
+
+function boundedDiagnostics(values: string[]): string[] {
+  return values.slice(0, PLANNER_DIAGNOSTIC_CAP)
+    .map(value => String(value).slice(0, PLANNER_DIAGNOSTIC_LENGTH));
+}
+
+type PlannerBinding = {
+  epoch: string; generation: number; contextId: string;
+  attempt: 0 | 1; sequence: number;
+};
+
+type PendingPlannerRound = {
+  binding: PlannerBinding;
+  resolve: (result: PlannerResult) => void;
+  reject: (error: Error) => void;
+};
+
+type PlannerFinalizeBinding = Pick<PlannerBinding,
+  "epoch" | "generation" | "contextId" | "sequence"> & { nonce: string };
+type PendingPlannerFinalize = {
+  binding: PlannerFinalizeBinding;
+  resolve: () => void;
+  reject: (error: Error) => void;
+};
+
+function bridgePlanner(
+  port: MessagePort,
+  generation: number,
+  decodeRaw: (raw: string) => PlannerResult,
+): Readonly<{ planner: Planner; finalize: () => Promise<void> }> {
+  let context: PlannerContext | null = null;
+  let contextId: string | null = null;
+  let pendingRound: PendingPlannerRound | null = null;
+  let pendingFinalize: PendingPlannerFinalize | null = null;
+  let poison: Error | null = null;
+  let nextSequence = 0;
+  let watchdog: ReturnType<typeof setTimeout> | null = null;
+
+  const fail = (message: string): Error =>
+    new ClayError("E_VALIDATION", `planner bridge rejected: ${message}`);
+  const clearWatchdog = (): void => {
+    if (watchdog === null) return;
+    clearTimeout(watchdog);
+    watchdog = null;
+  };
+  const rejectBridge = (error: Error): void => {
+    clearWatchdog();
+    poison ??= error;
+    const waiting = pendingRound;
+    const finalizing = pendingFinalize;
+    pendingRound = null;
+    pendingFinalize = null;
+    waiting?.reject(error);
+    finalizing?.reject(error);
+  };
+  const armWatchdog = (phase: "round" | "finalization"): void => {
+    clearWatchdog();
+    watchdog = setTimeout(() => {
+      rejectBridge(fail(`${phase} timed out`));
+    }, PLANNER_BRIDGE_TIMEOUT_MS);
+  };
+
+  port.onmessage = event => {
+    const message = event.data;
+    if (pendingFinalize) {
+      const waiting = pendingFinalize;
+      const keys = ["v", "kind", "epoch", "generation", "contextId", "sequence", "nonce"] as const;
+      const binding = waiting.binding;
+      if (!exactRecord(message, keys) || message.v !== 1 || message.kind !== "planner.finalized"
+          || message.epoch !== binding.epoch || message.generation !== binding.generation
+          || message.contextId !== binding.contextId || message.sequence !== binding.sequence
+          || message.nonce !== binding.nonce) {
+        rejectBridge(fail("finalization binding does not match"));
+        return;
+      }
+      pendingFinalize = null;
+      clearWatchdog();
+      waiting.resolve();
+      return;
+    }
+    const waiting = pendingRound;
+    if (!waiting) { rejectBridge(fail("late or duplicate response")); return; }
+    const responseKeys = [
+      "v", "kind", "epoch", "generation", "contextId", "attempt", "sequence", "result",
+    ] as const;
+    const cancelKeys = [
+      "v", "kind", "epoch", "generation", "contextId", "attempt", "sequence",
+    ] as const;
+    const isCancel = exactRecord(message, cancelKeys) && message.kind === "planner.cancel";
+    if (!isCancel && !exactRecord(message, responseKeys)) {
+      rejectBridge(fail("message is not closed"));
+      return;
+    }
+    const binding = waiting.binding;
+    if (message.v !== 1
+        || (message.kind !== "planner.response" && message.kind !== "planner.cancel")
+        || message.epoch !== binding.epoch
+        || message.generation !== binding.generation
+        || message.contextId !== binding.contextId
+        || message.attempt !== binding.attempt
+        || message.sequence !== binding.sequence) {
+      rejectBridge(fail("message binding does not match the active round"));
+      return;
+    }
+    if (message.kind === "planner.cancel") {
+      rejectBridge(fail("round was cancelled"));
+      return;
+    }
+    const result = message.result;
+    if (!exactRecord(result, ["ok", "raw"]) || result.ok !== true
+        || typeof result.raw !== "string") {
+      if (!exactRecord(result, ["ok", "error"]) || result.ok !== false) {
+        rejectBridge(fail("terminal result is invalid"));
+        return;
+      }
+      const plannerError = result.error;
+      if (!exactRecord(plannerError, ["code", "message"])
+          || typeof plannerError.code !== "string"
+          || !["E_NET", "E_MODEL"].includes(plannerError.code)
+          || typeof plannerError.message !== "string"
+          || plannerError.message.length > PLANNER_DIAGNOSTIC_LENGTH) {
+        rejectBridge(fail("terminal result is invalid"));
+        return;
+      }
+      pendingRound = null;
+      clearWatchdog();
+      waiting.resolve({ ok: false, error: {
+        code: plannerError.code,
+        message: plannerError.message,
+      } });
+      return;
+    }
+    if (result.raw.length > PLANNER_RAW_CAP) {
+      rejectBridge(fail("raw model output exceeds the bridge limit"));
+      return;
+    }
+    try {
+      const decoded = decodeRaw(result.raw);
+      pendingRound = null;
+      clearWatchdog();
+      waiting.resolve(decoded);
+    } catch (error) {
+      rejectBridge(error instanceof Error ? error : fail("raw output could not be decoded"));
+    }
+  };
+  port.onmessageerror = () => rejectBridge(fail("message could not be cloned"));
+  port.start();
+
+  const request = (
+    suppliedContext: PlannerContext,
+    attempt: 0 | 1,
+    repair: null | { priorRaw: string; diagnostics: string[] },
+  ): Promise<PlannerResult> => {
+    if (poison) return Promise.reject(poison);
+    if (pendingRound) return Promise.reject(fail("a round is already pending"));
+    if (attempt === 0) {
+      if (context) return Promise.reject(fail("first attempt was already requested"));
+      context = capturePlannerContext(suppliedContext);
+      contextId = mintPlannerId("ctx");
+    } else if (!context || !contextId) {
+      return Promise.reject(fail("repair was not authorized by a first attempt"));
+    }
+    if (repair && repair.priorRaw.length > PLANNER_RAW_CAP)
+      return Promise.reject(fail("repair raw output exceeds the bridge limit"));
+    const sequence = nextSequence++;
+    const binding: PlannerBinding = {
+      epoch: plannerBootEpoch, generation, contextId: contextId!, attempt, sequence,
+    };
+    const promise = new Promise<PlannerResult>((resolve, reject) => {
+      pendingRound = { binding, resolve, reject };
+    });
+    armWatchdog("round");
+    try {
+      port.postMessage({
+        v: 1, kind: "planner.request", ...binding, context,
+        repair: repair ? {
+          priorRaw: repair.priorRaw,
+          diagnostics: boundedDiagnostics(repair.diagnostics),
+        } : null,
+      });
+    } catch (error) {
+      rejectBridge(error instanceof Error ? error : fail("request could not be posted"));
+    }
+    return promise;
+  };
+
+  const finalize = (): Promise<void> => {
+    if (poison) return Promise.reject(poison);
+    if (pendingRound || pendingFinalize || !contextId)
+      return Promise.reject(fail("generation cannot finalize"));
+    const binding: PlannerFinalizeBinding = {
+      epoch: plannerBootEpoch, generation, contextId, sequence: nextSequence,
+      nonce: mintPlannerId("fin"),
+    };
+    const promise = new Promise<void>((resolve, reject) => {
+      pendingFinalize = { binding, resolve, reject };
+    });
+    armWatchdog("finalization");
+    try {
+      port.postMessage({ v: 1, kind: "planner.finalize", ...binding });
+    } catch (error) {
+      rejectBridge(error instanceof Error ? error : fail("finalization could not be posted"));
+    }
+    return promise;
+  };
+  return Object.freeze({
+    planner: Object.freeze({
+      requestPlan: (suppliedContext: PlannerContext) => request(suppliedContext, 0, null),
+      requestRepair: (_suppliedContext: PlannerContext, priorRaw: string, failures: string[]) =>
+        request(context ?? _suppliedContext, 1, { priorRaw, diagnostics: failures }),
+    }),
+    finalize,
+  });
+}
 
 // A ring of recent pipeline traces the user can review/copy (the user
 // asked for logs of inputs -> processing -> outputs). Also mirrored to the
@@ -63,80 +387,532 @@ function recordTrace(entry: TraceEntry): void {
   if (traceLog.length > TRACE_CAP) traceLog.length = TRACE_CAP;
 }
 
-function mustStore(): ClayStore {
+function mustStore(): ProductionStoreReader {
   if (!store) throw new Error("worker not booted");
   return store;
 }
 
-function mustDriver(): DbDriver {
-  if (!storeDriver) throw new Error("worker driver not booted");
-  return storeDriver;
+function mustAuthority(): ProductionStoreAuthority {
+  if (!authority) throw new ClayError("E_CATALOG_UNAVAILABLE", "worker authority is not booted");
+  return authority;
 }
 
-const RESERVED_WORKER_SETTINGS = new Set([
-  "sample_rows", "sample_provenance_v1", "first_run_publication_v1", "shell_id",
-]);
-
-function writableSettingKey(value: unknown): string {
-  if (typeof value !== "string" || value.length === 0 || value.length > 120)
-    throw new Error("worker setting key is invalid");
-  if (RESERVED_WORKER_SETTINGS.has(value))
-    throw new Error(`reserved worker setting '${value}' cannot be changed generically`);
-  return value;
+function failClosedMutation(route: string): never {
+  throw new ClayError("E_CATALOG_UNAVAILABLE",
+    `production mutation '${route}' is unavailable until it is authority-routed`);
 }
 
-function dropPending(): void {
-  if (pending) { pending.discard(); pending = null; }
+function enforceProductionMutationRoute(op: string): void {
+  const classification = DB_WORKER_ROUTE_CENSUS[op as keyof typeof DB_WORKER_ROUTE_CENSUS];
+  if (!classification)
+    throw new ClayError("E_CATALOG_UNAVAILABLE", `unclassified worker route '${op}'`);
+  if (classification.enforcement === "unavailable") failClosedMutation(op);
 }
 
-async function runPipelineTextOnce(text: string): Promise<IntentOutcome> {
-  const s = mustStore();
-  const backendUrl = modelAccess.backendUrl;
-  const apiKey = modelAccess.apiKey;
-  // Hosted first (ADR-011): if a backend is configured, use it and no
-  // browser key is needed. Otherwise fall back to BYO.
-  const client = backendUrl
-    ? new MutationClient({ mode: "hosted", endpoint: backendUrl.replace(/\/$/, ""),
-        session: modelAccess.provider === "clay" ? modelAccess.session
-          : modelAccess.provider === "codex" ? modelAccess.providerToken : undefined })
-    : apiKey
-      ? new MutationClient({ mode: "byo", apiKey })
-      : null;
-  if (!client) {
-    return { status: "failed", stage: "plan", reasons: [
-      "No model access configured. In Settings, either add a Clay backend URL "
-      + "(hosted) or your own Anthropic API key (BYO).",
-    ], repaired: false };
+async function bootProductionAuthority(input: unknown): Promise<WorkerBootProjection> {
+  const workerAuthority = await import("@clay/kernel/worker-authority");
+  const captured = workerAuthority.captureBrowserBootInput(input);
+  const key = JSON.stringify(captured);
+  const project = (target: ProductionStoreAuthority): WorkerBootProjection => {
+    const info = target.bootInfo();
+    return Object.freeze({
+      persistent: true as const,
+      seeded: info.seeded,
+      shellId: info.shellId,
+      selectedAppInstanceId: info.selectedAppInstanceId,
+      catalogGeneration: info.catalogGeneration,
+      apps: info.apps.map(app => Object.freeze({ ...app })),
+    });
+  };
+  if (authority) {
+    const info = authority.bootInfo();
+    if (captured.requestedAppId !== null
+        && captured.requestedAppId !== info.selectedAppInstanceId
+        && !openedBootAliases?.has(captured.requestedAppId))
+      throw new ClayError("E_CATALOG_CONFLICT",
+        "boot requested a different target than the opened worker authority");
+    return project(authority);
   }
-  const events: DebugEvent[] = [];
-  const pipeline = new MutationPipeline(s, client, {
-    onDebug: (ev) => {
-      events.push(ev);
-      // Console (DevTools): raw model output truncated, everything else full.
-      const printable = ev.stage === "plan" && ev.raw
-        ? { ...ev, raw: ev.raw.slice(0, 2000) } : ev;
-      console.log(`[clay pipeline] ${ev.stage}`, printable);
+  if (authorityBoot) {
+    if (authorityBoot.key !== key)
+      throw new ClayError("E_CATALOG_CONFLICT",
+        "concurrent boot request does not match the initializing target");
+    return authorityBoot.promise;
+  }
+  const current = (async (): Promise<WorkerBootProjection> => {
+    let candidate: ProductionStoreAuthority | null = null;
+    try {
+      candidate = await workerAuthority.ProductionStoreAuthority.bootBrowser(captured);
+      await candidate.reconcileInterruptedPlannerAttempts();
+      const candidateStore = candidate.readStore();
+      const projection = project(candidate);
+      authority = candidate;
+      store = candidateStore;
+      persistent = true;
+      openedBootAliases = new Set([
+        projection.selectedAppInstanceId,
+        ...(captured.requestedAppId === null ? [] : [captured.requestedAppId]),
+      ]);
+      return projection;
+    } catch (error) {
+      if (candidate && authority !== candidate) {
+        try { candidate.close(); } catch { /* candidate was never published */ }
+      }
+      throw error;
+    }
+  })();
+  const inFlight = Object.freeze({ key, promise: current });
+  authorityBoot = inFlight;
+  try {
+    return await current;
+  } finally {
+    if (authorityBoot === inFlight) authorityBoot = null;
+  }
+}
+
+function authorityRequestId(req: Request): string {
+  if (req.requestId === undefined)
+    throw new ClayError("E_TARGET_AUTHORITY_INVALID", "worker request identity is required");
+  if (!/^req_[a-z2-7]{26}$/.test(req.requestId))
+    throw new ClayError("E_TARGET_AUTHORITY_INVALID", "worker request identity is invalid");
+  return req.requestId;
+}
+
+const DIRECT_AUTHORITY_ROUTES = Object.freeze({
+  setCheckpoint: { route: "timeline.setCheckpoint" },
+  makeLatest: { route: "timeline.makeLatest" },
+  revertPanel: { route: "panel.revert" },
+  renamePanel: { route: "panel.rename" },
+  removePanel: { route: "panel.remove" },
+  addColumn: { route: "schema.addColumn" },
+  addRelationColumn: { route: "schema.addRelationColumn" },
+  renameColumn: { route: "schema.renameColumn" },
+  setSetting: { route: "setting.set" },
+  deleteSetting: { route: "setting.delete" },
+  compareAndSetSetting: { route: "setting.compareAndSet" },
+} as const);
+
+type DirectAuthorityRoute = keyof typeof DIRECT_AUTHORITY_ROUTES;
+
+async function runAuthorityMutation(
+  route:
+    | "seed" | "importTable" | "removeSamples" | "fillSamples"
+    | "setSetting" | "deleteSetting" | "compareAndSetSetting" | "commitLayout"
+    | "addAttachment" | "removeAttachment" | "purgeDeletedAttachments"
+    | "applyBatch" | "undoBatch" | "restoreRow" | "removeColumn"
+    | "upsertAutomation" | "deleteAutomation" | "runAutomations" | "runAutomationNow"
+    | "undoAutomationRun" | "markNotificationRead" | "recordPrivateMetric"
+    | "setPrivateMetricsEnabled" | "clearPrivateMetrics" | "recordFilter"
+    | "acceptSuggestion" | "dismissSuggestion"
+    | "setCheckpoint" | "makeLatest" | "revertPanel" | "renamePanel" | "removePanel"
+    | "addColumn" | "addRelationColumn" | "renameColumn",
+  payload: unknown,
+  req: Request,
+): Promise<unknown> {
+  const target = mustAuthority();
+  const requestId = authorityRequestId(req);
+  if (route === "seed") return (await target.executeMutation({
+    requestId, route: "starter.seed", payload,
+  })).result;
+  if (route === "importTable") return (await target.executeMutation({
+    requestId,
+    route: "table.import",
+    payload,
+  })).result;
+  if (route === "removeSamples") return (await target.executeMutation({
+    requestId,
+    route: "samples.remove",
+    payload,
+  })).result;
+  if (route === "fillSamples") return (await target.executeMutation({
+    requestId,
+    route: "samples.fill",
+    payload,
+  })).result;
+  if (route === "commitLayout") return (await target.executeMutation({
+    requestId,
+    route: "store.commit",
+    payload: { plan: {
+      intent: "layout change",
+      summary: "Saved layout changes.",
+      semanticOrigin: "direct",
+      migration: null,
+      panels: (payload as Record<string, unknown>).layout,
+      diff: [],
+    } },
+  })).result;
+  if (route === "addAttachment") return (await target.executeMutation({
+    requestId, route: "attachment.add", payload,
+  })).result;
+  if (route === "removeAttachment") return (await target.executeMutation({
+    requestId, route: "attachment.remove", payload,
+  })).result;
+  if (route === "purgeDeletedAttachments") return (await target.executeMutation({
+    requestId, route: "attachment.purge", payload,
+  })).result;
+  if (route === "applyBatch") return (await target.executeMutation({
+    requestId, route: "batch.apply", payload,
+  })).result;
+  if (route === "undoBatch") return (await target.executeMutation({
+    requestId, route: "batch.undo", payload,
+  })).result;
+  if (route === "restoreRow") return (await target.executeMutation({
+    requestId, route: "row.restore", payload,
+  })).result;
+  if (route === "removeColumn") return (await target.executeMutation({
+    requestId, route: "schema.removeColumn", payload,
+  })).result;
+
+  const authorityRoute = DIRECT_AUTHORITY_ROUTES[route as DirectAuthorityRoute];
+  if (authorityRoute) return (await target.executeMutation({
+    requestId,
+    route: authorityRoute.route,
+    payload,
+  })).result;
+
+  if (route === "runAutomations") return (await target.executeMutation({
+    requestId, route: "runDueAutomations", payload: {},
+  })).result;
+  const fields = payload as Record<string, unknown>;
+  if (route === "recordFilter") {
+    const detail = fields.payload;
+    const event = typeof detail === "object" && detail !== null && !Array.isArray(detail)
+      ? { kind: "filter", subject: fields.name, detail }
+      : { kind: "filter", subject: fields.name };
+    return (await target.executeMutation({ requestId, route: "recordUsage", payload: { event } })).result;
+  }
+  if (route === "clearPrivateMetrics") return (await target.executeOperationalMetricMutation({
+    requestId, route, payload: {},
+  })).result;
+  if (route === "upsertAutomation") return (await target.executeMutation({
+    requestId, route, payload: { input: fields.input },
+  })).result;
+  if (route === "setPrivateMetricsEnabled") return (await target.executeOperationalMetricMutation({
+    requestId, route, payload: { enabled: fields.enabled },
+  })).result;
+  if (route === "recordPrivateMetric") return (await target.executeOperationalMetricMutation({
+    requestId, route, payload: { event: fields.event },
+  })).result;
+  if (route === "acceptSuggestion" || route === "dismissSuggestion")
+    return (await target.executeMutation({
+      requestId, route, payload: { subject: fields.subject, kind: fields.kind },
+    })).result;
+  return (await target.executeMutation({
+    requestId, route, payload: { id: fields.id },
+  })).result;
+}
+
+// The authenticated ledger is a reserved worker setting; the legacy marker is
+// rejected rather than trusted as provenance.
+const SAMPLE_PROVENANCE_SETTING = "sample_provenance_v1";
+const LEGACY_SAMPLE_ROWS_SETTING = "sample_rows";
+
+type ActiveSampleCoordinate = Readonly<{ table: string; rowId: string }>;
+
+function activeSampleCoordinates(reader: ProductionStoreReader): readonly ActiveSampleCoordinate[] {
+  if (reader.getSetting(LEGACY_SAMPLE_ROWS_SETTING) !== undefined)
+    throw new ClayError("E_TARGET_AUTHORITY_INVALID", "legacy sample provenance is unauthenticated");
+  const ledger = parseSampleProvenanceLedger(reader.getSetting(SAMPLE_PROVENANCE_SETTING));
+  const byId = new Map<string, { name: string; active: boolean }>();
+  for (const table of reader.registrySnapshot().values()) {
+    const tableId = table.semantic?.tableId;
+    if (!tableId) continue;
+    if (byId.has(tableId))
+      throw new ClayError("E_TARGET_AUTHORITY_INVALID", "sample table identity is ambiguous");
+    byId.set(tableId, { name: table.name, active: !table.inactive });
+  }
+  const active: ActiveSampleCoordinate[] = [];
+  for (const entry of ledger.entries) {
+    const table = byId.get(entry.tableId);
+    if (!table)
+      throw new ClayError("E_TARGET_AUTHORITY_INVALID", "sample table identity is unavailable");
+    const row = reader.query({
+      from: table.name,
+      where: [{ field: "id", op: "eq", value: entry.rowId }],
+      includeDeleted: true,
+      limit: 1,
+    })[0];
+    if (!row)
+      throw new ClayError("E_TARGET_AUTHORITY_INVALID", "sample provenance references a missing row");
+    if (table.active && row.deleted_at == null)
+      active.push(Object.freeze({ table: table.name, rowId: entry.rowId }));
+  }
+  return Object.freeze(active);
+}
+
+function firstRunEvidence(): Readonly<{
+  sampleCount: number;
+  sampleTables: string[];
+  realRecordCount: number;
+  provenanceValid: boolean;
+}> {
+  const reader = mustStore();
+  try {
+    const samples = activeSampleCoordinates(reader);
+    const sampleKeys = new Set(samples.map(item => JSON.stringify([item.table, item.rowId])));
+    const sampleTables = [...new Set(samples.map(item => item.table))].sort();
+    let realRecordCount = 0;
+    for (const table of reader.registrySnapshot().values()) {
+      if (table.inactive) continue;
+      let afterId: string | null = null;
+      for (;;) {
+        const rows = reader.query({
+          from: table.name,
+          orderBy: [{ field: "id", dir: "asc" }],
+          limit: 500,
+          ...(afterId ? { where: [{ field: "id", op: "gt", value: afterId }] } : {}),
+        });
+        for (const row of rows) {
+          if (!sampleKeys.has(JSON.stringify([table.name, String(row.id)]))) realRecordCount += 1;
+        }
+        if (rows.length < 500) break;
+        afterId = String(rows.at(-1)!.id);
+      }
+    }
+    return Object.freeze({
+      sampleCount: samples.length,
+      sampleTables,
+      realRecordCount,
+      provenanceValid: true,
+    });
+  } catch {
+    return Object.freeze({
+      sampleCount: 0,
+      sampleTables: [],
+      realRecordCount: 0,
+      provenanceValid: false,
+    });
+  }
+}
+
+function firstEverydayActionTarget(): ActiveSampleCoordinate | null {
+  const reader = mustStore();
+  const samples = new Set(activeSampleCoordinates(reader)
+    .map(item => JSON.stringify([item.table, item.rowId])));
+  let newest: { table: string; rowId: string; updatedAt: string } | null = null;
+  for (const table of reader.registrySnapshot().values()) {
+    if (table.inactive) continue;
+    let afterId: string | null = null;
+    for (;;) {
+      const rows = reader.query({
+        from: table.name,
+        orderBy: [{ field: "id", dir: "asc" }],
+        limit: 500,
+        ...(afterId ? { where: [{ field: "id", op: "gt", value: afterId }] } : {}),
+      });
+      for (const row of rows) {
+        const rowId = String(row.id);
+        if (samples.has(JSON.stringify([table.name, rowId]))) continue;
+        const updatedAt = typeof row.updated_at === "string" ? row.updated_at : "";
+        if (!newest || updatedAt > newest.updatedAt
+            || (updatedAt === newest.updatedAt
+              && JSON.stringify([table.name, rowId]) < JSON.stringify([newest.table, newest.rowId])))
+          newest = { table: table.name, rowId, updatedAt };
+      }
+      if (rows.length < 500) break;
+      afterId = String(rows.at(-1)!.id);
+    }
+  }
+  return newest ? Object.freeze({ table: newest.table, rowId: newest.rowId }) : null;
+}
+
+async function completeEverydayAction(req: Request, payload: Record<string, unknown>): Promise<unknown> {
+  if (Object.keys(payload).length !== 3 || payload.action !== "open"
+      || typeof payload.table !== "string" || typeof payload.rowId !== "string")
+    throw new ClayError("E_VALIDATION", "Everyday-action evidence is invalid");
+  const reader = mustStore();
+  const samples = new Set(activeSampleCoordinates(reader)
+    .map(item => JSON.stringify([item.table, item.rowId])));
+  const coordinate = JSON.stringify([payload.table, payload.rowId]);
+  const row = samples.has(coordinate) ? null : reader.query({
+    from: payload.table,
+    where: [{ field: "id", op: "eq", value: payload.rowId }],
+    limit: 1,
+  })[0] ?? null;
+  if (!row || String(row.id) !== payload.rowId || row.deleted_at != null)
+    throw new ClayError("E_VALIDATION", "Everyday action did not read back a canonical real record");
+  const stored = reader.getSetting("release_a_first_success_v1");
+  const current = stored === undefined || stored === null
+    ? emptyFirstSuccessState() : parseFirstSuccessState(stored);
+  const applied = applyFirstSuccessEvent(current, {
+    type: "everyday_action", action: "open", changed: true, sample: false,
+  });
+  if (applied === current) {
+    if (current.steps.everyday.state === "complete") return current;
+    throw new ClayError("E_CONFLICT", "The first real record must be verified first");
+  }
+  if (current.revision >= Number.MAX_SAFE_INTEGER)
+    throw new ClayError("E_CONFLICT", "First-success progress revision cannot advance");
+  const next = { ...applied, revision: current.revision + 1 };
+  const committed = await mustAuthority().executeMutation({
+    requestId: authorityRequestId(req),
+    route: "setting.compareAndSet",
+    payload: {
+      key: "release_a_first_success_v1",
+      expectedRevision: current.revision,
+      value: next,
     },
   });
-  const result = await pipeline.run(text);
+  const outcome = committed.result as { ok?: unknown; current?: unknown };
+  if (!outcome || outcome.ok !== true)
+    throw new ClayError("E_CONFLICT", "First-success progress changed concurrently");
+  return parseFirstSuccessState(outcome.current ?? next);
+}
+
+function targetIdentity(value: {
+  appInstanceId: string;
+  activeGenerationId: string;
+  lineageEpoch: string;
+  protectionRevision: string;
+  stateSha256: string;
+}): TargetIdentityV1 {
+  return Object.freeze({
+    appInstanceId: value.appInstanceId,
+    activeGenerationId: value.activeGenerationId,
+    lineageEpoch: value.lineageEpoch,
+    stateRevision: value.protectionRevision,
+    stateDigest: value.stateSha256,
+  });
+}
+
+async function deviceProtection(): Promise<DeviceProtectionProjection> {
+  const inspection = mustAuthority().inspectAuthority();
+  const target = targetIdentity(inspection.target);
+  const selected = inspection.catalog.entries.find(entry =>
+    entry.appInstanceId === inspection.catalog.selectedAppInstanceId) ?? null;
+  const selectedTarget = selected ? Object.freeze({
+    appInstanceId: selected.appInstanceId,
+    activeGenerationId: selected.activeGenerationId,
+    lineageEpoch: selected.currentLineageEpoch,
+    stateRevision: selected.currentProtectionRevision,
+    stateDigest: selected.stateSha256,
+  }) : null;
+  const exactSelected = targetIdentityEquals(selectedTarget, target);
+  const targetPending = inspection.targetReservations.filter(item => item.state === "reserved");
+  const catalogPending = inspection.catalogReservations.filter(item => item.state === "reserved");
+  const targetPendingIds = targetPending.map(item => item.operationId).sort();
+  const catalogPendingIds = catalogPending.map(item => item.operationId).sort();
+  const mirroredPending = JSON.stringify(targetPendingIds) === JSON.stringify(catalogPendingIds);
+  let persisted: "yes" | "no" | "unknown" = "unknown";
+  try {
+    if (typeof navigator !== "undefined" && navigator.storage?.persisted)
+      persisted = await navigator.storage.persisted() ? "yes" : "no";
+  } catch { /* unreadable persistence is not protection evidence */ }
+  const checkpoint: CheckpointObservation = !exactSelected
+    ? { state: "generation_not_selected", target }
+    : targetPending.length > 0
+      ? { state: "in_progress", target }
+      : { state: "valid", target };
+  const result = deriveDeviceState({
+    checksComplete: true,
+    expectedStoreFailure: null,
+    catalogReadable: true,
+    catalogAppCount: inspection.catalog.entries.length,
+    namespaceInventoryReadable: true,
+    durableNamespaceCount: inspection.catalog.entries.length,
+    jobInventoryReadable: true,
+    pendingOperationCount: new Set([...targetPendingIds, ...catalogPendingIds]).size,
+    capability: "supported",
+    userChoice: null,
+    storeOpen: "yes",
+    transactionCertified: exactSelected && mirroredPending,
+    persisted,
+    target,
+    checkpoint,
+  });
+  return Object.freeze({ result: Object.freeze(result), target, checkpoint: Object.freeze(checkpoint) });
+}
+
+async function executePipelineText(text: string, plannerPort: MessagePort): Promise<IntentOutcome> {
+  if (pending)
+    throw new ClayError("E_CONFLICT", "Finish the current preview before reshaping again");
+  if (!text.trim() || text.length > 500)
+    throw new ClayError("E_VALIDATION", "reshape intent must be 1–500 characters");
+  if (!Number.isSafeInteger(plannerGeneration + 1))
+    throw new ClayError("E_INTERNAL", "planner generation exhausted");
+  const generation = ++plannerGeneration;
+
+  // The DB worker retains pipeline, validation, shadow, and preview authority.
+  // Only opaque model I/O crosses this one-intent port.
+  const { MutationPipeline, decodePlannerRaw } =
+    await import("@clay/kernel/planner-pipeline");
+  const events: DebugEvent[] = [];
+  const mutationAuthority = mustAuthority().plannerMutations();
+  let deferredClarifyAttempt: string | null = null;
+  const pipelineAuthority = Object.freeze({
+    beginAttempt: (intent: string) => mutationAuthority.beginAttempt(intent),
+    capturePlanningBase: () => mutationAuthority.capturePlanningBase(),
+    preparePreview: (input: Parameters<typeof mutationAuthority.preparePreview>[0]) =>
+      mutationAuthority.preparePreview(input),
+    assertPlanningBase: (base: Parameters<typeof mutationAuthority.assertPlanningBase>[0]) =>
+      mutationAuthority.assertPlanningBase(base),
+    finalizeAttempt: async (
+      attemptId: string, outcome: "clarify" | "failed", errorCode?: string,
+    ): Promise<void> => {
+      if (outcome === "clarify") {
+        if (deferredClarifyAttempt !== null)
+          throw new ClayError("E_INTERNAL", "clarification finalization was already deferred");
+        deferredClarifyAttempt = attemptId;
+        return;
+      }
+      await mutationAuthority.finalizeAttempt(attemptId, outcome, errorCode);
+    },
+    keep: (requestId: string, command: unknown) => mutationAuthority.keep(requestId, command),
+    discard: (requestId: string, command: unknown) => mutationAuthority.discard(requestId, command),
+  });
+  const bridge = bridgePlanner(plannerPort, generation, decodePlannerRaw);
+  const result = await new MutationPipeline(
+    pipelineAuthority,
+    bridge.planner,
+    { onDebug: event => events.push(event) },
+  ).run(text);
+  try {
+    await bridge.finalize();
+  } catch (error) {
+    if (result.status === "preview") {
+      try { result.preview.shadow.close(); } catch { /* disposable cleanup cannot mask failure */ }
+      await mutationAuthority.finalizeAttempt(result.attemptId, "failed", "E_VALIDATION");
+    } else if (result.status === "clarify" && deferredClarifyAttempt === result.attemptId) {
+      await mutationAuthority.finalizeAttempt(result.attemptId, "failed", "E_VALIDATION");
+    }
+    throw error;
+  }
+  if (result.status === "clarify") {
+    if (deferredClarifyAttempt !== result.attemptId)
+      throw new ClayError("E_INTERNAL", "clarification finalization binding is missing");
+    await mutationAuthority.finalizeAttempt(result.attemptId, "clarify");
+  }
   recordTrace({ at: new Date().toISOString(), intent: text, events });
-  if (result.status === "clarify")
-    return { status: "clarify", question: result.question, repaired: result.repaired };
-  if (result.status === "failed")
+
+  if (result.status === "clarify") {
     return {
-      status: "failed", stage: result.stage, reasons: result.reasons,
+      status: "clarify",
+      question: result.question,
       repaired: result.repaired,
     };
-  pending = result.preview;
+  }
+  if (result.status === "failed") {
+    return {
+      status: "failed",
+      stage: result.stage,
+      reasons: result.reasons,
+      repaired: result.repaired,
+    };
+  }
+  pending = { preview: result.preview, decision: "open" };
   return {
     status: "preview",
     preview: {
       summary: result.preview.plan.summary,
       diff: result.preview.plan.user_facing_diff,
-      panels: result.preview.plan.panels.map(pa => ({
-        panel_id: pa.panel_id, title: pa.title, placement: pa.placement,
-        code: pa.code, declared_queries: pa.declared_queries,
-        declared_writes: pa.declared_writes, version: result.preview.version,
+      panels: result.preview.plan.panels.map(panel => ({
+        panel_id: panel.panel_id,
+        version: result.preview.version,
+        title: panel.title,
+        placement: panel.placement,
+        code: panel.code,
+        declared_queries: panel.declared_queries,
+        declared_writes: panel.declared_writes,
       })),
       removePanels: result.preview.plan.remove_panels,
       version: result.preview.version,
@@ -145,95 +921,187 @@ async function runPipelineTextOnce(text: string): Promise<IntentOutcome> {
   };
 }
 
-function runPipelineText(text: string): Promise<IntentOutcome> {
-  if (pending || pipelineRun)
-    return Promise.resolve({ status: "failed", stage: "plan",
-      reasons: ["Finish the current reshape before starting another."], repaired: false });
-  pipelineRun = runPipelineTextOnce(text).finally(() => { pipelineRun = null; });
-  return pipelineRun;
+async function runPipelineText(text: string, plannerPort: MessagePort): Promise<IntentOutcome> {
+  if (pipelineRun)
+    throw new ClayError("E_CONFLICT", "A reshape is already being prepared");
+  const current = executePipelineText(text, plannerPort);
+  pipelineRun = current;
+  try {
+    return await current;
+  } finally {
+    plannerPort.close();
+    if (pipelineRun === current) pipelineRun = null;
+  }
+}
+
+function openPendingPreview(decision: "keeping" | "discarding"): PendingPreview {
+  const current = pending;
+  if (!current) throw new ClayError("E_CONFLICT", "no preview is open");
+  if (current.decision !== "open")
+    throw new ClayError("E_CONFLICT", "a preview decision is already in progress");
+  current.decision = decision;
+  return current;
+}
+
+async function keepPendingPreview(req: Request): Promise<{ version: number }> {
+  const currentAuthority = mustAuthority();
+  if (!pending && req.requestId) {
+    const version = await currentAuthority.replayPlannerDecision(req.requestId, "keep");
+    if (typeof version !== "number")
+      throw new ClayError("E_INTERNAL", "durable planner Keep result is invalid");
+    return { version };
+  }
+  const planner = currentAuthority.plannerMutations();
+  const current = openPendingPreview("keeping");
+  const requestId = authorityRequestId(req);
+  let version: number;
+  try {
+    version = await planner.keep(requestId, current.preview.command);
+  } catch (error) {
+    if (pending === current) current.decision = "open";
+    throw error;
+  }
+  if (pending === current) pending = null;
+  try { current.preview.shadow.close(); } catch { /* committed state is already terminal */ }
+  try {
+    if (typeof navigator !== "undefined" && navigator.storage?.persist)
+      persistent = await navigator.storage.persist();
+  } catch { /* persistence request is best-effort */ }
+  return { version };
+}
+
+async function discardPendingPreview(req: Request): Promise<null> {
+  const currentAuthority = mustAuthority();
+  if (!pending && req.requestId) {
+    await currentAuthority.replayPlannerDecision(req.requestId, "discard");
+    return null;
+  }
+  const planner = currentAuthority.plannerMutations();
+  const current = openPendingPreview("discarding");
+  const requestId = authorityRequestId(req);
+  try {
+    await planner.discard(requestId, current.preview.command);
+  } catch (error) {
+    if (pending === current) current.decision = "open";
+    throw error;
+  }
+  if (pending === current) pending = null;
+  try { current.preview.shadow.close(); } catch { /* discarded state is already terminal */ }
+  return null;
+}
+
+function serveProductionStore(target: "live" | "shadow", port: MessagePort): void {
+  const endpoint = target === "shadow"
+    ? pending?.preview.shadow.asyncStore() ?? null
+    : mustAuthority().asyncStore();
+  if (!endpoint) throw new ClayError("E_CATALOG_UNAVAILABLE", "no shadow store is open");
+  storePorts.add(port);
+  port.start?.();
+  storeServers.add(serveStore(endpoint, portFromMessagePort(port), beginStoreOperation));
+}
+
+function quiesceWorker(req: Request): Promise<null> {
+  if (shutdownRun) return shutdownRun;
+  shuttingDown = true;
+  shutdownRun = (async () => {
+    await Promise.all([...storeServers].map(server => server.quiesce()));
+    storeAdmissionClosed = true;
+    await waitForWorkerIdle();
+    for (const port of storePorts) {
+      try { port.close(); } catch { /* already closed */ }
+    }
+    storePorts.clear();
+    storeServers.clear();
+    let failure: unknown = null;
+    try {
+      if (pending) await discardPendingPreview(req);
+    } catch (error) { failure = error; }
+    try { authority?.close(); }
+    catch (error) { failure ??= error; }
+    authority = null;
+    store = null;
+    persistent = false;
+    if (failure) throw failure;
+    return null;
+  })();
+  return shutdownRun;
 }
 
 async function handle(req: Request, ports: readonly MessagePort[]): Promise<unknown> {
-  const p = req.payload ?? {};
+  enforceProductionMutationRoute(req.op);
+  if (shuttingDown && req.op !== "shutdown")
+    throw new ClayError("E_CONFLICT", "worker shutdown is already in progress");
+  const payloadDescriptor = Reflect.getOwnPropertyDescriptor(req, "payload");
+  const rawPayload = payloadDescriptor && "value" in payloadDescriptor
+    ? payloadDescriptor.value : undefined;
+  const p = (rawPayload ?? {}) as Record<string, unknown>;
   switch (req.op) {
-    case "boot": {
-      const appId = p.appId === undefined ? undefined : String(p.appId);
-      if (!store) {
-        const opened = await openBrowserDriver(appId);
-        persistent = opened.persistent;
-        currentAppId = appId;
-        storeDriver = opened.driver;
-        store = ClayStore.fromDriver(opened.driver);
-      }
-      return {
-        persistent,
-        seeded: store.headVersion() > 0,
-        shellId: store.getSetting<string>("shell_id") ?? null,
-      };
-    }
-    case "setModelAccess": {
-      const provider = p.provider;
-      if (provider !== "clay" && provider !== "openai"
-          && provider !== "anthropic" && provider !== "codex")
-        throw new Error("invalid model provider");
-      modelAccess = {
-        provider,
-        apiKey: p.apiKey ? String(p.apiKey) : undefined,
-        backendUrl: p.backendUrl ? String(p.backendUrl) : undefined,
-        session: provider === "clay" && p.session ? String(p.session) : undefined,
-        providerToken: provider === "codex" && p.providerToken
-          ? String(p.providerToken) : undefined,
-      };
-      return null;
-    }
-    case "forkApp": {
-      // B5 fork-and-explore: copy the CURRENT app (schema + data + history +
-      // panels) into a brand-new app's OPFS files, via the same validated
-      // .clay export/import path. The current app is left untouched — the
-      // client boots the fork after a reload.
-      const newId = String(p.newAppId);
-      const s = mustStore();
-      const bytes = await s.exportArchive(s.getSetting<string>("shell_id") ?? "clay");
-      const openNew = async (): Promise<DbDriver> => (await openBrowserDriver(newId)).driver;
-      const result = await ClayStore.importArchive(bytes, openNew);
-      result.store.close();          // populated on disk; not the live store
-      return null;
-    }
-    case "deleteApp": {
-      // G4: delete one app's files. If it's the open one, close first.
-      const appId = String(p.appId);
-      if (appId === currentAppId || (appId === "default" && currentAppId === undefined)) {
-        dropPending();
-        store?.close();
-        store = null;
-        storeDriver = null;
-        currentAppId = undefined;
-      }
-      await deleteAppStorage(appId);
-      return null;
-    }
+    case "boot":
+      // appId/localStorage is presentation-only. Durable selection and any
+      // legacy adoption are derived by trusted worker inventory + catalog.
+      return bootProductionAuthority(p);
+    case "shutdown":
+      return quiesceWorker(req);
+    case "forkApp":
+    case "deleteApp":
+      return failClosedMutation(req.op);
+    case "importTable":
+      return runAuthorityMutation("importTable", p, req);
+    case "seed":
+      return runAuthorityMutation("seed", createStarterSeedBundle(p.shellId), req);
     case "activateStarter": {
-      const result = await activateStarterAtomically(mustDriver(), mustStore(), p, {
-        onPublishedStore: published => { store = published; },
-      });
-      return result.receipt;
+      await runAuthorityMutation("seed", {
+        ...createStarterSeedBundle(p.shellId),
+        activation: { operationId: p.operationId, appId: p.appId },
+      }, req);
+      const receipt = mustStore().getSetting("first_run_publication_v1");
+      if (!receipt) throw new ClayError("E_INTERNAL", "starter publication receipt is missing");
+      return receipt;
     }
     case "activateImportedApp": {
-      const result = await activateImportedAppAtomically(mustDriver(), mustStore(), p, {
-        onPublishedStore: published => { store = published; },
-      });
-      return result.receipt;
+      const imported = await runAuthorityMutation("importTable", {
+        table: p.table,
+        columns: p.columns,
+        rows: p.rows,
+        activation: {
+          operationId: p.operationId,
+          appId: p.appId,
+          review: p.review,
+        },
+      }, req) as { publication?: unknown };
+      if (!imported || imported.publication === undefined)
+        throw new ClayError("E_INTERNAL", "first-run import publication receipt is missing");
+      return imported.publication;
     }
-    case "importTable": {
-      const result = await importTableAtomically(
-        mustDriver(), mustStore(), p, published => { store = published; },
-      );
-      return result.result;
+    case "firstRunPublication": {
+      if (p.appId !== "default")
+        throw new ClayError("E_VALIDATION", "first-run publication app binding is invalid");
+      const receipt = mustStore().getSetting("first_run_publication_v1") ?? null;
+      if (receipt && (typeof receipt !== "object"
+          || (receipt as { appId?: unknown }).appId !== p.appId))
+        throw new ClayError("E_TARGET_AUTHORITY_INVALID", "first-run publication receipt is invalid");
+      return receipt;
     }
-    case "firstRunPublication":
-      return readFirstRunPublication(mustStore(), p.appId);
     case "undoFirstRunImport":
-      return undoFirstRunImportAtomically(mustDriver(), mustStore(), p);
+      return (await mustAuthority().executeMutation({
+        requestId: authorityRequestId(req),
+        route: "firstRun.undoImport",
+        payload: p,
+      })).result;
+    case "firstRunEvidence":
+      return firstRunEvidence();
+    case "firstEverydayActionTarget":
+      return firstEverydayActionTarget();
+    case "completeEverydayAction":
+      return completeEverydayAction(req, p);
+    case "updateRecordWithSampleHandoff":
+      return (await mustAuthority().executeMutation({
+        requestId: authorityRequestId(req),
+        route: "store.update",
+        payload: { table: p.table, id: p.rowId, patch: p.patch },
+      })).result;
+    case "deviceProtection":
+      return deviceProtection();
     case "panels":
       return mustStore().livePanels();
     case "panelProvenance":
@@ -244,116 +1112,101 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       return mustStore().semanticSchemaTrace();
     case "fieldProvenance":
       return mustStore().fieldProvenance();
+    case "commitLayout":
+      return runAuthorityMutation("commitLayout", p, req);
     case "recordPrivateMetric":
-      mustStore().recordPrivateMetric(p.event as PrivateMetricEvent);
-      return null;
+      return runAuthorityMutation("recordPrivateMetric", p, req);
+    case "setPrivateMetricsEnabled":
+      return runAuthorityMutation("setPrivateMetricsEnabled", p, req);
+    case "clearPrivateMetrics":
+      return runAuthorityMutation("clearPrivateMetrics", p, req);
     case "privateMetricsSummary":
       return mustStore().privateMetricsSummary();
-    case "setPrivateMetricsEnabled":
-      mustStore().setPrivateMetricsEnabled(Boolean(p.enabled));
-      return mustStore().privateMetricsSummary();
-    case "clearPrivateMetrics":
-      mustStore().clearPrivateMetrics();
-      return mustStore().privateMetricsSummary();
-    case "commitLayout":
-      mustStore().commitLayout(
-        p.placements as { panel_id: string; region: "top" | "main" | "side"; order: number; w?: number }[]);
-      return mustStore().livePanels();
     case "history":
       return mustStore().history();
     case "setCheckpoint":
-      mustStore().setCheckpoint(Number(p.version), String(p.label ?? ""));
-      return mustStore().history();
+      return runAuthorityMutation("setCheckpoint", rawPayload, req);
     case "panelsAt":
       return mustStore().livePanels(Number(p.version));
-    case "makeLatest": {
-      // ADR-007: the one destructive-ish operation; the shell warns first.
-      dropPending();
-      mustStore().rollbackTo(Number(p.version), { truncate: true });
-      return mustStore().livePanels();
-    }
+    case "makeLatest":
+      return runAuthorityMutation("makeLatest", rawPayload, req);
     case "registryTables":
       return [...mustStore().registrySnapshot().values()];
     case "storePort": {
       const port = ports[0];
       if (!port) throw new Error("storePort needs a transferred port");
-      const target = p.target === "shadow" ? pending?.shadow : mustStore();
-      if (!target) throw new Error("no shadow store open");
-      port.start?.();
-      serveStore(target, portFromMessagePort(port));
+      serveProductionStore(p.target === "shadow" ? "shadow" : "live", port);
       return null;
     }
-    case "intent":
-      return runPipelineText(String(p.text ?? ""));
+    case "intent": {
+      const port = ports[0];
+      if (!port || ports.length !== 1)
+        throw new ClayError("E_VALIDATION", "intent needs exactly one planner port");
+      return runPipelineText(String(p.text ?? ""), port);
+    }
     case "repairPanel": {
-      // doc 05 §7 Repair: one-round fix with the runtime error; the result
-      // arrives as a NORMAL preview and never auto-commits.
-      const panelId = String(p.panelId);
-      const error = String(p.error ?? "unknown error").slice(0, 200);
-      const text = (`The ${panelId} panel crashed at runtime with this error: ${error}. `
-        + `Fix that panel. Keep its purpose and layout; change only what is `
-        + `needed to stop the error.`).slice(0, 500);
-      return runPipelineText(text);
+      const port = ports[0];
+      if (!port || ports.length !== 1)
+        throw new ClayError("E_VALIDATION", "panel repair needs exactly one planner port");
+      const panelId = String(p.panelId ?? "");
+      const panel = mustStore().livePanels().find(candidate => candidate.panel_id === panelId);
+      if (!panel) throw new ClayError("E_VALIDATION", `unknown panel '${panelId}'`);
+      return runPipelineText(
+        `Repair panel "${panel.title}" (${panel.panel_id}) after a runtime error.`.slice(0, 500),
+        port,
+      );
     }
-    case "revertPanel": {
-      dropPending();
-      mustStore().revertPanel(String(p.panelId));
-      return mustStore().livePanels();
-    }
-    case "renamePanel": {
-      mustStore().renamePanel(String(p.panelId), String(p.title));
-      return mustStore().livePanels();
-    }
+    case "revertPanel":
+      return runAuthorityMutation("revertPanel", rawPayload, req);
+    case "renamePanel":
+      return runAuthorityMutation("renamePanel", rawPayload, req);
     case "addAttachment":
-      return mustStore().addAttachment({
-        table: String(p.table), rowId: String(p.rowId), field: String(p.field),
-        name: String(p.name), mime: String(p.mime ?? ""),
-        bytes: new Uint8Array(p.bytes as ArrayBuffer),
-      });
+      return runAuthorityMutation("addAttachment", p, req);
     case "attachmentsForRecord":
       return mustStore().attachmentsForRecord(
         String(p.table), String(p.rowId), String(p.field));
     case "readAttachment":
       return mustStore().readAttachment(String(p.id));
     case "removeAttachment":
-      mustStore().removeAttachment(
-        String(p.table), String(p.rowId), String(p.field), String(p.id)); return null;
+      return runAuthorityMutation("removeAttachment", p, req);
     case "attachmentStorage":
       return mustStore().attachmentStorage();
     case "purgeDeletedAttachments":
-      return mustStore().purgeDeletedAttachments();
+      return runAuthorityMutation("purgeDeletedAttachments", p, req);
     case "listAutomations":
       return mustStore().listAutomations();
     case "upsertAutomation":
-      return mustStore().upsertAutomation(p.input as never);
+      return runAuthorityMutation("upsertAutomation", p, req);
     case "deleteAutomation":
-      mustStore().deleteAutomation(String(p.id)); return null;
+      return runAuthorityMutation("deleteAutomation", p, req);
     case "simulateAutomation":
       return mustStore().simulateAutomation(String(p.id));
     case "runAutomations":
-      return mustStore().runDueAutomations();
+      return runAuthorityMutation("runAutomations", p, req);
     case "runAutomationNow":
-      return mustStore().runAutomationNow(String(p.id));
+      return runAuthorityMutation("runAutomationNow", p, req);
     case "automationRuns":
       return mustStore().automationRuns(
         p.automationId === null || p.automationId === undefined ? undefined : String(p.automationId),
         Number(p.limit ?? 100));
     case "undoAutomationRun":
-      return mustStore().undoAutomationRun(String(p.id));
+      return runAuthorityMutation("undoAutomationRun", p, req);
     case "notifications":
       return mustStore().listNotifications(Number(p.limit ?? 100));
     case "markNotificationRead":
-      mustStore().markNotificationRead(String(p.id)); return null;
+      return runAuthorityMutation("markNotificationRead", p, req);
     case "globalSearch":
       return mustStore().globalSearch(String(p.term ?? ""), Number(p.limit ?? 20));
     case "applyBatch":
-      return mustStore().applyBatch({
-        source: "user", summary: String(p.summary ?? ""), mutations: p.mutations as never,
-      });
+      return (await mustAuthority().executeMutation({
+        requestId: authorityRequestId(req),
+        route: "batch.apply",
+        payload: p,
+      })).result;
     case "operationBatches":
       return mustStore().operationBatches(Number(p.limit ?? 50));
     case "undoBatch":
-      return mustStore().undoBatch(String(p.id));
+      return runAuthorityMutation("undoBatch", p, req);
     case "rowHistory":
       return mustStore().rowHistory(String(p.table), String(p.id));
     case "previewRelationConversion":
@@ -362,86 +1215,43 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
         targetTable: String(p.targetTable), displayField: String(p.displayField),
       });
     case "convertTextToRelation":
-      return mustStore().convertTextToRelation({ ...p, cardinality: "one" } as never);
-    case "addColumn": {
-      addColumnCommit(mustStore(), String(p.table), p.column as never);
-      return [...mustStore().registrySnapshot().values()];
-    }
-    case "renameColumn": {
-      renameColumnCommit(mustStore(), String(p.table), String(p.from), String(p.to));
-      return [...mustStore().registrySnapshot().values()];
-    }
-    case "removePanel": {
-      mustStore().removePanel(String(p.panelId));
-      return mustStore().livePanels();
-    }
-    case "keep": {
-      if (!pending) throw new Error("no preview open");
-      const version = pending.keep();
-      pending = null;
-      // doc 04 §8: request durable storage at the first kept mutation.
-      if (!persistRequested && persistent
-          && typeof navigator !== "undefined" && navigator.storage?.persist) {
-        persistRequested = true;
-        try { await navigator.storage.persist(); } catch { /* best effort */ }
-      }
-      return { version };
-    }
+      return failClosedMutation(req.op);
+    case "removeColumn":
+      return runAuthorityMutation("removeColumn", p, req);
+    case "addColumn":
+      return runAuthorityMutation("addColumn", rawPayload, req);
+    case "addRelationColumn":
+      return runAuthorityMutation("addRelationColumn", rawPayload, req);
+    case "renameColumn":
+      return runAuthorityMutation("renameColumn", rawPayload, req);
+    case "removePanel":
+      return runAuthorityMutation("removePanel", rawPayload, req);
+    case "keep":
+      return keepPendingPreview(req);
     case "discard":
-      dropPending();
-      return null;
+      return discardPendingPreview(req);
     case "removeSamples":
-      return mustDriver().tx(() => {
-        removeSampleRows(mustStore());
-        return null;
-      });
+      return runAuthorityMutation("removeSamples", p, req);
     case "fillSamples":
-      return mustDriver().tx(() => fillSampleRows(mustStore()));
+      return runAuthorityMutation("fillSamples", createSampleFillBundle(mustStore()), req);
     case "sampleCount":
-      return sampleRowCount(mustStore());
-    case "firstRunEvidence":
-      return recordProvenanceSummary(mustStore());
+      return mustAuthority().sampleRowCount();
     case "restoreRow":
-      mustStore().restoreRow(String(p.table), String(p.id));
-      return null;
+      return runAuthorityMutation("restoreRow", p, req);
     case "restorableRows":
       return mustStore().restorableRows(String(p.table));
     case "suggestions":
       return mustStore().suggestions();
     case "recordFilter":
-      mustStore().recordUsage({ kind: "filter",
-        subject: String(p.name), detail: p.payload as Record<string, unknown> });
-      return null;
+      return runAuthorityMutation("recordFilter", p, req);
     case "dismissSuggestion":
-      mustStore().dismissSuggestion(String(p.subject), String(p.kind));
-      return null;
+      return runAuthorityMutation("dismissSuggestion", p, req);
     case "acceptSuggestion":
-      mustStore().acceptSuggestion(String(p.subject), String(p.kind));
-      return null;
-    case "reset": {
-      // P4: deleting the local databases removes all local data.
-      dropPending();
-      store?.close();
-      store = null;
-      storeDriver = null;
-      await wipeBrowserStorage();
-      return null;
-    }
-    case "exportArchive": {
-      const s = mustStore();
-      const bytes = await s.exportArchive(s.getSetting<string>("shell_id") ?? "clay");
-      return {
-        bytes: bytes.buffer,
-        filename: `clay-${new Date().toISOString().slice(0, 10)}.clay`,
-      };
-    }
-    case "importArchive": {
-      dropPending();
-      const bytes = new Uint8Array(p.bytes as ArrayBuffer);
-      const result = await mustStore().replaceFromArchive(bytes);
-      store = result.store;
-      return { manifest: result.manifest, invalidPanels: result.invalidPanels };
-    }
+      return runAuthorityMutation("acceptSuggestion", p, req);
+    case "reset":
+    case "exportArchive":
+    case "importArchive":
+      return failClosedMutation(req.op);
     case "status": {
       // navigator.storage.persist() requested at first commit (doc 04 §8),
       // status + usage estimate surfaced here.
@@ -456,39 +1266,11 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
           quotaBytes = est.quota ?? null;
         }
       } catch { /* estimate unavailable */ }
-      let modelConnection = {
-        provider: "none", model: null as string | null,
-        configured: false, reachable: false, detail: "No model connection selected",
-      };
-      if (modelAccess.apiKey) {
-        modelConnection = { provider: "anthropic", model: null,
-          configured: true, reachable: true, detail: "API key stored on this device" };
-      } else if (modelAccess.backendUrl) {
-        try {
-          const healthUrl = `${modelAccess.backendUrl.replace(/\/$/, "")}/healthz`;
-          const response = await fetch(healthUrl, { signal: AbortSignal.timeout(2500) });
-          const health = await response.json() as {
-            model?: boolean; provider?: string; model_id?: string;
-            reachable?: boolean; detail?: string;
-          };
-          modelConnection = {
-            provider: health.provider ?? "hosted", model: health.model_id ?? null,
-            configured: health.model === true,
-            reachable: health.reachable ?? response.ok,
-            detail: health.detail ?? (health.model
-              ? "Connected" : "Backend reachable; model not configured"),
-          };
-        } catch {
-          modelConnection = { provider: "hosted", model: null,
-            configured: true, reachable: false, detail: "Backend is not reachable" };
-        }
-      }
       return {
         persistent, persisted, usageBytes, quotaBytes,
         attachments: mustStore().attachmentStorage(),
         versions: mustStore().headVersion(),
         stats: mustStore().attemptStats(),
-        modelConnection,
       };
     }
     case "requestPersist": {
@@ -501,30 +1283,22 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "getSetting":
       return mustStore().getSetting(String(p.key)) ?? null;
     case "setSetting":
-      mustStore().setSetting(writableSettingKey(p.key), p.value);
-      return null;
+      return runAuthorityMutation("setSetting", rawPayload, req);
     case "deleteSetting":
-      mustStore().deleteSetting(writableSettingKey(p.key));
-      return null;
-    case "compareAndSetSetting": {
-      const key = writableSettingKey(p.key);
-      const current = mustStore().getSetting<unknown>(key);
-      const revision = current && typeof current === "object"
-        && Number.isSafeInteger((current as { revision?: unknown }).revision)
-        ? Number((current as { revision: number }).revision) : 0;
-      if (revision !== Number(p.expectedRevision)) return { ok: false, current };
-      mustStore().setSetting(key, p.value);
-      return { ok: true, current: p.value };
-    }
+      return runAuthorityMutation("deleteSetting", rawPayload, req);
+    case "compareAndSetSetting":
+      return runAuthorityMutation("compareAndSetSetting", rawPayload, req);
     default:
-      throw new Error(`unknown op '${req.op}'`);
+      throw new ClayError("E_CATALOG_UNAVAILABLE", `unclassified worker route '${req.op}'`);
   }
 }
 
 self.onmessage = (ev: MessageEvent): void => {
   const req = ev.data as Request;
   void (async () => {
+    let finishOperation = (): void => {};
     try {
+      if (req.op !== "shutdown") finishOperation = beginWorkerOperation();
       const result = await handle(req, ev.ports);
       const transfer: Transferable[] = [];
       if (result && typeof result === "object" && "bytes" in result) {
@@ -537,8 +1311,13 @@ self.onmessage = (ev: MessageEvent): void => {
     } catch (e) {
       (self as unknown as Worker).postMessage({
         id: req.id, ok: false,
-        error: e instanceof Error ? e.message : String(e),
+        error: {
+          code: e instanceof ClayError ? e.code : "E_INTERNAL",
+          message: e instanceof Error ? e.message : String(e),
+        },
       });
+    } finally {
+      finishOperation();
     }
   })();
 };

@@ -20,6 +20,7 @@ export function Onboarding(props: {
   const [goal, setGoal] = useState<StarterGoalId>(DEFAULT_STARTER_GOAL);
   const [showGoals, setShowGoals] = useState(false);
   const [showAll, setShowAll] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const recommendation = recommendStarter(goal);
@@ -106,17 +107,28 @@ export function Onboarding(props: {
         </section>
       ) : null}
       <div className="onboarding-cards onboarding-secondary">
-        <button className="shell-card" disabled={props.busy} onClick={() => props.onPick("blank")}>
-          <span className="shell-name">Start from scratch</span>
-          <span className="shell-tagline">Open an empty app and customize it when you are ready.</span>
-        </button>
         <button className="shell-card" disabled={props.busy}
           aria-expanded={showAll} aria-controls="starter-gallery"
           onClick={() => setShowAll(open => !open)}>
           <span className="shell-name">See all templates</span>
           <span className="shell-tagline">Choose a different ready-made starter.</span>
         </button>
+        <button className="shell-card" disabled={props.busy}
+          aria-expanded={showAdvanced} aria-controls="onboarding-advanced"
+          onClick={() => setShowAdvanced(open => !open)}>
+          <span className="shell-name">Advanced options</span>
+          <span className="shell-tagline">Open an empty app when you want to build it yourself.</span>
+        </button>
       </div>
+
+      {showAdvanced ? (
+        <section id="onboarding-advanced" aria-label="Advanced start options">
+          <button className="shell-card" disabled={props.busy} onClick={() => props.onPick("blank")}>
+            <span className="shell-name">Start from scratch</span>
+            <span className="shell-tagline">Open an empty app and customize it when you are ready.</span>
+          </button>
+        </section>
+      ) : null}
 
       {showAll ? (
         <section id="starter-gallery" aria-labelledby="gallery-heading">

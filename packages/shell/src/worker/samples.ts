@@ -3,9 +3,11 @@
 // table id, row id, and trusted operation id are recorded in the reserved
 // provenance ledger, so "clear sample data" removes EXACTLY those rows and can
 // never touch anything the user typed or imported themselves.
-import type { ClayStore, RegColumn } from "@clay/kernel";
+import type {
+  BatchMutation, BatchReceipt, ClayStore, DbDriver, QueryRow, RegColumn,
+} from "@clay/kernel";
 import {
-  readSampleProvenance, recordSampleRows, type SampleCreatedResult,
+  promoteSampleRow, readSampleProvenance, recordSampleRows, type SampleCreatedResult,
 } from "../shells/sample-provenance";
 
 const PROJECT_NAMES = [
@@ -128,6 +130,48 @@ const ROWS_PER_TABLE = 8;
 
 export type SampleFillResult = Extract<SampleCreatedResult, { route: "samples.fill" }>;
 
+export type SampleFillBundle = {
+  tables: Array<{ table: string; rows: Record<string, unknown>[] }>;
+};
+
+function canGenerateRequiredValue(column: RegColumn): boolean {
+  return column.type === "text" || column.type === "number" || column.type === "integer"
+    || column.type === "date" || column.type === "boolean"
+    || (column.type === "enum" && (column.values?.length ?? 0) > 0);
+}
+
+/** Detached sample candidates for the shared production authority route. */
+export function createSampleFillBundle(
+  store: Pick<ClayStore, "registrySnapshot">,
+): SampleFillBundle {
+  let seed = 42;
+  const rng = (): number => {
+    seed = (seed * 1664525 + 1013904223) % 4294967296;
+    return seed / 4294967296;
+  };
+  const tables: SampleFillBundle["tables"] = [];
+  for (const table of store.registrySnapshot().values()) {
+    const names = new Set(table.columns.map(column => column.name));
+    if (/(activity|_log|_history)$/.test(table.name)
+        || (names.has("from_stage") && names.has("to_stage"))) continue;
+    const writable = table.columns.filter(column =>
+      column.type !== "computed" && column.type !== "json" && !column.hidden);
+    if (writable.length === 0
+        || writable.some(column => column.required && !canGenerateRequiredValue(column))) continue;
+    const rows: Record<string, unknown>[] = [];
+    for (let rowIndex = 0; rowIndex < ROWS_PER_TABLE; rowIndex++) {
+      const row: Record<string, unknown> = {};
+      for (const column of writable) {
+        const value = valueFor(column, rowIndex + Math.floor(rng() * 3), rng, table.name);
+        if (value !== undefined && value !== null) row[column.name] = value;
+      }
+      rows.push(row);
+    }
+    tables.push({ table: table.name, rows });
+  }
+  return { tables };
+}
+
 /** Fill every table with plausible rows and return exact durable coordinates. */
 export function fillSampleRows(store: ClayStore): SampleFillResult {
   let seed = 42;
@@ -172,6 +216,84 @@ export function fillSampleRows(store: ClayStore): SampleFillResult {
 /** How many tracked sample rows are currently active (drives the Clear button). */
 export function sampleRowCount(store: ClayStore): number {
   return recordProvenanceSummary(store).sampleCount;
+}
+
+export function applyUserBatchWithSampleHandoff(
+  driver: DbDriver,
+  store: ClayStore,
+  summary: string,
+  mutations: BatchMutation[],
+): BatchReceipt {
+  const provenance = readSampleProvenance(store);
+  const sampleKeys = new Set(provenance
+    .filter(entry => entry.tableActive && entry.rowState === "active")
+    .map(entry => JSON.stringify([entry.tableName, entry.rowId])));
+  const updates = new Map<string, Extract<BatchMutation, { kind: "update" }>>();
+  for (const mutation of mutations) {
+    if (mutation.kind === "update")
+      updates.set(JSON.stringify([mutation.table, mutation.id]), mutation);
+  }
+  const before = new Map<string, QueryRow>();
+  for (const [key, mutation] of updates) {
+    if (!sampleKeys.has(key)) continue;
+    const row = store.query({
+      from: mutation.table,
+      where: [{ field: "id", op: "eq", value: mutation.id }],
+      includeDeleted: true,
+      limit: 1,
+    })[0];
+    if (row) before.set(key, row);
+  }
+
+  return driver.tx(() => {
+    const receipt = store.applyBatch({ source: "user", summary, mutations });
+    for (const [key, prior] of before) {
+      const mutation = updates.get(key)!;
+      const row = store.query({
+        from: mutation.table,
+        where: [{ field: "id", op: "eq", value: mutation.id }],
+        includeDeleted: true,
+        limit: 1,
+      })[0];
+      if (!row || row.deleted_at !== null) continue;
+      const changed = Object.keys(mutation.patch).some(field =>
+        JSON.stringify(prior[field] ?? null) !== JSON.stringify(row[field] ?? null));
+      if (changed) promoteSampleRow(store, mutation.table, mutation.id);
+    }
+    return receipt;
+  });
+}
+
+/** Atomically turns an edited active example into user-owned data. A no-op
+ * patch keeps its example provenance, and any provenance failure rolls the row
+ * update back with it. */
+export function updateSampleToReal(
+  driver: DbDriver,
+  store: ClayStore,
+  table: string,
+  rowId: string,
+  patch: Record<string, unknown>,
+): { row: QueryRow; promoted: boolean } {
+  const provenance = readSampleProvenance(store);
+  const before = store.query({
+    from: table,
+    where: [{ field: "id", op: "eq", value: rowId }],
+    includeDeleted: true,
+    limit: 1,
+  })[0];
+  if (!before || before.deleted_at !== null)
+    throw new Error("sample-to-real edit target is not an active record");
+  const wasSample = provenance.some(entry => entry.tableName === table
+    && entry.rowId === rowId && entry.tableActive && entry.rowState === "active");
+  let row = before;
+  let promoted = false;
+  driver.tx(() => {
+    row = store.update(table, rowId, patch);
+    const changed = Object.keys(patch).some(key =>
+      JSON.stringify(before[key] ?? null) !== JSON.stringify(row[key] ?? null));
+    if (wasSample && changed) promoted = promoteSampleRow(store, table, rowId);
+  });
+  return { row, promoted };
 }
 
 /** Content-free evidence for first-run UI. Exact trusted row ids separate

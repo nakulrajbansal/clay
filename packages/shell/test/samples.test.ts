@@ -2,17 +2,20 @@
 // reserved row-level provenance ledger; clear removes EXACTLY those rows (soft-delete),
 // never rows the user added themselves — that asymmetry is the whole point.
 import { describe, expect, it, vi } from "vitest";
-import { ClayStore, deriveInverse, type MigrationPlanT } from "@clay/kernel";
+import {
+  ClayStore, deriveInverse, openMemoryDriver, type DbDriver, type MigrationPlanT,
+} from "@clay/kernel";
+import { SampleHandoffStore } from "../src/app/sample-handoff-store";
 import { removeSampleRows, seedStarterShell } from "../src/shells/seed";
 import {
   SAMPLE_PROVENANCE_SETTING, parseSampleCreatedResult, parseSampleProvenanceLedger,
 } from "../src/shells/sample-provenance";
 import {
-  fillSampleRows, recordProvenanceSummary,
+  applyUserBatchWithSampleHandoff, fillSampleRows, recordProvenanceSummary, updateSampleToReal,
 } from "../src/worker/samples";
 
-async function storeWithProjects(): Promise<ClayStore> {
-  const store = await ClayStore.openMemory();
+async function storeWithProjects(driver?: DbDriver): Promise<ClayStore> {
+  const store = driver ? ClayStore.fromDriver(driver) : await ClayStore.openMemory();
   const operations: MigrationPlanT["operations"] = [{
     op: "create_table", table: "projects",
     columns: [
@@ -55,6 +58,104 @@ describe("sample data fill/clear", () => {
       expect(typeof r.budget).toBe("number");
       expect(String(r.due_date)).toMatch(/^\d{4}-\d{2}-\d{2}/);
     }
+    store.close();
+  });
+
+  it("routes every live-store edit through the worker sample handoff", async () => {
+    const delegate = {
+      query: vi.fn(async () => []),
+      insert: vi.fn(async () => ({ id: "inserted" })),
+      update: vi.fn(async () => { throw new Error("raw update must not run"); }),
+      softDelete: vi.fn(async () => undefined),
+      registryTables: vi.fn(async () => []),
+    };
+    const handoff = vi.fn(async () => ({ id: "sample-1", name: "Mine" }));
+    const store = new SampleHandoffStore(delegate, handoff);
+
+    await expect(store.update("projects", "sample-1", { name: "Mine" })).resolves
+      .toMatchObject({ id: "sample-1", name: "Mine" });
+    expect(handoff).toHaveBeenCalledWith("projects", "sample-1", { name: "Mine" });
+    expect(delegate.update).not.toHaveBeenCalled();
+    await store.query({ from: "projects" });
+    expect(delegate.query).toHaveBeenCalledTimes(1);
+  });
+
+  it("turns the first edited example into a real record and Clear keeps that exact row", async () => {
+    const driver = await openMemoryDriver();
+    const store = await storeWithProjects(driver);
+    const filled = fillSampleRows(store);
+    const sample = filled.created[0]!;
+    const before = store.query({
+      from: "projects", where: [{ field: "id", op: "eq", value: sample.rowId }], limit: 1,
+    })[0]!;
+
+    const noChange = updateSampleToReal(driver, store, "projects", sample.rowId, {
+      name: before.name,
+    });
+    expect(noChange.promoted).toBe(false);
+    expect(recordProvenanceSummary(store).sampleCount).toBe(filled.added);
+
+    const changed = updateSampleToReal(driver, store, "projects", sample.rowId, {
+      name: "My edited project",
+    });
+    expect(changed.promoted).toBe(true);
+    expect(recordProvenanceSummary(store)).toEqual({
+      sampleCount: filled.added - 1,
+      sampleTables: ["projects"],
+      realRecordCount: 1,
+      provenanceValid: true,
+    });
+
+    removeSampleRows(store);
+    expect(store.query({ from: "projects" })).toMatchObject([
+      { id: sample.rowId, name: "My edited project" },
+    ]);
+    expect(recordProvenanceSummary(store)).toEqual({
+      sampleCount: 0, sampleTables: [], realRecordCount: 1, provenanceValid: true,
+    });
+    store.close();
+  });
+
+  it("promotes every changed example in a user batch before Clear runs", async () => {
+    const driver = await openMemoryDriver();
+    const store = await storeWithProjects(driver);
+    const filled = fillSampleRows(store);
+    const [first, second] = filled.created;
+    if (!first || !second) throw new Error("missing sample fixtures");
+
+    const receipt = applyUserBatchWithSampleHandoff(driver, store, "Keep two examples", [
+      { kind: "update", table: "projects", id: first.rowId, patch: { name: "Mine one" } },
+      { kind: "update", table: "projects", id: second.rowId, patch: { name: "Mine two" } },
+    ]);
+    expect(receipt.changed).toBe(2);
+    expect(recordProvenanceSummary(store).realRecordCount).toBe(2);
+    removeSampleRows(store);
+    expect(store.query({ from: "projects" }).map(row => row.name).sort())
+      .toEqual(["Mine one", "Mine two"]);
+    store.close();
+  });
+
+  it("rolls the row edit back if sample-to-real provenance publication fails", async () => {
+    const driver = await openMemoryDriver();
+    const store = await storeWithProjects(driver);
+    const filled = fillSampleRows(store);
+    const sample = filled.created[0]!;
+    const before = store.query({
+      from: "projects", where: [{ field: "id", op: "eq", value: sample.rowId }], limit: 1,
+    })[0]!;
+    const setSetting = store.setSetting.bind(store);
+    vi.spyOn(store, "setSetting").mockImplementation((key, value) => {
+      if (key === SAMPLE_PROVENANCE_SETTING) throw new Error("injected provenance failure");
+      return setSetting(key, value);
+    });
+
+    expect(() => updateSampleToReal(driver, store, "projects", sample.rowId, {
+      name: "Must roll back",
+    })).toThrow("injected provenance failure");
+    expect(store.query({
+      from: "projects", where: [{ field: "id", op: "eq", value: sample.rowId }], limit: 1,
+    })[0]).toEqual(before);
+    expect(recordProvenanceSummary(store).sampleCount).toBe(filled.added);
     store.close();
   });
 

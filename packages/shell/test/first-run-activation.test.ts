@@ -255,9 +255,10 @@ describe("worker-owned staged first-run publication", () => {
     expect(new Set(result.receipt.import?.rowIds).size).toBe(2);
     expect(result.receipt.import?.batchIds).toHaveLength(1);
     expect(owner.store.getSetting(FIRST_SUCCESS_SETTING_KEY)).toMatchObject({
+      start: { state: "complete", path: "import", shellId: "blank" },
       steps: {
-        app: { state: "complete", path: "import", shellId: "blank" },
         realRecord: { state: "complete", source: "import" },
+        everyday: { state: "pending" },
       },
     });
     owner.store.close();
@@ -307,10 +308,10 @@ describe("first-run import receipt Undo", () => {
     expect(readFirstRunPublication(owner.store, "default")?.undone).toBe(true);
     expect(owner.store.getSetting(FIRST_SUCCESS_SETTING_KEY)).toMatchObject({
       revision: 3,
+      start: { state: "complete", path: "import", shellId: "blank" },
       steps: {
-        app: { state: "complete", path: "import", shellId: "blank" },
         realRecord: { state: "pending" },
-        work: { state: "pending" },
+        everyday: { state: "pending" },
       },
     });
     owner.store.close();

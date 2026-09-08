@@ -10,7 +10,9 @@
 import { describe, expect, it } from "vitest";
 import { MutationPlan } from "@clay/schema";
 import {
-  MutationPipeline, type DebugEvent, type Planner, type PlannerResult,
+  MutationPipeline, createInProcessPlannerMutationAuthority,
+  type ClayStore, type DebugEvent, type Planner, type PlannerResult,
+  type PreparedMutationPreview,
 } from "@clay/kernel";
 import { trackStore, groomStore, logStore } from "../src/regression/contexts";
 import { hydrateApiPlan } from "../src/client";
@@ -49,6 +51,20 @@ function trace(): { onDebug: (e: DebugEvent) => void; events: DebugEvent[] } {
   return { onDebug: e => events.push(e), events };
 }
 
+function pipelineFor(
+  store: ClayStore,
+  planner: Planner,
+  options: ConstructorParameters<typeof MutationPipeline>[2] = {},
+): MutationPipeline {
+  return new MutationPipeline(createInProcessPlannerMutationAuthority(store), planner, options);
+}
+
+async function discardPreview(store: ClayStore, preview: PreparedMutationPreview): Promise<void> {
+  await createInProcessPlannerMutationAuthority(store)
+    .discard(`req_${"e".repeat(26)}`, preview.command);
+  preview.shadow.close();
+}
+
 describe("realistic evaluation — imperfect first output, one repair, commit", () => {
   it("camelCase panel_id (fails PanelId regex) is repaired to snake_case", async () => {
     const store = await trackStore();
@@ -76,7 +92,7 @@ describe("realistic evaluation — imperfect first output, one repair, commit", 
 
     const t = trace();
     const planner = new ScriptedWire([bad, good]);
-    const result = await new MutationPipeline(store, planner, t).run(
+    const result = await pipelineFor(store, planner, t).run(
       "add a priority field and show it as a colored badge");
 
     expect(result.status).toBe("preview");
@@ -86,7 +102,7 @@ describe("realistic evaluation — imperfect first output, one repair, commit", 
     expect(repair).toMatchObject({ trigger: "schema" });
     if (repair && repair.stage === "repair")
       expect(repair.reasons.join(" ")).toMatch(/panel_id|panels\.0\.panel_id/i);
-    if (result.status === "preview") result.preview.discard();
+    if (result.status === "preview") await discardPreview(store, result.preview);
     store.close();
   });
 
@@ -109,11 +125,11 @@ describe("realistic evaluation — imperfect first output, one repair, commit", 
       { ...base, summary: longSummary },
       { ...base, summary: "Adds a bar chart of books finished per month." },
     ]);
-    const result = await new MutationPipeline(store, planner).run(
+    const result = await pipelineFor(store, planner).run(
       "show a chart of books finished per month");
     expect(result.status).toBe("preview");
     expect(planner.repairs).toBe(1);
-    if (result.status === "preview") result.preview.discard();
+    if (result.status === "preview") await discardPreview(store, result.preview);
     store.close();
   });
 
@@ -138,12 +154,12 @@ describe("realistic evaluation — imperfect first output, one repair, commit", 
       }),
     };
     const planner = new ScriptedWire([bad, good]);
-    const result = await new MutationPipeline(store, planner).run("get rid of the breed field");
+    const result = await pipelineFor(store, planner).run("get rid of the breed field");
     // Either the schema layer (unknown op fails the discriminated union) or
     // the validator catches it; both trigger the single repair -> preview.
     expect(result.status).toBe("preview");
     expect(planner.repairs).toBe(1);
-    if (result.status === "preview") result.preview.discard();
+    if (result.status === "preview") await discardPreview(store, result.preview);
     store.close();
   });
 
@@ -164,7 +180,7 @@ describe("realistic evaluation — imperfect first output, one repair, commit", 
       remove_panels: [], confidence: 0.9,
     };
     const planner = new ScriptedWire([broken, broken]);
-    const result = await new MutationPipeline(store, planner).run(
+    const result = await pipelineFor(store, planner).run(
       "show my projects as a gantt chart");
     expect(result.status).toBe("failed");
     if (result.status === "failed") {
@@ -182,7 +198,7 @@ describe("realistic evaluation — imperfect first output, one repair, commit", 
       clarifying_question: "Progress on what — pages per week, books toward a goal, or time spent?",
       assumptions: [], migration: null, panels: [], remove_panels: [], confidence: 0.3,
     }]);
-    const result = await new MutationPipeline(store, planner).run("track my progress better");
+    const result = await pipelineFor(store, planner).run("track my progress better");
     expect(result.status).toBe("clarify");
     expect(planner.repairs).toBe(0);
     store.close();

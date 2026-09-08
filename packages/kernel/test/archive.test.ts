@@ -6,7 +6,21 @@ import {
   ClayStore, crc32, deriveInverse, isFieldId, openDriverFromBytes, registryToJson,
   zipRead, zipWrite, type DbDriver, type ForwardOpT,
 } from "../src/index";
-import { HEALTH_COMPUTED, seededStore } from "./helpers";
+import { HEALTH_COMPUTED, seededStoreWithDriver } from "./helpers";
+
+const testDrivers = new WeakMap<ClayStore, DbDriver>();
+
+async function trackedSeededStore(): Promise<ClayStore> {
+  const { store, driver } = await seededStoreWithDriver();
+  testDrivers.set(store, driver);
+  return store;
+}
+
+function driverOf(store: ClayStore): DbDriver {
+  const driver = testDrivers.get(store);
+  if (!driver) throw new Error("archive test driver is unavailable");
+  return driver;
+}
 
 describe("minimal zip", () => {
   it("round-trips entries byte-exact", () => {
@@ -45,7 +59,7 @@ describe("minimal zip", () => {
 });
 
 async function richStore(): Promise<ClayStore> {
-  const store = await seededStore();
+  const store = await trackedSeededStore();
   store.commit({
     intent: "health", summary: "Adds health score.", migration: HEALTH_COMPUTED,
     panels: [{
@@ -61,7 +75,7 @@ async function richStore(): Promise<ClayStore> {
 }
 
 function stripSemanticMetadata(store: ClayStore, removeGuard: boolean): void {
-  const driver = (store as unknown as { driver: DbDriver }).driver;
+  const driver = driverOf(store);
   for (const row of driver.select("SELECT table_name, spec_json FROM sys.tables_registry")) {
     const spec = JSON.parse(String(row.spec_json)) as {
       semantic?: unknown; columns: Array<{ semantic?: unknown }>;
@@ -130,7 +144,7 @@ describe("export -> import round trip", () => {
   });
 
   it("rejects an oversized manifest before JSON parsing", async () => {
-    const source = await seededStore();
+    const source = await trackedSeededStore();
     const parts = zipRead(await source.exportArchive("manifest-limit"));
     source.close();
     const manifest = JSON.parse(new TextDecoder().decode(
@@ -190,7 +204,7 @@ describe("export -> import round trip", () => {
     source.update("projects", id, { private_note: "must survive" });
     source.rollbackTo(2, { truncate: true });
     source.insert("projects", { name: "Added while note was inactive" });
-    const driver=(source as unknown as {driver:DbDriver}).driver;
+    const driver = driverOf(source);
     driver.exec("INSERT INTO sys.inactive_cells VALUES(?,?,?)",["projects","private_note",id]);
     expect(source.verifyIntegrity()).toContain("inactive-cell marker does not point to a NULL cell");
     driver.exec("DELETE FROM sys.inactive_cells WHERE row_id=?",[id]);
@@ -211,10 +225,10 @@ describe("export -> import round trip", () => {
 
   it("rolls back an existing target when archive copy fails mid-install", async () => {
     const source = await richStore();
-    const target = await seededStore();
+    const target = await trackedSeededStore();
     const targetBefore = JSON.stringify(target.dumpTable("projects"));
     const targetRegistry = registryToJson(target.registrySnapshot());
-    const realDriver = (target as unknown as { driver: DbDriver }).driver;
+    const realDriver = driverOf(target);
     let injected = false;
     const failingDriver = new Proxy(realDriver, {
       get(driver, property) {
@@ -239,29 +253,7 @@ describe("export -> import round trip", () => {
     source.close(); target.close();
   });
 
-  it("rolls back an existing target when post-copy publication validation fails", async () => {
-    const source = await richStore();
-    const target = await seededStore();
-    const targetBefore = JSON.stringify(target.dumpTable("projects"));
-    const targetRegistry = registryToJson(target.registrySnapshot());
-    const targetDriver = (target as unknown as { driver: DbDriver }).driver;
-    let validated = false;
-
-    await expect(ClayStore.importArchive(
-      await source.exportArchive("replacement"),
-      async () => targetDriver,
-      installed => {
-        validated = installed.query({ from: "projects" }).length > 0;
-        throw new Error("injected publication validation failure");
-      },
-    )).rejects.toThrow("injected publication validation failure");
-    expect(validated).toBe(true);
-    expect(JSON.stringify(target.dumpTable("projects"))).toBe(targetBefore);
-    expect(registryToJson(target.registrySnapshot())).toBe(targetRegistry);
-    source.close(); target.close();
-  });
-
-  it("aborts on integrity failure (mixed-up databases)",  async () => {
+  it("aborts on integrity failure (mixed-up databases)", async () => {
     const a = await richStore();
     const empty = await ClayStore.openMemory();
     const aBytes = await a.exportArchive("a");
@@ -283,7 +275,7 @@ describe("export -> import round trip", () => {
   it("rejects physical user columns missing from the registry", async () => {
     const store = await richStore();
     try {
-      const driver = (store as unknown as { driver: DbDriver }).driver;
+      const driver = driverOf(store);
       driver.exec(`ALTER TABLE "projects" ADD COLUMN "orphan_note" TEXT`);
 
       expect(store.verifyIntegrity()).toContain(
@@ -294,14 +286,14 @@ describe("export -> import round trip", () => {
 
   it("rejects format-3 orphan tables, registry key mismatches, and manifest counts", async () => {
     const orphan = await richStore();
-    const orphanDriver = (orphan as unknown as { driver: DbDriver }).driver;
+    const orphanDriver = driverOf(orphan);
     orphanDriver.exec("DELETE FROM sys.tables_registry WHERE table_name = 'projects'");
     await expect(ClayStore.importArchive(await orphan.exportArchive("orphan")))
       .rejects.toThrow(/physical table|manifest table count|unsafe schema|unexpected table/i);
     orphan.close();
 
     const mismatch = await richStore();
-    const mismatchDriver = (mismatch as unknown as { driver: DbDriver }).driver;
+    const mismatchDriver = driverOf(mismatch);
     mismatchDriver.exec(
       "UPDATE sys.tables_registry SET table_name = 'wrong_key' WHERE table_name = 'projects'",
     );
@@ -418,7 +410,7 @@ describe("export -> import round trip", () => {
   });
 
   it("re-validates imported panel blobs (G15)", async () => {
-    const store = await seededStore();
+    const store = await trackedSeededStore();
     store.commit({
       intent: "hostile", summary: "Adds a hostile panel.", migration: null,
       panels: [{

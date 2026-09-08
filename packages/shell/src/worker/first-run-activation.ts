@@ -343,14 +343,15 @@ function firstSuccess(
   imported: boolean,
 ): FirstSuccessState {
   return {
-    version: 1,
+    version: 2,
     revision: imported ? 2 : 1,
     dismissed: false,
+    start: { state: "complete", path, shellId },
     steps: {
-      app: { state: "complete", path, shellId },
       realRecord: imported ? { state: "complete", source: "import" } : { state: "pending" },
-      work: { state: "pending" },
-      customization: { state: "pending" },
+      everyday: { state: "pending" },
+      reshapePreview: { state: "pending" },
+      reshapeKept: { state: "pending" },
     },
   };
 }

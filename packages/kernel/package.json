@@ -6,7 +6,11 @@
   "exports": {
     ".": "./src/index.ts",
     "./expr": "./src/expr.ts",
-    "./errors": "./src/errors.ts"
+    "./errors": "./src/errors.ts",
+    "./shell-runtime": "./src/shell-runtime.ts",
+    "./worker-rpc": "./src/worker-rpc.ts",
+    "./planner-pipeline": "./src/planner-pipeline-entry.ts",
+    "./worker-authority": "./src/worker-authority.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

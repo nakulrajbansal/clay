@@ -1,0 +1,544 @@
+import { expandBlueprint, parseBlueprintDirective } from "./blueprints";
+import {
+  STARTER_SEED_PREFIX,
+  targetAuthorityInvalid as invalid,
+} from "./production-input-capture";
+import {
+  captureStrictJson,
+  type StrictJsonCapturePolicy,
+} from "./strict-json-capture";
+import { deriveInverse, type MigrationPlanT } from "./migrate";
+import type { SampleProvenanceCoordinate } from "./production-response-envelope";
+import { sha256HexSync } from "./state-digest";
+import {
+  ClayStore,
+  type PanelBlobInput,
+  type SampleRowProvenanceEntry,
+} from "./store";
+
+type SeedJsonValue = null | boolean | number | string | SeedJsonValue[] | SeedJsonRecord;
+type SeedJsonRecord = { [key: string]: SeedJsonValue };
+
+type StarterSeedColumn = Readonly<{
+  name: string;
+  type: "text" | "number" | "integer" | "date" | "enum";
+  required: boolean;
+  values?: readonly string[];
+}>;
+
+type StarterSeedTable = Readonly<{
+  name: string;
+  columns: readonly StarterSeedColumn[];
+  sampleRows: readonly Readonly<SeedJsonRecord>[];
+}>;
+
+type StarterSeedPanel = Readonly<{
+  panelId: string;
+  title: string;
+  placement: Readonly<{
+    region: "top" | "main" | "side";
+    order: number;
+    w?: number;
+    h?: number;
+    col?: number;
+  }>;
+  code: string;
+  declaredQueries: readonly Readonly<SeedJsonRecord>[];
+  declaredWrites: readonly string[];
+}>;
+
+export type CapturedStarterSeedBundle = Readonly<{
+  schema: 1;
+  shellId: string;
+  shellName: string;
+  tables: readonly StarterSeedTable[];
+  panels: readonly StarterSeedPanel[];
+  activation?: Readonly<{ operationId: string; appId: "default" }>;
+}>;
+
+export type StarterSeedCatalogMetadata = Readonly<{ shellId: string }>;
+export type StarterSeedExecutionOutcome = Readonly<{
+  result: null;
+  sampleProvenance: readonly SampleProvenanceCoordinate[];
+}>;
+
+/** Metadata which must ride the authority's revision publication atomically. */
+export function starterSeedCatalogMetadata(
+  bundle: CapturedStarterSeedBundle,
+): StarterSeedCatalogMetadata {
+  return Object.freeze({ shellId: bundle.shellId });
+}
+
+const MAX_CAPTURE_STRING = 1_000_000;
+const MAX_TABLES = 64;
+const MAX_COLUMNS_PER_TABLE = 128;
+const MAX_SAMPLE_ROWS = 10_000;
+const MAX_SAMPLE_ROWS_PER_TABLE = 1_000;
+const MAX_PANELS = 256;
+const MAX_QUERIES_PER_PANEL = 64;
+const MAX_WRITES_PER_PANEL = 64;
+const SAFE_IDENTIFIER = /^[a-z_][a-z0-9_]{0,63}$/;
+const SAFE_SHELL_ID = /^[a-z0-9_]{1,64}$/;
+const RELATIVE_STARTER_DAY = /^@clay\/starter-day:([+-]?\d{1,5})$/;
+
+const SEED_CAPTURE_POLICY: StrictJsonCapturePolicy = [
+  32, 100_000, MAX_CAPTURE_STRING, 2_000_000, 10_000, 256, 128, false, true,
+  reason => {
+    if (reason === 2) throw invalid(STARTER_SEED_PREFIX + "string exceeds its capture limit");
+    if (reason === 3) throw invalid(STARTER_SEED_PREFIX + "array exceeds its capture limit");
+    const messages = [
+      STARTER_SEED_PREFIX + "contains a non-finite number",
+      STARTER_SEED_PREFIX + "contains a non-JSON value",
+      STARTER_SEED_PREFIX + "exceeds aggregate capture limits",
+      STARTER_SEED_PREFIX + "arrays must use the plain Array prototype",
+      STARTER_SEED_PREFIX + "arrays must be dense and have no extra properties",
+      STARTER_SEED_PREFIX + "fields must be plain data properties",
+      STARTER_SEED_PREFIX + "records must use a plain object prototype",
+      STARTER_SEED_PREFIX + "fields must be plain data properties",
+    ];
+    if (reason >= 5) throw invalid(messages[reason - 5] ?? STARTER_SEED_PREFIX + "exceeds aggregate capture limits");
+    throw invalid(STARTER_SEED_PREFIX + "exceeds aggregate capture limits");
+  },
+];
+
+/** Capture caller JSON without invoking accessors, iterators, or array methods. */
+function capturePlainJson(input: unknown): SeedJsonValue {
+  return captureStrictJson(input, SEED_CAPTURE_POLICY) as SeedJsonValue;
+}
+
+function asRecord(value: SeedJsonValue, what: string): SeedJsonRecord {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw invalid(`starter seed ${what} must be a plain record`);
+  return value;
+}
+
+function asArray(value: SeedJsonValue, what: string): SeedJsonValue[] {
+  if (!Array.isArray(value)) throw invalid(`starter seed ${what} must be an array`);
+  return value;
+}
+
+function exactKeys(
+  record: SeedJsonRecord,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): void {
+  const keys = Object.keys(record);
+  const allowed = new Set<string>();
+  for (let index = 0; index < required.length; index++) allowed.add(required[index]!);
+  for (let index = 0; index < optional.length; index++) allowed.add(optional[index]!);
+  if (keys.length < required.length || keys.length > required.length + optional.length)
+    throw invalid(STARTER_SEED_PREFIX + "record has unknown or missing fields");
+  for (let index = 0; index < required.length; index++) {
+    if (!Object.hasOwn(record, required[index]!))
+      throw invalid(STARTER_SEED_PREFIX + "record has unknown or missing fields");
+  }
+  for (let index = 0; index < keys.length; index++) {
+    if (!allowed.has(keys[index]!))
+      throw invalid(STARTER_SEED_PREFIX + "record has unknown or missing fields");
+  }
+}
+
+function boundedString(value: SeedJsonValue, what: string, maximum: number): string {
+  if (typeof value !== "string" || value.length < 1 || value.length > maximum)
+    throw invalid(`starter seed ${what} is invalid`);
+  return value;
+}
+
+function identifier(value: SeedJsonValue, what: string): string {
+  const result = boundedString(value, what, 64);
+  if (!SAFE_IDENTIFIER.test(result)) throw invalid(`starter seed ${what} is invalid`);
+  return result;
+}
+
+function nonNegativeInteger(value: SeedJsonValue, what: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
+    throw invalid(`starter seed ${what} is invalid`);
+  return value;
+}
+
+function parseColumn(value: SeedJsonValue): StarterSeedColumn {
+  const record = asRecord(value, "column");
+  exactKeys(record, ["name", "type", "required"], ["values"]);
+  const name = identifier(record.name!, "column name");
+  const type = record.type;
+  if (type !== "text" && type !== "number" && type !== "integer"
+      && type !== "date" && type !== "enum")
+    throw invalid(STARTER_SEED_PREFIX + "column type is invalid");
+  if (typeof record.required !== "boolean")
+    throw invalid(STARTER_SEED_PREFIX + "column required flag is invalid");
+  let values: readonly string[] | undefined;
+  if (record.values !== undefined) {
+    const source = asArray(record.values, "enum values");
+    if (source.length < 1 || source.length > 100)
+      throw invalid(STARTER_SEED_PREFIX + "enum values are invalid");
+    const copy: string[] = [];
+    for (let index = 0; index < source.length; index++)
+      copy.push(boundedString(source[index]!, "enum value", 80));
+    if (new Set(copy).size !== copy.length)
+      throw invalid(STARTER_SEED_PREFIX + "enum values must be unique");
+    values = Object.freeze(copy);
+  }
+  if ((type === "enum") !== (values !== undefined))
+    throw invalid(STARTER_SEED_PREFIX + "enum values are invalid");
+  return Object.freeze({ name, type, required: record.required, ...(values ? { values } : {}) });
+}
+
+function parseTable(value: SeedJsonValue): StarterSeedTable {
+  const record = asRecord(value, "table");
+  exactKeys(record, ["name", "columns", "sampleRows"]);
+  const name = identifier(record.name!, "table name");
+  const columnSource = asArray(record.columns!, "columns");
+  if (columnSource.length < 1 || columnSource.length > MAX_COLUMNS_PER_TABLE)
+    throw invalid(STARTER_SEED_PREFIX + "column array exceeds its limit");
+  const columns: StarterSeedColumn[] = [];
+  for (let index = 0; index < columnSource.length; index++)
+    columns.push(parseColumn(columnSource[index]!));
+  if (new Set(columns.map(column => column.name)).size !== columns.length)
+    throw invalid(STARTER_SEED_PREFIX + "column names must be unique");
+  const columnNames = new Set(columns.map(column => column.name));
+
+  const rowSource = asArray(record.sampleRows!, "sample rows");
+  if (rowSource.length > MAX_SAMPLE_ROWS_PER_TABLE)
+    throw invalid(STARTER_SEED_PREFIX + "sample row array exceeds its limit");
+  const sampleRows: Readonly<SeedJsonRecord>[] = [];
+  for (let index = 0; index < rowSource.length; index++) {
+    const row = asRecord(rowSource[index]!, "sample row");
+    const keys = Object.keys(row);
+    for (let keyIndex = 0; keyIndex < keys.length; keyIndex++) {
+      if (!columnNames.has(keys[keyIndex]!))
+        throw invalid(STARTER_SEED_PREFIX + "sample row references an unknown column");
+    }
+    sampleRows.push(row);
+  }
+  return Object.freeze({
+    name,
+    columns: Object.freeze(columns),
+    sampleRows: Object.freeze(sampleRows),
+  });
+}
+
+function optionalPlacementInteger(
+  record: SeedJsonRecord,
+  key: "w" | "h" | "col",
+): number | undefined {
+  return record[key] === undefined
+    ? undefined : nonNegativeInteger(record[key]!, `panel placement ${key}`);
+}
+
+function parsePanel(value: SeedJsonValue): StarterSeedPanel {
+  const record = asRecord(value, "panel");
+  exactKeys(record, [
+    "panel_id", "title", "placement", "code", "declared_queries", "declared_writes",
+  ]);
+  const panelId = identifier(record.panel_id!, "panel id");
+  const title = boundedString(record.title!, "panel title", 80);
+  const code = boundedString(record.code!, "panel code", MAX_CAPTURE_STRING);
+  const placementRecord = asRecord(record.placement!, "panel placement");
+  exactKeys(placementRecord, ["region", "order"], ["w", "h", "col"]);
+  const region = placementRecord.region;
+  if (region !== "top" && region !== "main" && region !== "side")
+    throw invalid(STARTER_SEED_PREFIX + "panel placement region is invalid");
+  const order = nonNegativeInteger(placementRecord.order!, "panel placement order");
+  const w = optionalPlacementInteger(placementRecord, "w");
+  const h = optionalPlacementInteger(placementRecord, "h");
+  const col = optionalPlacementInteger(placementRecord, "col");
+  const placement = Object.freeze({
+    region,
+    order,
+    ...(w === undefined ? {} : { w }),
+    ...(h === undefined ? {} : { h }),
+    ...(col === undefined ? {} : { col }),
+  });
+
+  const querySource = asArray(record.declared_queries!, "declared queries");
+  if (querySource.length > MAX_QUERIES_PER_PANEL)
+    throw invalid(STARTER_SEED_PREFIX + "declared query array exceeds its limit");
+  const declaredQueries: Readonly<SeedJsonRecord>[] = [];
+  for (let index = 0; index < querySource.length; index++)
+    declaredQueries.push(asRecord(querySource[index]!, "declared query"));
+
+  const writeSource = asArray(record.declared_writes!, "declared writes");
+  if (writeSource.length > MAX_WRITES_PER_PANEL)
+    throw invalid(STARTER_SEED_PREFIX + "declared write array exceeds its limit");
+  const declaredWrites: string[] = [];
+  for (let index = 0; index < writeSource.length; index++)
+    declaredWrites.push(identifier(writeSource[index]!, "declared write"));
+  if (new Set(declaredWrites).size !== declaredWrites.length)
+    throw invalid(STARTER_SEED_PREFIX + "declared writes must be unique");
+
+  return Object.freeze({
+    panelId,
+    title,
+    placement,
+    code,
+    declaredQueries: Object.freeze(declaredQueries),
+    declaredWrites: Object.freeze(declaredWrites),
+  });
+}
+
+function parseActivation(
+  value: SeedJsonValue,
+): Readonly<{ operationId: string; appId: "default" }> {
+  const record = asRecord(value, "activation");
+  exactKeys(record, ["operationId", "appId"]);
+  const operationId = boundedString(record.operationId!, "activation operation id", 128);
+  if (!/^[a-zA-Z0-9_-]{16,128}$/.test(operationId) || record.appId !== "default")
+    throw invalid(STARTER_SEED_PREFIX + "activation binding is invalid");
+  return Object.freeze({ operationId, appId: "default" });
+}
+
+/** Source-private capture used only by ProductionMutationCoordinator. */
+export function captureStarterSeedBundle(input: unknown): CapturedStarterSeedBundle {
+  const captured = capturePlainJson(input);
+  const record = asRecord(captured, "bundle");
+  exactKeys(record, ["schema", "shellId", "shellName", "tables", "panels"], ["activation"]);
+  if (record.schema !== 1) throw invalid(STARTER_SEED_PREFIX + "schema is invalid");
+  const shellId = boundedString(record.shellId!, "shell id", 64);
+  if (!SAFE_SHELL_ID.test(shellId)) throw invalid(STARTER_SEED_PREFIX + "shell id is invalid");
+  const shellName = boundedString(record.shellName!, "shell name", 80);
+  if (shellName !== shellName.trim()) throw invalid(STARTER_SEED_PREFIX + "shell name is invalid");
+
+  const tableSource = asArray(record.tables!, "tables");
+  if (tableSource.length > MAX_TABLES)
+    throw invalid(STARTER_SEED_PREFIX + "table array exceeds its limit");
+  const tables: StarterSeedTable[] = [];
+  let sampleRows = 0;
+  for (let index = 0; index < tableSource.length; index++) {
+    const table = parseTable(tableSource[index]!);
+    sampleRows += table.sampleRows.length;
+    if (sampleRows > MAX_SAMPLE_ROWS)
+      throw invalid(STARTER_SEED_PREFIX + "sample rows exceed their aggregate limit");
+    tables.push(table);
+  }
+  if (new Set(tables.map(table => table.name)).size !== tables.length)
+    throw invalid(STARTER_SEED_PREFIX + "table names must be unique");
+
+  const panelSource = asArray(record.panels!, "panels");
+  if (panelSource.length > MAX_PANELS)
+    throw invalid(STARTER_SEED_PREFIX + "panel array exceeds its limit");
+  const panels: StarterSeedPanel[] = [];
+  for (let index = 0; index < panelSource.length; index++)
+    panels.push(parsePanel(panelSource[index]!));
+  if (new Set(panels.map(panel => panel.panelId)).size !== panels.length)
+    throw invalid(STARTER_SEED_PREFIX + "panel ids must be unique");
+
+  const activation = record.activation === undefined ? undefined : parseActivation(record.activation);
+  return Object.freeze({
+    schema: 1,
+    shellId,
+    shellName,
+    tables: Object.freeze(tables),
+    panels: Object.freeze(panels),
+    ...(activation === undefined ? {} : { activation }),
+  });
+}
+
+const STORE_COMMIT: ClayStore["commit"] = ClayStore.prototype.commit;
+const STORE_INSERT: ClayStore["insert"] = ClayStore.prototype.insert;
+const STORE_SET_SETTING: ClayStore["setSetting"] = ClayStore.prototype.setSetting;
+const STORE_HEAD_VERSION: ClayStore["headVersion"] = ClayStore.prototype.headVersion;
+const STORE_REGISTRY_SNAPSHOT: ClayStore["registrySnapshot"] = ClayStore.prototype.registrySnapshot;
+const STORE_VALIDATION_REGISTRY_SNAPSHOT: ClayStore["validationRegistrySnapshot"] =
+  ClayStore.prototype.validationRegistrySnapshot;
+const STORE_RECORD_SAMPLE_PROVENANCE: ClayStore["recordSampleRowProvenance"] =
+  ClayStore.prototype.recordSampleRowProvenance;
+const DERIVE_INVERSE: typeof deriveInverse = deriveInverse;
+const PARSE_BLUEPRINT: typeof parseBlueprintDirective = parseBlueprintDirective;
+const EXPAND_BLUEPRINT: typeof expandBlueprint = expandBlueprint;
+
+function materializeSampleRow(
+  table: StarterSeedTable,
+  row: Readonly<SeedJsonRecord>,
+  seedInstant: string,
+): Record<string, unknown> {
+  const materialized: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const key of Object.keys(row)) materialized[key] = row[key];
+  for (let index = 0; index < table.columns.length; index++) {
+    const column = table.columns[index]!;
+    if (column.type !== "date") continue;
+    const value = materialized[column.name];
+    if (typeof value !== "string" || !value.startsWith("@clay/starter-day:")) continue;
+    const match = RELATIVE_STARTER_DAY.exec(value);
+    const offset = match ? Number(match[1]) : Number.NaN;
+    if (!Number.isSafeInteger(offset) || Math.abs(offset) > 36_500)
+      throw invalid(STARTER_SEED_PREFIX + "relative date is invalid");
+    const date = new Date(seedInstant);
+    if (Number.isNaN(date.getTime())) throw invalid("trusted starter seed instant is invalid");
+    date.setDate(date.getDate() + offset);
+    materialized[column.name] = date.toISOString().slice(0, 10);
+  }
+  return materialized;
+}
+
+function copyPlacement(panel: StarterSeedPanel): PanelBlobInput["placement"] {
+  return {
+    region: panel.placement.region,
+    order: panel.placement.order,
+    ...(panel.placement.w === undefined ? {} : { w: panel.placement.w }),
+    ...(panel.placement.h === undefined ? {} : { h: panel.placement.h }),
+    ...(panel.placement.col === undefined ? {} : { col: panel.placement.col }),
+  };
+}
+
+/**
+ * Source-private, module-pinned seed executor. The coordinator invokes this
+ * exact function for both disposable shadow preflight and the guarded live
+ * transaction; no caller callback or Store reference crosses the boundary.
+ */
+export function executeCapturedStarterSeed(
+  store: ClayStore,
+  bundle: CapturedStarterSeedBundle,
+  seedInstant: string,
+  operationId: string,
+): StarterSeedExecutionOutcome {
+  for (let start = 0; start < bundle.tables.length; start += 3) {
+    const operations: MigrationPlanT["operations"] = [];
+    const names: string[] = [];
+    const end = Math.min(start + 3, bundle.tables.length);
+    for (let index = start; index < end; index++) {
+      const table = bundle.tables[index]!;
+      names.push(table.name);
+      const columns: Extract<
+        MigrationPlanT["operations"][number], { op: "create_table" }
+      >["columns"] = [];
+      for (let columnIndex = 0; columnIndex < table.columns.length; columnIndex++) {
+        const column = table.columns[columnIndex]!;
+        columns.push({
+          name: column.name,
+          type: column.type,
+          required: column.required,
+          ...(column.values === undefined ? {} : { values: [...column.values] }),
+        });
+      }
+      operations.push({ op: "create_table", table: table.name, columns });
+    }
+    const registry = STORE_REGISTRY_SNAPSHOT.call(store);
+    STORE_COMMIT.call(store, {
+      intent: "first run",
+      summary: `Sets up ${names.join(", ")}.`,
+      semanticOrigin: "seed",
+      migration: {
+        operations,
+        inverse: DERIVE_INVERSE(operations, registry),
+      },
+    });
+  }
+
+  // The registry is intentionally sampled only after every schema group has
+  // landed, so directive expansion sees the complete post-schema registry.
+  const registry = STORE_REGISTRY_SNAPSHOT.call(store);
+  const authorityRegistry = STORE_VALIDATION_REGISTRY_SNAPSHOT.call(store);
+  const panels: PanelBlobInput[] = [];
+  for (let index = 0; index < bundle.panels.length; index++) {
+    const panel = bundle.panels[index]!;
+    const directive = PARSE_BLUEPRINT(panel.code);
+    if (directive === null) {
+      panels.push({
+        panel_id: panel.panelId,
+        title: panel.title,
+        placement: copyPlacement(panel),
+        code: panel.code,
+        declared_queries: panel.declaredQueries as PanelBlobInput["declared_queries"],
+        declared_writes: [...panel.declaredWrites],
+      });
+      continue;
+    }
+    const expanded = EXPAND_BLUEPRINT(directive, registry);
+    panels.push({
+      panel_id: panel.panelId,
+      title: panel.title,
+      placement: copyPlacement(panel),
+      code: expanded.code,
+      declared_queries: expanded.declared_queries as PanelBlobInput["declared_queries"],
+      declared_writes: [...expanded.declared_writes],
+    });
+  }
+  const blank = bundle.tables.length === 0;
+  STORE_COMMIT.call(store, {
+    intent: "first run",
+    summary: blank ? "Starts a blank canvas." : `Creates your ${bundle.shellName} views.`,
+    semanticOrigin: "seed",
+    migration: null,
+    panels,
+    diff: blank ? [] : [{ kind: "add_panel", detail: `${bundle.shellName} starter panels` }],
+  });
+
+  const sampleEntries: SampleRowProvenanceEntry[] = [];
+  for (let tableIndex = 0; tableIndex < bundle.tables.length; tableIndex++) {
+    const table = bundle.tables[tableIndex]!;
+    const tableId = authorityRegistry.get(table.name)?.semantic?.tableId;
+    if (!tableId) throw invalid("starter sample table identity is unavailable");
+    for (let rowIndex = 0; rowIndex < table.sampleRows.length; rowIndex++) {
+      const inserted = STORE_INSERT.call(
+        store,
+        table.name,
+        materializeSampleRow(table, table.sampleRows[rowIndex]!, seedInstant),
+      );
+      sampleEntries.push(Object.freeze({
+        tableId,
+        rowId: String(inserted.id),
+        operationId,
+      }));
+    }
+  }
+  if (sampleEntries.length > 0)
+    STORE_RECORD_SAMPLE_PROVENANCE.call(store, sampleEntries);
+  STORE_SET_SETTING.call(store, "shell_id", bundle.shellId);
+  const sampleProvenance = sampleEntries
+    .map(entry => Object.freeze({ tableId: entry.tableId, rowId: entry.rowId }))
+    .sort((left, right) => {
+      const leftKey = `${left.tableId}\u0000${left.rowId}`;
+      const rightKey = `${right.tableId}\u0000${right.rowId}`;
+      return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+    });
+  if (bundle.activation) {
+    const firstSuccess = Object.freeze({
+      version: 2,
+      revision: 1,
+      dismissed: false,
+      start: Object.freeze({
+        state: "complete",
+        path: bundle.shellId === "blank" ? "blank" : "recommended",
+        shellId: bundle.shellId,
+      }),
+      steps: Object.freeze({
+        realRecord: Object.freeze({ state: "pending" }),
+        everyday: Object.freeze({ state: "pending" }),
+        reshapePreview: Object.freeze({ state: "pending" }),
+        reshapeKept: Object.freeze({ state: "pending" }),
+      }),
+    });
+    const fingerprintPayload = JSON.stringify({
+      version: 1,
+      kind: "starter",
+      appId: bundle.activation.appId,
+      shellId: bundle.shellId,
+    });
+    const sourceFingerprint = sha256HexSync(new TextEncoder().encode(fingerprintPayload));
+    const created = sampleEntries.map(entry => Object.freeze({ ...entry }))
+      .sort((left, right) => left.tableId.localeCompare(right.tableId)
+        || left.rowId.localeCompare(right.rowId)
+        || left.operationId.localeCompare(right.operationId));
+    const receipt = Object.freeze({
+      version: 1,
+      operationId: bundle.activation.operationId,
+      appId: bundle.activation.appId,
+      kind: "starter",
+      sourceFingerprint,
+      revision: STORE_HEAD_VERSION.call(store),
+      shellId: bundle.shellId,
+      undone: false,
+      import: null,
+      sampleCreation: Object.freeze({
+        route: "starter.seed",
+        created: Object.freeze(created),
+      }),
+    });
+    STORE_SET_SETTING.call(store, "release_a_first_success_v1", firstSuccess);
+    STORE_SET_SETTING.call(store, "first_run_publication_v1", receipt);
+  }
+  return Object.freeze({
+    result: null,
+    sampleProvenance: Object.freeze(sampleProvenance),
+  });
+}

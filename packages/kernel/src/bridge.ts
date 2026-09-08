@@ -7,7 +7,12 @@
 // strikes per doc 03/06.
 import { BridgeCall, BridgeOpenRecord, BridgePanelError, BridgeUserGesture } from "@clay/schema";
 import { ClayError } from "./errors";
-import type { AsyncStore, MessagePortLike } from "./asyncstore";
+import {
+  createStoreMutationContext,
+  type AsyncStore,
+  type MessagePortLike,
+  type StoreMutationContext,
+} from "./asyncstore";
 import type { RegTable } from "./registry";
 
 type QueryT = import("@clay/schema").Query;
@@ -156,6 +161,7 @@ type PanelState = {
   strikes: number;
   tripped: boolean;
   watches: Map<string, { query: QueryT; table: string }>;
+  writeRequests: Map<number, { fingerprint: string; context: StoreMutationContext }>;
 };
 
 export class Bridge {
@@ -184,7 +190,7 @@ export class Bridge {
     const state: PanelState = {
       manifest, port, callTimes: [], emitTimes: [], confirmTimes: [],
       confirmOpen: false, writeGrant: null,
-      strikes: 0, tripped: false, watches: new Map(),
+      strikes: 0, tripped: false, watches: new Map(), writeRequests: new Map(),
     };
     this.panels.set(manifest.panelId, state);
     port.onMessage((raw) => { void this.handle(state, raw); });
@@ -250,6 +256,22 @@ export class Bridge {
 
   private matchDeclaredQuery(state: PanelState, q: unknown): boolean {
     return state.manifest.declaredQueries.some(d => queryMatchesDeclared(q, d));
+  }
+
+  private writeContext(
+    state: PanelState,
+    call: { seq: number; call: string; args: unknown[] },
+  ): StoreMutationContext {
+    const fingerprint = JSON.stringify([call.call, call.args]);
+    const existing = state.writeRequests.get(call.seq);
+    if (existing) {
+      if (existing.fingerprint !== fingerprint)
+        throw new ClayError("E_VALIDATION", "panel call sequence was reused with different input");
+      return existing.context;
+    }
+    const context = createStoreMutationContext();
+    state.writeRequests.set(call.seq, { fingerprint, context });
+    return context;
   }
 
   private async handle(state: PanelState, raw: unknown): Promise<void> {
@@ -341,21 +363,27 @@ export class Bridge {
               `table '${String(table)}' is not in declared_writes (ADR-014)`);
           if (!this.limits.allowWrites)
             throw new ClayError("E_VALIDATION", "preview is read-only until kept");
-          const grant = state.writeGrant;
-          if (!grant || grant.remaining <= 0 || now > grant.expiresAt)
-            throw new ClayError("E_VALIDATION", "write requires a recent user action");
-          grant.remaining -= 1;
+          const admitted = state.writeRequests.has(call.seq);
+          if (!admitted) {
+            const grant = state.writeGrant;
+            if (!grant || grant.remaining <= 0 || now > grant.expiresAt)
+              throw new ClayError("E_VALIDATION", "write requires a recent user action");
+            grant.remaining -= 1;
+          }
+          const context = this.writeContext(state, call);
           if (call.call === "db.insert") {
-            const row = await this.store.insert(table, (call.args[1] ?? {}) as Record<string, unknown>);
+            const row = await this.store.insert(
+              table, (call.args[1] ?? {}) as Record<string, unknown>, context,
+            );
             this.notifyWrite(table);
             this.reply(state, call.seq, row);
           } else if (call.call === "db.update") {
             const row = await this.store.update(table, String(call.args[1]),
-              (call.args[2] ?? {}) as Record<string, unknown>);
+              (call.args[2] ?? {}) as Record<string, unknown>, context);
             this.notifyWrite(table);
             this.reply(state, call.seq, row);
           } else {
-            await this.store.softDelete(table, String(call.args[1]));
+            await this.store.softDelete(table, String(call.args[1]), context);
             this.notifyWrite(table);
             this.reply(state, call.seq, null);
           }

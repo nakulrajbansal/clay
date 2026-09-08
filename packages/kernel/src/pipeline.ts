@@ -10,7 +10,19 @@ import type { z } from "zod";
 import { ClayError } from "./errors";
 import { deriveInverse, validateMigrationPlan } from "./migrate";
 import { expandBlueprint, parseBlueprintDirective } from "./blueprints";
-import type { ClayStore, PanelBlobInput } from "./store";
+import type {
+  PlannerMutationAuthority,
+  PlanningCapture,
+  PreparedMutationPreview,
+  PreviewShadow,
+} from "./planner-authority";
+import { capturePlannerPlanData } from "./planner-command";
+export { createInProcessPlannerMutationAuthority } from "./planner-authority";
+export type {
+  PlannerMutationAuthority,
+  PreparedMutationPreview,
+  PreviewShadow,
+} from "./planner-authority";
 import { missingDiffLines, validateMutationPlan, type ValidationIssue } from "./validate";
 
 type MutationPlanT = z.infer<typeof MutationPlanSchema>;
@@ -43,6 +55,74 @@ export type Planner = {
   requestRepair(ctx: PlannerContext, priorPlanRaw: string, failures: string[]): Promise<PlannerResult>;
 };
 
+function clipPlannerDisplay(value: unknown, max: number): unknown {
+  return typeof value === "string" && value.length > max
+    ? `${value.slice(0, max - 1)}…` : value;
+}
+
+function hydratePlannerWire(input: unknown): unknown {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const plan = { ...(input as Record<string, unknown>) };
+  if (typeof plan.migration === "string") {
+    const value = plan.migration.trim();
+    plan.migration = value === "" || value === "null" ? null : JSON.parse(value);
+  }
+  if (Array.isArray(plan.panels)) {
+    plan.panels = plan.panels.map(value => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+      const panel = { ...(value as Record<string, unknown>) };
+      if (Array.isArray(panel.declared_queries)) {
+        panel.declared_queries = panel.declared_queries.map(query =>
+          typeof query === "string" ? JSON.parse(query) : query);
+      }
+      if (typeof panel.code === "string"
+          && /\b(Board|Timeline)\b/.test(panel.code)
+          && panel.placement && typeof panel.placement === "object"
+          && !Array.isArray(panel.placement)) {
+        const placement = panel.placement as Record<string, unknown>;
+        if (placement.w === undefined) panel.placement = { ...placement, w: 4 };
+      }
+      return panel;
+    });
+  }
+  plan.summary = clipPlannerDisplay(plan.summary, 200);
+  if (Array.isArray(plan.assumptions)) {
+    plan.assumptions = plan.assumptions.slice(0, 5)
+      .map(assumption => clipPlannerDisplay(assumption, 150));
+  }
+  if (Array.isArray(plan.user_facing_diff)) {
+    plan.user_facing_diff = plan.user_facing_diff.map(value =>
+      value && typeof value === "object" && !Array.isArray(value)
+        ? { ...(value as Record<string, unknown>),
+          detail: clipPlannerDisplay((value as { detail?: unknown }).detail, 120) }
+        : value);
+  }
+  return plan;
+}
+
+/** Decode opaque model bytes inside the trusted pipeline closure. */
+export function decodePlannerRaw(raw: string): PlannerResult {
+  let hydrated: unknown;
+  try {
+    hydrated = hydratePlannerWire(JSON.parse(raw));
+  } catch (error) {
+    return { ok: false, error: {
+      code: "E_PARSE", message: `model output is not parseable: ${String(error)}`, raw,
+    } };
+  }
+  const parsed = MutationPlanSchema.safeParse(hydrated);
+  if (!parsed.success) {
+    const issues = parsed.error.issues.map(issue =>
+      `${issue.path.length > 0 ? issue.path.join(".") : "(root)"}: ${issue.message}`);
+    return { ok: false, error: {
+      code: "E_SCHEMA",
+      message: `plan fails validation: ${issues.slice(0, 3).join("; ")}`,
+      issues, raw,
+    } };
+  }
+  return { ok: true, plan: parsed.data, raw };
+}
+
 /** Structured trace of one attempt through the pipeline (for logs/review). */
 export type DebugEvent =
   | { stage: "intake"; intent: string; registryTables: string[]; panelCount: number }
@@ -55,20 +135,11 @@ export type DebugEvent =
 /** S4 smoke hook. Default: run every concrete declared query against the
  * shadow. The browser shell replaces this with a real panel boot +
  * 2s render watch; both throw to signal a dry-run failure. */
-export type SmokeTest = (shadow: ClayStore, plan: MutationPlanT) => Promise<void>;
-
-export type PreviewHandle = {
-  plan: MutationPlanT;
-  /** the migrated shadow store — the PreviewHost renders panels against it */
-  shadow: ClayStore;
-  version: number;               // the version keep() will create
-  keep(): number;                // S6 commit on the LIVE store (doc 05 §6, G8)
-  discard(): void;
-};
+export type SmokeTest = (shadow: PreviewShadow, plan: MutationPlanT) => Promise<void>;
 
 export type AttemptResult =
   | { status: "clarify"; question: string; attemptId: string; repaired: boolean }
-  | { status: "preview"; preview: PreviewHandle; attemptId: string; repaired: boolean }
+  | { status: "preview"; preview: PreparedMutationPreview; attemptId: string; repaired: boolean }
   | { status: "failed"; stage: "plan" | "validate" | "dry_run";
       reasons: string[]; attemptId: string; repaired: boolean };
 
@@ -86,21 +157,12 @@ export const defaultSmokeTest: SmokeTest = async (shadow, plan) => {
 const issueStrings = (issues: ValidationIssue[]): string[] =>
   issues.map(i => `${i.rule}${i.panel ? ` [${i.panel}]` : ""}: ${i.message}`);
 
-function toCommitPanels(plan: MutationPlanT): PanelBlobInput[] {
-  return plan.panels.map(p => ({
-    panel_id: p.panel_id, title: p.title,
-    placement: p.placement, code: p.code,
-    declared_queries: p.declared_queries,
-    declared_writes: p.declared_writes,
-  }));
-}
-
 export class MutationPipeline {
   private readonly smokeTest: SmokeTest;
   private readonly onDebug?: (ev: DebugEvent) => void;
 
   constructor(
-    private readonly store: ClayStore,
+    private readonly authority: PlannerMutationAuthority,
     private readonly planner: Planner,
     opts: { smokeTest?: SmokeTest; onDebug?: (ev: DebugEvent) => void } = {},
   ) {
@@ -114,15 +176,18 @@ export class MutationPipeline {
    * the jobs table" must ship jobs-panel code so the model can return a
    * correct whole-file replacement instead of regenerating from scratch. */
   buildContext(intent: string): PlannerContext {
+    return this.buildContextFromCapture(intent, this.authority.capturePlanningBase());
+  }
+
+  private buildContextFromCapture(intent: string, capture: PlanningCapture): PlannerContext {
     const words = new Set(intent.toLowerCase().split(/[^a-z0-9_]+/).filter(Boolean));
     const mentions = (s: string): boolean => {
       const t = s.toLowerCase();
       return words.has(t) || words.has(t.replace(/s$/, "")) || words.has(`${t}s`);
     };
-    const registry = [...this.store.registrySnapshot().values()];
     return {
-      registry,
-      panels: this.store.livePanels().map(p => {
+      registry: [...capture.registry.values()],
+      panels: capture.livePanels.map(p => {
         const tables = [...new Set(p.declared_queries.map(q => q.from))];
         const targeted =
           mentions(p.panel_id) || mentions(p.title)
@@ -136,29 +201,53 @@ export class MutationPipeline {
           ...(targeted ? { code: p.code } : {}),
         };
       }),
-      recentSummaries: this.store.recentSummaries(5),
+      recentSummaries: [...capture.recentSummaries],
       intent,
     };
   }
 
   async run(intent: string): Promise<AttemptResult> {
-    const attemptId = this.store.beginAttempt(intent);          // S0
-    const ctx = this.buildContext(intent);                      // S1
+    const attemptId = await this.authority.beginAttempt(intent); // S0
     let repairUsed = false;
+    let finalizationStarted = false;
+    let activePreview: PreparedMutationPreview | null = null;
     const debug = (ev: DebugEvent): void => this.onDebug?.(ev);
+    const finalizeAttempt = async (
+      outcome: "clarify" | "failed",
+      errorCode?: string,
+    ): Promise<void> => {
+      if (finalizationStarted)
+        throw new ClayError("E_INTERNAL", "planner attempt finalization was already started");
+      // Mark first so a failed durable acknowledgement is surfaced rather
+      // than being hidden by a second, ambiguous finalization attempt.
+      finalizationStarted = true;
+      await this.authority.finalizeAttempt(attemptId, outcome, errorCode);
+    };
+
+    try {
+    const capture = this.authority.capturePlanningBase();        // S1
+    const ctx = this.buildContextFromCapture(intent, capture);
     debug({ stage: "intake", intent,
       registryTables: ctx.registry.map(t => (t as { name: string }).name),
       panelCount: ctx.panels.length });
 
-    const fail = (stage: "plan" | "validate" | "dry_run", reasons: string[],
-      code: string): AttemptResult => {
-      this.store.finishAttempt(attemptId, "failed", code);
+    const fail = async (stage: "plan" | "validate" | "dry_run", reasons: string[],
+      code: string): Promise<AttemptResult> => {
+      await finalizeAttempt("failed", code);
       debug({ stage: "outcome", status: `failed@${stage}`, repaired: repairUsed });
       return { status: "failed", stage, reasons, attemptId, repaired: repairUsed };
     };
+    const callPlanner = async (operation: () => Promise<PlannerResult>): Promise<PlannerResult> => {
+      try { return await operation(); }
+      catch (error) {
+        await finalizeAttempt("failed", error instanceof ClayError ? error.code : "E_MODEL");
+        debug({ stage: "outcome", status: "failed@plan", repaired: repairUsed });
+        throw error;
+      }
+    };
 
     // S2
-    let result = await this.planner.requestPlan(ctx);
+    let result = await callPlanner(() => this.planner.requestPlan(ctx));
     debug({ stage: "plan", ok: result.ok,
       raw: result.ok ? result.raw : (result.error.raw ?? null),
       error: result.ok ? undefined : result.error.message });
@@ -173,13 +262,32 @@ export class MutationPipeline {
         if (recoverable && !repairUsed) {
           repairUsed = true;
           debug({ stage: "repair", trigger: "schema", reasons });
-          result = await this.planner.requestRepair(ctx, raw!, reasons);
+          result = await callPlanner(() => this.planner.requestRepair(ctx, raw!, reasons));
           debug({ stage: "plan", ok: result.ok,
             raw: result.ok ? result.raw : (result.error.raw ?? null),
             error: result.ok ? undefined : result.error.message });
           continue;
         }
-        return fail("plan", reasons, code);
+        return await fail("plan", reasons, code);
+      }
+
+      const priorRaw = result.raw;
+
+      try {
+        result = { ...result, plan: capturePlannerPlanData(result.plan) };
+      } catch (error) {
+        const reason = error instanceof ClayError
+          ? `${error.code}: ${error.message}` : String(error);
+        if (repairUsed)
+          return await fail("validate", [reason],
+            error instanceof ClayError ? error.code : "E_VALIDATION");
+        repairUsed = true;
+        debug({ stage: "repair", trigger: "validate", reasons: [reason] });
+        result = await callPlanner(() => this.planner.requestRepair(ctx, priorRaw, [reason]));
+        debug({ stage: "plan", ok: result.ok,
+          raw: result.ok ? result.raw : (result.error.raw ?? null),
+          error: result.ok ? undefined : result.error.message });
+        continue;
       }
 
       // Reversibility is kernel-owned: replace the model's hand-written
@@ -195,7 +303,7 @@ export class MutationPipeline {
             && Array.isArray(p.migration.operations)) {
           try {
             p.migration.inverse =
-              deriveInverse(p.migration.operations, this.store.registrySnapshot());
+              deriveInverse(p.migration.operations, capture.registry);
           } catch { /* invalid op sequence — V5 below states it */ }
         }
         // Same spirit for V7 (ADR-021): a plan that changes things but
@@ -206,7 +314,7 @@ export class MutationPipeline {
         if (plan && typeof plan === "object" && Array.isArray(plan.user_facing_diff)) {
           try {
             const missing = missingDiffLines(plan,
-              new Set(this.store.livePanels().map(lp => lp.panel_id)));
+              new Set(capture.livePanels.map(lp => lp.panel_id)));
             if (missing.length > 0
                 && plan.user_facing_diff.length + missing.length <= 12)
               plan.user_facing_diff.push(...missing);
@@ -224,7 +332,7 @@ export class MutationPipeline {
       {
         const plan = result.plan as MutationPlanT | null;
         if (plan && typeof plan === "object" && Array.isArray(plan.panels)) {
-          let reg = this.store.registrySnapshot();
+          let reg = capture.registry;
           if (plan.migration) {
             try { reg = validateMigrationPlan(plan.migration, reg); }
             catch { /* bad migration — V5 reports; expand pre-migration */ }
@@ -254,12 +362,12 @@ export class MutationPipeline {
 
       // S3: the Validator (V1–V7)
       const issues = [...blueprintIssues, ...validateMutationPlan(result.plan, {
-        registry: this.store.validationRegistrySnapshot(),
-        livePanelIds: this.store.livePanels().map(p => p.panel_id),
+        registry: capture.validationRegistry,
+        livePanelIds: capture.livePanels.map(p => p.panel_id),
       })];
       if (issues.length > 0) {
         debug({ stage: "validate", issues: issueStrings(issues) });
-        if (repairUsed) return fail("validate", issueStrings(issues), "E_VALIDATION");
+        if (repairUsed) return await fail("validate", issueStrings(issues), "E_VALIDATION");
         repairUsed = true;
         // Focus the single repair round on the root cause: when the
         // migration itself failed, panel checks ran against the stale
@@ -268,7 +376,8 @@ export class MutationPipeline {
         const migrationIssues = issues.filter(i => i.panel === undefined);
         const repairIssues = migrationIssues.length > 0 ? migrationIssues : issues;
         debug({ stage: "repair", trigger: "validate", reasons: issueStrings(repairIssues) });
-        result = await this.planner.requestRepair(ctx, result.raw, issueStrings(repairIssues));
+        result = await callPlanner(() =>
+          this.planner.requestRepair(ctx, priorRaw, issueStrings(repairIssues)));
         debug({ stage: "plan", ok: result.ok,
           raw: result.ok ? result.raw : (result.error.raw ?? null),
           error: result.ok ? undefined : result.error.message });
@@ -277,7 +386,7 @@ export class MutationPipeline {
 
       const plan = MutationPlanSchema.parse(result.plan);
       if (plan.clarifying_question) {
-        this.store.finishAttempt(attemptId, "clarify");
+        await finalizeAttempt("clarify");
         debug({ stage: "outcome", status: "clarify", repaired: repairUsed });
         return {
           status: "clarify", question: plan.clarifying_question,
@@ -285,71 +394,64 @@ export class MutationPipeline {
         };
       }
 
-      // S4: prepare semantic IDs once, then use the same immutable assignment
-      // batch in the disposable shadow and the eventual live Keep.
-      const baseVersion = this.store.headVersion();
-      const semanticAssignments = this.store.prepareSemanticAssignments(
-        plan.migration,
-        "model",
-      );
-      // S4: shadow dry-run — backup, migrate shadow, smoke
-      const shadow = await this.store.shadowCopy();
+      // S4: create one immutable exact-base command while preparing a
+      // disposable shadow. S6 receives data only; no live Store capability.
+      let preview: PreparedMutationPreview | null = null;
       try {
-        shadow.commit({
-          intent, summary: plan.summary, migration: plan.migration,
-          semanticOrigin: "model", semanticAssignments,
-          panels: toCommitPanels(plan), removePanels: plan.remove_panels,
-          diff: plan.user_facing_diff,
+        preview = await this.authority.preparePreview({
+          attemptId,
+          base: capture.base,
+          intent,
+          plan,
         });
-        await this.smokeTest(shadow, plan);
-        if (this.store.headVersion() !== baseVersion) {
-          shadow.close();
-          return fail("dry_run", [
+        activePreview = preview;
+        await this.smokeTest(preview.shadow, preview.plan);
+        try {
+          this.authority.assertPlanningBase(capture.base);
+        } catch {
+          try { preview.shadow.close(); }
+          finally { if (activePreview === preview) activePreview = null; }
+          return await fail("dry_run", [
             "App changed during validation. Reshape again from the latest version.",
           ], "E_CONFLICT");
         }
         debug({ stage: "dry_run", ok: true });
       } catch (e) {
-        shadow.close();
+        if (preview) {
+          try { preview.shadow.close(); }
+          finally { if (activePreview === preview) activePreview = null; }
+        }
         const reason = e instanceof ClayError ? `${e.code}: ${e.message}` : String(e);
         debug({ stage: "dry_run", ok: false, error: reason });
-        if (repairUsed) return fail("dry_run", [reason], "E_DRY_RUN");
+        if (e instanceof ClayError && e.code === "E_CONFLICT")
+          return await fail("dry_run", [reason], "E_CONFLICT");
+        if (repairUsed) return await fail("dry_run", [reason], "E_DRY_RUN");
         repairUsed = true;
         debug({ stage: "repair", trigger: "dry_run", reasons: [reason] });
-        result = await this.planner.requestRepair(ctx, result.raw, [reason]);
+        result = await callPlanner(() => this.planner.requestRepair(ctx, priorRaw, [reason]));
         debug({ stage: "plan", ok: result.ok,
           raw: result.ok ? result.raw : (result.error.raw ?? null),
           error: result.ok ? undefined : result.error.message });
         continue;
       }
 
-      // S5: preview in place; S6 on the caller's Keep/Discard
-      const store = this.store;
-      const preview: PreviewHandle = {
-        plan, shadow, version: baseVersion + 1,
-        keep: (): number => {
-          if (store.headVersion() !== baseVersion)
-            throw new ClayError("E_VALIDATION",
-              "App changed while this preview was open. Discard it and reshape again.");
-          // migrations are shape-level: applying to the LIVE db is safe even
-          // if rows were added while previewing (G8)
-          const version = store.commit({
-            intent, summary: plan.summary, migration: plan.migration,
-            semanticOrigin: "model", semanticAssignments,
-            panels: toCommitPanels(plan), removePanels: plan.remove_panels,
-            diff: plan.user_facing_diff,
-          });
-          store.finishAttempt(attemptId, "kept");
-          shadow.close();
-          return version;
-        },
-        discard: (): void => {
-          store.finishAttempt(attemptId, "discarded");
-          shadow.close();   // shadow.db deleted after every run (doc 04 §8)
-        },
-      };
+      // S5 returns immutable data plus a shadow-only resource. S6 decisions
+      // are explicit authority calls and shadow closure is separate.
+      if (!preview) throw new ClayError("E_INTERNAL", "preview preparation returned no state");
       debug({ stage: "outcome", status: "preview", repaired: repairUsed });
       return { status: "preview", preview, attemptId, repaired: repairUsed };
+    }
+    } catch (error) {
+      const disposable = activePreview;
+      activePreview = null;
+      if (disposable) {
+        try { disposable.shadow.close(); }
+        catch { /* durable finalization has precedence over disposable cleanup */ }
+      }
+      if (!finalizationStarted) await finalizeAttempt(
+        "failed", error instanceof ClayError ? error.code : "E_INTERNAL",
+      );
+      throw error;
     }
   }
 }

@@ -11,5 +11,12 @@ export default defineConfig({
   },
   worker: {
     format: "es",
+    rollupOptions: {
+      output: {
+        onlyExplicitManualChunks: true,
+        manualChunks: id => id.replaceAll("\\", "/").endsWith("/planner-authority.ts")
+          ? "planner-authority" : undefined,
+      },
+    },
   },
 });

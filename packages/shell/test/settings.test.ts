@@ -2,13 +2,38 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   CODEX_BACKEND_URL, getActiveModelAccess, getBackendUrl, getModelProvider, getSessionToken,
-  hasModelAccess,
+  hasModelAccess, managedDefaultBackendUrl,
   normalizeBackendUrl, setApiKey, setBackendUrl, setModelProvider,
   setSessionToken,
 } from "../src/app/settings";
 
 describe("model provider settings", () => {
   beforeEach(() => localStorage.clear());
+
+  it("selects the canonical same-origin managed connection without overriding explicit providers", () => {
+    const managedLocation = {
+      protocol: "https:", hostname: "clay.example", origin: "https://clay.example",
+    };
+    expect(managedDefaultBackendUrl(managedLocation)).toBe("https://clay.example");
+    expect(managedDefaultBackendUrl({
+      protocol: "http:", hostname: "localhost", origin: "http://localhost:5173",
+    })).toBeNull();
+
+    expect(getModelProvider()).toBe("clay");
+    expect(getActiveModelAccess(managedLocation)).toEqual({
+      provider: "clay", apiKey: null, backendUrl: "https://clay.example",
+    });
+
+    setModelProvider("openai");
+    expect(getActiveModelAccess(managedLocation)).toEqual({
+      provider: "openai", apiKey: null, backendUrl: null,
+    });
+    setApiKey("legacy-key");
+    setModelProvider("clay");
+    expect(getActiveModelAccess(managedLocation)).toEqual({
+      provider: "clay", apiKey: null, backendUrl: "https://clay.example",
+    });
+  });
 
   it("uses the local Codex connector without a browser API key", () => {
     setModelProvider("codex");

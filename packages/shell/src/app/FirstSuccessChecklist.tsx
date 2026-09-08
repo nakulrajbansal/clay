@@ -2,12 +2,14 @@ import {
   FIRST_WRITE_STORAGE_COPY, TEMPORARY_FIRST_WRITE_COPY,
   firstSuccessCount, type FirstSuccessState,
 } from "./first-success-state";
+import { targetIdentityEquals } from "@clay/kernel";
+import type { DeviceProtectionProjection } from "../worker/db-worker";
 
 const labels = {
-  app: "Start with a working app",
   realRecord: "Add your first real record",
-  work: "Review your Work view",
-  customization: "Keep your first customization",
+  everyday: "Do one everyday action",
+  reshapePreview: "Ask Clay for one small change",
+  reshapeKept: "Review and Keep the Preview",
 } as const;
 
 type StepName = keyof typeof labels;
@@ -17,9 +19,11 @@ export function FirstSuccessChecklist(props: {
   loading: boolean;
   error: string | null;
   persistent?: boolean;
+  protection?: DeviceProtectionProjection | null;
   onAddRecord: () => void;
-  onReviewWork: () => void;
-  onCustomize: () => void;
+  onDoEveryday: () => void;
+  onAskClay: () => void;
+  onReviewPreview: () => void;
   onDismiss: () => void;
   onResume: () => void;
   onRetry: () => void;
@@ -40,10 +44,20 @@ export function FirstSuccessChecklist(props: {
 
   const { state } = props;
   const count = firstSuccessCount(state);
+  const exactProtected = props.protection?.result.state === "protected_on_device"
+    && props.protection.checkpoint.state === "valid"
+    && targetIdentityEquals(props.protection.target, props.protection.checkpoint.target);
+  const activityComplete = count === 4;
+  const protectionMessage = props.protection?.result.state === "checkpointing"
+    ? "Protecting the latest change"
+    : props.protection?.result.state === "needs_protection"
+        || (props.protection?.result.state === "protected_on_device" && !exactProtected)
+      ? "Protection is out of date"
+      : "Waiting for protection";
   if (state.dismissed) {
     return (
       <section className="banner" aria-label="Setup checklist" style={{ flexWrap: "wrap" }}>
-        <span>{count} of 4 setup steps complete</span>
+        <span>{count} of 4 activity steps complete{exactProtected ? " — protected on this device" : ""}</span>
         <span className="banner-actions">
           <button className="link" onClick={props.onResume}>Continue setup</button>
         </span>
@@ -51,16 +65,18 @@ export function FirstSuccessChecklist(props: {
     );
   }
 
-  const order: StepName[] = ["app", "realRecord", "work", "customization"];
+  const order: StepName[] = ["realRecord", "everyday", "reshapePreview", "reshapeKept"];
   const firstPending = order.find(step => state.steps[step].state === "pending") ?? null;
   const status = (step: StepName): string => state.steps[step].state === "complete"
     ? "Complete" : firstPending === step ? "Next" : "Not started";
   const nextAction = firstPending === "realRecord"
     ? { label: "Add a real record", run: props.onAddRecord }
-    : firstPending === "work"
-      ? { label: "Review Work", run: props.onReviewWork }
-      : firstPending === "customization"
-        ? { label: "Customize", run: props.onCustomize } : null;
+    : firstPending === "everyday"
+      ? { label: "Do an everyday action", run: props.onDoEveryday }
+      : firstPending === "reshapePreview"
+        ? { label: "Ask Clay", run: props.onAskClay }
+        : firstPending === "reshapeKept"
+          ? { label: "Review Preview", run: props.onReviewPreview } : null;
 
   return (
     <section className="banner" aria-labelledby="first-success-title"
@@ -76,6 +92,17 @@ export function FirstSuccessChecklist(props: {
             </li>
           ))}
         </ol>
+        {activityComplete ? (
+          exactProtected ? (
+            <p style={{ margin: "7px 0 0", color: "var(--success)" }}>
+              <strong>Setup complete — protected on this device</strong>
+            </p>
+          ) : (
+            <p style={{ margin: "7px 0 0", color: "var(--text-2)" }} role="status">
+              <strong>4 of 4 activity steps complete.</strong>{" "}{protectionMessage}.
+            </p>
+          )
+        ) : null}
         {state.steps.realRecord.state === "pending" ? (
           <p style={{ margin: "7px 0 0", color: "var(--text-2)" }}>
             {props.persistent === false ? TEMPORARY_FIRST_WRITE_COPY : FIRST_WRITE_STORAGE_COPY}

@@ -49,8 +49,8 @@ describe("first-run onboarding", () => {
     expect(document.querySelectorAll('button[data-start-priority="primary"]')).toHaveLength(2);
     expect(button("Change recommendation").getAttribute("aria-expanded")).toBe("false");
     const text = document.body.textContent ?? "";
-    expect(text.indexOf("Import a spreadsheet")).toBeLessThan(text.indexOf("Start from scratch"));
-    expect(text.indexOf("Use a recommended starter")).toBeLessThan(text.indexOf("Start from scratch"));
+    expect(text.indexOf("Import a spreadsheet")).toBeLessThan(text.indexOf("Advanced options"));
+    expect(text.indexOf("Use a recommended starter")).toBeLessThan(text.indexOf("Advanced options"));
     expect(document.activeElement).toBe(document.querySelector("h1"));
 
     await act(async () => button("Use a recommended starter").click());
@@ -70,6 +70,17 @@ describe("first-run onboarding", () => {
     await unmount();
   });
 
+  it("keeps blank creation behind Advanced options so only the two start paths are immediate", async () => {
+    const onPick = vi.fn();
+    const { unmount } = await mount({ onPick });
+
+    expect(buttons().some(item => item.textContent?.includes("Start from scratch"))).toBe(false);
+    await act(async () => button("Advanced options").click());
+    await act(async () => button("Start from scratch").click());
+    expect(onPick).toHaveBeenCalledWith("blank");
+    await unmount();
+  });
+
   it("keeps import primary and blank secondary while both remain callback-owned", async () => {
     const onPick = vi.fn();
     const onImport = vi.fn();
@@ -84,6 +95,7 @@ describe("first-run onboarding", () => {
     Object.defineProperty(input, "files", { configurable: true, value: [file] });
     await act(async () => input.dispatchEvent(new Event("change", { bubbles: true })));
     expect(onImport).toHaveBeenCalledWith(file);
+    await act(async () => button("Advanced options").click());
     await act(async () => button("Start from scratch").click());
     expect(onPick).toHaveBeenCalledWith("blank");
     await unmount();

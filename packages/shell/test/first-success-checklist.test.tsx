@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 import { FirstSuccessChecklist } from "../src/app/FirstSuccessChecklist";
 import { applyFirstSuccessEvent, emptyFirstSuccessState } from "../src/app/first-success-state";
+import type { DeviceProtectionProjection } from "../src/worker/db-worker";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -24,12 +25,49 @@ const button = (name: string): HTMLButtonElement => {
 
 const baseProps = {
   onAddRecord: () => undefined,
-  onReviewWork: () => undefined,
-  onCustomize: () => undefined,
+  onDoEveryday: () => undefined,
+  onAskClay: () => undefined,
+  onReviewPreview: () => undefined,
   onDismiss: () => undefined,
   onResume: () => undefined,
   onRetry: () => undefined,
 };
+
+const completedState = {
+  version: 2 as const,
+  revision: 5,
+  dismissed: false,
+  start: { state: "complete" as const, path: "recommended" as const, shellId: "tracker" as const },
+  steps: {
+    realRecord: { state: "complete" as const, source: "create" as const },
+    everyday: { state: "complete" as const, action: "open" as const },
+    reshapePreview: { state: "complete" as const, baseVersion: 2 },
+    reshapeKept: { state: "complete" as const, version: 3 },
+  },
+};
+
+const currentTarget = {
+  appInstanceId: `app_${"a".repeat(26)}`,
+  activeGenerationId: `gen_${"b".repeat(26)}`,
+  lineageEpoch: "1",
+  stateRevision: "9",
+  stateDigest: `sha256:${"c".repeat(64)}`,
+};
+
+const protectionProps = (
+  state: "temporary" | "needs_protection" | "checkpointing" | "protected_on_device",
+  checkpointTarget: typeof currentTarget | null = currentTarget,
+): { protection: DeviceProtectionProjection } => ({
+  protection: {
+    result: state === "needs_protection"
+      ? { state, reasonCode: "checkpoint_stale" }
+      : { state, reasonCode: null },
+    target: currentTarget,
+    checkpoint: checkpointTarget === null
+      ? { state: "none", target: null }
+      : { state: state === "checkpointing" ? "in_progress" : "valid", target: checkpointTarget },
+  },
+} as unknown as { protection: DeviceProtectionProjection });
 
 describe("FirstSuccessChecklist", () => {
   it("renders four evidence steps and only offers the next available action", async () => {
@@ -43,10 +81,10 @@ describe("FirstSuccessChecklist", () => {
 
     const items = [...document.querySelectorAll("ol li")];
     expect(items.map(item => item.textContent)).toEqual([
-      expect.stringContaining("Start with a working app: Complete"),
       expect.stringContaining("Add your first real record: Next"),
-      expect.stringContaining("Review your Work view: Not started"),
-      expect.stringContaining("Keep your first customization: Not started"),
+      expect.stringContaining("Do one everyday action: Not started"),
+      expect.stringContaining("Ask Clay for one small change: Not started"),
+      expect.stringContaining("Review and Keep the Preview: Not started"),
     ]);
     expect(document.body.textContent).toContain(
       "This is a temporary session. Records can disappear when this tab closes.",
@@ -97,6 +135,40 @@ describe("FirstSuccessChecklist", () => {
     expect(button("Dismiss").tagName).toBe("BUTTON");
     await act(async () => button("Dismiss").click());
     expect(onDismiss).toHaveBeenCalledTimes(1);
+    await unmount();
+  });
+
+  it.each([
+    ["temporary", null, "Waiting for protection"],
+    ["needs_protection", { ...currentTarget, stateRevision: "8" }, "Protection is out of date"],
+    ["checkpointing", currentTarget, "Protecting the latest change"],
+  ] as const)(
+    "withholds overall completion while exact-current protection is %s",
+    async (state, checkpointTarget, message) => {
+      const unmount = await render(<FirstSuccessChecklist {...baseProps}
+        {...protectionProps(state, checkpointTarget)}
+        state={completedState} loading={false} error={null} persistent={state !== "temporary"} />);
+      expect(document.body.textContent).toContain("4 of 4 activity steps complete");
+      expect(document.body.textContent).toContain(message);
+      expect(document.body.textContent).not.toContain("Setup complete — protected on this device");
+      expect([...document.querySelectorAll("ol li strong")].map(node => node.textContent))
+        .toEqual(["Complete", "Complete", "Complete", "Complete"]);
+      await unmount();
+    },
+  );
+
+  it("completes only for a protected_on_device result bound to the exact current tuple", async () => {
+    let unmount = await render(<FirstSuccessChecklist {...baseProps}
+      {...protectionProps("protected_on_device")}
+      state={completedState} loading={false} error={null} persistent />);
+    expect(document.body.textContent).toContain("Setup complete — protected on this device");
+    await unmount();
+
+    unmount = await render(<FirstSuccessChecklist {...baseProps}
+      {...protectionProps("protected_on_device", { ...currentTarget, stateDigest: `sha256:${"d".repeat(64)}` })}
+      state={completedState} loading={false} error={null} persistent />);
+    expect(document.body.textContent).toContain("Protection is out of date");
+    expect(document.body.textContent).not.toContain("Setup complete — protected on this device");
     await unmount();
   });
 });

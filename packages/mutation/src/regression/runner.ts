@@ -1,7 +1,9 @@
 // The regression runner (doc 08 §4/§5): replays the 30 cases through the
 // real MutationPipeline (S2 live model -> S3 Validator -> S4 shadow dry
 // run) and scores the launch gate. Live-only: needs an Anthropic API key.
-import { MutationPipeline, type AttemptResult } from "@clay/kernel";
+import {
+  MutationPipeline, createInProcessPlannerMutationAuthority, type AttemptResult,
+} from "@clay/kernel";
 import { MutationClient } from "../client";
 import { ARCHETYPE_STORES } from "./contexts";
 import {
@@ -61,9 +63,13 @@ export async function runRegressionSuite(opts: RunOptions = {}): Promise<SuiteRe
   for (const c of cases) {
     const store = await ARCHETYPE_STORES[c.archetype]();
     try {
-      const pipeline = new MutationPipeline(store, client);
+      const authority = createInProcessPlannerMutationAuthority(store);
+      const pipeline = new MutationPipeline(authority, client);
       const result = await pipeline.run(c.intent);
-      if (result.status === "preview") result.preview.discard();
+      if (result.status === "preview") {
+        await authority.discard(`req_${"r".repeat(26)}`, result.preview.command);
+        result.preview.shadow.close();
+      }
       const outcome = judge(c, result);
       outcomes.push(outcome);
       opts.onCase?.(outcome);

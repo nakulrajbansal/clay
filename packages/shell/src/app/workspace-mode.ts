@@ -25,6 +25,14 @@ export function readWorkspaceMode(
   } catch { return "work"; }
 }
 
+export function readWorkspaceModeForEntry(
+  appId: string | null,
+  firstSuccessComplete: boolean,
+  storage?: WorkspaceModeStorage,
+): WorkspaceMode {
+  return firstSuccessComplete ? readWorkspaceMode(appId, storage) : "work";
+}
+
 export function writeWorkspaceMode(
   appId: string | null,
   mode: WorkspaceMode,

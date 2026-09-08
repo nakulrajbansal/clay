@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it } from "vitest";
 import {
-  ClayStore, InProcessAsyncStore, deriveInverse,
+  ClayStore, InProcessAsyncStore, deriveInverse, openMemoryDriver,
   type AutomationDefinition, type AutomationDefinitionInput, type AsyncStore,
   type BatchMutation, type ForwardOpT, type Query, type QueryRow, type RegTable,
 } from "@clay/kernel";
@@ -11,6 +11,10 @@ import { AutomationCenter } from "../src/app/AutomationCenter";
 import { CommandPalette } from "../src/app/CommandPalette";
 import { DataView, loadAllTableRows, reconcileVisibleFieldNames } from "../src/app/DataView";
 import type { WorkerClient } from "../src/app/worker-client";
+import {
+  FIRST_SUCCESS_SETTING_KEY, applyFirstSuccessEvent, emptyFirstSuccessState,
+} from "../src/app/first-success-state";
+import { completeEverydayActionFromCanonicalReadback } from "../src/worker/first-success-journey";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -99,6 +103,46 @@ describe("Daily Workbench UI", () => {
       table: "tasks", id: "018f0000-0000-7000-8000-000000000001",
     }]);
     await unmount();
+  });
+
+  it("completes the everyday step only after the deep-linked record is read back by the worker", async () => {
+    const driver = await openMemoryDriver();
+    const store = ClayStore.fromDriver(driver);
+    const operations: ForwardOpT[] = [{ op: "create_table", table: "tasks", columns: [
+      { name: "title", type: "text", required: true },
+    ] }];
+    store.commit({ intent: "tasks", summary: "Tasks.",
+      migration: { operations, inverse: deriveInverse(operations, store.registrySnapshot()) } });
+    const row = store.insert("tasks", { title: "Call the real customer" });
+    const started = applyFirstSuccessEvent(emptyFirstSuccessState(), {
+      type: "app_created", path: "recommended", shellId: "tracker",
+    });
+    const withRecord = applyFirstSuccessEvent(started, {
+      type: "real_record", source: "create", changed: 1, sample: false,
+    });
+    store.setSetting(FIRST_SUCCESS_SETTING_KEY, { ...withRecord, revision: 2 });
+
+    type Progress = ReturnType<typeof applyFirstSuccessEvent>;
+    let progress: Progress | null = null;
+    const worker = {
+      registryTables: async () => [...store.registrySnapshot().values()],
+      semanticTrace: async () => store.semanticSchemaTrace(), sampleCount: async () => 0,
+      operationBatches: async () => [], getSetting: async () => null,
+      restorableRows: async () => [], recordFilter: async () => null,
+      completeEverydayAction: async (request: { action: "open"; table: string; rowId: string }) =>
+        completeEverydayActionFromCanonicalReadback(driver, store, request),
+    } as unknown as WorkerClient;
+    const { unmount } = await mount(<DataView
+      worker={worker} store={new InProcessAsyncStore(store)} initialTable="tasks"
+      initialRecordId={String(row.id)} onImport={() => undefined} onWrite={() => undefined}
+      onEverydayAction={state => { progress = state; }} onClose={() => undefined}
+      onError={message => { throw new Error(message); }} onInfo={() => undefined}
+    />);
+    await waitFor(() => progress !== null);
+    expect(progress!.steps.everyday).toEqual({ state: "complete", action: "open" });
+    await waitFor(() => document.body.textContent?.includes("Call the real customer") ?? false);
+    expect(store.getSetting(FIRST_SUCCESS_SETTING_KEY)).toEqual(progress);
+    await unmount(); store.close();
   });
 
   it("makes the first matching record the keyboard action for a nonempty search", async () => {

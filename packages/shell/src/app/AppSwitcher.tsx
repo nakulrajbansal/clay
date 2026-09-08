@@ -149,7 +149,8 @@ export function AppSwitcher(props: {
 
       <span className={`appbar-trust${props.persistent ? "" : " appbar-trust-warn"}`}>
         <span className="appbar-trust-dot" aria-hidden="true" />
-        {props.persistent ? "Stored on this device" : "Temporary session"} · v{props.version}
+        {props.persistent ? "Stored on this device" : "Temporary session"}
+        {props.workspaceMode === "customize" ? ` · version ${props.version}` : ""}
       </span>
       <div className="appbar-lens">
         <button
@@ -268,21 +269,21 @@ export function AppSwitcher(props: {
       </button>
       <button
         className="appbar-action appbar-data-btn"
-        aria-label="Open data"
+        aria-label="Open all data"
         title="See, edit, and import your data"
         onClick={props.onOpenData}
       >
         <span className="appbar-action-icon" aria-hidden="true">▦</span>
-        <span className="appbar-action-label">Data</span>
+        <span className="appbar-action-label">All data</span>
       </button>
       <button
         className="appbar-action appbar-shape-btn"
-        aria-label="Open shape map"
-        title="See how your data, views, and history connect"
+        aria-label="Open data shape"
+        title="See how your data, views, and recent changes connect"
         onClick={props.onOpenShapeMap}
       >
         <span className="appbar-action-icon" aria-hidden="true">⌘</span>
-        <span className="appbar-action-label">Shape map</span>
+        <span className="appbar-action-label">Data shape</span>
       </button>
       <div className="appbar-theme">
         <button
@@ -316,8 +317,8 @@ export function AppSwitcher(props: {
       </div>
       <button
         className={`appbar-rail-toggle${props.railOpen ? " active" : ""}`}
-        aria-label={props.railOpen ? "Hide reshape" : "Show reshape"}
-        title={props.railOpen ? "Hide reshape" : "Show reshape"}
+        aria-label={props.railOpen ? "Close Ask Clay" : "Open Ask Clay"}
+        title={props.railOpen ? "Close Ask Clay" : "Open Ask Clay"}
         onClick={props.onToggleRail}
       >
         <span aria-hidden="true">{props.railOpen ? "◧" : "◨"}</span>

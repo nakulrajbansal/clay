@@ -329,7 +329,25 @@ describe("PrivateMetricsReducer", () => {
     expect(reducer.summary().activation.d14Window).toBe("not_eligible");
     setOffset(21);
     expect(reducer.summary().activation.d14Window).toBe("retained");
+    expect(driver.state().firstKeepDay).not.toBeNull();
+    reducer.record({ type: "reshape_started", origin: "composer" });
     expect(driver.state().firstKeepDay).toBeNull();
+  });
+
+  it("keeps summary observationally read-only across cohort and retention boundaries", () => {
+    const { driver, reducer, setOffset } = harness();
+    reducer.record({ type: "activation_completed", elapsed: "under_3m" });
+    reducer.record({ type: "reshape_started", origin: "composer" });
+    const beforeState = structuredClone(driver.state());
+    const beforeCells = structuredClone(driver.cells());
+
+    setOffset(40);
+    const summary = reducer.summary();
+
+    expect(summary.activation.d14Strict).toBe("not_retained");
+    expect(summary.activation.d14Window).toBe("not_retained");
+    expect(driver.state()).toEqual(beforeState);
+    expect(driver.cells()).toEqual(beforeCells);
   });
 
   it("retains exactly 35 days, survives rollback, and honors disable and clear", () => {

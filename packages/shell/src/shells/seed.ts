@@ -8,7 +8,7 @@
 // land in one commit; then sample rows.
 import {
   ClayStore, deriveInverse, expandBlueprint, parseBlueprintDirective,
-  type BatchMutation, type MigrationPlanT,
+  type BatchMutation, type MigrationPlanT, type PanelBlobInput,
 } from "@clay/kernel";
 import { SEED_PANELS } from "./seed-panels";
 import type { StarterShellId } from "./starter-catalog";
@@ -33,6 +33,15 @@ export type StarterShell = {
   name: string;
   tagline: string;
   tables: ShellTable[];
+};
+
+export type StarterSeedBundle = {
+  [key: string]: unknown;
+  schema: 1;
+  shellId: StarterShellId;
+  shellName: string;
+  tables: ShellTable[];
+  panels: PanelBlobInput[];
 };
 
 const col = (name: string, type: ShellColumn["type"],
@@ -657,4 +666,72 @@ export function removeSampleRows(store: ClayStore): void {
     summary: "Remove example records",
     mutations: removals,
   });
+}
+
+function copySeedValue(input: unknown): unknown {
+  if (input === null || typeof input === "string" || typeof input === "boolean") return input;
+  if (typeof input === "number" && Number.isFinite(input)) return input;
+  if (Array.isArray(input)) return input.map(copySeedValue);
+  if (typeof input === "object" && input !== null
+      && (Object.getPrototypeOf(input) === Object.prototype
+        || Object.getPrototypeOf(input) === null)) {
+    const output: Record<string, unknown> = {};
+    for (const key of Object.keys(input))
+      output[key] = copySeedValue((input as Record<string, unknown>)[key]);
+    return output;
+  }
+  throw new Error("trusted starter seed contains non-plain data");
+}
+
+/** Detached trusted input for the shared production authority seed route. */
+export function createStarterSeedBundle(id: unknown): StarterSeedBundle {
+  const shell = typeof id === "string" ? STARTER_SHELLS.find(candidate => candidate.id === id) : null;
+  if (!shell) throw new Error(`unknown starter shell '${String(id)}'`);
+  const rawPanels = SEED_PANELS[shell.id] ?? [];
+  if (shell.tables.length > 64 || rawPanels.length > 256)
+    throw new Error("trusted starter seed exceeds structural limits");
+  let sampleRowCount = 0;
+  const tables: ShellTable[] = [];
+  for (const table of shell.tables) {
+    sampleRowCount += table.sampleRows.length;
+    if (table.columns.length < 1 || table.columns.length > 128
+        || table.sampleRows.length > 1_000 || sampleRowCount > 10_000)
+      throw new Error("trusted starter seed exceeds structural limits");
+    tables.push({
+      name: table.name,
+      columns: table.columns.map(column => ({
+        name: column.name,
+        type: column.type,
+        required: column.required,
+        ...(column.values === undefined ? {} : { values: [...column.values] }),
+      })),
+      sampleRows: table.sampleRows.map(row =>
+        copySeedValue(row) as Record<string, unknown>),
+    });
+  }
+  const panels: PanelBlobInput[] = rawPanels.map(panel => ({
+    panel_id: panel.panel_id,
+    title: panel.title,
+    placement: {
+      region: panel.placement.region,
+      order: panel.placement.order,
+      ...(panel.placement.w === undefined ? {} : { w: panel.placement.w }),
+      ...(panel.placement.h === undefined ? {} : { h: panel.placement.h }),
+      ...(panel.placement.col === undefined ? {} : { col: panel.placement.col }),
+    },
+    code: panel.code,
+    declared_queries: panel.declared_queries.map(query =>
+      copySeedValue(query) as PanelBlobInput["declared_queries"][number]),
+    declared_writes: [...panel.declared_writes],
+  }));
+  const bundle: StarterSeedBundle = {
+    schema: 1,
+    shellId: shell.id,
+    shellName: shell.name,
+    tables,
+    panels,
+  };
+  if (new TextEncoder().encode(JSON.stringify(bundle)).byteLength > 900_000)
+    throw new Error("trusted starter seed exceeds aggregate limits");
+  return bundle;
 }

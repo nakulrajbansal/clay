@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { WorkerClient } from "../src/app/worker-client";
 
-type Posted = { id: number; op: string; payload: Record<string, unknown> };
+type Posted = {
+  id: number;
+  requestId: string;
+  op: string;
+  payload: Record<string, unknown> | undefined;
+};
+
+const requestId = expect.stringMatching(/^req_[a-z2-7]{26}$/);
 
 function harness(reply?: (message: Posted) => unknown): {
   client: WorkerClient; posted: Posted[]; transfers: Transferable[][];
@@ -24,11 +31,27 @@ function harness(reply?: (message: Posted) => unknown): {
 
 describe("WorkerClient boot boundary", () => {
   it("returns validated neutral boot information and sends only an app hint", async () => {
-    const bootInfo = { persistent: true, seeded: true, shellId: "tracker" } as const;
+    const selectedAppInstanceId = `app_${"a".repeat(26)}`;
+    const bootInfo = {
+      persistent: true,
+      seeded: true,
+      shellId: "tracker",
+      selectedAppInstanceId,
+      catalogGeneration: "1",
+      apps: [{ id: selectedAppInstanceId, name: "My app", shellId: "tracker" }],
+    } as const;
     const { client, posted } = harness(message => message.op === "boot" ? bootInfo : null);
     const result = await client.boot("default");
     expect(result).toEqual(bootInfo);
-    expect(posted[0]).toEqual({ id: 1, op: "boot", payload: { appId: "default" } });
+    expect(posted[0]).toEqual({
+      id: 1,
+      requestId,
+      op: "boot",
+      payload: {
+        requestedAppId: "default",
+        appCache: [{ id: "default", name: "My app", shellId: "blank" }],
+      },
+    });
   });
 
   it("rejects malformed neutral boot information", async () => {
@@ -48,8 +71,23 @@ describe("WorkerClient first-run evidence boundary", () => {
       message.op === "firstRunEvidence" ? evidence : null);
     await expect(client.firstRunEvidence()).resolves.toEqual(evidence);
     expect(posted).toEqual([
-      { id: 1, op: "firstRunEvidence", payload: undefined },
+      { id: 1, requestId, op: "firstRunEvidence", payload: undefined },
     ]);
+  });
+
+  it("routes live edits through the worker-owned sample-to-real operation", async () => {
+    const row = { id: "sample-1", name: "Mine" };
+    const { client, posted } = harness(message =>
+      message.op === "updateRecordWithSampleHandoff" ? row : null);
+    await expect(client.updateRecordWithSampleHandoff(
+      "items", "sample-1", { name: "Mine" },
+    )).resolves.toEqual(row);
+    expect(posted).toEqual([{
+      id: 1,
+      requestId,
+      op: "updateRecordWithSampleHandoff",
+      payload: { table: "items", rowId: "sample-1", patch: { name: "Mine" } },
+    }]);
   });
 
   it("binds publication, receipt lookup, and Undo to explicit operation, app, and revision", async () => {
@@ -72,19 +110,75 @@ describe("WorkerClient first-run evidence boundary", () => {
     });
 
     expect(posted).toEqual([
-      { id: 1, op: "activateStarter", payload: {
+      { id: 1, requestId, op: "activateStarter", payload: {
         operationId: "starter-operation-0001", appId: "default", shellId: "tracker",
       } },
-      { id: 2, op: "activateImportedApp", payload: {
+      { id: 2, requestId, op: "activateImportedApp", payload: {
         operationId: "import-operation-00001", appId: "default", table: "jobs",
         columns: [{ name: "name", type: "text" }], rows: [{ name: "One" }, { name: "Two" }],
         review: importReview,
       } },
-      { id: 3, op: "firstRunPublication", payload: { appId: "default" } },
-      { id: 4, op: "undoFirstRunImport", payload: {
+      { id: 3, requestId, op: "firstRunPublication", payload: { appId: "default" } },
+      { id: 4, requestId, op: "undoFirstRunImport", payload: {
         operationId: "import-operation-00001", appId: "default", expectedRevision: 1,
       } },
     ]);
+  });
+});
+
+describe("WorkerClient first-record loss boundary", () => {
+  it("requests a best-effort persistence result without opening a mutation ticket", async () => {
+    const { client, posted } = harness(message =>
+      message.op === "requestPersist" ? { persisted: false } : null);
+    await expect(client.requestPersist()).resolves.toEqual({ persisted: false });
+    expect(posted).toEqual([{ id: 1, requestId, op: "requestPersist", payload: undefined }]);
+  });
+});
+
+describe("WorkerClient first-success everyday boundary", () => {
+  it("binds exact target lookup and canonical completion to separate worker reads", async () => {
+    const target = { table: "tasks", rowId: "018f0000-0000-7000-8000-000000000001" };
+    const { client, posted } = harness(message =>
+      message.op === "firstEverydayActionTarget" ? target : { steps: { everyday: {
+        state: "complete", action: "open",
+      } } });
+    await expect(client.firstEverydayActionTarget()).resolves.toEqual(target);
+    await client.completeEverydayAction({ action: "open", ...target });
+    expect(posted).toEqual([
+      { id: 1, requestId, op: "firstEverydayActionTarget", payload: undefined },
+      { id: 2, requestId, op: "completeEverydayAction", payload: { action: "open", ...target } },
+    ]);
+  });
+});
+
+describe("WorkerClient device protection boundary", () => {
+  const target = {
+    appInstanceId: `app_${"a".repeat(26)}`,
+    activeGenerationId: `gen_${"b".repeat(26)}`,
+    lineageEpoch: "1",
+    stateRevision: "2",
+    stateDigest: `sha256:${"c".repeat(64)}`,
+  };
+
+  it("accepts only an exact-current protected projection", async () => {
+    const projection = {
+      result: { state: "protected_on_device", reasonCode: null },
+      target,
+      checkpoint: { state: "valid", target },
+    };
+    const { client, posted } = harness(message =>
+      message.op === "deviceProtection" ? projection : null);
+    await expect(client.deviceProtection()).resolves.toEqual(projection);
+    expect(posted).toEqual([{ id: 1, requestId, op: "deviceProtection", payload: undefined }]);
+  });
+
+  it("rejects a protected claim bound to a stale target", async () => {
+    const { client } = harness(() => ({
+      result: { state: "protected_on_device", reasonCode: null },
+      target,
+      checkpoint: { state: "valid", target: { ...target, stateRevision: "1" } },
+    }));
+    await expect(client.deviceProtection()).rejects.toThrow("invalid device protection checkpoint");
   });
 });
 
@@ -122,6 +216,22 @@ describe("WorkerClient daily-work boundary", () => {
     expect(posted[0]?.payload).toEqual({ term: "acme", limit: 12 });
     expect(posted[1]?.payload).toMatchObject({ source: "user", summary: "Complete selected" });
   });
+  it("reuses one stable logical request identity across a lost-response retry", async () => {
+    const { client, posted } = harness();
+    const context = client.createMutationContext();
+    const mutations = [{
+      kind: "update" as const,
+      table: "tasks",
+      id: "018f0000-0000-7000-8000-000000000001",
+      patch: { status: "done" },
+    }];
+    await client.applyBatch("Complete selected", mutations, context);
+    await client.applyBatch("Complete selected", mutations, context);
+    expect(posted).toHaveLength(2);
+    expect(posted[0]!.requestId).toBe(context.requestId);
+    expect(posted[1]!.requestId).toBe(context.requestId);
+    expect(posted[1]!.payload).toEqual(posted[0]!.payload);
+  });
 });
 
 describe("WorkerClient connected-record boundary", () => {
@@ -158,28 +268,25 @@ describe("WorkerClient model credential boundary", () => {
         backendUrl: provider === "anthropic" ? null : "http://127.0.0.1:8788",
         session: "clay-session-secret",
       });
-      expect(posted[0]!.payload).not.toHaveProperty("session");
+      expect(posted).toEqual([]);
     },
   );
 
-  it("serializes a session only for Clay hosted", async () => {
+  it("keeps a Clay hosted session on the main-thread planner boundary", async () => {
     const { client, posted } = harness();
     await client.setModelAccess({
       provider: "clay", apiKey: null, backendUrl: "https://clay.example",
       session: "clay-session-secret",
     });
-    expect(posted[0]!.payload.session).toBe("clay-session-secret");
+    expect(posted).toEqual([]);
   });
 
-  it("serializes a Codex connector token in a provider-specific field", async () => {
+  it("keeps a Codex connector token on the main-thread planner boundary", async () => {
     const { client, posted } = harness();
     await client.setModelAccess({
       provider: "codex", apiKey: null, backendUrl: "http://127.0.0.1:8788",
       session: "clay-session-secret", providerToken: "connector-token",
     });
-    expect(posted[0]!.payload).toMatchObject({
-      provider: "codex", providerToken: "connector-token",
-    });
-    expect(posted[0]!.payload).not.toHaveProperty("session");
+    expect(posted).toEqual([]);
   });
 });

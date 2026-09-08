@@ -19,12 +19,39 @@ function completed(state: FirstSuccessState): string[] {
 }
 
 describe("first-success evidence", () => {
-  it("records the four durable steps without treating samples or no-ops as activation", () => {
+  it("tracks the four exact user-success steps instead of counting app setup as a step", () => {
+    let state = emptyFirstSuccessState();
+    expect(Object.keys(state.steps)).toEqual([
+      "realRecord", "everyday", "reshapePreview", "reshapeKept",
+    ]);
+    state = applyFirstSuccessEvent(state, {
+      type: "app_created", path: "recommended", shellId: "tracker",
+    });
+    expect(completed(state)).toEqual([]);
+    state = applyFirstSuccessEvent(state, {
+      type: "real_record", source: "create", changed: 1, sample: false,
+    });
+    state = applyFirstSuccessEvent(state, {
+      type: "everyday_action", action: "update", changed: true, sample: false,
+    });
+    state = applyFirstSuccessEvent(state, {
+      type: "reshape_previewed", baseVersion: 1,
+    });
+    state = applyFirstSuccessEvent(state, {
+      type: "reshape_kept", version: 2, changed: true,
+    });
+    expect(completed(state)).toEqual([
+      "realRecord", "everyday", "reshapePreview", "reshapeKept",
+    ]);
+  });
+
+  it("records durable evidence without treating samples, no-ops, or route clicks as activation", () => {
     let state = emptyFirstSuccessState();
     state = applyFirstSuccessEvent(state, {
       type: "app_created", path: "recommended", shellId: "tracker",
     });
-    expect(completed(state)).toEqual(["app"]);
+    expect(completed(state)).toEqual([]);
+    expect(state.start).toMatchObject({ state: "complete", path: "recommended" });
 
     const afterSample = applyFirstSuccessEvent(state, {
       type: "real_record", source: "create", changed: 1, sample: true,
@@ -38,25 +65,29 @@ describe("first-success evidence", () => {
     state = applyFirstSuccessEvent(state, {
       type: "real_record", source: "import", changed: 3, sample: false,
     });
-    expect(completed(state)).toEqual(["app", "realRecord"]);
+    expect(completed(state)).toEqual(["realRecord"]);
     expect(applyFirstSuccessEvent(state, {
-      type: "work_used", workspaceMode: "customize", realRecordAvailable: true,
+      type: "everyday_action", action: "update", changed: false, sample: false,
     })).toBe(state);
     expect(applyFirstSuccessEvent(state, {
-      type: "work_used", workspaceMode: "work", realRecordAvailable: false,
+      type: "everyday_action", action: "update", changed: true, sample: true,
     })).toBe(state);
 
     state = applyFirstSuccessEvent(state, {
-      type: "work_used", workspaceMode: "work", realRecordAvailable: true,
+      type: "everyday_action", action: "update", changed: true, sample: false,
     });
-    expect(completed(state)).toEqual(["app", "realRecord", "work"]);
+    expect(completed(state)).toEqual(["realRecord", "everyday"]);
     expect(applyFirstSuccessEvent(state, {
-      type: "customization_kept", version: 2, changed: false,
+      type: "reshape_kept", version: 2, changed: true,
     })).toBe(state);
+    state = applyFirstSuccessEvent(state, { type: "reshape_previewed", baseVersion: 1 });
+    expect(completed(state)).toEqual(["realRecord", "everyday", "reshapePreview"]);
     state = applyFirstSuccessEvent(state, {
-      type: "customization_kept", version: 2, changed: true,
+      type: "reshape_kept", version: 2, changed: true,
     });
-    expect(completed(state)).toEqual(["app", "realRecord", "work", "customization"]);
+    expect(completed(state)).toEqual([
+      "realRecord", "everyday", "reshapePreview", "reshapeKept",
+    ]);
   });
 
   it("uses exact truthful first-write storage copy without protected or backup claims", () => {
@@ -72,12 +103,13 @@ describe("first-success evidence", () => {
 
   it("regresses only record-dependent milestones when Undo leaves no real record", () => {
     const completedState: FirstSuccessState = {
-      version: 1, revision: 4, dismissed: true,
+      version: 2, revision: 4, dismissed: true,
+      start: { state: "complete", path: "import", shellId: "blank" },
       steps: {
-        app: { state: "complete", path: "import", shellId: "blank" },
         realRecord: { state: "complete", source: "import" },
-        work: { state: "complete" },
-        customization: { state: "complete", version: 2 },
+        everyday: { state: "complete", action: "update" },
+        reshapePreview: { state: "complete", baseVersion: 1 },
+        reshapeKept: { state: "complete", version: 2 },
       },
     };
     expect(reconcileFirstSuccessAfterImportUndo(completedState, true)).toBe(completedState);
@@ -87,7 +119,7 @@ describe("first-success evidence", () => {
       steps: {
         ...completedState.steps,
         realRecord: { state: "pending" },
-        work: { state: "pending" },
+        everyday: { state: "pending" },
       },
     });
   });
@@ -122,7 +154,7 @@ describe("first-success app-setting CAS", () => {
     expect(expectedRevisions).toEqual([0, 1]);
     expect(result.revision).toBe(2);
     expect(result.dismissed).toBe(true);
-    expect(result.steps.app).toMatchObject({ state: "complete", path: "recommended" });
+    expect(result.start).toMatchObject({ state: "complete", path: "recommended" });
   });
 
   it("keeps each worker-backed app setting isolated and resumes a dismissed checklist", async () => {
@@ -151,7 +183,7 @@ describe("first-success app-setting CAS", () => {
       type: "set_dismissed", dismissed: false,
     });
     expect(resumed.dismissed).toBe(false);
-    expect(resumed.steps.app.state).toBe("complete");
+    expect(resumed.start.state).toBe("complete");
   });
 
   it("fails closed after bounded repeated conflicts", async () => {

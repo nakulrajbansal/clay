@@ -1,5 +1,4 @@
 import type { StarterShellId } from "../shells/seed";
-import type { WorkspaceMode } from "./workspace-mode";
 
 export const FIRST_SUCCESS_SETTING_KEY = "release_a_first_success_v1";
 export const FIRST_WRITE_STORAGE_COPY =
@@ -8,7 +7,7 @@ export const TEMPORARY_FIRST_WRITE_COPY =
   "This is a temporary session. Records can disappear when this tab closes.";
 
 type PendingEvidence = { state: "pending" };
-type AppEvidence = PendingEvidence | {
+type StartEvidence = PendingEvidence | {
   state: "complete";
   path: "recommended" | "import" | "gallery" | "blank";
   shellId: StarterShellId;
@@ -17,21 +16,43 @@ type RecordEvidence = PendingEvidence | {
   state: "complete";
   source: "create" | "import";
 };
-type WorkEvidence = PendingEvidence | { state: "complete" };
-type CustomizationEvidence = PendingEvidence | {
+type EverydayEvidence = PendingEvidence | {
+  state: "complete";
+  action: "open" | "search" | "update" | "complete";
+};
+type PreviewEvidence = PendingEvidence | {
+  state: "complete";
+  baseVersion: number;
+};
+type KeptEvidence = PendingEvidence | {
   state: "complete";
   version: number;
 };
 
+/** Version 2 keeps app creation metadata outside the four user-success steps.
+ * The setting key stays stable so existing per-app V1 progress can migrate. */
 export type FirstSuccessState = {
+  version: 2;
+  revision: number;
+  dismissed: boolean;
+  start: StartEvidence;
+  steps: {
+    realRecord: RecordEvidence;
+    everyday: EverydayEvidence;
+    reshapePreview: PreviewEvidence;
+    reshapeKept: KeptEvidence;
+  };
+};
+
+type LegacyFirstSuccessState = {
   version: 1;
   revision: number;
   dismissed: boolean;
   steps: {
-    app: AppEvidence;
+    app: StartEvidence;
     realRecord: RecordEvidence;
-    work: WorkEvidence;
-    customization: CustomizationEvidence;
+    work: PendingEvidence | { state: "complete" };
+    customization: KeptEvidence;
   };
 };
 
@@ -39,9 +60,15 @@ export type FirstSuccessEvent =
   | { type: "app_created"; path: "recommended" | "import" | "gallery" | "blank";
       shellId: StarterShellId }
   | { type: "real_record"; source: "create" | "import"; changed: number; sample: boolean }
-  | { type: "work_used"; workspaceMode: WorkspaceMode; realRecordAvailable: boolean }
+  | { type: "everyday_action"; action: "open" | "search" | "update" | "complete";
+      changed: boolean; sample: boolean }
+  | { type: "reshape_previewed"; baseVersion: number }
+  | { type: "reshape_kept"; version: number; changed: boolean }
+  // Compatibility alias keeps older customization callers safe during migration.
   | { type: "customization_kept"; version: number; changed: boolean }
   | { type: "set_dismissed"; dismissed: boolean };
+
+export type ShellFirstSuccessEvent = Exclude<FirstSuccessEvent, { type: "everyday_action" }>;
 
 export type FirstSuccessSettingClient = {
   getSetting: (key: string) => Promise<unknown>;
@@ -52,14 +79,15 @@ export type FirstSuccessSettingClient = {
 
 export function emptyFirstSuccessState(): FirstSuccessState {
   return {
-    version: 1,
+    version: 2,
     revision: 0,
     dismissed: false,
+    start: { state: "pending" },
     steps: {
-      app: { state: "pending" },
       realRecord: { state: "pending" },
-      work: { state: "pending" },
-      customization: { state: "pending" },
+      everyday: { state: "pending" },
+      reshapePreview: { state: "pending" },
+      reshapeKept: { state: "pending" },
     },
   };
 }
@@ -70,57 +98,100 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   const actual = Object.keys(value).sort();
-  return actual.length === keys.length && actual.every((key, index) => key === keys[index]);
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 }
 
 function pending(value: unknown): value is PendingEvidence {
   return isRecord(value) && value.state === "pending" && Object.keys(value).length === 1;
 }
 
+function validStart(value: unknown): value is StartEvidence {
+  return pending(value) || (isRecord(value) && value.state === "complete"
+    && hasExactKeys(value, ["path", "shellId", "state"])
+    && ["recommended", "import", "gallery", "blank"].includes(String(value.path))
+    && typeof value.shellId === "string" && value.shellId.length > 0 && value.shellId.length <= 40);
+}
+
+function validRecord(value: unknown): value is RecordEvidence {
+  return pending(value) || (isRecord(value) && value.state === "complete"
+    && hasExactKeys(value, ["source", "state"])
+    && (value.source === "create" || value.source === "import"));
+}
+
+function validEveryday(value: unknown): value is EverydayEvidence {
+  return pending(value) || (isRecord(value) && value.state === "complete"
+    && hasExactKeys(value, ["action", "state"])
+    && ["open", "search", "update", "complete"].includes(String(value.action)));
+}
+
+function validPreview(value: unknown): value is PreviewEvidence {
+  return pending(value) || (isRecord(value) && value.state === "complete"
+    && hasExactKeys(value, ["baseVersion", "state"])
+    && Number.isSafeInteger(value.baseVersion) && Number(value.baseVersion) >= 0);
+}
+
+function validKept(value: unknown): value is KeptEvidence {
+  return pending(value) || (isRecord(value) && value.state === "complete"
+    && hasExactKeys(value, ["state", "version"])
+    && Number.isSafeInteger(value.version) && Number(value.version) > 0);
+}
+
+function validEnvelope(value: Record<string, unknown>): boolean {
+  return Number.isSafeInteger(value.revision) && Number(value.revision) >= 0
+    && typeof value.dismissed === "boolean";
+}
+
+function parseLegacyFirstSuccessState(value: Record<string, unknown>): FirstSuccessState {
+  if (!hasExactKeys(value, ["dismissed", "revision", "steps", "version"])
+      || !validEnvelope(value) || !isRecord(value.steps)
+      || !hasExactKeys(value.steps, ["app", "customization", "realRecord", "work"])
+      || !validStart(value.steps.app) || !validRecord(value.steps.realRecord)
+      || !(pending(value.steps.work) || (isRecord(value.steps.work)
+        && value.steps.work.state === "complete" && hasExactKeys(value.steps.work, ["state"])))
+      || !validKept(value.steps.customization))
+    throw new Error("First-success progress is invalid");
+  const legacy = value as unknown as LegacyFirstSuccessState;
+  const kept = legacy.steps.customization;
+  return {
+    version: 2,
+    revision: legacy.revision,
+    dismissed: legacy.dismissed,
+    start: legacy.steps.app,
+    steps: {
+      realRecord: legacy.steps.realRecord,
+      everyday: legacy.steps.work.state === "complete"
+        ? { state: "complete", action: "open" } : { state: "pending" },
+      reshapePreview: kept.state === "complete"
+        ? { state: "complete", baseVersion: Math.max(0, kept.version - 1) }
+        : { state: "pending" },
+      reshapeKept: kept,
+    },
+  };
+}
+
 export function parseFirstSuccessState(value: unknown): FirstSuccessState {
-  if (!isRecord(value) || value.version !== 1
-      || !hasExactKeys(value, ["dismissed", "revision", "steps", "version"])
-      || !Number.isSafeInteger(value.revision) || Number(value.revision) < 0
-      || typeof value.dismissed !== "boolean" || !isRecord(value.steps))
+  if (!isRecord(value)) throw new Error("First-success progress is invalid");
+  if (value.version === 1) return parseLegacyFirstSuccessState(value);
+  if (value.version !== 2
+      || !hasExactKeys(value, ["dismissed", "revision", "start", "steps", "version"])
+      || !validEnvelope(value) || !validStart(value.start) || !isRecord(value.steps)
+      || !hasExactKeys(value.steps, ["everyday", "realRecord", "reshapeKept", "reshapePreview"])
+      || !validRecord(value.steps.realRecord) || !validEveryday(value.steps.everyday)
+      || !validPreview(value.steps.reshapePreview) || !validKept(value.steps.reshapeKept))
     throw new Error("First-success progress is invalid");
-  const steps = value.steps;
-  if (!isRecord(steps.app) || !isRecord(steps.realRecord)
-      || !isRecord(steps.work) || !isRecord(steps.customization)
-      || !hasExactKeys(steps, ["app", "customization", "realRecord", "work"]))
-    throw new Error("First-success progress is invalid");
-
-  const app = steps.app;
-  const validApp = pending(app) || (app.state === "complete"
-    && hasExactKeys(app, ["path", "shellId", "state"])
-    && ["recommended", "import", "gallery", "blank"].includes(String(app.path))
-    && typeof app.shellId === "string" && app.shellId.length > 0 && app.shellId.length <= 40);
-  const realRecord = steps.realRecord;
-  const validRecord = pending(realRecord) || (realRecord.state === "complete"
-    && hasExactKeys(realRecord, ["source", "state"])
-    && (realRecord.source === "create" || realRecord.source === "import"));
-  const work = steps.work;
-  const validWork = pending(work) || (work.state === "complete"
-    && hasExactKeys(work, ["state"]));
-  const customization = steps.customization;
-  const validCustomization = pending(customization) || (customization.state === "complete"
-    && hasExactKeys(customization, ["state", "version"])
-    && Number.isSafeInteger(customization.version) && Number(customization.version) > 0);
-  if (!validApp || !validRecord || !validWork || !validCustomization)
-    throw new Error("First-success progress is invalid");
-
   return value as FirstSuccessState;
 }
 
 /** Undo may remove the only canonical real-record evidence. Reconcile the
- * dependent milestones in the same worker transaction while preserving app,
- * customization, dismissal, and any surviving real-record evidence. */
+ * dependent milestones while preserving setup, reshape, and dismissal evidence. */
 export function reconcileFirstSuccessAfterImportUndo(
   value: unknown,
   realRecordAvailable: boolean,
 ): FirstSuccessState {
   const state = parseFirstSuccessState(value);
   if (realRecordAvailable
-      || (state.steps.realRecord.state === "pending" && state.steps.work.state === "pending"))
+      || (state.steps.realRecord.state === "pending" && state.steps.everyday.state === "pending"))
     return state;
   if (state.revision >= Number.MAX_SAFE_INTEGER)
     throw new Error("First-success progress revision cannot advance");
@@ -130,7 +201,7 @@ export function reconcileFirstSuccessAfterImportUndo(
     steps: {
       ...state.steps,
       realRecord: { state: "pending" },
-      work: { state: "pending" },
+      everyday: { state: "pending" },
     },
   };
 }
@@ -141,23 +212,32 @@ export function applyFirstSuccessEvent(
 ): FirstSuccessState {
   switch (event.type) {
     case "app_created":
-      if (state.steps.app.state === "complete") return state;
-      return { ...state, steps: { ...state.steps,
-        app: { state: "complete", path: event.path, shellId: event.shellId } } };
+      if (state.start.state === "complete") return state;
+      return { ...state,
+        start: { state: "complete", path: event.path, shellId: event.shellId } };
     case "real_record":
       if (state.steps.realRecord.state === "complete"
           || event.sample || !Number.isSafeInteger(event.changed) || event.changed <= 0) return state;
       return { ...state, steps: { ...state.steps,
         realRecord: { state: "complete", source: event.source } } };
-    case "work_used":
-      if (state.steps.work.state === "complete" || event.workspaceMode !== "work"
-          || !event.realRecordAvailable || state.steps.realRecord.state !== "complete") return state;
-      return { ...state, steps: { ...state.steps, work: { state: "complete" } } };
+    case "everyday_action":
+      if (state.steps.everyday.state === "complete" || state.steps.realRecord.state !== "complete"
+          || event.sample || !event.changed) return state;
+      return { ...state, steps: { ...state.steps,
+        everyday: { state: "complete", action: event.action } } };
+    case "reshape_previewed":
+      if (state.steps.reshapePreview.state === "complete"
+          || state.steps.everyday.state !== "complete"
+          || !Number.isSafeInteger(event.baseVersion) || event.baseVersion < 0) return state;
+      return { ...state, steps: { ...state.steps,
+        reshapePreview: { state: "complete", baseVersion: event.baseVersion } } };
+    case "reshape_kept":
     case "customization_kept":
-      if (state.steps.customization.state === "complete" || !event.changed
+      if (state.steps.reshapeKept.state === "complete"
+          || state.steps.reshapePreview.state !== "complete" || !event.changed
           || !Number.isSafeInteger(event.version) || event.version <= 0) return state;
       return { ...state, steps: { ...state.steps,
-        customization: { state: "complete", version: event.version } } };
+        reshapeKept: { state: "complete", version: event.version } } };
     case "set_dismissed":
       return state.dismissed === event.dismissed ? state : { ...state, dismissed: event.dismissed };
   }
@@ -172,7 +252,7 @@ export async function loadFirstSuccessState(
 
 export async function mutateFirstSuccessState(
   client: FirstSuccessSettingClient,
-  event: FirstSuccessEvent,
+  event: ShellFirstSuccessEvent,
   maxAttempts = 4,
 ): Promise<FirstSuccessState> {
   if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 8)

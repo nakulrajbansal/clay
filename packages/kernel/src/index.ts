@@ -7,7 +7,7 @@ export {
   deriveDeviceState, DeviceProtectionInputV1, DeviceStateResultV1, targetIdentityEquals,
   type CheckpointObservation, type DeviceProtectionInput, type DeviceState,
   type DeviceStateResult, type DurableStoreCapability, type ExpectedStoreFailure,
-  type ProtectionReasonCode, type TemporaryUserChoice,
+  type ProtectionReasonCode, type TargetIdentityV1, type TemporaryUserChoice,
 } from "./protection";
 export {
   compileExpr, evalExpr, parseExpr, typecheckExpr, exprFields,
@@ -60,18 +60,24 @@ export {
   type PrivateMetricEvent, type PrivateMetricsSummary, type Rate,
 } from "./private-metrics";
 export {
-  MutationPipeline, defaultSmokeTest,
+  MutationPipeline, createInProcessPlannerMutationAuthority, defaultSmokeTest,
   type AttemptResult, type DebugEvent, type Planner, type PlannerContext,
-  type PlannerResult, type PreviewHandle, type SmokeTest,
+  type PlannerMutationAuthority, type PlannerResult, type PreparedMutationPreview,
+  type PreviewShadow, type SmokeTest,
 } from "./pipeline";
+export type {
+  PreparedMutationBase, PreparedMutationCommand,
+  PreparedSemanticAssignmentsDataV1, PreparedSemanticIdEntry,
+} from "./planner-command";
 export { Observer, type Suggestion, type UsageEvent } from "./observe";
 export {
   MetricsCollector, classifyDiffKind,
   type AttemptRecord, type MetricsSummary, type DiffKind, type Outcome,
 } from "./metrics";
 export {
-  InProcessAsyncStore, StoreRpcClient, portFromMessagePort, serveStore,
-  type AsyncStore, type MessagePortLike, type StoreRequest, type StoreResponse,
+  createStoreMutationContext, InProcessAsyncStore, StoreRpcClient, portFromMessagePort, serveStore,
+  type AsyncStore, type MessagePortLike, type StoreMutationContext,
+  type StoreRequest, type StoreResponse,
 } from "./asyncstore";
 export {
   Bridge, queryMatchesDeclared,

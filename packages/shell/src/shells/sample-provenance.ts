@@ -188,6 +188,29 @@ export function readSampleProvenance(store: ClayStore): SampleProvenanceState[] 
   });
 }
 
+export function promoteSampleRow(
+  store: ClayStore,
+  tableName: string,
+  rowId: string,
+): boolean {
+  const existing = readSampleProvenance(store);
+  const target = existing.find(entry => entry.tableName === tableName
+    && entry.rowId === rowId && entry.tableActive && entry.rowState === "active");
+  if (!target) return false;
+  const entries = existing
+    .filter(entry => entry.tableId !== target.tableId || entry.rowId !== target.rowId)
+    .map(({ tableId, rowId: existingRowId, operationId }) => Object.freeze({
+      tableId, rowId: existingRowId, operationId,
+    }))
+    .sort(compareEntries);
+  const ledger = Object.freeze({ schema: 1 as const, entries: Object.freeze(entries) });
+  store.setSetting(SAMPLE_PROVENANCE_SETTING, ledger);
+  const readBack = parseSampleProvenanceLedger(store.getSetting(SAMPLE_PROVENANCE_SETTING));
+  if (JSON.stringify(readBack) !== JSON.stringify(ledger))
+    throw new Error("sample-to-real provenance failed read-back");
+  return true;
+}
+
 export function recordSampleRows(
   store: ClayStore,
   additions: Readonly<Record<string, readonly string[]>>,

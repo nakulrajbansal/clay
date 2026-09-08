@@ -17,7 +17,8 @@ import { StateMerkleIndex, type StateMerkleChange } from "./state-merkle-index";
 
 const HEADER_TABLE = "target_authority_header";
 const RESERVATION_TABLE = "target_revision_reservations";
-const TABLES = [HEADER_TABLE, RESERVATION_TABLE] as const;
+const RECEIPT_TABLE = "production_request_receipts";
+const TABLES = [HEADER_TABLE, RECEIPT_TABLE, RESERVATION_TABLE] as const;
 const DDL = [
   `CREATE TABLE sys.target_authority_header(
   singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
@@ -42,6 +43,44 @@ const DDL = [
   state_sha256 TEXT,
   reserved_at TEXT NOT NULL,
   finalized_at TEXT
+)`,
+  `CREATE TABLE sys.production_request_receipts(
+  request_id TEXT PRIMARY KEY,
+  operation_id TEXT NOT NULL,
+  request_sha256 TEXT NOT NULL,
+  app_instance_id TEXT NOT NULL,
+  active_generation_id TEXT NOT NULL,
+  lineage_epoch TEXT NOT NULL,
+  expected_protection_revision TEXT NOT NULL,
+  expected_state_sha256 TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('prepared','invoked','committed','no_op','failed')),
+  resulting_protection_revision TEXT,
+  resulting_state_sha256 TEXT,
+  response_sha256 TEXT,
+  response_json TEXT,
+  prepared_at TEXT NOT NULL,
+  invoked_at TEXT,
+  completed_at TEXT,
+  CHECK(
+    (state = 'prepared' AND invoked_at IS NULL AND completed_at IS NULL
+      AND resulting_protection_revision IS NULL AND resulting_state_sha256 IS NULL
+      AND response_sha256 IS NULL AND response_json IS NULL)
+    OR (state = 'invoked' AND invoked_at IS NOT NULL AND completed_at IS NULL
+      AND resulting_protection_revision IS NULL AND resulting_state_sha256 IS NULL
+      AND response_sha256 IS NULL AND response_json IS NULL)
+    OR (state = 'no_op' AND invoked_at IS NULL AND completed_at IS NOT NULL
+      AND resulting_protection_revision = expected_protection_revision
+      AND resulting_state_sha256 = expected_state_sha256
+      AND response_sha256 IS NOT NULL AND response_json IS NOT NULL)
+    OR (state = 'committed' AND invoked_at IS NOT NULL AND completed_at IS NOT NULL
+      AND resulting_protection_revision IS NOT NULL
+      AND resulting_state_sha256 <> expected_state_sha256
+      AND response_sha256 IS NOT NULL AND response_json IS NOT NULL)
+    OR (state = 'failed' AND completed_at IS NOT NULL
+      AND resulting_protection_revision = expected_protection_revision
+      AND resulting_state_sha256 = expected_state_sha256
+      AND response_sha256 IS NOT NULL AND response_json IS NOT NULL)
+  )
 )`,
 ] as const;
 
@@ -69,6 +108,8 @@ function exactSchema(driver: DbDriver): boolean {
     const expectedNames = [
       HEADER_TABLE,
       RESERVATION_TABLE,
+      RECEIPT_TABLE,
+      `sqlite_autoindex_${RECEIPT_TABLE}_1`,
       `sqlite_autoindex_${RESERVATION_TABLE}_1`,
       `sqlite_autoindex_${RESERVATION_TABLE}_2`,
     ].sort();
@@ -78,7 +119,9 @@ function exactSchema(driver: DbDriver): boolean {
       if (row.type === "table")
         return row.tbl_name === row.name
           && definitions.get(String(row.name)) === normalized(String(row.sql));
-      return row.type === "index" && row.tbl_name === RESERVATION_TABLE && row.sql === null;
+      return row.type === "index"
+        && (row.tbl_name === RESERVATION_TABLE || row.tbl_name === RECEIPT_TABLE)
+        && row.sql === null;
     });
   } catch {
     return false;

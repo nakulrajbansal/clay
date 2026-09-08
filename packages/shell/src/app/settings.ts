@@ -14,6 +14,22 @@ export const CODEX_BACKEND_URL = "http://127.0.0.1:8788";
 const isLoopbackHostname = (hostname: string): boolean =>
   hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
 
+type ManagedLocation = Pick<Location, "protocol" | "hostname" | "origin">;
+
+/** The managed product path is same-origin HTTPS. This is deliberately a pure
+ * decision so entry can be tested without writing provider/backend settings. */
+export function managedDefaultBackendUrl(
+  browserLocation?: ManagedLocation | null,
+): string | null {
+  let current = browserLocation;
+  if (current === undefined) {
+    try { current = typeof location === "undefined" ? null : location; }
+    catch { current = null; }
+  }
+  return current?.protocol === "https:" && !isLoopbackHostname(current.hostname)
+    ? current.origin : null;
+}
+
 function read(k: string): string | null {
   try { return localStorage.getItem(k); } catch { return null; }
 }
@@ -24,7 +40,7 @@ function write(k: string, v: string | null): void {
 
 export function getApiKey(): string | null { return read(KEY); }
 export function setApiKey(v: string | null): void { write(KEY, v && v.trim() ? v.trim() : null); }
-export function getBackendUrl(): string | null {
+export function getBackendUrl(browserLocation?: ManagedLocation | null): string | null {
   const stored = read(BACKEND);
   if (stored) {
     try {
@@ -36,15 +52,13 @@ export function getBackendUrl(): string | null {
       write(SESSION, null);
     }
   }
-  // Hosted deploys serve the shell and API from ONE origin: default to
-  // the page's own origin so a fresh visitor can sign in with zero setup.
-  // An explicit BYO key keeps direct mode; localhost/http keeps dev flows.
-  try {
-    if (!read(KEY) && typeof location !== "undefined"
-      && location.protocol === "https:"
-      && !isLoopbackHostname(location.hostname)) return location.origin;
-  } catch { /* non-browser context */ }
-  return null;
+  // A fresh managed profile uses the canonical same-origin connection without
+  // persisting a synthetic preference. Explicit BYO/OpenAI/Codex choices are
+  // never silently routed back through the managed provider.
+  const explicitProvider = read(PROVIDER);
+  if ((explicitProvider !== null && explicitProvider !== "clay")
+      || (explicitProvider === null && Boolean(read(KEY)))) return null;
+  return managedDefaultBackendUrl(browserLocation);
 }
 function backendOrigin(value: string | null): string | null {
   if (!value) return null;
@@ -104,13 +118,13 @@ export function getModelProvider(): ModelProviderId {
   return "clay";
 }
 export function setModelProvider(provider: ModelProviderId): void { write(PROVIDER, provider); }
-export function getActiveModelAccess(): {
+export function getActiveModelAccess(browserLocation?: ManagedLocation | null): {
   provider: ModelProviderId; apiKey: string | null; backendUrl: string | null;
 } {
   const provider = getModelProvider();
   if (provider === "anthropic") return { provider, apiKey: getApiKey(), backendUrl: null };
   if (provider === "codex") return { provider, apiKey: null, backendUrl: CODEX_BACKEND_URL };
-  return { provider, apiKey: null, backendUrl: getBackendUrl() };
+  return { provider, apiKey: null, backendUrl: getBackendUrl(browserLocation) };
 }
 export function hasModelAccess(): boolean {
   const access = getActiveModelAccess();

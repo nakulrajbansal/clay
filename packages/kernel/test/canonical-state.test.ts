@@ -3,6 +3,9 @@ import {
   ClayError,
   ClayStore,
   deriveInverse,
+  openDriverFromBytes,
+  openMemoryDriver,
+  zipRead,
   type DbDriver,
   type ForwardOpT,
 } from "../src/index";
@@ -19,7 +22,8 @@ async function fixture(): Promise<{
   rowId: string;
   attachmentId: string;
 }> {
-  const store = await ClayStore.openMemory();
+  const driver = await openMemoryDriver();
+  const store = ClayStore.fromDriver(driver);
   const operations: ForwardOpT[] = [{ op: "create_table", table: "projects", columns: [
     { name: "name", type: "text", required: true },
     { name: "estimate", type: "number", required: false },
@@ -45,7 +49,7 @@ async function fixture(): Promise<{
   });
   return {
     store,
-    driver: (store as unknown as { driver: DbDriver }).driver,
+    driver,
     rowId: String(row.id),
     attachmentId: attachment.id,
   };
@@ -383,6 +387,7 @@ describe("canonical target-state enumeration", () => {
   it("preserves semantic user index leaves through archive reconstruction", async () => {
     const { store } = await fixture();
     let imported: ClayStore | undefined;
+    let importedDriver: DbDriver | undefined;
     try {
       const addIndex: ForwardOpT[] = [{ op: "add_index", table: "projects", column: "name" }];
       store.commit({
@@ -396,16 +401,29 @@ describe("canonical target-state enumeration", () => {
         intent: "rename fixture", summary: "Renames the indexed field before export.",
         migration: { operations: rename, inverse: deriveInverse(rename, store.registrySnapshot()) },
       });
-      imported = (await ClayStore.importArchive(await store.exportArchive("canonical-index"))).store;
+      importedDriver = await openMemoryDriver();
+      imported = (await ClayStore.importArchive(
+        await store.exportArchive("canonical-index"),
+        async () => importedDriver!,
+      )).store;
       const registry = imported.validationRegistrySnapshot();
       const table = registry.get("projects")!;
       const field = table.columns.find(column => column.name === "title")!;
       const key = `schema/index/main/${table.semantic!.tableId}/${field.semantic!.fieldId}/`;
-      const driver = (imported as unknown as { driver: DbDriver }).driver;
-      expect(enumerateCanonicalStateV1(driver, registry).leaves
-        .some(entry => entry.seed.key.startsWith(key))).toBe(true);
+      const parts = zipRead(await imported.exportArchive("canonical-index-audit"));
+      const driver = await openDriverFromBytes(
+        parts.find(part => part.name === "user.db")!.data,
+        parts.find(part => part.name === "system.db")!.data,
+      );
+      try {
+        expect(enumerateCanonicalStateV1(driver, registry).leaves
+          .some(entry => entry.seed.key.startsWith(key))).toBe(true);
+      } finally {
+        driver.close();
+      }
     } finally {
-      imported?.close();
+      if (imported) imported.close();
+      else importedDriver?.close();
       store.close();
     }
   });

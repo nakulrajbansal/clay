@@ -111,13 +111,14 @@ import {
   MutationRequestError, buildRepairTurn, buildSystemPrompt, buildUserTurn,
   type S1Context,
 } from "./prompt";
+import { BoundedResponseTextError, readBoundedResponseText } from "./bounded-response";
 
 type MutationPlanT = import("@clay/schema").MutationPlan;
 
 export type Transport =
   | { mode: "byo"; apiKey: string }
   | { mode: "openai"; apiKey: string; model?: string; endpoint?: string }
-  | { mode: "hosted"; endpoint: string; session?: string };
+  | { mode: "hosted"; endpoint: string; session?: string; credentials?: "include" };
 
 export type PlanResult =
   | { ok: true; plan: MutationPlanT; raw: string;
@@ -134,14 +135,22 @@ function formatIssues(issues: { path: (string | number)[]; message: string }[]):
 }
 
 type FetchLike = (url: string, init: {
-  method: string; headers: Record<string, string>; body: string;
-}) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
+  method: string; headers: Record<string, string>; body: string; signal?: AbortSignal;
+}) => Promise<Pick<Response, "ok" | "status" | "body" | "headers">>;
 
 export type MutationClientOptions = {
   fetchFn?: FetchLike;
   /** G2: escalate repair rounds to the Opus-class model. */
   modelRepair?: boolean;
+  /** Per-intent shell lifecycle cancellation. */
+  signal?: AbortSignal;
+  /** Hard wall-clock deadline for fetch plus streamed response consumption. */
+  requestTimeoutMs?: number;
 };
+
+export const MUTATION_REQUEST_TIMEOUT_MS = 180_000;
+export const MUTATION_RESPONSE_MAX_BYTES = 2 * 1024 * 1024;
+const MUTATION_ERROR_RESPONSE_MAX_BYTES = 64 * 1024;
 
 type AnthropicResponse = {
   content?: { type: string; text?: string }[];
@@ -160,6 +169,8 @@ type OpenAIResponse = {
 export class MutationClient {
   private readonly fetchFn: FetchLike;
   private readonly modelRepair: boolean;
+  private readonly signal?: AbortSignal;
+  private readonly requestTimeoutMs: number;
   readonly systemPrompt: string;
 
   constructor(private readonly transport: Transport, opts: MutationClientOptions = {}) {
@@ -169,6 +180,11 @@ export class MutationClient {
       ?? ((url, init): ReturnType<FetchLike> =>
         (fetch as unknown as FetchLike)(url, init));
     this.modelRepair = opts.modelRepair ?? false;
+    this.signal = opts.signal;
+    this.requestTimeoutMs = opts.requestTimeoutMs ?? MUTATION_REQUEST_TIMEOUT_MS;
+    if (!Number.isSafeInteger(this.requestTimeoutMs)
+        || this.requestTimeoutMs < 1 || this.requestTimeoutMs > MUTATION_REQUEST_TIMEOUT_MS)
+      throw new TypeError("model request timeout is invalid");
     this.systemPrompt = buildSystemPrompt();
   }
 
@@ -257,6 +273,47 @@ export class MutationClient {
     return messages;
   }
 
+  private async readResponseText(
+    response: Pick<Response, "ok" | "status" | "body" | "headers">,
+  ): Promise<string> {
+    try {
+      return await readBoundedResponseText(
+        response,
+        response.ok ? MUTATION_RESPONSE_MAX_BYTES : MUTATION_ERROR_RESPONSE_MAX_BYTES,
+      );
+    } catch (error) {
+      if (error instanceof BoundedResponseTextError) throw new MutationRequestError(
+        "E_MODEL", "model response body was invalid or exceeded the safety limit",
+      );
+      throw error;
+    }
+  }
+
+  private async postForText(
+    url: string,
+    init: {
+      method: string; headers: Record<string, string>; body: string;
+      credentials?: "include" | "omit";
+    },
+  ): Promise<{
+    response: Pick<Response, "ok" | "status" | "body" | "headers">;
+    text: string;
+  }> {
+    const controller = new AbortController();
+    const forwardLifecycleAbort = (): void => controller.abort(this.signal?.reason);
+    if (this.signal?.aborted) forwardLifecycleAbort();
+    else this.signal?.addEventListener("abort", forwardLifecycleAbort, { once: true });
+    const timer = globalThis.setTimeout(() =>
+      controller.abort(new Error("model request deadline exceeded")), this.requestTimeoutMs);
+    try {
+      const response = await this.fetchFn(url, { ...init, signal: controller.signal });
+      return { response, text: await this.readResponseText(response) };
+    } finally {
+      globalThis.clearTimeout(timer);
+      this.signal?.removeEventListener("abort", forwardLifecycleAbort);
+    }
+  }
+
   private async byoRequest(
     ctx: S1Context,
     repair: { priorPlanRaw: string; failures: string[] } | null,
@@ -271,7 +328,7 @@ export class MutationClient {
       // Keep this schema byte-stable for grammar caching (G1/ADR-013).
       output_config: { format: { type: "json_schema", schema: apiSchema } },
     };
-    const res = await this.fetchFn(ANTHROPIC_API_URL, {
+    const { response: res, text } = await this.postForText(ANTHROPIC_API_URL, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -282,7 +339,6 @@ export class MutationClient {
       },
       body: JSON.stringify(body),
     });
-    const text = await res.text();
     if (!res.ok)
       // include the response body: the API's own message is the diagnosis
       throw new MutationRequestError("E_MODEL",
@@ -313,7 +369,7 @@ export class MutationClient {
       } },
     };
     const endpoint = this.transport.endpoint ?? OPENAI_API_URL;
-    const res = await this.fetchFn(endpoint, {
+    const { response: res, text } = await this.postForText(endpoint, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -321,7 +377,6 @@ export class MutationClient {
       },
       body: JSON.stringify(body),
     });
-    const text = await res.text();
     if (!res.ok)
       throw new MutationRequestError("E_MODEL",
         `openai ${res.status}: ${text.slice(0, 400)}`);
@@ -347,15 +402,16 @@ export class MutationClient {
     // shapes + intent only (B2). Repairs count against the same attempt.
     const path = repair ? "/mutations/repair" : "/mutations/plan";
     const session = this.transport.mode === "hosted" ? this.transport.session : undefined;
-    const res = await this.fetchFn(`${endpoint}${path}`, {
+    const { response: res, text } = await this.postForText(`${endpoint}${path}`, {
       method: "POST",
+      credentials: this.transport.mode === "hosted" && this.transport.credentials === "include"
+        ? "include" : "omit",
       headers: { "content-type": "application/json",
         ...(session ? { authorization: `Bearer ${session}` } : {}) },
       body: JSON.stringify(repair
         ? { context: ctx, prior_plan: repair.priorPlanRaw, failures: repair.failures }
         : { context: ctx }),
     });
-    const text = await res.text();
     if (!res.ok)
       throw new MutationRequestError("E_MODEL",
         `backend ${res.status}: ${text.slice(0, 400)}`);
