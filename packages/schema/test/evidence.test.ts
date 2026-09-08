@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   BenchmarkEvidenceManifestV1,
   LocalExportEvidenceManifestV2,
+  LOCAL_EXPORT_REQUIRED_REQUIREMENTS_V2,
+  ManualScreenReaderEvidenceV1,
   ReleaseEvidenceManifestV1,
 } from "../src/evidence";
 
@@ -18,7 +20,8 @@ const benchmark = {
   build,
   browser: { name: "chromium", version: "140.0", headless: true },
   path: "browser-worker-rpc-owner-preview",
-  fixture: { harnessSha256: digest, harnessBytes: 2048, fields: 1, rows: [1000, 5000] },
+  fixture: { harnessSha256: digest, harnessBytes: 2048, fields: 30,
+    rows: [1000, 5000], nearLimitPlaintextBytes: 8_000_000 },
   methodology: {
     clock: "performance.now",
     percentile: "nearest-rank-p95",
@@ -37,13 +40,13 @@ const benchmark = {
   },
   samples: [
     { rows: 1000, classification: "cold", operation: "csv", milliseconds: 10,
-      incrementalMemoryBytes: 100, inputBytes: 200, outputBytes: 50 },
+      incrementalMemoryBytes: 100, inputBytes: 200, outputBytes: 50, plaintextBytes: 1_600_000 },
     { rows: 1000, classification: "warm", operation: "csv", milliseconds: 8,
-      incrementalMemoryBytes: 80, inputBytes: 200, outputBytes: 50 },
+      incrementalMemoryBytes: 80, inputBytes: 200, outputBytes: 50, plaintextBytes: 1_600_000 },
     { rows: 5000, classification: "cold", operation: "owner-preview", milliseconds: 30,
-      incrementalMemoryBytes: 200, inputBytes: 500, outputBytes: 100 },
+      incrementalMemoryBytes: 200, inputBytes: 500, outputBytes: 100, plaintextBytes: 8_000_000 },
     { rows: 5000, classification: "warm", operation: "owner-preview", milliseconds: 20,
-      incrementalMemoryBytes: 150, inputBytes: 500, outputBytes: 100 },
+      incrementalMemoryBytes: 150, inputBytes: 500, outputBytes: 100, plaintextBytes: 8_000_000 },
   ],
   results: {
     rows1000CsvP95Ms: 8,
@@ -56,6 +59,20 @@ const benchmark = {
   verdict: "PASS",
 } as const;
 
+const textScaleSurfaces = [
+  "body", ".dataview", ".appbar-menu", ".appbar-theme-menu", ".export-dialog",
+].map((surface, index) => ({
+  surface,
+  coverage: {
+    textNodes: 8, formControls: 3,
+    placeholderControls: surface === ".dataview" ? 1 : 0,
+    selectedOptions: surface === ".dataview" ? 1 : 0,
+    pseudoElements: index === 0 ? 1 : 0,
+  },
+  renderedTextNodes: index === 0 ? 12 : 11,
+  scaledTextNodes: index === 0 ? 12 : 11,
+}));
+
 const accessibility = {
   schema: "AccessibilityEvidenceV1",
   axe: { status: "PASS", serious: 0, critical: 0,
@@ -64,7 +81,7 @@ const accessibility = {
     assertions: ["open", "operate", "close"] },
   reflow320At200Percent: { status: "PASS", viewportWidth: 320, textScalePercent: 200,
     method: "computed-font-size-per-rendered-text-node", renderedTextNodes: 24,
-    scaledTextNodes: 24,
+    scaledTextNodes: 24, surfaces: textScaleSurfaces,
     representativeFontSizes: [
       { label: "dialog title", beforeCssPixels: 22, afterCssPixels: 44 },
       { label: "local-only badge", beforeCssPixels: 10.5, afterCssPixels: 21 },
@@ -88,6 +105,12 @@ const accessibility = {
   adaptations: { status: "PASS", assertions: ["forced colors", "reduced motion", "text spacing"] },
 } as const;
 
+const manualArtifact = {
+  file: "manual-screen-reader/nvda-speech-viewer.txt",
+  bytes: 512,
+  sha256: digest,
+} as const;
+
 const manualScreenReaderPass = {
   status: "PASS",
   mode: "manual",
@@ -97,19 +120,38 @@ const manualScreenReaderPass = {
   performedAt: "2026-09-06T00:00:00.000Z",
   tester: "Release accessibility tester",
   method: "Manual NVDA run with Speech Viewer transcript capture",
+  procedure: {
+    id: "release-f-manual-screen-reader",
+    version: 1,
+    sha256: digest,
+  },
   source,
   build,
   assertions: [
-    "The named export dialog and description were announced.",
-    "The loading status was announced without moving focus.",
-    "The linked projection error and recovery action were announced.",
-  ],
-  artifact: {
-    file: "manual-screen-reader/nvda-speech-viewer.txt",
-    bytes: 123,
-    sha256: digest,
-  },
+    { id: "dialog-status-and-error-announcements", status: "PASS",
+      observation: "The named dialog, loading status, and linked error alert were announced." },
+    { id: "manifest-policy-comprehension", status: "PASS",
+      observation: "Scope, exclusions, relations, redactions, and completeness were understood." },
+    { id: "preview-table-navigation", status: "PASS",
+      observation: "Headers, cells, and row order were navigable and associated." },
+    { id: "formula-neutralization-disclosure", status: "PASS",
+      observation: "Spreadsheet formula neutralization was announced before download." },
+    { id: "controls-names-states-and-keyboard", status: "PASS",
+      observation: "Every policy and action exposed a clear name, state, and keyboard operation." },
+    { id: "focus-trap-and-restoration", status: "PASS",
+      observation: "Focus stayed inside the dialog and returned to its invoking control." },
+    { id: "current-view-and-record-journeys", status: "PASS",
+      observation: "Both view and record journeys completed without a trap or ambiguous action." },
+  ].map((assertion, index) => ({ ...assertion, performedAt: "2026-09-06T00:00:00.000Z", artifact: manualArtifact,
+    locator: `transcript-lines:${index * 3 + 1}-${index * 3 + 3}` })),
+  artifact: manualArtifact,
 } as const;
+
+const requiredArtifactNames = [
+  "accessibility-tree.json", "current-view.csv", "record.csv",
+  "desktop-current-view.png", "desktop-print-media.png", "desktop-print.pdf",
+  "desktop-record.png", "mobile-320px-200pct.png",
+] as const;
 
 const localExport = {
   schema: "LocalExportEvidenceManifestV2",
@@ -118,12 +160,43 @@ const localExport = {
   build,
   browser: { name: "chromium", version: "140.0", headless: true },
   url: "http://127.0.0.1:4173",
-  requirements: ["F-AT-030", "F-AT-060"],
-  exclusions: ["manual screen-reader evidence unavailable"],
-  observations: { desktop: {}, mobile: {}, network: {} },
-  checks: [{ ok: true, label: "local" }],
+  requirements: [...LOCAL_EXPORT_REQUIRED_REQUIREMENTS_V2],
+  gates: [
+    { id: "local-print-csv", status: "PASS" },
+    { id: "direct-pdf", status: "NOT_SHIPPED" },
+    { id: "hosted-encrypted-snapshots", status: "NOT_SHIPPED" },
+    { id: "hosted-public-intake", status: "NOT_SHIPPED" },
+    { id: "hosted-file-requests", status: "NOT_SHIPPED" },
+  ],
+  observations: {
+    desktop: {
+      currentView: { headings: ["Title"], rows: [["Example"]],
+        csv: { bytes: 123, sha256: digest, rows: 1, fields: 1, exact: true } },
+      record: { id: "018f0000-0000-7000-8000-000000000001",
+        headings: ["Title"], rows: [["Example"]],
+        csv: { bytes: 123, sha256: digest }, csvExact: true, printCalls: 1 },
+      print: { artifact: "desktop-print.pdf", extractedSha256: digest, exact: true },
+      opfsUnchanged: true, historyUnchanged: true, axeBlocking: 0,
+    },
+    mobile: {
+      viewport: { width: 320, height: 800 }, textScalePercent: 200,
+      surfaces: textScaleSurfaces, horizontalDocumentOverflow: false,
+      dialogFitsViewport: true, appMenuReachable: true, themeMenuReachable: true,
+      keyboardAssertions: ["tab route", "forward wrap", "reverse wrap", "inert outside",
+        "Space closes", "focus returns", "Escape returns"],
+      actionsReachable: true, axeBlocking: 0,
+    },
+    network: { desktopExportRequests: 0, recordExportRequests: 0,
+      mobileExportRequests: 0, unexpected: [] },
+  },
+  cases: [
+    "current-view-preview-exact", "current-view-csv-exact", "print-document-exact",
+    "record-preview-exact", "record-actions-exact", "network-local-only",
+    "durable-state-unchanged", "mobile-reflow", "mobile-controls-reachable",
+    "keyboard-complete", "automated-accessibility",
+  ].map(id => ({ id, status: "PASS" })),
   errors: [],
-  artifacts: [{ file: "desktop-print.pdf", bytes: 123, sha256: digest }],
+  artifacts: requiredArtifactNames.map(file => ({ file, bytes: 123, sha256: digest })),
   accessibility,
   verdict: "BLOCKED",
 } as const;
@@ -136,7 +209,9 @@ const release = {
     { file: "runtime/report.json", schema: "LocalExportEvidenceManifestV2", sha256: digest },
     { file: "benchmark.json", schema: "BenchmarkEvidenceManifestV1", sha256: digest },
   ],
-  artifacts: [{ file: "runtime/desktop-print.pdf", bytes: 123, sha256: digest }],
+  artifacts: requiredArtifactNames.map(file => ({
+    file: `runtime/${file}`, bytes: 123, sha256: digest,
+  })),
   verdict: "BLOCKED",
 } as const;
 
@@ -216,6 +291,57 @@ describe("closed Release F evidence schemas", () => {
         },
       },
     }).success).toBe(false);
+    expect(LocalExportEvidenceManifestV2.safeParse({
+      ...localExport,
+      accessibility: {
+        ...accessibility,
+        reflow320At200Percent: {
+          ...accessibility.reflow320At200Percent,
+          surfaces: textScaleSurfaces.slice(1),
+        },
+      },
+    }).success).toBe(false);
+    expect(LocalExportEvidenceManifestV2.safeParse({
+      ...localExport,
+      accessibility: {
+        ...accessibility,
+        reflow320At200Percent: {
+          ...accessibility.reflow320At200Percent,
+          surfaces: textScaleSurfaces.map(surface => surface.surface === ".dataview"
+            ? { ...surface, scaledTextNodes: surface.scaledTextNodes - 1 } : surface),
+        },
+      },
+    }).success).toBe(false);
+  });
+
+  it("requires the exact automated artifact inventory and accessibility references", () => {
+    for (const missing of requiredArtifactNames) expect(LocalExportEvidenceManifestV2.safeParse({
+      ...localExport,
+      artifacts: localExport.artifacts.filter(artifact => artifact.file !== missing),
+    }).success).toBe(false);
+    expect(LocalExportEvidenceManifestV2.safeParse({
+      ...localExport,
+      cases: localExport.cases.slice(1),
+    }).success).toBe(false);
+    expect(LocalExportEvidenceManifestV2.safeParse({
+      ...localExport,
+      cases: localExport.cases.map((item, index) =>
+        index === 0 ? { ...item, status: "FAIL" } : item),
+      verdict: "BLOCKED",
+    }).success).toBe(false);
+    expect(LocalExportEvidenceManifestV2.safeParse({
+      ...localExport,
+      requirements: localExport.requirements.slice(1),
+    }).success).toBe(false);
+    expect(LocalExportEvidenceManifestV2.safeParse({
+      ...localExport,
+      requirements: [...localExport.requirements].reverse(),
+    }).success).toBe(false);
+    expect(LocalExportEvidenceManifestV2.safeParse({
+      ...localExport,
+      accessibility: { ...accessibility,
+        accessibilityTree: { ...accessibility.accessibilityTree, artifact: "missing.json" } },
+    }).success).toBe(false);
   });
 
   it("keeps unavailable manual screen-reader evidence from receiving a PASS verdict", () => {
@@ -235,12 +361,20 @@ describe("closed Release F evidence schemas", () => {
     }).success).toBe(false);
   });
 
-  it("accepts only a source/build-bound manual NVDA or VoiceOver PASS with an inventoried artifact", () => {
+  it("rejects manual PASS without timestamped per-step proof", () => {
+    const weak = {
+      ...manualScreenReaderPass,
+      assertions: manualScreenReaderPass.assertions.map(({ id, status, observation }) =>
+        ({ id, status, observation })),
+    };
+    expect(ManualScreenReaderEvidenceV1.safeParse(weak).success).toBe(false);
+  });
+
+  it("accepts only a source/build-bound manual NVDA or VoiceOver PASS with inventoried proof", () => {
     const passing = {
       ...localExport,
       artifacts: [...localExport.artifacts, manualScreenReaderPass.artifact],
       accessibility: { ...accessibility, screenReader: manualScreenReaderPass },
-      exclusions: [],
       verdict: "PASS",
     } as const;
     expect(LocalExportEvidenceManifestV2.parse(passing)).toEqual(passing);
@@ -275,5 +409,49 @@ describe("closed Release F evidence schemas", () => {
         screenReader: { ...manualScreenReaderPass, product: "JAWS" },
       },
     }).success).toBe(false);
+    expect(LocalExportEvidenceManifestV2.safeParse({
+      ...passing,
+      accessibility: {
+        ...passing.accessibility,
+        screenReader: { ...manualScreenReaderPass,
+          assertions: ["opened", "heard text", "closed"] },
+      },
+    }).success).toBe(false);
+    expect(LocalExportEvidenceManifestV2.safeParse({
+      ...passing,
+      accessibility: {
+        ...passing.accessibility,
+        screenReader: { ...manualScreenReaderPass,
+          assertions: manualScreenReaderPass.assertions.slice(0, 6) },
+      },
+    }).success).toBe(false);
+    expect(LocalExportEvidenceManifestV2.safeParse({
+      ...passing,
+      accessibility: {
+        ...passing.accessibility,
+        screenReader: { ...manualScreenReaderPass,
+          assertions: manualScreenReaderPass.assertions.map((assertion, index) =>
+            index === 6 ? manualScreenReaderPass.assertions[0] : assertion) },
+      },
+    }).success).toBe(false);
+  });
+
+  it("rejects content-free or chronologically invalid manual PASS evidence", () => {
+    const rejected = [
+      { ...manualScreenReaderPass, platform: "macOS 15" },
+      { ...manualScreenReaderPass,
+        assertions: manualScreenReaderPass.assertions.map((item, index) =>
+          index === 0 ? { ...item, observation: "   " } : item) },
+      { ...manualScreenReaderPass,
+        assertions: manualScreenReaderPass.assertions.map((item, index) =>
+          index === 1 ? { ...item, locator: manualScreenReaderPass.assertions[0]!.locator } : item) },
+      { ...manualScreenReaderPass, performedAt: "2999-01-01T00:00:00.000Z" },
+      { ...manualScreenReaderPass, artifact: { ...manualArtifact, bytes: 1 },
+        assertions: manualScreenReaderPass.assertions.map(item => ({
+          ...item, artifact: { ...manualArtifact, bytes: 1 },
+        })) },
+    ];
+    for (const candidate of rejected)
+      expect(ManualScreenReaderEvidenceV1.safeParse(candidate).success).toBe(false);
   });
 });

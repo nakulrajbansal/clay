@@ -4,10 +4,13 @@ import { EventEmitter } from "node:events";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { LOCAL_EXPORT_REQUIRED_REQUIREMENTS_V2 } from "../packages/schema/src/evidence.ts";
 import * as evidenceLib from "./local-export-evidence-lib.mjs";
 import {
   assertBenchmarkEvidence,
+  buildDirectoryDigest,
   canonicalEvidenceJson,
   sha256Evidence,
   summarizeBenchmarkSamples,
@@ -15,6 +18,7 @@ import {
 } from "./local-export-evidence-lib.mjs";
 
 const source = { commit: "b".repeat(40), tree: "c".repeat(40) };
+const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const digest = value => sha256Evidence(Buffer.from(value));
 const build = { sha256: digest("build"), bytes: 123, files: 4 };
 const methodology = {
@@ -36,6 +40,7 @@ const limits = {
 const sample = (rows, classification, operation, milliseconds) => ({
   rows, classification, operation, milliseconds,
   incrementalMemoryBytes: 100, inputBytes: 200, outputBytes: 50,
+  plaintextBytes: operation === "cancel" ? 0 : rows === 5000 ? 8_000_000 : 1_600_000,
 });
 const warm = (rows, operation, milliseconds) => Array.from({ length: 30 }, () =>
   sample(rows, "warm", operation, milliseconds));
@@ -52,7 +57,8 @@ const benchmark = {
   build,
   browser: { name: "chromium", version: "140", headless: true },
   path: "browser-worker-rpc-owner-preview",
-  fixture: { harnessSha256: digest("fixture"), harnessBytes: 2048, fields: 1, rows: [1000, 5000] },
+  fixture: { harnessSha256: digest("fixture"), harnessBytes: 2048, fields: 30,
+    rows: [1000, 5000], nearLimitPlaintextBytes: 8_000_000 },
   methodology,
   limits,
   samples,
@@ -60,6 +66,18 @@ const benchmark = {
   rawResultsSha256: sha256Evidence(Buffer.from(canonicalEvidenceJson({ methodology, samples }))),
   verdict: "PASS",
 };
+const textScaleSurfaces = [
+  "body", ".dataview", ".appbar-menu", ".appbar-theme-menu", ".export-dialog",
+].map((surface, index) => ({
+  surface,
+  coverage: { textNodes: 8, formControls: 3,
+    placeholderControls: surface === ".dataview" ? 1 : 0,
+    selectedOptions: surface === ".dataview" ? 1 : 0,
+    pseudoElements: index === 0 ? 1 : 0 },
+  renderedTextNodes: index === 0 ? 12 : 11,
+  scaledTextNodes: index === 0 ? 12 : 11,
+}));
+
 const accessibility = {
   schema: "AccessibilityEvidenceV1",
   axe: { status: "PASS", serious: 0, critical: 0,
@@ -68,7 +86,7 @@ const accessibility = {
     assertions: ["open", "operate", "close"] },
   reflow320At200Percent: { status: "PASS", viewportWidth: 320, textScalePercent: 200,
     method: "computed-font-size-per-rendered-text-node", renderedTextNodes: 24,
-    scaledTextNodes: 24,
+    scaledTextNodes: 24, surfaces: textScaleSurfaces,
     representativeFontSizes: [
       { label: "dialog title", beforeCssPixels: 22, afterCssPixels: 44 },
       { label: "local-only badge", beforeCssPixels: 10.5, afterCssPixels: 21 },
@@ -110,12 +128,33 @@ const dialogStateObservations = {
 const runtimeArtifactNames = [
   "accessibility-tree.json",
   "current-view.csv",
+  "record.csv",
   "desktop-current-view.png",
   "desktop-print-media.png",
   "desktop-print.pdf",
   "desktop-record.png",
   "mobile-320px-200pct.png",
 ];
+
+test("build directory digest length-frames paths and payloads", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clay-build-digest-"));
+  const left = join(root, "left");
+  const right = join(root, "right");
+  try {
+    await Promise.all([mkdir(left), mkdir(right)]);
+    await Promise.all([
+      writeFile(join(left, "a"), Buffer.from([0x62, 0])),
+      writeFile(join(left, "c"), Buffer.alloc(0)),
+      writeFile(join(right, "a"), Buffer.alloc(0)),
+      writeFile(join(right, "b"), Buffer.from([0x63, 0])),
+    ]);
+    const leftDigest = await buildDirectoryDigest(left);
+    const rightDigest = await buildDirectoryDigest(right);
+    assert.deepEqual({ bytes: leftDigest.bytes, files: leftDigest.files }, { bytes: 2, files: 2 });
+    assert.deepEqual({ bytes: rightDigest.bytes, files: rightDigest.files }, { bytes: 2, files: 2 });
+    assert.notEqual(leftDigest.sha256, rightDigest.sha256);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 async function fixtureDirectory(writeManifests = true) {
   const root = await mkdtemp(join(tmpdir(), "clay-release-f-evidence-"));
@@ -131,10 +170,40 @@ async function fixtureDirectory(writeManifests = true) {
     source, build,
     browser: { name: "chromium", version: "140", headless: true },
     url: "http://127.0.0.1:4173",
-    requirements: ["F-AT-030", "F-AT-060"],
-    exclusions: ["manual screen-reader evidence unavailable"],
-    observations: { desktop: {}, mobile: {}, network: {} },
-    checks: [{ ok: true, label: "local" }], errors: [], artifacts, accessibility,
+    requirements: [...LOCAL_EXPORT_REQUIRED_REQUIREMENTS_V2],
+    gates: [
+      { id: "local-print-csv", status: "PASS" },
+      { id: "direct-pdf", status: "NOT_SHIPPED" },
+      { id: "hosted-encrypted-snapshots", status: "NOT_SHIPPED" },
+      { id: "hosted-public-intake", status: "NOT_SHIPPED" },
+      { id: "hosted-file-requests", status: "NOT_SHIPPED" },
+    ],
+    observations: {
+      desktop: {
+        currentView: { headings: ["Title"], rows: [["Example"]],
+          csv: { bytes: 3, sha256: digest("bin"), rows: 1, fields: 1, exact: true } },
+        record: { id: "018f0000-0000-7000-8000-000000000001",
+          headings: ["Title"], rows: [["Example"]],
+          csv: { bytes: 3, sha256: digest("bin") }, csvExact: true, printCalls: 1 },
+        print: { artifact: "desktop-print.pdf", extractedSha256: digest("text"), exact: true },
+        opfsUnchanged: true, historyUnchanged: true, axeBlocking: 0,
+      },
+      mobile: { viewport: { width: 320, height: 800 }, textScalePercent: 200,
+        surfaces: textScaleSurfaces, horizontalDocumentOverflow: false,
+        dialogFitsViewport: true, appMenuReachable: true, themeMenuReachable: true,
+        keyboardAssertions: ["tab route", "forward wrap", "reverse wrap", "inert outside",
+          "Space closes", "focus returns", "Escape returns"],
+        actionsReachable: true, axeBlocking: 0 },
+      network: { desktopExportRequests: 0, recordExportRequests: 0,
+        mobileExportRequests: 0, unexpected: [] },
+    },
+    cases: [
+      "current-view-preview-exact", "current-view-csv-exact", "print-document-exact",
+      "record-preview-exact", "record-actions-exact", "network-local-only",
+      "durable-state-unchanged", "mobile-reflow", "mobile-controls-reachable",
+      "keyboard-complete", "automated-accessibility",
+    ].map(id => ({ id, status: "PASS" })),
+    errors: [], artifacts, accessibility,
     verdict: "BLOCKED",
   };
   const reportBytes = Buffer.from(`${JSON.stringify(report)}\n`);
@@ -195,7 +264,8 @@ test("release writer emits closed V2 reports and the complete runtime artifact i
     "benchmark.json", "release.json", "runtime/accessibility-tree.json",
     "runtime/current-view.csv", "runtime/desktop-current-view.png",
     "runtime/desktop-print-media.png", "runtime/desktop-print.pdf",
-    "runtime/desktop-record.png", "runtime/mobile-320px-200pct.png", "runtime/report.json",
+    "runtime/desktop-record.png", "runtime/mobile-320px-200pct.png", "runtime/record.csv",
+    "runtime/report.json",
   ]);
 });
 
@@ -263,40 +333,98 @@ test("manual screen-reader input is strict, source/build-bound, copied, and inve
   const outputDirectory = join(root, "output");
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(outputDirectory);
-  const transcript = Buffer.from("NVDA Speech Viewer transcript\n");
+  const assertionIds = [
+    "dialog-status-and-error-announcements", "manifest-policy-comprehension",
+    "preview-table-navigation", "formula-neutralization-disclosure",
+    "controls-names-states-and-keyboard", "focus-trap-and-restoration",
+    "current-view-and-record-journeys",
+  ];
+  const transcript = Buffer.from(`${assertionIds.flatMap(id => [
+    `[${id}]`, `Observed concrete screen-reader behavior for ${id}.`,
+    `Verified the required result for ${id}.`,
+  ]).join("\n")}\n`);
+  const procedureBytes = await readFile(join(
+    repositoryRoot, "specs", "release-f-manual-screen-reader-procedure.md",
+  ));
   await writeFile(join(root, "nvda-transcript.txt"), transcript);
+  const sourceArtifact = {
+    file: "nvda-transcript.txt", bytes: transcript.byteLength,
+    sha256: sha256Evidence(transcript),
+  };
   const manual = {
     status: "PASS", mode: "manual", product: "NVDA", productVersion: "2026.1",
     platform: "Windows 11", performedAt: "2026-09-06T00:00:00.000Z",
     tester: "Release accessibility tester",
     method: "Manual NVDA run with Speech Viewer transcript capture",
-    source, build,
-    assertions: ["dialog announced", "loading announced", "linked error announced"],
-    artifact: {
-      file: "nvda-transcript.txt", bytes: transcript.byteLength,
-      sha256: sha256Evidence(transcript),
+    procedure: {
+      id: "release-f-manual-screen-reader", version: 1,
+      sha256: sha256Evidence(procedureBytes),
     },
+    source, build,
+    assertions: [
+      { id: "dialog-status-and-error-announcements", status: "PASS",
+        observation: "Dialog, progress, and error were announced." },
+      { id: "manifest-policy-comprehension", status: "PASS",
+        observation: "Scope and export policy were understandable." },
+      { id: "preview-table-navigation", status: "PASS",
+        observation: "Table headers and cells were navigable." },
+      { id: "formula-neutralization-disclosure", status: "PASS",
+        observation: "Formula neutralization was announced." },
+      { id: "controls-names-states-and-keyboard", status: "PASS",
+        observation: "Controls exposed clear names and states." },
+      { id: "focus-trap-and-restoration", status: "PASS",
+        observation: "Focus stayed contained and returned." },
+      { id: "current-view-and-record-journeys", status: "PASS",
+        observation: "Both required journeys completed." },
+    ].map((assertion, index) => ({ ...assertion, performedAt: "2026-09-06T00:00:00.000Z", artifact: sourceArtifact,
+      locator: `transcript-lines:${index * 3 + 1}-${index * 3 + 3}` })),
+    artifact: sourceArtifact,
   };
+  const manualOptions = { source, build, outputDirectory, sourceDirectory: repositoryRoot };
   const input = join(root, "manual.json");
   await writeFile(input, `${JSON.stringify(manual)}\n`);
-  const ingested = await evidenceLib.ingestManualScreenReaderEvidence(input, {
-    source, build, outputDirectory,
-  });
+  const ingested = await evidenceLib.ingestManualScreenReaderEvidence(input, manualOptions);
   assert.equal(ingested.screenReader.status, "PASS");
   assert.equal(ingested.artifact.file, "manual-screen-reader/nvda-transcript.txt");
   assert.deepEqual(await readFile(join(outputDirectory, ingested.artifact.file)), transcript);
   assert.deepEqual(ingested.screenReader.artifact, ingested.artifact);
+  assert.ok(ingested.screenReader.assertions.every(assertion =>
+    JSON.stringify(assertion.artifact) === JSON.stringify(ingested.artifact)));
   const unavailable = await evidenceLib.ingestManualScreenReaderEvidence(undefined, {
     source, build, outputDirectory,
   });
   assert.equal(unavailable.screenReader.status, "UNAVAILABLE");
   assert.equal(unavailable.artifact, null);
   await writeFile(input, `${JSON.stringify({
+    ...manual, assertions: manual.assertions.map((assertion, index) =>
+      index === 0 ? { ...assertion, locator: "transcript-lines:999-1000" } : assertion),
+  })}\n`);
+  await assert.rejects(evidenceLib.ingestManualScreenReaderEvidence(input, manualOptions), /locator/i);
+  await writeFile(input, `${JSON.stringify({
+    ...manual, procedure: { ...manual.procedure, sha256: digest("wrong-procedure") },
+  })}\n`);
+  await assert.rejects(evidenceLib.ingestManualScreenReaderEvidence(input, manualOptions), /procedure/i);
+  const missingMarker = Buffer.from(transcript.toString("utf8")
+    .replace("[dialog-status-and-error-announcements]", "[missing-marker]"));
+  await writeFile(join(root, "nvda-transcript.txt"), missingMarker);
+  await writeFile(input, `${JSON.stringify({
+    ...manual,
+    artifact: { ...sourceArtifact, bytes: missingMarker.byteLength,
+      sha256: sha256Evidence(missingMarker) },
+    assertions: manual.assertions.map(assertion => ({ ...assertion,
+      artifact: { ...sourceArtifact, bytes: missingMarker.byteLength,
+        sha256: sha256Evidence(missingMarker) } })),
+  })}\n`);
+  await assert.rejects(evidenceLib.ingestManualScreenReaderEvidence(input, manualOptions), /assertion segment/i);
+  await writeFile(join(root, "nvda-transcript.txt"), transcript);
+  await writeFile(input, `${JSON.stringify({
+    ...manual, assertions: ["opened", "heard text", "closed"],
+  })}\n`);
+  await assert.rejects(evidenceLib.ingestManualScreenReaderEvidence(input, manualOptions), /assertions|array|string/i);
+  await writeFile(input, `${JSON.stringify({
     ...manual, source: { ...source, tree: "d".repeat(40) },
   })}\n`);
-  await assert.rejects(evidenceLib.ingestManualScreenReaderEvidence(input, {
-    source, build, outputDirectory,
-  }), /source/i);
+  await assert.rejects(evidenceLib.ingestManualScreenReaderEvidence(input, manualOptions), /source/i);
 });
 
 test("loading, success, and error accessibility claims are derived from observations", () => {
@@ -358,15 +486,16 @@ test("evidence output cleanup rejects unknown entries and deletes only owned out
   assert.deepEqual(await readdir(root), []);
 });
 
-test("PDF content-stream text ends with the exact complete normalized table", () => {
-  const text = "\fReport heading\nTITLE\nBrightLab\nexpansion\nHarbor\nCafe\nsetup\n=1+1\n2026-09-\n10\n";
-  const expected = ["TITLE", "BrightLab expansion", "Harbor Cafe setup", "=1+1", "2026-09-10"];
-  assert.equal(evidenceLib.pdfTextEndsWithExactSequence(text, expected), true);
-  assert.equal(evidenceLib.pdfTextEndsWithExactSequence(text,
-    ["TITLE", "Harbor Cafe setup", "BrightLab expansion", "=1+1", "2026-09-10"]), false);
-  assert.equal(evidenceLib.pdfTextEndsWithExactSequence("\fTITLE\nfoobar\n", ["TITLE", "bar"]), false);
-  assert.equal(evidenceLib.pdfTextEndsWithExactSequence("\fREPORTTITLE\nvalue\n", ["TITLE", "value"]), false);
-  assert.equal(evidenceLib.pdfTextEndsWithExactSequence("\fＴＩＴＬＥ\n", ["TITLE"]), false);
+test("PDF content-stream text exactly matches the complete normalized print document", () => {
+  const text = "\fReport heading\n3 rows × 2 fields · Complete, no truncation\nCurrent view\nTITLE\nBrightLab\nexpansion\nHarbor\nCafe\nsetup\n=1+1\n2026-\n09-\n10\n";
+  const expected = ["Report heading", "3 rows × 2 fields · Complete, no truncation",
+    "Current view", "TITLE", "BrightLab expansion", "Harbor Cafe setup", "=1+1", "2026-09-10"];
+  assert.equal(evidenceLib.pdfTextMatchesExactSequence(text, expected), true);
+  assert.equal(evidenceLib.pdfTextMatchesExactSequence(`Unexpected\n${text}`, expected), false);
+  assert.equal(evidenceLib.pdfTextMatchesExactSequence(text,
+    ["Report heading", "3 rows × 2 fields · Complete, no truncation", "Current view",
+      "TITLE", "Harbor Cafe setup", "BrightLab expansion", "=1+1", "2026-09-10"]), false);
+  assert.equal(evidenceLib.pdfTextMatchesExactSequence("\fＴＩＴＬＥ\n", ["TITLE"]), false);
 });
 
 test("preview cleanup settles when termination emits exit synchronously", async () => {

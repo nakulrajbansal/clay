@@ -93,6 +93,16 @@ describe("local export owner preview", () => {
     expect(dialog.textContent).toContain("Complete — no truncation");
     expect(dialog.textContent).toContain("Friendly labels; relation IDs excluded");
     expect(dialog.textContent).toContain("Customer → customers.Name");
+    const redactionGroup = dialog.querySelector<HTMLElement>(
+      '.export-redaction-options[role="group"][aria-labelledby]',
+    );
+    const redactionLabel = redactionGroup?.getAttribute("aria-labelledby");
+    expect(redactionLabel && dialog.querySelector(`#${redactionLabel}`)?.textContent)
+      .toBe("Redact values");
+    expect([...redactionGroup!.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
+      .map(input => input.getAttribute("aria-label"))).toEqual([
+        "Redact Title values, field 1", "Redact Notes values, field 2",
+      ]);
     expect(dialog.textContent).toContain("Double amount → jobs.Amount");
     expect(dialog.textContent).toContain("Attachments excluded");
     expect(dialog.textContent).toContain("Hidden and unselected fields excluded");
@@ -131,6 +141,53 @@ describe("local export owner preview", () => {
       key: "Escape", bubbles: true,
     })));
     expect(closes).toBe(1);
+  });
+
+  it("paginates large previews but expands every frozen row before native Print", async () => {
+    const rows = Array.from({ length: 205 }, (_, index) => [
+      `Title ${index}`, `Notes ${index}`, String(index), `Customer ${index}`,
+      String(index * 2), "",
+    ]);
+    const largeArtifact: ProjectionArtifactV1 = {
+      ...artifact,
+      projection: {
+        ...artifact.projection,
+        manifest: { ...artifact.projection.manifest, rowCount: rows.length },
+        rows,
+      },
+    };
+    const print = vi.fn();
+    Object.defineProperty(window, "print", { configurable: true, value: print });
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    await act(async () => root.render(<ExportDialog
+      worker={{ projectExport: async () => largeArtifact }}
+      request={request}
+      fieldChoices={[]}
+      onClose={() => root.unmount()}
+    />));
+    await flush();
+    const dialog = document.body.querySelector<HTMLElement>(".export-dialog")!;
+    expect(dialog.querySelectorAll("tbody tr")).toHaveLength(100);
+    expect(dialog.textContent).toContain("Rows 1–100 of 205");
+    const next = [...dialog.querySelectorAll("button")]
+      .find(button => button.textContent === "Next 100")!;
+    await act(async () => next.click());
+    expect(dialog.querySelectorAll("tbody tr")).toHaveLength(100);
+    expect(dialog.textContent).toContain("Rows 101–200 of 205");
+    await act(async () => next.click());
+    expect(dialog.querySelectorAll("tbody tr")).toHaveLength(5);
+    expect(dialog.textContent).toContain("Rows 201–205 of 205");
+    const printButton = [...dialog.querySelectorAll("button")]
+      .find(button => button.textContent === "Print / Save as PDF")!;
+    await act(async () => printButton.click());
+    expect(print).toHaveBeenCalledTimes(1);
+    expect(dialog.querySelectorAll("tbody tr")).toHaveLength(205);
+    await act(async () => window.dispatchEvent(new Event("afterprint")));
+    expect(dialog.querySelectorAll("tbody tr")).toHaveLength(100);
+    expect(dialog.textContent).toContain("Rows 1–100 of 205");
+    await act(async () => root.unmount());
   });
 
   it("downloads only CSV bytes inside a non-zero-offset Uint8Array view", async () => {

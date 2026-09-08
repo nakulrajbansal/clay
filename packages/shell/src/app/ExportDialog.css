@@ -8,6 +8,27 @@
   background: #fff;
 }
 
+.projection-pagination {
+  margin: 0 24px 12px; display: flex; align-items: center;
+  justify-content: space-between; gap: 8px; flex-wrap: wrap;
+}
+.projection-pagination span { display: flex; gap: 8px; }
+.projection-pagination button { min-height: 44px; }
+.export-dialog { min-width: 0; overflow-x: hidden; }
+.export-dialog > *, .export-options, .projection-print-document,
+.projection-table-scroll { min-width: 0; max-width: 100%; }
+.projection-table-scroll { overflow: auto; }
+.export-redaction-options { flex-wrap: wrap; overflow-x: visible; }
+.export-redaction-options > span { flex-basis: 100%; }
+.export-redaction-options label { white-space: normal; overflow-wrap: anywhere; }
+
+
+@media (max-width: 480px) {
+  .export-dialog .relation-preview { grid-template-columns: 1fr; }
+  .projection-print-document { margin-inline: 14px; }
+  .projection-pagination { margin-inline: 14px; }
+}
+
 @media print {
   @page { margin: 12mm; }
   body > * { visibility: hidden !important; }
@@ -22,11 +43,13 @@
     overflow: visible;
   }
   .export-dialog > :not(.projection-print-document) { display: none; }
+
   .projection-print-document,
   .projection-print-document * { visibility: visible; }
   .projection-table-scroll { overflow: visible; }
   .projection-print-document thead { display: table-header-group; }
   .projection-print-document tr { break-inside: avoid; }
+
   .projection-print-document th { position: static; }
   .projection-empty-marker,
   .projection-csv-safety-note { display: none !important; }

@@ -108,7 +108,7 @@ const ProjectionDependencyV1 = z.object({
   });
 });
 export const ProjectionManifestV1 = z.object({
-  completeness: z.object({ truncated: z.literal(false), reason: z.null() }).strict(),
+  completeness: z.object({ reason: z.null(), truncated: z.literal(false) }).strict(),
   csv: z.object({
     byteCount: z.number().int().nonnegative().max(8 * 1024 * 1024),
     formulaNeutralizedCells: z.number().int().nonnegative(),

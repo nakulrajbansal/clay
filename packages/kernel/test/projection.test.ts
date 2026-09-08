@@ -1,12 +1,14 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import { ProjectionManifestV1 as ProjectionManifestSchema } from "@clay/schema/projection";
 import {
   ClayStore, deriveInverse, openMemoryDriver, type ForwardOpT,
 } from "../src/index";
 import {
-  decodeProjectionArtifactV1, decodeProjectionPlaintextV1, projectPlaintextV1,
-  type ProjectionRequestV1,
+  decodeProjectionArtifactV1, decodeProjectionPlaintextV1, decodeProjectionTransportV1,
+  projectPlaintextV1,
+  projectionTransportV1, type ProjectionRequestV1,
 } from "../src/projection";
 
 const fixture = (name: string): Uint8Array => new Uint8Array(readFileSync(fileURLToPath(
@@ -100,6 +102,24 @@ describe("ProjectionPlaintextV1 current Data view", () => {
     } finally { store.close(); }
   });
 
+  it("rejects valid projection JSON whose keys are not in canonical order", async () => {
+    const { store } = await projectionFixture();
+    try {
+      const artifact = await projectPlaintextV1(store, requestFor(store));
+      const parsed = JSON.parse(new TextDecoder().decode(artifact.plaintext));
+      const normalized = JSON.stringify({
+        manifest: ProjectionManifestSchema.parse(parsed.manifest),
+        rows: parsed.rows,
+        schema: parsed.schema,
+      });
+      expect(normalized).toBe(new TextDecoder().decode(artifact.plaintext));
+      const reordered = new TextEncoder().encode(JSON.stringify({
+        schema: parsed.schema, rows: parsed.rows, manifest: parsed.manifest,
+      }));
+      expect(() => decodeProjectionPlaintextV1(reordered)).toThrow(/not canonical/i);
+    } finally { store.close(); }
+  });
+
   it("returns the exact recursively frozen preview with its canonical bytes", async () => {
     const { store } = await projectionFixture();
     try {
@@ -111,6 +131,19 @@ describe("ProjectionPlaintextV1 current Data view", () => {
       expect(Object.isFrozen(artifact.projection.manifest.fields)).toBe(true);
       expect(Object.isFrozen(artifact.projection.rows)).toBe(true);
       expect(Object.isFrozen(artifact.projection.rows[0])).toBe(true);
+    } finally { store.close(); }
+  });
+
+  it("transports only canonical bytes without copying their buffers", async () => {
+    const { store } = await projectionFixture();
+    try {
+      const artifact = await projectPlaintextV1(store, requestFor(store));
+      const transport = projectionTransportV1(artifact);
+      expect(Object.keys(transport)).toEqual(["plaintext", "csv"]);
+      expect(transport.plaintext).toBe(artifact.plaintext);
+      expect(transport.csv).toBe(artifact.csv);
+      expect(Object.isFrozen(transport)).toBe(true);
+      expect(decodeProjectionTransportV1(transport)).toEqual(artifact.projection);
     } finally { store.close(); }
   });
 

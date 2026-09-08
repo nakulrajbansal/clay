@@ -9,9 +9,10 @@ import type {
   RelationConversionRequest, RelationConversionResult, SemanticSchemaTraceV1, Suggestion,
 } from "@clay/kernel";
 import {
-  decodeProjectionArtifactV1,
+  decodeProjectionTransportV1,
   type ProjectionArtifactV1,
   type ProjectionRequestV1,
+  type ProjectionTransportV1,
 } from "@clay/kernel/projection";
 import { ClayError } from "@clay/kernel/errors";
 import type { IntentOutcome } from "../worker/db-worker";
@@ -341,14 +342,14 @@ export class WorkerClient {
   async projectExport(
     request: ProjectionRequestV1, signal?: AbortSignal,
   ): Promise<ProjectionArtifactV1> {
-    const transported = await this.call<ProjectionArtifactV1>(
+    const transported = await this.call<ProjectionTransportV1>(
       "projectPlaintextV1", request, undefined, signal,
     );
-    const canonicalProjection = decodeProjectionArtifactV1(transported);
+    const canonicalProjection = decodeProjectionTransportV1(transported);
     return Object.freeze({
       projection: canonicalProjection,
-      plaintext: transported.plaintext.slice(),
-      csv: transported.csv.slice(),
+      plaintext: transported.plaintext,
+      csv: transported.csv,
     });
   }
   restoreRow(table: string, id: string): Promise<null> {

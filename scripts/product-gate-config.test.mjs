@@ -88,6 +88,9 @@ test("local-export release entrypoint owns an isolated clean-HEAD certificate li
     "manual evidence input must actually be external to the authoritative source");
   assert.match(wrapper, /finally\s*\{/);
   assert.match(wrapper, /const cleanupFailures = \[\]/);
+  assert.match(wrapper,
+    /catch \(error\) \{ removalError = error; \}[\s\S]*?await rm\(checkout, \{ recursive: true, force: true \}\)[\s\S]*?worktreeRemovalComplete/,
+    "a failed Git removal must delete the exact owned checkout before authoritative readback");
   assert.match(wrapper, /worktree[\s\S]*remove[\s\S]*worktree[\s\S]*prune/);
   assert.match(wrapper,
     /cleanup\("remove isolated temporary directory"[\s\S]*rm\(temporaryRoot, \{ recursive: true, force: true \}\)/);
@@ -99,12 +102,35 @@ test("local-export release entrypoint owns an isolated clean-HEAD certificate li
 
 test("local-export browser evidence observes real dialog states and doubles every rendered text node", async () => {
   const source = await readFile(new URL("scripts/local-export-evidence.mjs", root), "utf8");
+  const styles = await readFile(new URL("packages/shell/src/app/styles.css", root), "utf8");
   const harness = await readFile(new URL(
     "packages/shell/test/browser/projection-benchmark-owner.tsx", root,
   ), "utf8");
   const browserBenchmark = await readFile(new URL(
     "scripts/local-export-browser-benchmark.mjs", root,
   ), "utf8");
+  const benchmarkWorker = await readFile(new URL(
+    "packages/shell/test/browser/projection-benchmark-worker.ts", root,
+  ), "utf8");
+  const exportDialog = await readFile(new URL(
+    "packages/shell/src/app/ExportDialog.tsx", root,
+  ), "utf8");
+  assert.match(harness, /import "\.\.\/\.\.\/src\/app\/Operations\.css"/,
+    "the benchmark owner must load the production modal and dialog layout styles");
+  assert.match(browserBenchmark, /fields:\s*30/);
+  assert.match(browserBenchmark, /nearLimitPlaintextBytes/);
+  assert.match(benchmarkWorker, /const FIELD_COUNT = 30/);
+  assert.match(exportDialog, /const PREVIEW_PAGE_SIZE = 100/);
+  assert.match(exportDialog,
+    /manifest\.rowCount > PREVIEW_PAGE_SIZE[\s\S]*?Rows \{pageStart \+ 1\}–\{pageEnd\} of \{manifest\.rowCount\}/,
+    "large previews must disclose the exact visible range and total");
+  assert.match(exportDialog,
+    /onPrint[\s\S]*?event\.type === "beforeprint" \? -1 : 0[\s\S]*?addEventListener\("beforeprint", onPrint\)[\s\S]*?addEventListener\("afterprint", onPrint\)/,
+    "native Print must expand all rows and then restore a bounded preview");
+  assert.match(exportDialog, /flushSync\(\(\) => setPage\(-1\)\)[\s\S]*?window\.print\(\)/);
+  assert.match(browserBenchmark,
+    /expectedRows = Math\.min\(rows, 100\)[\s\S]*?projection-pagination[\s\S]*?Rows 1–\$\{expectedRows\} of \$\{rows\}/,
+    "the browser benchmark must time a complete first preview page with exact total disclosure");
   assert.match(source, /schema: "LocalExportEvidenceManifestV2"/);
   assert.match(source, /writeReleaseEvidenceDirectory\(dirname\(outDir\), report, benchmarkEvidence\)/);
   assert.doesNotMatch(source, /schema: "LocalExportEvidenceManifestV1"/);
@@ -128,6 +154,81 @@ test("local-export browser evidence observes real dialog states and doubles ever
   assert.doesNotMatch(source,
     /document\.documentElement\.style\.setProperty\("font-size", "200%", "important"\)/);
   assert.doesNotMatch(source, /deviceScaleFactor:\s*2/);
+  assert.match(source,
+    /observeMobileAppbarPopover[\s\S]*?fullyInViewport[\s\S]*?hit === item \|\| item\.contains\(hit\)[\s\S]*?allItemsReachable/,
+    "each popover item must be fully visible and win its own pointer hit-test");
+  assert.match(source,
+    /await bootData\(mobilePage,\s*"mobile",\s*\{\s*keyboard:\s*true,\s*textScalePercent:\s*200\s*\}\)/,
+    "the mobile Data journey must run at actual 200% text and use keyboard activation");
+  assert.match(source,
+    /await reachControlByTab\(mobilePage, mobileTrigger[\s\S]*?mobilePage\.keyboard\.press\("Enter"\)/,
+    "the mobile export preview must be reached by Tab and opened with Enter");
+  assert.match(source,
+    /reachControlByTab[\s\S]*?body\.focus\(\)[\s\S]*?keyboard\.press\("Tab"\)[\s\S]*?document\.activeElement === element/,
+    "keyboard journeys must reach controls through the natural Tab order");
+  assert.doesNotMatch(source, /await mobileTrigger\.focus\(\)/);
+  assert.match(source,
+    /lastControl\.focus\(\)[\s\S]*?keyboard\.press\("Tab"\)[\s\S]*?document\.activeElement === firstControl/,
+    "Tab from the final control must wrap exactly to the first control");
+  assert.match(source,
+    /firstControl\.focus\(\)[\s\S]*?keyboard\.press\("Shift\+Tab"\)[\s\S]*?document\.activeElement === lastControl/,
+    "Shift+Tab from the first control must wrap exactly to the final control");
+  assert.match(source,
+    /outside\.focus\(\)[\s\S]*?document\.activeElement !== outside[\s\S]*?activeDialog\.contains/,
+    "content outside the modal must remain inert to focus");
+  assert.match(source,
+    /keyboard\.press\("Space"\)[\s\S]*?keyboard\.press\("Escape"\)/,
+    "the mobile certificate must exercise activation and dismissal keys");
+  assert.match(source, /pdfTextMatchesExactSequence\(printText, orderedPrintValues\)/,
+    "the PDF certificate must compare the complete normalized print document");
+  assert.match(source,
+    /selectedRecordId[\s\S]*?recordFieldPairs[\s\S]*?recordHeadings[\s\S]*?recordPreviewRows/,
+    "the record journey must bind identity, headings, and values");
+  assert.match(source, /recordCsvRows[\s\S]*?expectedRecordCsv/,
+    "the record journey must read back its exact CSV");
+  assert.match(source, /recordPrintBaseline[\s\S]*?printCalls === recordPrintBaseline \+ 1/,
+    "the record journey must invoke native Print");
+  assert.match(source,
+    /const keyboardAssertions = \[\];[\s\S]*?assertions:\s*keyboardAssertions/,
+    "keyboard manifest assertions must be populated only by observed checks");
+  assert.doesNotMatch(source, /assertions:\s*\[\s*"Enter opens the export preview/,
+    "the certificate must not hardcode an unobserved Enter assertion");
+  assert.doesNotMatch(styles,
+    /@media \(max-width: 480px\)[\s\S]*?\.appbar\s*\{[^}]*overflow-x:\s*auto;/,
+    "the compact app bar must not require horizontal scrolling");
+  assert.match(styles,
+    /@media \(max-width: 480px\)[\s\S]*?\.appbar\s*\{[^}]*flex-wrap:\s*wrap;[^}]*overflow:\s*visible;/,
+    "the compact app bar must reflow all controls visibly");
+  assert.match(source,
+    /appbarFitsViewport[\s\S]*?scrollWidth[\s\S]*?clientWidth/,
+    "the mobile certificate must measure app-bar internal overflow");
+  assert.match(source,
+    /targetActions[\s\S]*?rect\.left >= 0[\s\S]*?rect\.right <= innerWidth[\s\S]*?hit === element/,
+    "each export action must be fully visible and win its own hit-test");
+  assert.match(source, /dialogInternalHorizontalOverflow/,
+    "the mobile certificate must measure dialog-level horizontal overflow");
+  assert.match(styles,
+    /@media \(max-width: 480px\)[\s\S]*?:is\(\.appbar-menu,\.appbar-theme-menu\)\s*\{[^}]*max-width:\s*calc\(100vw - 16px\);[^}]*max-height:\s*calc\(100dvh - 64px\);[^}]*overflow:\s*auto;/,
+    "mobile app and theme menus must remain bounded and scroll within the viewport");
+  assert.match(styles,
+    /@media \(max-width: 720px\)[\s\S]*?\.dataview-header-actions\s*\{[^}]*width:\s*100%;[^}]*min-width:\s*0;/,
+    "the wrapped Data actions must shrink before their internal horizontal scroll is used");
+});
+
+test("compact export controls truly reflow below the wrapped app bar", async () => {
+  const styles = await readFile(new URL("packages/shell/src/app/styles.css", root), "utf8");
+  const exportStyles = await readFile(new URL(
+    "packages/shell/src/app/ExportDialog.css", root,
+  ), "utf8");
+  const compact = styles.slice(styles.indexOf("@media (max-width: 480px)"));
+  assert.match(compact, /\.appbar-theme\s*\{[^}]*position:\s*static;/);
+  assert.match(compact,
+    /\.appbar-theme-menu\s*\{[^}]*top:\s*100%;[^}]*left:\s*8px;[^}]*right:\s*8px;[^}]*width:\s*auto;/);
+  assert.match(compact, /\.rail\s*\{[^}]*position:\s*absolute;[^}]*top:\s*0;/);
+  assert.match(compact,
+    /\.appbar-theme-btn\s+\.appbar-action-label\s*\{[^}]*display:\s*none;/);
+  assert.match(exportStyles,
+    /\.export-redaction-options\s*\{[^}]*flex-wrap:\s*wrap;[^}]*overflow-x:\s*visible;/);
 });
 
 test("shared product-gate helpers bind override, final origin, and manifest entry", () => {

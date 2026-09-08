@@ -1,11 +1,35 @@
 /** @vitest-environment jsdom */
 import { act, useRef, useState } from "react";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { createRoot } from "react-dom/client";
 import { expect, it } from "vitest";
 import { ModalDialog } from "../src/app/ModalDialog";
 import "../src/app/styles.css";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+it("keeps actionable toasts inside the inert app subtree", async () => {
+  const appSource = readFileSync(resolve(process.cwd(), "src/app/App.tsx"), "utf8");
+  expect(appSource).not.toContain('createPortal(<div className="toasts"');
+  function Probe(): React.JSX.Element {
+    return <div className="app">
+      <div className="toasts"><button className="toast-action">Export now</button></div>
+      <ModalDialog className="probe-dialog" backdropClassName="modal-backdrop"
+        ariaLabel="Probe" onClose={() => undefined}><button>Inside action</button></ModalDialog>
+    </div>;
+  }
+  const host = document.createElement("div");
+  host.id = "root";
+  document.body.replaceChildren(host);
+  const root = createRoot(host);
+  await act(async () => root.render(<Probe />));
+  const app = host.querySelector<HTMLElement>(".app")!;
+  expect(app.inert).toBe(true);
+  expect(app.getAttribute("aria-hidden")).toBe("true");
+  expect(app.querySelector(".toast-action")).not.toBeNull();
+  await act(async () => root.unmount());
+});
 
 it("exposes only the top modal layer to interaction and assistive technology", async () => {
   function Probe(): React.JSX.Element {

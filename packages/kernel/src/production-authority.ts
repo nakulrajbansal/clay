@@ -150,7 +150,7 @@ type ProductionStoreReaderMethod =
 
 export type ProductionStoreReader = Readonly<Pick<
   ClayStore, ProductionStoreReaderMethod
->>;
+> & { projectionSnapshot(): string }>;
 
 const PINNED_READS = Object.freeze({
   attachmentStorage: ClayStore.prototype.attachmentStorage,
@@ -181,7 +181,9 @@ const PINNED_READS = Object.freeze({
   suggestions: ClayStore.prototype.suggestions,
 });
 
-function createStoreReader(store: ClayStore): ProductionStoreReader {
+function createStoreReader(
+  store: ClayStore, projectionSnapshot: () => string,
+): ProductionStoreReader {
   const reader: ProductionStoreReader = {
     attachmentStorage: PINNED_READS.attachmentStorage.bind(store),
     attachmentsForRecord: PINNED_READS.attachmentsForRecord.bind(store),
@@ -197,6 +199,7 @@ function createStoreReader(store: ClayStore): ProductionStoreReader {
     livePanels: PINNED_READS.livePanels.bind(store),
     operationBatches: PINNED_READS.operationBatches.bind(store),
     panelProvenance: PINNED_READS.panelProvenance.bind(store),
+    projectionSnapshot,
 
     previewRelationConversion: PINNED_READS.previewRelationConversion.bind(store),
     privateMetricsSummary: PINNED_READS.privateMetricsSummary.bind(store),
@@ -420,7 +423,8 @@ export class ProductionStoreAuthority {
   ) {
     this.#driver = session.driver;
     this.#store = store;
-    this.#reader = createStoreReader(store);
+    const target = TargetAuthorityStore.open(session.driver);
+    this.#reader = createStoreReader(store, () => JSON.stringify(target.evidence()));
     this.#boot = boot;
     this.#coordinator = new ProductionMutationCoordinator(
       session.driver,
@@ -428,7 +432,7 @@ export class ProductionStoreAuthority {
       store,
       fence,
       catalogGeneration,
-      TargetAuthorityStore.open(session.driver).evidence(),
+      target.evidence(),
       leaseTtlMs,
       () => Date.now(),
     );

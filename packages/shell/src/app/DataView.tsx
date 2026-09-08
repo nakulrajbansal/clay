@@ -140,6 +140,24 @@ export function DataView(props: {
     name: string; type: string; targetTable?: string; cardinality?: "one" | "many";
   } | null>(null);
   const [renamingCol, setRenamingCol] = useState<{ from: string; value: string } | null>(null);
+  const pendingWritesRef = useRef(new Set<Promise<unknown>>());
+  const [pendingWrites, setPendingWrites] = useState(0);
+
+  const runWrite = useCallback(<T,>(operation: () => Promise<T>): Promise<T> => {
+    const pending = Promise.resolve().then(operation);
+    pendingWritesRef.current.add(pending);
+    setPendingWrites(pendingWritesRef.current.size);
+    const settled = (): void => {
+      pendingWritesRef.current.delete(pending);
+      setPendingWrites(pendingWritesRef.current.size);
+    };
+    void pending.then(settled, settled);
+    return pending;
+  }, []);
+  const waitForWrites = useCallback(async (): Promise<void> => {
+    while (pendingWritesRef.current.size > 0)
+      await Promise.allSettled([...pendingWritesRef.current]);
+  }, []);
 
   useEffect(() => { setSelectedRows(new Set()); }, [selected, search, filter, activeViewId]);
 
@@ -294,17 +312,19 @@ export function DataView(props: {
     recovery = false,
   ): Promise<boolean> => {
     if (!selected) return false;
-    try {
-      await fn();
-      await reload(selected);
-      props.onWrite(selected);
-      if (recovery) props.onRecovery?.("success");
-      return true;
-    } catch (e) {
-      if (recovery) props.onRecovery?.("failed");
-      props.onError(e instanceof Error ? e.message : String(e));
-      return false;
-    }
+    return runWrite(async () => {
+      try {
+        await fn();
+        await reload(selected);
+        props.onWrite(selected);
+        if (recovery) props.onRecovery?.("success");
+        return true;
+      } catch (e) {
+        if (recovery) props.onRecovery?.("failed");
+        props.onError(e instanceof Error ? e.message : String(e));
+        return false;
+      }
+    });
   };
 
   const cancelEdit = (): void => {
@@ -507,7 +527,9 @@ export function DataView(props: {
     } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
   };
 
-  const openCurrentViewExport = (): void => {
+  const openCurrentViewExport = async (): Promise<void> => {
+    await waitForWrites();
+    if (selected) await reload(selected);
     if (!table || !semanticTrace) {
       props.onError("Export is not ready. Reopen Data.");
       return;
@@ -516,6 +538,22 @@ export function DataView(props: {
       setExportScope(buildCurrentViewProjectionScopeV1({
         trace: semanticTrace, table, columns, search, filter, sort,
         dateAnchor: localDateAnchorV1(),
+      }));
+    } catch (error) {
+      props.onError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const openRecordExport = async (): Promise<void> => {
+    await waitForWrites();
+    if (selected) await reload(selected);
+    if (!semanticTrace || !detail || !detailTable) {
+      props.onError("Export is not ready. Reopen Data.");
+      return;
+    }
+    try {
+      setExportScope(buildRecordProjectionScopeV1({
+        trace: semanticTrace, table: detailTable, recordId: detail.id,
       }));
     } catch (error) {
       props.onError(error instanceof Error ? error.message : String(error));
@@ -591,7 +629,8 @@ export function DataView(props: {
           </label>
           {table ? <button ref={exportButtonRef} className="dataview-import"
             type="button" aria-label="Preview Print / CSV for current Data view"
-            onClick={openCurrentViewExport}>Print / CSV</button> : null}
+            disabled={pendingWrites > 0} aria-busy={pendingWrites > 0}
+            onClick={() => void openCurrentViewExport()}>Print / CSV</button> : null}
           <button className="dataview-close" aria-label="Close data view"
             title="Close (Esc)" onClick={props.onClose}>✕</button>
         </div>
@@ -925,7 +964,7 @@ export function DataView(props: {
                     );
                   })}
                   <td className="cell-actions">
-                    <button className="link" title="Open record details"
+                    <button className="link" data-id={String(r.id)}
                       aria-label={`Open ${accessibleRowLabel(table, r)} record details`}
                       onClick={() => setDetailStack([{ table: selected!, id: String(r.id) }])}>
                       open
@@ -1046,6 +1085,8 @@ export function DataView(props: {
           tables={tables}
           store={store}
           worker={worker}
+          runWrite={runWrite}
+          exportPending={pendingWrites > 0}
           onNavigate={(nextTable, id) => setDetailStack(stack => [
             ...stack, { table: nextTable, id },
           ])}
@@ -1056,19 +1097,7 @@ export function DataView(props: {
           }}
           onError={props.onError}
           onInfo={props.onInfo}
-          onExport={() => {
-            if (!semanticTrace) {
-              props.onError("Export is not ready. Reopen Data.");
-              return;
-            }
-            try {
-              setExportScope(buildRecordProjectionScopeV1({
-                trace: semanticTrace, table: detailTable, recordId: detail.id,
-              }));
-            } catch (error) {
-              props.onError(error instanceof Error ? error.message : String(error));
-            }
-          }}
+          onExport={() => void openRecordExport()}
           onConfirm={props.onConfirm}
         />
         </Suspense>

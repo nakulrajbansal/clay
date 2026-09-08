@@ -4,6 +4,7 @@ import type { ProjectionArtifactV1, ProjectionRequestV1 } from "@clay/kernel/pro
 import { ExportDialog } from "../../src/app/ExportDialog";
 import { WorkerClient } from "../../src/app/worker-client";
 import "../../src/app/styles.css";
+import "../../src/app/Operations.css";
 
 const query = new URLSearchParams(location.search);
 const workerUrl = query.get("worker");
@@ -86,7 +87,9 @@ function App(): React.JSX.Element {
     {open ? <ExportDialog
       worker={exportWorker}
       request={request}
-      fieldChoices={[{ fieldId: request.fieldIds[0]!, label: "Title" }]}
+      fieldChoices={request.fieldIds.map((fieldId, index) => ({
+        fieldId, label: index === 0 ? "Title" : `Field ${index.toString().padStart(2, "0")}`,
+      }))}
       onClose={() => setOpen(false)}
     /> : null}
   </main>;

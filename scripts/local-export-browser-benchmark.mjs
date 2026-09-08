@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import AxeBuilder from "@axe-core/playwright";
 import { createRequire } from "node:module";
 import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
@@ -7,6 +6,7 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   assertBenchmarkEvidence,
+  buildDirectoryDigest,
   canonicalEvidenceJson,
   sha256Evidence,
   summarizeBenchmarkSamples,
@@ -28,14 +28,8 @@ async function filesBelow(root, current = root) {
 
 async function harnessDigest(root) {
   const files = await filesBelow(root);
-  const hash = createHash("sha256");
-  let bytes = 0;
-  for (const file of files) {
-    const data = await readFile(join(root, file));
-    hash.update(file).update("\0").update(data);
-    bytes += data.byteLength;
-  }
-  return { harnessSha256: `sha256:${hash.digest("hex")}`, harnessBytes: bytes, files };
+  const digest = await buildDirectoryDigest(root);
+  return { harnessSha256: digest.sha256, harnessBytes: digest.bytes, files };
 }
 
 export async function buildProjectionBenchmarkHarness(outDir) {
@@ -159,6 +153,7 @@ async function rawSample(page, rows, classification) {
       incrementalMemoryBytes: Math.max(0,
         Math.round(memory.peak - memory.baseline - api.inputBytes() - outputBytes)),
       inputBytes: api.inputBytes(), outputBytes,
+      plaintextBytes: output.plaintextBytes,
     };
   }, { rows, classification });
 }
@@ -170,8 +165,15 @@ async function previewSample(page, rows, classification) {
     window.__projectionBenchmark.open();
   });
   await page.locator(".export-dialog tbody").waitFor({ timeout: 15_000 });
-  const count = await page.locator(".export-dialog tbody tr").count();
-  if (count !== rows) throw new Error(`owner preview rendered ${count} rows instead of ${rows}`);
+  const renderedRows = await page.locator(".export-dialog tbody tr").count();
+  const expectedRows = Math.min(rows, 100);
+  if (renderedRows !== expectedRows)
+    throw new Error(`owner preview rendered ${renderedRows} rows instead of page size ${expectedRows}`);
+  if (rows > expectedRows) {
+    const status = await page.locator(".projection-pagination output").textContent();
+    if (status?.replace(/,/g, "").includes(`Rows 1–${expectedRows} of ${rows}`) !== true)
+      throw new Error(`owner preview pagination status is invalid: ${status}`);
+  }
   const result = await page.evaluate(({ rows, classification }) => {
     const api = window.__projectionBenchmark;
     const milliseconds = performance.now() - window.__releaseFPreviewStarted;
@@ -183,6 +185,7 @@ async function previewSample(page, rows, classification) {
       incrementalMemoryBytes: Math.max(0,
         Math.round(memory.peak - memory.baseline - api.inputBytes() - outputBytes)),
       inputBytes: api.inputBytes(), outputBytes,
+      plaintextBytes: output.plaintextBytes,
     };
   }, { rows, classification });
   await page.locator(".export-dialog").press("Escape");
@@ -202,7 +205,7 @@ async function cancelSample(page, rows, classification) {
       rows, classification, operation: "cancel", milliseconds,
       incrementalMemoryBytes: Math.max(0,
         Math.round(memory.peak - memory.baseline - api.inputBytes())),
-      inputBytes: api.inputBytes(), outputBytes: 0,
+      inputBytes: api.inputBytes(), outputBytes: 0, plaintextBytes: 0,
     };
   }, { rows, classification });
 }
@@ -259,6 +262,9 @@ export async function runProjectionBrowserBenchmark({ browser, url, source, buil
     incrementalMemoryBytes: 64 * 1024 * 1024,
   };
   const results = summarizeBenchmarkSamples(samples);
+  const nearLimitPlaintextBytes = Math.max(...samples
+    .filter(sample => sample.rows === 5000 && sample.operation === "csv")
+    .map(sample => sample.plaintextBytes));
   const pass = results.rows1000CsvP95Ms <= limits.rows1000CsvP95Ms
     && results.rows5000CsvP95Ms <= limits.rows5000CsvP95Ms
     && results.rows5000PreviewP95Ms <= limits.rows5000PreviewP95Ms
@@ -274,8 +280,9 @@ export async function runProjectionBrowserBenchmark({ browser, url, source, buil
     fixture: {
       harnessSha256: harness.harnessSha256,
       harnessBytes: harness.harnessBytes,
-      fields: 1,
+      fields: 30,
       rows: [1000, 5000],
+      nearLimitPlaintextBytes,
     },
     methodology,
     limits,
@@ -340,15 +347,15 @@ export async function runExportDialogStateEvidence({ browser, url }) {
 }
 
 /** Fast wiring probe; release evidence always uses the fixed 30-run path above. */
-export async function smokeProjectionBrowserBenchmark({ browser, url }) {
+export async function smokeProjectionBrowserBenchmark({ browser, url, rows = 1000 }) {
   const temporaryBuild = await mkdtemp(join(tmpdir(), "clay-release-f-benchmark-smoke-"));
   try {
     const harness = await buildProjectionBenchmarkHarness(temporaryBuild);
-    const { context, page, errors } = await openHarness(browser, url, harness, 1000);
+    const { context, page, errors } = await openHarness(browser, url, harness, rows);
     try {
-      const csv = normalizeSample(await rawSample(page, 1000, "cold"));
-      const preview = normalizeSample(await previewSample(page, 1000, "cold"));
-      const cancel = normalizeSample(await cancelSample(page, 1000, "cold"));
+      const csv = normalizeSample(await rawSample(page, rows, "cold"));
+      const preview = normalizeSample(await previewSample(page, rows, "cold"));
+      const cancel = normalizeSample(await cancelSample(page, rows, "cold"));
       if (errors.length) throw new Error(errors.join("; "));
       return { csv, preview, cancel, harnessSha256: harness.harnessSha256 };
     } finally {

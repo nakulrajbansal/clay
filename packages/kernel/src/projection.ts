@@ -1,4 +1,5 @@
 import {
+  ProjectionManifestV1 as ProjectionManifestSchema,
   ProjectionPlaintextV1 as ProjectionPlaintextSchema,
   ProjectionRequestV1 as ProjectionRequestSchema,
   type ProjectionManifestV1,
@@ -34,12 +35,49 @@ export type ProjectionArtifactV1 = Readonly<{
   csv: Uint8Array;
 }>;
 
+export type ProjectionTransportV1 = Readonly<{
+  plaintext: Uint8Array;
+  csv: Uint8Array;
+}>;
+
+export function projectionTransportV1(artifact: ProjectionArtifactV1): ProjectionTransportV1 {
+  return Object.freeze({ plaintext: artifact.plaintext, csv: artifact.csv });
+}
+
 /** The narrow read-only Store surface accepted by the one projection API. */
 export type ProjectionReadableStoreV1 = Readonly<{
   queryBounded(query: Query, budget: QueryByteBudget): QueryRow[];
   registrySnapshot(): Registry;
   semanticSchemaTrace(): SemanticSchemaTraceV1;
+  projectionSnapshot?(): string;
 }>;
+
+function bindProjectionSnapshot(source: ProjectionReadableStoreV1): {
+  source: ProjectionReadableStoreV1;
+  verify: () => void;
+} {
+  const expected = source.projectionSnapshot?.() ?? null;
+  if (expected === null) return { source, verify: () => undefined };
+  const verify = (): void => {
+    if (source.projectionSnapshot?.() !== expected)
+      throw new ClayError("E_CONFLICT", "Data changed while Clay prepared the export. Try again.");
+  };
+  const read = <T,>(operation: () => T): T => {
+    verify();
+    const value = operation();
+    verify();
+    return value;
+  };
+  return {
+    source: Object.freeze({
+      projectionSnapshot: () => expected,
+      queryBounded: (query, budget) => read(() => source.queryBounded(query, budget)),
+      registrySnapshot: () => read(() => source.registrySnapshot()),
+      semanticSchemaTrace: () => read(() => source.semanticSchemaTrace()),
+    }),
+    verify,
+  };
+}
 
 export type ProjectionCooperativeOptionsV1 = Readonly<{
   isCancelled?: () => boolean;
@@ -62,6 +100,7 @@ const textEncoder = new TextEncoder();
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 const CSV_BOM = new Uint8Array([0xef, 0xbb, 0xbf]);
 const FORMULA_PREFIX = /^[=+\-@\t\r]/;
+const CSV_MISMATCH = "CSV bytes do not match canonical projection";
 
 function invalid(message: string, detail?: unknown): ClayError {
   return new ClayError("E_VALIDATION", message, detail);
@@ -108,27 +147,40 @@ function freezeJson<T>(value: T): T {
   return Object.freeze(value);
 }
 
-export function encodeProjectionPlaintextV1(value: ProjectionPlaintextV1): Uint8Array {
-  const parsed = ProjectionPlaintextSchema.safeParse(value);
-  if (!parsed.success) throw invalid("invalid projection", parsed.error.issues);
-  const bytes = textEncoder.encode(canonicalProjectionJsonV1(parsed.data));
+function freezeProjectionPlaintextV1(value: ProjectionPlaintextV1): ProjectionPlaintextV1 {
+  freezeJson(value.manifest);
+  for (const row of value.rows) Object.freeze(row);
+  Object.freeze(value.rows);
+  return Object.freeze(value);
+}
+
+function encodeConstructedProjectionPlaintextV1(value: ProjectionPlaintextV1): Uint8Array {
+  const bytes = textEncoder.encode(canonicalProjectionJsonV1(value));
   if (bytes.byteLength > PROJECTION_LIMITS_V1.plaintextBytes)
     throw limit("8 MiB plaintext limit exceeded; narrow the view.");
   return bytes;
 }
 
+export function encodeProjectionPlaintextV1(value: ProjectionPlaintextV1): Uint8Array {
+  const parsed = ProjectionPlaintextSchema.safeParse(value);
+  if (!parsed.success) throw invalid("invalid projection", parsed.error.issues);
+  return encodeConstructedProjectionPlaintextV1(parsed.data);
+}
+
 export function decodeProjectionPlaintextV1(bytes: Uint8Array): ProjectionPlaintextV1 {
   if (!(bytes instanceof Uint8Array) || bytes.byteLength > PROJECTION_LIMITS_V1.plaintextBytes)
     throw invalid("Projection bytes are missing or over 8 MiB");
+  let text: string;
   let unknown: unknown;
-  try { unknown = JSON.parse(utf8Decoder.decode(bytes)); }
-  catch (error) { throw invalid("Projection is not valid UTF-8 JSON", error); }
+  try {
+    text = utf8Decoder.decode(bytes);
+    unknown = JSON.parse(text);
+  } catch (error) { throw invalid("Projection is not valid UTF-8 JSON", error); }
   const parsed = ProjectionPlaintextSchema.safeParse(unknown);
   if (!parsed.success) throw invalid("invalid projection", parsed.error.issues);
-  const canonical = textEncoder.encode(canonicalProjectionJsonV1(parsed.data));
-  if (!equalBytes(bytes, canonical))
+  if (text !== JSON.stringify(parsed.data))
     throw invalid("Projection bytes are not canonical");
-  return freezeJson(parsed.data);
+  return freezeProjectionPlaintextV1(parsed.data);
 }
 
 export function projectionCsvTextV1(text: string): string {
@@ -140,24 +192,77 @@ function csvCell(text: string): string {
   return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 }
 
+function utf8ByteLength(text: string): number {
+  let bytes = 0;
+  for (let index = 0; index < text.length; index++) {
+    const code = text.charCodeAt(index);
+    if (code <= 0x7f) bytes++;
+    else if (code <= 0x7ff) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff
+        && index + 1 < text.length) {
+      const next = text.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) { bytes += 4; index++; }
+      else bytes += 3;
+    } else bytes += 3;
+  }
+  return bytes;
+}
+
 function encodeCsv(fields: ProjectionManifestV1["fields"], rows: readonly (readonly string[])[]): {
   bytes: Uint8Array; formulaNeutralizedCells: number;
 } {
   let formulaNeutralizedCells = 0;
-  const encodeCell = (text: string): string => {
-    if (projectionCsvTextV1(text) !== text) formulaNeutralizedCells++;
-    return csvCell(text);
-  };
-  const lines = [
-    fields.map(field => encodeCell(field.label)).join(","),
-    ...rows.map(row => row.map(encodeCell).join(",")),
-  ];
-  const body = textEncoder.encode(`${lines.join("\r\n")}\r\n`);
-  const bytes = new Uint8Array(CSV_BOM.byteLength + body.byteLength);
-  bytes.set(CSV_BOM); bytes.set(body, CSV_BOM.byteLength);
-  if (bytes.byteLength > PROJECTION_LIMITS_V1.plaintextBytes)
+  const line = (values: readonly string[], countFormulas: boolean): string =>
+    `${values.map(text => {
+      if (countFormulas && projectionCsvTextV1(text) !== text) formulaNeutralizedCells++;
+      return csvCell(text);
+    }).join(",")}\r\n`;
+  const header = fields.map(field => field.label);
+  let bodyBytes = utf8ByteLength(line(header, true));
+  for (const row of rows) bodyBytes += utf8ByteLength(line(row, true));
+  const totalBytes = CSV_BOM.byteLength + bodyBytes;
+  if (totalBytes > PROJECTION_LIMITS_V1.plaintextBytes)
     throw limit("8 MiB local export limit exceeded; narrow the view.");
+  const bytes = new Uint8Array(totalBytes);
+  bytes.set(CSV_BOM);
+  let offset = CSV_BOM.byteLength;
+  const writeLine = (values: readonly string[]): void => {
+    const text = line(values, false);
+    const result = textEncoder.encodeInto(text, bytes.subarray(offset));
+    if (result.read !== text.length) throw new ClayError("E_INTERNAL", "CSV buffer sizing failed");
+    offset += result.written;
+  };
+  writeLine(header);
+  for (const row of rows) writeLine(row);
+  if (offset !== bytes.byteLength) throw new ClayError("E_INTERNAL", "CSV byte count changed");
   return { bytes, formulaNeutralizedCells };
+}
+
+function verifyCsv(
+  fields: ProjectionManifestV1["fields"], rows: readonly (readonly string[])[],
+  bytes: Uint8Array,
+): number {
+  if (bytes.byteLength < CSV_BOM.byteLength
+      || CSV_BOM.some((byte, index) => bytes[index] !== byte))
+    throw invalid(CSV_MISMATCH);
+  let text: string;
+  try { text = utf8Decoder.decode(bytes.subarray(CSV_BOM.byteLength)); }
+  catch (error) { throw invalid("CSV bytes are not valid UTF-8", error); }
+  let offset = 0;
+  let formulaNeutralizedCells = 0;
+  const verifyLine = (values: readonly string[]): void => {
+    const expected = `${values.map(value => {
+      if (projectionCsvTextV1(value) !== value) formulaNeutralizedCells++;
+      return csvCell(value);
+    }).join(",")}\r\n`;
+    if (!text.startsWith(expected, offset))
+      throw invalid(CSV_MISMATCH);
+    offset += expected.length;
+  };
+  verifyLine(fields.map(field => field.label));
+  for (const row of rows) verifyLine(row);
+  if (offset !== text.length) throw invalid(CSV_MISMATCH);
+  return formulaNeutralizedCells;
 }
 
 export function encodeProjectionCsvV1(
@@ -169,34 +274,46 @@ export function encodeProjectionCsvV1(
 }
 
 function uint8View(value: unknown): Uint8Array | null {
-  if (Object.prototype.toString.call(value) !== "[object Uint8Array]") return null;
-  const view = value as { buffer?: unknown; byteOffset?: unknown; byteLength?: unknown };
-  if (Object.prototype.toString.call(view.buffer) !== "[object ArrayBuffer]"
-      || typeof view.byteOffset !== "number" || typeof view.byteLength !== "number") return null;
-  return new Uint8Array(view.buffer as ArrayBuffer, view.byteOffset, view.byteLength);
+  const view = value as Uint8Array;
+  if (!ArrayBuffer.isView(view) || view[Symbol.toStringTag] !== "Uint8Array") return null;
+  return new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
 }
 
-/** Parse a transported artifact and prove that its CSV is exactly the
- * deterministic encoding declared by its canonical plaintext manifest. */
-export function decodeProjectionArtifactV1(
-  artifact: ProjectionArtifactV1,
-): ProjectionPlaintextV1 {
-  const plaintextBytes = artifact && typeof artifact === "object"
-    ? uint8View(artifact.plaintext) : null;
-  const csvBytes = artifact && typeof artifact === "object"
-    ? uint8View(artifact.csv) : null;
+function decodeProjectionBytesV1(artifact: ProjectionTransportV1): ProjectionPlaintextV1 {
+  const plaintextBytes = uint8View(artifact.plaintext);
+  const csvBytes = uint8View(artifact.csv);
   if (!plaintextBytes || !csvBytes)
     throw invalid("Projection bytes are missing");
   const plaintext = decodeProjectionPlaintextV1(plaintextBytes);
-  if (!artifact.projection
-      || !equalBytes(encodeProjectionPlaintextV1(artifact.projection), plaintextBytes))
-    throw invalid("Projection preview does not match canonical bytes");
-  const csv = encodeCsv(plaintext.manifest.fields, plaintext.rows);
-  if (!equalBytes(csv.bytes, csvBytes))
-    throw invalid("CSV bytes do not match canonical projection");
+  const formulaNeutralizedCells = verifyCsv(
+    plaintext.manifest.fields, plaintext.rows, csvBytes,
+  );
   if (plaintext.manifest.csv.byteCount !== csvBytes.byteLength
-      || plaintext.manifest.csv.formulaNeutralizedCells !== csv.formulaNeutralizedCells)
+      || plaintext.manifest.csv.formulaNeutralizedCells !== formulaNeutralizedCells)
     throw invalid("CSV manifest does not match bytes");
+  return plaintext;
+}
+
+export function decodeProjectionTransportV1(
+  transport: ProjectionTransportV1,
+): ProjectionPlaintextV1 {
+  if (!isPlainRecord(transport) || Reflect.ownKeys(transport).length !== 2
+  )
+    throw invalid("Projection transport must contain only canonical plaintext and CSV bytes");
+  return decodeProjectionBytesV1(transport);
+}
+
+/** Parse an in-process artifact and prove its preview and CSV match canonical bytes. */
+export function decodeProjectionArtifactV1(
+  artifact: ProjectionArtifactV1,
+): ProjectionPlaintextV1 {
+  if (!isPlainRecord(artifact) || Reflect.ownKeys(artifact).length !== 3
+      || !Object.hasOwn(artifact, "projection"))
+    throw invalid("Projection artifact is malformed");
+  const plaintext = decodeProjectionBytesV1(artifact);
+  if (!artifact.projection || !equalBytes(
+    encodeProjectionPlaintextV1(artifact.projection), artifact.plaintext,
+  )) throw invalid("Projection preview does not match canonical bytes");
   return plaintext;
 }
 
@@ -651,17 +768,54 @@ function prepareProjection(
   };
 }
 
-function finishProjection(
-  prepared: PreparedProjectionV1, canonicalRows: QueryRow[],
+function streamableCurrentView(prepared: PreparedProjectionV1): boolean {
+  return prepared.request.kind === "current_view" && prepared.namedView !== null
+    && prepared.namedView.search === "" && prepared.namedView.filter === null
+    && prepared.namedView.sort === null;
+}
+
+async function loadCurrentOutputRowsCooperative(
+  source: ProjectionReadableStoreV1, prepared: PreparedProjectionV1,
+  budget: QueryByteBudget, options: ProjectionCooperativeOptionsV1,
+): Promise<string[][]> {
+  if (!streamableCurrentView(prepared))
+    throw new ClayError("E_INTERNAL", "streaming projection received a filtered or sorted view");
+  const rows: string[][] = [];
+  let sourceRows = 0;
+  let cursor: string | null = null;
+  const yieldControl = options.yieldControl
+    ?? (() => new Promise<void>(resolve => setTimeout(resolve, 0)));
+  for (;;) {
+    cancelled(options);
+    const remainingWithSentinel = PROJECTION_LIMITS_V1.sourceRows + 1 - sourceRows;
+    const requestLimit = Math.min(500, remainingWithSentinel);
+    const page = pageRows(source, prepared.table, prepared.materializedNames,
+      cursor ? { field: "id", op: "gt", value: cursor } : null, requestLimit, budget);
+    sourceRows += page.length;
+    if (sourceRows > PROJECTION_LIMITS_V1.sourceRows)
+      throw limit("This Data view has more than 20,000 source rows; Clay cannot prove completeness. Narrow Data before export.");
+    rows.push(...outputRows(page, prepared.columns,
+      prepared.request.options.includeRecordIds, prepared.redactedNames));
+    if (rows.length > PROJECTION_LIMITS_V1.rows)
+      throw limit("This export has more than 5,000 matching rows; narrow the Data view.");
+    if (page.length < requestLimit) return rows;
+    cursor = String(page.at(-1)!.id);
+    await yieldControl();
+    cancelled(options);
+  }
+}
+
+function finishProjectionRows(
+  prepared: PreparedProjectionV1, rows: string[][],
 ): ProjectionArtifactV1 {
   const {
     request, schemaVersion, table, columns, dependencies, redactedNames, view,
   } = prepared;
-  if (canonicalRows.length > PROJECTION_LIMITS_V1.rows)
+  if (rows.length > PROJECTION_LIMITS_V1.rows)
     throw limit("This export has more than 5,000 matching rows; narrow the Data view.");
 
   const fields = makeOutputFields(columns, request.options.includeRecordIds, redactedNames);
-  const rows = outputRows(canonicalRows, columns, request.options.includeRecordIds, redactedNames);
+
   const csv = encodeCsv(fields, rows);
   const plaintext: ProjectionPlaintextV1 = {
     manifest: {
@@ -695,9 +849,22 @@ function finishProjection(
     rows,
     schema: "ProjectionPlaintextV1",
   };
-  const projection = freezeJson(ProjectionPlaintextSchema.parse(plaintext));
-  const plaintextBytes = encodeProjectionPlaintextV1(projection);
+  const manifest = ProjectionManifestSchema.parse(plaintext.manifest);
+  if (rows.length !== manifest.rowCount || rows.some(row =>
+    row.length !== manifest.fieldCount || row.some(value => typeof value !== "string")))
+    throw new ClayError("E_INTERNAL", "constructed projection rows do not match the manifest");
+  const projection = freezeProjectionPlaintextV1({ ...plaintext, manifest });
+  const plaintextBytes = encodeConstructedProjectionPlaintextV1(projection);
   return Object.freeze({ projection, plaintext: plaintextBytes, csv: csv.bytes });
+}
+
+function finishProjection(
+  prepared: PreparedProjectionV1, canonicalRows: QueryRow[],
+): ProjectionArtifactV1 {
+  return finishProjectionRows(prepared, outputRows(
+    canonicalRows, prepared.columns, prepared.request.options.includeRecordIds,
+    prepared.redactedNames,
+  ));
 }
 
 function recordRows(
@@ -716,6 +883,8 @@ function recordRows(
 export function projectPlaintextV1(
   source: ProjectionReadableStoreV1, input: ProjectionRequestV1,
 ): ProjectionArtifactV1 {
+  const snapshot = bindProjectionSnapshot(source);
+  source = snapshot.source;
   const prepared = prepareProjection(source, input);
   const budget = sourceBudget();
   const rows = prepared.request.kind === "record"
@@ -724,6 +893,7 @@ export function projectPlaintextV1(
       source, prepared.table, prepared.materializedNames,
       prepared.columns.map(column => column.name), prepared.namedView!, budget,
     );
+  snapshot.verify();
   return finishProjection(prepared, rows);
 }
 
@@ -734,8 +904,16 @@ export async function projectPlaintextV1Cooperative(
   options: ProjectionCooperativeOptionsV1 = {},
 ): Promise<ProjectionArtifactV1> {
   cancelled(options);
+  const snapshot = bindProjectionSnapshot(source);
+  source = snapshot.source;
   const prepared = prepareProjection(source, input);
   const budget = sourceBudget();
+  if (streamableCurrentView(prepared)) {
+    const output = await loadCurrentOutputRowsCooperative(source, prepared, budget, options);
+    cancelled(options);
+    snapshot.verify();
+    return finishProjectionRows(prepared, output);
+  }
   const rows = prepared.request.kind === "record"
     ? recordRows(source, prepared, budget)
     : await loadCurrentRowsCooperative(
@@ -743,5 +921,6 @@ export async function projectPlaintextV1Cooperative(
       prepared.columns.map(column => column.name), prepared.namedView!, budget, options,
     );
   cancelled(options);
+  snapshot.verify();
   return finishProjection(prepared, rows);
 }

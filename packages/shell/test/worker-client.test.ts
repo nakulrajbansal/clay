@@ -118,12 +118,14 @@ describe("WorkerClient daily-work boundary", () => {
 });
 
 describe("WorkerClient local export boundary", () => {
-  it("decodes a structured-cloned artifact into a recursively frozen canonical projection", async () => {
-    const artifact = transportedArtifact();
-    expect(Object.isFrozen(artifact.projection)).toBe(false);
-    const { client, posted } = harness(message =>
-      message.op === "projectPlaintextV1" ? artifact : null);
-    const request = {
+  it("accepts canonical bytes-only transport without copying transferred buffers", async () => {
+    const transport = {
+      plaintext: projectionPlaintext.slice(),
+      csv: projectionCsv.slice(),
+    };
+    const { client } = harness(message =>
+      message.op === "projectPlaintextV1" ? transport : null);
+    const result = await client.projectExport({
       schema: 1,
       kind: "record",
       expectedSchemaVersion: 2,
@@ -131,19 +133,16 @@ describe("WorkerClient local export boundary", () => {
       fieldIds: ["fld_018f0000-0000-7000-8000-000000000002"],
       recordId: "018f0000-0000-7000-8000-000000000003",
       options: { includeRecordIds: false, redactedFieldIds: [] },
-    } satisfies ProjectionRequestV1;
-    const result = await client.projectExport(request);
-    expect(result).not.toBe(artifact);
+    });
     expect(result.projection).toEqual(decodeProjectionPlaintextV1(projectionPlaintext));
+    expect(result.plaintext).toBe(transport.plaintext);
+    expect(result.csv).toBe(transport.csv);
     expect(Object.isFrozen(result)).toBe(true);
     expectJsonDeepFrozen(result.projection);
-    expect(posted).toHaveLength(1);
-    expect(posted[0]).toMatchObject({ op: "projectPlaintextV1", payload: request });
   });
 
-  it("rejects a transported preview tampered after the worker encoded its bytes", async () => {
+  it("rejects a redundant projection graph outside the closed worker transport", async () => {
     const artifact = transportedArtifact();
-    (artifact.projection.manifest as { title: string }).title += " tampered";
     const { client } = harness(message =>
       message.op === "projectPlaintextV1" ? artifact : null);
     await expect(client.projectExport({
@@ -154,7 +153,7 @@ describe("WorkerClient local export boundary", () => {
       fieldIds: ["fld_018f0000-0000-7000-8000-000000000002"],
       recordId: "018f0000-0000-7000-8000-000000000003",
       options: { includeRecordIds: false, redactedFieldIds: [] },
-    })).rejects.toThrow(/preview does not match/i);
+    })).rejects.toThrow(/transport/i);
   });
 
   it("rejects export bytes that arrive without the worker-validated preview", async () => {

@@ -36,6 +36,11 @@ async function removeIsolatedWorktree(checkout) {
   let removalError;
   try { git(repoRoot, "worktree", "remove", "--force", checkout); return; }
   catch (error) { removalError = error; }
+  try { await rm(checkout, { recursive: true, force: true }); }
+  catch (fallbackError) {
+    throw new AggregateError([removalError, fallbackError],
+      "Git and owned-directory worktree removal both failed");
+  }
   const checkoutExists = await pathExists(checkout);
   const registered = git(repoRoot, "worktree", "list", "--porcelain");
   if (worktreeRemovalComplete(checkout, checkoutExists, registered)) return;

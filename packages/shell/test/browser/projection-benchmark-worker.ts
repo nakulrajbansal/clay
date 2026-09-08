@@ -1,6 +1,7 @@
 import { ClayError } from "@clay/kernel/errors";
 import {
   projectPlaintextV1Cooperative,
+  projectionTransportV1,
   type ProjectionReadableStoreV1,
   type ProjectionRequestV1,
 } from "@clay/kernel/projection";
@@ -9,18 +10,26 @@ import type {
 } from "@clay/kernel";
 
 const TABLE_ID = "tbl_018f0000-0000-7000-8000-000000000001" as TableId;
-const FIELD_ID = "fld_018f0000-0000-7000-8000-000000000002" as FieldId;
-const TABLE: RegTable = {
-  name: "benchmark_rows",
-  columns: [{ name: "title", label: "Title", type: "text", required: true }],
-};
+const FIELD_COUNT = 30;
+const FIELD_IDS = Array.from({ length: FIELD_COUNT }, (_, index) =>
+  `fld_018f0000-0000-7000-8000-${(index + 2).toString(16).padStart(12, "0")}` as FieldId);
+const COLUMNS: RegTable["columns"] = FIELD_IDS.map((_fieldId, index) => ({
+  name: index === 0 ? "title" : `field_${index.toString().padStart(2, "0")}`,
+  label: index === 0 ? "Title" : `Field ${index.toString().padStart(2, "0")}`,
+  type: "text" as const,
+  required: true,
+}));
+const TABLE: RegTable = { name: "benchmark_rows", columns: COLUMNS };
 const TRACE: SemanticSchemaTraceV1 = {
   v: 1,
   atVersion: 1,
   tables: [{ tableId: TABLE_ID, name: TABLE.name, label: "Benchmark rows",
     aliases: [], state: "visible" }],
-  fields: [{ tableId: TABLE_ID, fieldId: FIELD_ID, tableName: TABLE.name,
-    fieldName: "title", label: "Title", aliases: [], state: "visible" }],
+  fields: COLUMNS.map((column, index) => ({
+    tableId: TABLE_ID, fieldId: FIELD_IDS[index]!, tableName: TABLE.name,
+    fieldName: column.name, label: column.label ?? column.name,
+    aliases: [], state: "visible" as const,
+  })),
   relationships: [],
   opBindings: [],
 };
@@ -37,6 +46,15 @@ function indexFromId(id: string): number {
   return Number.parseInt(id.slice(-12), 16);
 }
 
+const VALUE_FILL = "x".repeat(44);
+function fieldValue(rowIndex: number, fieldIndex: number): string {
+  if (fieldIndex === 0) return `Benchmark row ${rowIndex.toString().padStart(4, "0")}`;
+  return `${rowIndex.toString().padStart(4, "0")}:${fieldIndex
+    .toString().padStart(2, "0")}:${VALUE_FILL}`;
+}
+
+const FIELD_INDEX = new Map(COLUMNS.map((column, index) => [column.name, index]));
+
 function queryRows(query: Query, budget: QueryByteBudget): QueryRow[] {
   if (rowCount === null) throw new ClayError("E_INTERNAL", "benchmark source is not initialized");
   if (query.from !== TABLE.name) throw new ClayError("E_TABLE_UNKNOWN", "unknown benchmark table");
@@ -52,20 +70,33 @@ function queryRows(query: Query, budget: QueryByteBudget): QueryRow[] {
   lastExclusive = Math.min(lastExclusive, first + limit);
   const rows: QueryRow[] = [];
   let bytes = 0;
+  const selectedFields = query.select ?? ["id", ...COLUMNS.map(column => column.name)];
   for (let index = first; index < lastExclusive; index++) {
-    const id = rowId(index);
-    const title = `Benchmark row ${index.toString().padStart(4, "0")}`;
-    const rowBytes = encoder.encode(id).byteLength + encoder.encode(title).byteLength;
+    const row: QueryRow = {};
+    let rowBytes = 0;
+    for (const field of selectedFields) {
+      const value = field === "id" ? rowId(index)
+        : FIELD_INDEX.has(field) ? fieldValue(index, FIELD_INDEX.get(field)!) : null;
+      row[field] = value;
+      if (typeof value === "string") rowBytes += encoder.encode(value).byteLength;
+    }
     if (rowBytes > budget.maxRowBytes || bytes + rowBytes > budget.remainingBytes)
       throw new ClayError("E_LIMIT", budget.limitLabel);
     bytes += rowBytes;
-    const row: QueryRow = {};
-    for (const field of query.select ?? ["id", "title"])
-      row[field] = field === "id" ? id : field === "title" ? title : null;
     rows.push(row);
   }
   budget.remainingBytes -= bytes;
   return rows;
+}
+
+function fixtureInputBytes(rows: number): number {
+  let bytes = 0;
+  for (let row = 0; row < rows; row++) {
+    bytes += encoder.encode(rowId(row)).byteLength;
+    for (let field = 0; field < FIELD_COUNT; field++)
+      bytes += encoder.encode(fieldValue(row, field)).byteLength;
+  }
+  return bytes;
 }
 
 const source: ProjectionReadableStoreV1 = Object.freeze({
@@ -99,11 +130,11 @@ self.onmessage = (event: MessageEvent): void => {
             kind: "current_view",
             expectedSchemaVersion: 1,
             tableId: TABLE_ID,
-            fieldIds: [FIELD_ID],
+            fieldIds: FIELD_IDS,
             view: { search: "", filter: null, sort: null, dateAnchor: "2026-09-06" },
             options: { includeRecordIds: false, redactedFieldIds: [] },
           } satisfies ProjectionRequestV1,
-          inputBytes: rows * 56,
+          inputBytes: fixtureInputBytes(rows),
         });
         return;
       }
@@ -122,7 +153,7 @@ self.onmessage = (event: MessageEvent): void => {
           request.payload as ProjectionRequestV1,
           { isCancelled: () => cancelled.has(request.id) },
         );
-        post(request.id, true, artifact);
+        post(request.id, true, projectionTransportV1(artifact));
       } finally {
         active.delete(request.id);
         cancelled.delete(request.id);

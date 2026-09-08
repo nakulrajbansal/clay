@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type RefObject } from "react";
+import { flushSync } from "react-dom";
 import {
   projectionCsvTextV1,
   type ProjectionArtifactV1, type ProjectionPlaintextV1, type ProjectionRequestV1,
@@ -20,6 +21,7 @@ const FILTER_LABELS: Record<string, string> = {
   is_null: "is empty", not_null: "is not empty", within_days: "is within days",
   older_than_days: "is older than days",
 };
+const PREVIEW_PAGE_SIZE = 100;
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -79,6 +81,8 @@ export function ExportDialog(props: {
   const [artifact, setArtifact] = useState<ProjectionArtifactV1 | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
+  const [page, setPage] = useState(0);
+  const printAll = page < 0;
   const redactionKey = redactedFieldIds.join("\u0000");
 
   useEffect(() => {
@@ -86,6 +90,7 @@ export function ExportDialog(props: {
     const controller = new AbortController();
     setArtifact(null);
     setError(null);
+    setPage(0);
     const request = {
       ...props.request,
       options: { includeRecordIds, redactedFieldIds: [...redactedFieldIds] },
@@ -100,9 +105,26 @@ export function ExportDialog(props: {
     return () => { active = false; controller.abort(); };
   }, [props.worker, props.request, includeRecordIds, redactionKey, retry]);
 
+  useEffect(() => {
+    const onPrint = (event: Event): void => flushSync(() =>
+      setPage(event.type === "beforeprint" ? -1 : 0));
+    window.addEventListener("beforeprint", onPrint);
+    window.addEventListener("afterprint", onPrint);
+    return () => {
+      window.removeEventListener("beforeprint", onPrint);
+      window.removeEventListener("afterprint", onPrint);
+    };
+  }, []);
+
   const redacted = useMemo(() => new Set(redactedFieldIds), [redactionKey]);
   const plaintext = artifact?.projection ?? null;
   const manifest = plaintext?.manifest ?? null;
+  const pageCount = Math.max(1, Math.ceil((manifest?.rowCount ?? 0) / PREVIEW_PAGE_SIZE));
+  const currentPage = Math.max(page, 0);
+  const pageStart = currentPage * PREVIEW_PAGE_SIZE;
+  const pageEnd = Math.min(pageStart + PREVIEW_PAGE_SIZE, manifest?.rowCount ?? 0);
+  const visibleRows = printAll ? plaintext?.rows ?? []
+    : plaintext?.rows.slice(pageStart, pageEnd) ?? [];
 
   const toggleRedaction = (fieldId: string): void => {
     setRedactedFieldIds(current => current.includes(fieldId)
@@ -126,6 +148,27 @@ export function ExportDialog(props: {
     anchor.remove();
     queueMicrotask(() => URL.revokeObjectURL(url));
   };
+
+  const printProjection = (): void => {
+    flushSync(() => setPage(-1));
+    window.print();
+  };
+
+  const manifestRows = manifest && plaintext ? [
+    ["Scope", `${manifest.rowCount} rows × ${manifest.fieldCount} fields`],
+    ["Order", readableScope(plaintext)],
+    ["Relations", manifest.policies.relations === "friendly_labels"
+      ? "Friendly labels; relation IDs excluded" : "Friendly labels plus explicit relation ID columns"],
+    ["Clay IDs", manifest.policies.recordIds === "included" ? "Explicitly included" : "Excluded"],
+    ["Attachments", "Attachments excluded"],
+    ["Other fields", "Hidden and unselected fields excluded"],
+    ["Dependencies", readableDependencies(plaintext)],
+    ["Redactions", manifest.redactions.length ? manifest.redactions.join(", ") : "No redactions"],
+    ["Completeness", "Complete — no truncation"],
+    ["Size", `${formatBytes(artifact!.plaintext.byteLength)} projection · ${formatBytes(
+      manifest.csv.byteCount,
+    )} CSV`],
+  ] : [];
 
   return <ModalDialog
     className="relation-dialog export-dialog"
@@ -155,10 +198,12 @@ export function ExportDialog(props: {
           onChange={event => setIncludeRecordIds(event.currentTarget.checked)} />
         Include Clay record IDs and relation ID columns
       </label>
-      {props.fieldChoices.length > 0 ? <div className="workbench-tools export-redaction-options">
-        <span>Redact values</span>
-        {props.fieldChoices.map(field => <label key={field.fieldId}>
+      {props.fieldChoices.length > 0 ? <div className="workbench-tools export-redaction-options"
+        role="group" aria-labelledby="export-redaction-values-label">
+        <span id="export-redaction-values-label">Redact values</span>
+        {props.fieldChoices.map((field, index) => <label key={field.fieldId}>
           <input type="checkbox" checked={redacted.has(field.fieldId)}
+            aria-label={`Redact ${field.label} values, field ${index + 1}`}
             onChange={() => toggleRedaction(field.fieldId)} />
           {field.label}
         </label>)}
@@ -177,22 +222,9 @@ export function ExportDialog(props: {
     {manifest && plaintext ? <>
       <section className="export-manifest" aria-label="Export manifest">
         <dl className="relation-preview">
-          <div><dt>Scope</dt><dd>{manifest.rowCount} rows × {manifest.fieldCount} fields</dd></div>
-          <div><dt>Order</dt><dd>{readableScope(plaintext)}</dd></div>
-          <div><dt>Relations</dt><dd>{manifest.policies.relations === "friendly_labels"
-            ? "Friendly labels; relation IDs excluded"
-            : "Friendly labels plus explicit relation ID columns"}</dd></div>
-          <div><dt>Clay IDs</dt><dd>{manifest.policies.recordIds === "included"
-            ? "Explicitly included" : "Excluded"}</dd></div>
-          <div><dt>Attachments</dt><dd>Attachments excluded</dd></div>
-          <div><dt>Other fields</dt><dd>Hidden and unselected fields excluded</dd></div>
-          <div><dt>Dependencies</dt><dd>{readableDependencies(plaintext)}</dd></div>
-          <div><dt>Redactions</dt><dd>{manifest.redactions.length
-            ? manifest.redactions.join(", ") : "No redactions"}</dd></div>
-          <div><dt>Completeness</dt><dd>Complete — no truncation</dd></div>
-          <div><dt>Size</dt><dd>{formatBytes(artifact!.plaintext.byteLength)} projection · {formatBytes(
-            manifest.csv.byteCount,
-          )} CSV</dd></div>
+          {manifestRows.map(([label, value]) => <div key={label}>
+            <dt>{label}</dt><dd>{value}</dd>
+          </div>)}
         </dl>
         <p className="export-policy-note">
           Dates use stored values with no timezone conversion. Blank values export as empty cells.
@@ -201,6 +233,19 @@ export function ExportDialog(props: {
             : " No spreadsheet-formula changes are needed."}
         </p>
       </section>
+
+      {manifest.rowCount > PREVIEW_PAGE_SIZE && !printAll ? <nav
+        className="projection-pagination" aria-label="Preview rows">
+        <output aria-live="polite">
+          Rows {pageStart + 1}–{pageEnd} of {manifest.rowCount}. Download and Print include all rows.
+        </output>
+        <span>
+          <button type="button" disabled={currentPage === 0}
+            onClick={() => setPage(value => value - 1)}>Previous 100</button>
+          <button type="button" disabled={currentPage >= pageCount - 1}
+            onClick={() => setPage(value => value + 1)}>Next 100</button>
+        </span>
+      </nav> : null}
 
       <article className="record-fields projection-print-document" data-renderer={
         `${manifest.renderer.id}@${manifest.renderer.version}`
@@ -216,7 +261,8 @@ export function ExportDialog(props: {
           tabIndex={0}
         >
           <table className="dataview-grid">
-            <caption>{readableScope(plaintext)}</caption>
+            <caption>{readableScope(plaintext)}{!printAll && manifest.rowCount > PREVIEW_PAGE_SIZE
+              ? ` · Rows ${pageStart + 1}–${pageEnd} of ${manifest.rowCount}` : ""}</caption>
             <thead><tr>{manifest.fields.map((field, index) => {
               const csvLabel = projectionCsvTextV1(field.label);
               return <th scope="col" key={`${field.name}-${index}`}>
@@ -225,7 +271,9 @@ export function ExportDialog(props: {
                   ? <><br /><small className="projection-csv-safety-note">CSV: {csvLabel}</small></> : null}
               </th>;
             })}</tr></thead>
-            <tbody>{plaintext.rows.map((row, rowIndex) => <tr key={rowIndex}>
+            <tbody>{visibleRows.map((row, visibleIndex) => <tr key={
+              printAll ? visibleIndex : pageStart + visibleIndex
+            }>
               {row.map((value, fieldIndex) => {
                 const csv = projectionCsvTextV1(value);
                 return <td key={fieldIndex}>
@@ -245,7 +293,7 @@ export function ExportDialog(props: {
       <button type="button" data-export-csv disabled={!artifact || !plaintext}
         onClick={downloadCsv}>Download CSV</button>
       <button type="button" className="primary" disabled={!artifact || !plaintext}
-        style={{ minHeight: 44 }} onClick={() => window.print()}>Print / Save as PDF</button>
+        style={{ minHeight: 44 }} onClick={printProjection}>Print / Save as PDF</button>
     </footer>
   </ModalDialog>;
 }

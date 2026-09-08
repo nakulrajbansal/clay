@@ -138,6 +138,8 @@ export function RecordDetail(props: {
   onError: (message: string) => void;
   onInfo: (message: string) => void;
   onExport?: () => void;
+  exportPending?: boolean;
+  runWrite?: <T>(operation: () => Promise<T>) => Promise<T>;
   onConfirm?: (message: string) => Promise<boolean>;
 }): React.JSX.Element {
   const [row, setRow] = useState<QueryRow | null>(null);
@@ -220,9 +222,12 @@ export function RecordDetail(props: {
     if (!row || isDerived(column) || column.type === "attachment") return;
     setSaving(column.name);
     try {
-      await props.store.update(props.table.name, props.recordId, { [column.name]: value });
-      await reload();
-      props.onWrite(props.table.name);
+      const write = async (): Promise<void> => {
+        await props.store.update(props.table.name, props.recordId, { [column.name]: value });
+        await reload();
+        props.onWrite(props.table.name);
+      };
+      if (props.runWrite) await props.runWrite(write); else await write();
     } catch (error) {
       props.onError(error instanceof Error ? error.message : String(error));
       await reload().catch(() => undefined);
@@ -346,6 +351,7 @@ export function RecordDetail(props: {
           <div className="record-detail-actions" aria-label="Record actions">
             {props.onExport ? <button type="button"
               aria-label="Preview Print / CSV for this record"
+              disabled={props.exportPending || saving !== null}
               onClick={props.onExport}>Print / CSV</button> : null}
             <button onClick={() => void duplicate()}>Duplicate</button>
             <button className="danger" onClick={() => void archive()}>Archive</button>

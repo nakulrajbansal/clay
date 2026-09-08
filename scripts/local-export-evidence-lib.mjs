@@ -39,12 +39,9 @@ function normalizedPdfText(value) {
   return value.replace(/(\p{N})-\s+(?=\p{N})/gu, "$1-").replace(/\s+/gu, " ").trim();
 }
 
-export function pdfTextEndsWithExactSequence(text, values) {
+export function pdfTextMatchesExactSequence(text, values) {
   const expected = normalizedPdfText(values.filter(value => value !== "").join(" "));
-  const actual = normalizedPdfText(text);
-  if (!expected || !actual.endsWith(expected)) return false;
-  const start = actual.length - expected.length;
-  return start === 0 || actual[start - 1] === " ";
+  return expected.length > 0 && normalizedPdfText(text) === expected;
 }
 
 function hasExited(child) {
@@ -277,7 +274,7 @@ export function summarizeExportDialogStateEvidence(observations) {
 }
 
 export async function ingestManualScreenReaderEvidence(inputPath, {
-  source, build, outputDirectory,
+  source, build, outputDirectory, sourceDirectory = process.cwd(),
 }) {
   if (inputPath === undefined) return {
     screenReader: {
@@ -295,6 +292,13 @@ export async function ingestManualScreenReaderEvidence(inputPath, {
   assertSameSource(manual.source, source, "manual screen-reader");
   if (!sameJson(manual.build, build))
     throw new Error("manual screen-reader build does not match the isolated build");
+  const procedureBytes = await readFile(join(
+    sourceDirectory, "specs", "release-f-manual-screen-reader-procedure.md",
+  ));
+  if (manual.procedure.sha256 !== sha256Evidence(procedureBytes))
+    throw new Error("manual screen-reader procedure digest does not match tracked source");
+  if (!manual.assertions.every(assertion => sameJson(assertion.artifact, manual.artifact)))
+    throw new Error("manual screen-reader step artifact must match the session artifact");
   const sourceArtifact = resolve(dirname(inputPath), manual.artifact.file);
   const inputRoot = resolve(dirname(inputPath));
   if (sourceArtifact === inputRoot || !sourceArtifact.startsWith(`${inputRoot}${sep}`))
@@ -302,12 +306,31 @@ export async function ingestManualScreenReaderEvidence(inputPath, {
   const bytes = await readFile(sourceArtifact);
   if (bytes.byteLength !== manual.artifact.bytes || sha256Evidence(bytes) !== manual.artifact.sha256)
     throw new Error("manual screen-reader artifact bytes or digest do not match input");
+  let transcript;
+  try { transcript = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+  catch { throw new Error("manual screen-reader transcript is not valid UTF-8"); }
+  const lines = transcript.replace(/\r\n?/g, "\n").split("\n");
+  const ranges = [];
+  for (const assertion of manual.assertions) {
+    const match = /^transcript-lines:([1-9][0-9]{0,5})-([1-9][0-9]{0,5})$/
+      .exec(assertion.locator);
+    const start = Number(match?.[1]);
+    const end = Number(match?.[2]);
+    if (!match || start > end || end > lines.length
+        || ranges.some(range => start <= range.end && end >= range.start))
+      throw new Error(`manual screen-reader locator is missing or overlaps: ${assertion.locator}`);
+    const segment = lines.slice(start - 1, end).join("\n").trim();
+    if (segment.length < 20 || !segment.includes(`[${assertion.id}]`))
+      throw new Error(`manual screen-reader locator has no bound assertion segment: ${assertion.id}`);
+    ranges.push({ start, end });
+  }
   const copiedFile = `manual-screen-reader/${basename(manual.artifact.file)}`;
   const copiedPath = join(outputDirectory, copiedFile);
   await mkdir(dirname(copiedPath), { recursive: true });
   await copyFile(sourceArtifact, copiedPath);
   const artifact = { file: copiedFile, bytes: bytes.byteLength, sha256: sha256Evidence(bytes) };
-  const screenReader = ManualScreenReaderEvidenceV1.parse({ ...manual, artifact });
+  const assertions = manual.assertions.map(assertion => ({ ...assertion, artifact }));
+  const screenReader = ManualScreenReaderEvidenceV1.parse({ ...manual, assertions, artifact });
   return { screenReader, artifact };
 }
 
@@ -333,14 +356,17 @@ async function inventoryFiles(root, current = root) {
 export async function buildDirectoryDigest(root) {
   const files = await inventoryFiles(root);
   if (files.length === 0) throw new Error("production build directory is empty");
-  const hash = createHash("sha256");
+  const inventory = [];
   let bytes = 0;
   for (const file of files) {
     const data = await readFile(join(root, file));
     bytes += data.byteLength;
-    hash.update(file).update("\0").update(data);
+    inventory.push({ path: file, bytes: data.byteLength, sha256: sha256Evidence(data) });
   }
-  return { sha256: `sha256:${hash.digest("hex")}`, bytes, files: files.length };
+  const framed = Buffer.from(canonicalEvidenceJson({
+    schema: "BuildDirectoryDigestV1", files: inventory,
+  }), "utf8");
+  return { sha256: sha256Evidence(framed), bytes, files: files.length };
 }
 
 export async function verifyReleaseEvidenceDirectory(directory, expectedSource) {
@@ -373,7 +399,7 @@ export async function verifyReleaseEvidenceDirectory(directory, expectedSource) 
   if (!sameJson(report.build, benchmark.build))
     throw new Error("runtime and benchmark reports do not bind the same build");
   if (report.verdict === "FAIL" || report.errors.length > 0
-      || report.checks.some(check => !check.ok))
+      || report.cases.some(item => item.status !== "PASS"))
     throw new Error("runtime report does not contain clean automated evidence");
   if (release.verdict !== report.verdict)
     throw new Error("release verdict does not match the runtime accessibility verdict");

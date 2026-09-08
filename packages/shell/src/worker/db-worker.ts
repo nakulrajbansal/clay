@@ -7,7 +7,9 @@ import {
   InProcessAsyncStore, portFromMessagePort, serveStore,
   type DebugEvent, type LivePanel, type PanelProvenance, type PreviewHandle,
 } from "@clay/kernel";
-import { projectPlaintextV1Cooperative, type ProjectionRequestV1 } from "@clay/kernel/projection";
+import {
+  projectPlaintextV1Cooperative, projectionTransportV1, type ProjectionRequestV1,
+} from "@clay/kernel/projection";
 import { ClayError } from "@clay/kernel/errors";
 import type {
   ProductionStoreAuthority,
@@ -228,9 +230,10 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "projectPlaintextV1":
       activeProjections.add(req.id);
       try {
-        return await projectPlaintextV1Cooperative(mustStore(), p as ProjectionRequestV1, {
+        const artifact = await projectPlaintextV1Cooperative(mustStore(), p as ProjectionRequestV1, {
           isCancelled: () => cancelledProjections.has(req.id),
         });
+        return projectionTransportV1(artifact);
       } finally {
         activeProjections.delete(req.id);
         cancelledProjections.delete(req.id);

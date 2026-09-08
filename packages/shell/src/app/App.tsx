@@ -3,7 +3,7 @@
 // during S5 the proposed panels render in place with a dashed frame,
 // bound to a SECOND Bridge over the shadow store (preview-before-commit).
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+
 import {
   Bridge, StoreRpcClient, deriveSafeDiffKind, portFromMessagePort,
   type ClayNotification,
@@ -1619,7 +1619,7 @@ export function App(): React.JSX.Element {
         </LazySurfaceBoundary>
       ) : null}
       {confirmDialog}
-      {createPortal(<div className="toasts" aria-live="polite" aria-atomic="true">
+      <div className="toasts" aria-live="polite" aria-atomic="true">
         {toasts.map(t => (
           <div key={t.id} className={`toast toast-${t.kind}`}
             role={t.kind === "danger" ? "alert" : "status"}>
@@ -1632,7 +1632,7 @@ export function App(): React.JSX.Element {
             ) : null}
           </div>
         ))}
-      </div>, document.body)}
+      </div>
     </div>
   );
 }
