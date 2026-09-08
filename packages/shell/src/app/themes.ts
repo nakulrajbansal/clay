@@ -88,19 +88,32 @@ export function setThemeId(appId: string, id: string): void {
   try { localStorage.setItem(key(appId), id); } catch { /* private mode */ }
 }
 
-// css var name (kebab) per token
-const CSS: Record<keyof ThemeVars, string> = {
+// Public panel variable names are an interface: saved/generated panel CSS may use them.
+const PANEL_CSS: Record<keyof ThemeVars, string> = {
   bg: "--bg", panel: "--panel", border: "--border", borderStrong: "--border-strong",
   border2: "--border-2", bgSoft: "--bg-soft", text: "--text", text2: "--text-2", text3: "--text-3",
   accent: "--accent", accentHover: "--accent-hover", accentSoft: "--accent-soft",
   accentText: "--accent-text", accentOn: "--accent-on", chartArea: "--chart-area",
 };
+// The trusted shell uses a private namespace, which production builds may compact
+// without changing the panel-facing contract above.
+const SHELL_CSS: Record<keyof ThemeVars, string> = {
+  bg: "--shell-bg", panel: "--shell-panel", border: "--shell-border",
+  borderStrong: "--shell-border-strong", border2: "--shell-border-2",
+  bgSoft: "--shell-bg-soft", text: "--shell-text", text2: "--shell-text-2",
+  text3: "--shell-text-3", accent: "--shell-accent",
+  accentHover: "--shell-accent-hover", accentSoft: "--shell-accent-soft",
+  accentText: "--shell-accent-text", accentOn: "--shell-accent-on",
+  chartArea: "--shell-chart-area",
+};
 
 /** Apply a theme to the trusted shell (document root) live. */
 export function applyThemeToRoot(theme: Theme): void {
   const root = document.documentElement;
-  for (const [k, cssVar] of Object.entries(CSS))
-    root.style.setProperty(cssVar, theme.vars[k as keyof ThemeVars]);
+  for (const key of Object.keys(PANEL_CSS) as (keyof ThemeVars)[]) {
+    root.style.setProperty(PANEL_CSS[key], theme.vars[key]);
+    root.style.setProperty(SHELL_CSS[key], theme.vars[key]);
+  }
   root.style.colorScheme = theme.dark ? "dark" : "light";
   root.dataset.theme = theme.id;
 }
@@ -115,7 +128,7 @@ const SERIES_DARK = ["#7d7aec", "#00a300", "#d55181", "#c98500", "#199e70", "#d9
 
 /** A :root override block to inject into a panel iframe's srcdoc. */
 export function panelThemeCss(theme: Theme): string {
-  const decls = Object.entries(CSS)
+  const decls = Object.entries(PANEL_CSS)
     .map(([k, cssVar]) => `${cssVar}:${theme.vars[k as keyof ThemeVars]}`).join(";");
   const series = (theme.dark ? SERIES_DARK : SERIES_LIGHT)
     .map((c, i) => `--series-${i + 1}:${c}`).join(";");
