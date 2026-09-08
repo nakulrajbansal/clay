@@ -68,6 +68,23 @@ const BenchmarkSampleV1 = z.object({
   plaintextBytes: z.number().int().nonnegative(),
 }).strict();
 
+const MaximumPrintEvidenceV1 = z.object({
+  artifact: z.object({
+    file: z.literal("maximum-print.pdf"),
+    bytes: PositiveInteger,
+    sha256: Sha256,
+  }).strict(),
+  rows: z.literal(5000),
+  fields: z.literal(30),
+  previewRows: z.literal(100),
+  renderedCells: z.literal(150_000),
+  maxCellsPerTask: z.literal(600),
+  sheets: z.literal(272),
+  responsiveBeforePrint: z.literal(true),
+  extractedSha256: Sha256,
+  exact: z.literal(true),
+}).strict();
+
 export const BenchmarkEvidenceManifestV1 = z.object({
   schema: z.literal("BenchmarkEvidenceManifestV1"),
   generatedAt: IsoInstant,
@@ -86,6 +103,7 @@ export const BenchmarkEvidenceManifestV1 = z.object({
     rows: z.tuple([z.literal(1000), z.literal(5000)]),
     nearLimitPlaintextBytes: z.number().int().min(7_800_000).max(8 * 1024 * 1024),
   }).strict(),
+  maximumPrint: MaximumPrintEvidenceV1,
   methodology: z.object({
     clock: z.literal("performance.now"),
     percentile: z.literal("nearest-rank-p95"),
@@ -403,6 +421,14 @@ const NetworkObservationsV2 = z.object({
   desktopExportRequests: z.literal(0),
   recordExportRequests: z.literal(0),
   mobileExportRequests: z.literal(0),
+  desktopActions: z.tuple([z.literal("csv"), z.literal("print")]),
+  recordActions: z.tuple([z.literal("csv"), z.literal("print")]),
+  desktopWebSockets: z.literal(0),
+  recordWebSockets: z.literal(0),
+  desktopBlobUrls: z.literal(1),
+  recordBlobUrls: z.literal(1),
+  desktopDownloadBlobUrls: z.literal(1),
+  recordDownloadBlobUrls: z.literal(1),
   unexpected: z.tuple([]),
 }).strict();
 const RuntimeObservationsV2 = z.object({

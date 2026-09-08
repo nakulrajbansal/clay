@@ -1,4 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
+import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -8,6 +9,7 @@ import {
   assertBenchmarkEvidence,
   buildDirectoryDigest,
   canonicalEvidenceJson,
+  pdfTextMatchesExactSequence,
   sha256Evidence,
   summarizeBenchmarkSamples,
 } from "./local-export-evidence-lib.mjs";
@@ -158,7 +160,7 @@ async function rawSample(page, rows, classification) {
   }, { rows, classification });
 }
 
-async function previewSample(page, rows, classification) {
+async function previewSample(page, rows, classification, pdfProofPath) {
   await page.evaluate(() => {
     window.__projectionBenchmark.beginMemorySample();
     window.__releaseFPreviewStarted = performance.now();
@@ -174,6 +176,79 @@ async function previewSample(page, rows, classification) {
     if (status?.replace(/,/g, "").includes(`Rows 1–${expectedRows} of ${rows}`) !== true)
       throw new Error(`owner preview pagination status is invalid: ${status}`);
   }
+  const printCallsBefore = await page.evaluate(() => {
+    window.__releaseFEventLoopYielded = false;
+    window.__releaseFResponsiveAtPrint = false;
+    setTimeout(() => { window.__releaseFEventLoopYielded = true; }, 0);
+    return window.__projectionBenchmark.printCalls();
+  });
+  await page.getByRole("button", { name: "Print / Save as PDF", exact: true }).click();
+  await page.waitForFunction(expected => window.__projectionBenchmark.printCalls() === expected
+    && document.querySelector('.projection-print-root[data-print-ready="true"]') !== null,
+  printCallsBefore + 1, { timeout: 15_000 });
+  const printObservation = await page.evaluate(({ rows, expectedRows }) => {
+    const root = document.querySelector('.projection-print-root[data-print-ready="true"]');
+    const dialog = document.querySelector(".export-dialog");
+    if (!(root instanceof HTMLElement) || !(dialog instanceof HTMLElement))
+      throw new Error("bounded print surface is unavailable");
+    const sheetCellCounts = [...root.querySelectorAll(".projection-print-sheet")]
+      .map(sheet => sheet.querySelectorAll("td").length);
+    return {
+      previewRows: dialog.querySelectorAll("tbody tr").length,
+      expectedRows,
+      declaredRows: Number(root.dataset.printRows),
+      declaredFields: Number(root.dataset.printFields),
+      declaredTotalCells: Number(root.dataset.printTotalCells),
+      renderedCells: root.querySelectorAll("td").length,
+      maxSheetCells: Math.max(...sheetCellCounts),
+      sheets: sheetCellCounts.length,
+      responsiveBeforePrint: window.__releaseFResponsiveAtPrint,
+      expectedCells: rows * 30,
+    };
+  }, { rows, expectedRows });
+  if (printObservation.previewRows !== expectedRows
+      || printObservation.declaredRows !== rows
+      || printObservation.declaredFields !== 30
+      || printObservation.declaredTotalCells !== printObservation.expectedCells
+      || printObservation.renderedCells !== printObservation.expectedCells
+      || printObservation.maxSheetCells > 600
+      || !printObservation.responsiveBeforePrint) {
+    throw new Error(`bounded owner print observation is invalid: ${JSON.stringify(printObservation)}`);
+  }
+  let maximumPrint = null;
+  if (pdfProofPath) {
+    const orderedPrintValues = await page.locator(
+      'body > .projection-print-root[data-print-ready="true"]',
+    ).locator("h1, p, h2, caption, th, td").allTextContents();
+    await page.emulateMedia({ media: "print" });
+    const pdfBytes = await page.pdf({
+      path: pdfProofPath, format: "A4", landscape: true, printBackground: true,
+    });
+    if (pdfBytes.subarray(0, 5).toString("ascii") !== "%PDF-")
+      throw new Error("maximum print proof is not a PDF");
+    const pdfText = execFileSync(
+      "pdftotext", ["-enc", "UTF-8", "-raw", pdfProofPath, "-"],
+      { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 },
+    );
+    if (!pdfTextMatchesExactSequence(pdfText, orderedPrintValues))
+      throw new Error("maximum print PDF text does not exactly match the segmented print document");
+    maximumPrint = {
+      artifact: {
+        file: basename(pdfProofPath), bytes: pdfBytes.byteLength,
+        sha256: sha256Evidence(pdfBytes),
+      },
+      rows: printObservation.declaredRows,
+      fields: printObservation.declaredFields,
+      previewRows: printObservation.previewRows,
+      renderedCells: printObservation.renderedCells,
+      maxCellsPerTask: printObservation.maxSheetCells,
+      sheets: printObservation.sheets,
+      responsiveBeforePrint: printObservation.responsiveBeforePrint,
+      extractedSha256: sha256Evidence(Buffer.from(pdfText)),
+      exact: true,
+    };
+    await page.emulateMedia({ media: "screen" });
+  }
   const result = await page.evaluate(({ rows, classification }) => {
     const api = window.__projectionBenchmark;
     const milliseconds = performance.now() - window.__releaseFPreviewStarted;
@@ -188,9 +263,11 @@ async function previewSample(page, rows, classification) {
       plaintextBytes: output.plaintextBytes,
     };
   }, { rows, classification });
+  await page.evaluate(() => window.dispatchEvent(new Event("afterprint")));
+  await page.locator(".projection-print-root").waitFor({ state: "detached" });
   await page.locator(".export-dialog").press("Escape");
   await page.locator(".export-dialog").waitFor({ state: "detached" });
-  return result;
+  return { ...result, ...(maximumPrint ? { maximumPrint } : {}) };
 }
 
 async function cancelSample(page, rows, classification) {
@@ -211,37 +288,47 @@ async function cancelSample(page, rows, classification) {
 }
 
 function normalizeSample(sample) {
+  const { maximumPrint: _maximumPrint, ...measured } = sample;
   return {
-    ...sample,
+    ...measured,
     milliseconds: Number(sample.milliseconds.toFixed(3)),
   };
 }
 
-async function sampleGroup(browser, url, harness, rows, operation) {
+async function sampleGroup(browser, url, harness, rows, operation, pdfProofPath) {
   const { context, page, errors } = await openHarness(browser, url, harness, rows);
   const take = operation === "csv" ? rawSample
     : operation === "owner-preview" ? previewSample : cancelSample;
-  const samples = [normalizeSample(await take(page, rows, "cold"))];
+  const cold = await take(page, rows, "cold", pdfProofPath);
+  const samples = [normalizeSample(cold)];
   for (let index = 0; index < WARMUP_RUNS; index++) await take(page, rows, "warm");
   for (let index = 0; index < SAMPLE_RUNS; index++)
     samples.push(normalizeSample(await take(page, rows, "warm")));
   if (errors.length) throw new Error(`benchmark browser errors: ${errors.join("; ")}`);
   await context.close();
-  return samples;
+  return { samples, maximumPrint: cold.maximumPrint ?? null };
 }
 
 export async function runProjectionBrowserBenchmark({ browser, url, source, build, outDir }) {
   const temporaryBuild = await mkdtemp(join(tmpdir(), "clay-release-f-benchmark-"));
   let harness;
   let samples;
+  let maximumPrint;
   try {
     harness = await buildProjectionBenchmarkHarness(temporaryBuild);
+    await mkdir(outDir, { recursive: true });
+    const csv1000 = await sampleGroup(browser, url, harness, 1000, "csv");
+    const csv5000 = await sampleGroup(browser, url, harness, 5000, "csv");
+    const owner5000 = await sampleGroup(
+      browser, url, harness, 5000, "owner-preview", join(outDir, "maximum-print.pdf"),
+    );
+    const cancel5000 = await sampleGroup(browser, url, harness, 5000, "cancel");
     samples = [
-      ...await sampleGroup(browser, url, harness, 1000, "csv"),
-      ...await sampleGroup(browser, url, harness, 5000, "csv"),
-      ...await sampleGroup(browser, url, harness, 5000, "owner-preview"),
-      ...await sampleGroup(browser, url, harness, 5000, "cancel"),
+      ...csv1000.samples, ...csv5000.samples,
+      ...owner5000.samples, ...cancel5000.samples,
     ];
+    maximumPrint = owner5000.maximumPrint;
+    if (!maximumPrint) throw new Error("maximum print evidence was not retained");
   } finally {
     await rm(temporaryBuild, { recursive: true, force: true });
   }
@@ -250,9 +337,9 @@ export async function runProjectionBrowserBenchmark({ browser, url, source, buil
     percentile: "nearest-rank-p95",
     warmupRuns: WARMUP_RUNS,
     sampleRuns: SAMPLE_RUNS,
-    coldDefinition: "fresh Chromium context and module worker; first operation after fixture initialization",
-    warmDefinition: "same Chromium context, production projector/client/owner, and fixture after two declared warm-ups",
-    memory: "Chromium --enable-precise-memory-info usedJSHeapSize peak sampled every 2 ms; declared input/output bytes subtracted",
+    coldDefinition: "fresh Chromium context/module worker; first operation after fixture initialization; the 5,000-row owner run also extracts and exactly verifies the segmented PDF",
+    warmDefinition: "same Chromium context after two warm-ups; owner timing ends only after bounded complete Print preparation, and cancellation ends only after correlated worker terminal plus quiescence acknowledgement",
+    memory: "Chromium --enable-precise-memory-info usedJSHeapSize peak sampled every 2 ms through complete owner Print preparation; declared input/output bytes subtracted",
   };
   const limits = {
     rows1000CsvP95Ms: 1000,
@@ -284,11 +371,14 @@ export async function runProjectionBrowserBenchmark({ browser, url, source, buil
       rows: [1000, 5000],
       nearLimitPlaintextBytes,
     },
+    maximumPrint,
     methodology,
     limits,
     samples,
     results,
-    rawResultsSha256: sha256Evidence(Buffer.from(canonicalEvidenceJson({ methodology, samples }))),
+    rawResultsSha256: sha256Evidence(Buffer.from(canonicalEvidenceJson({
+      methodology, samples, maximumPrint,
+    }))),
     verdict: pass ? "PASS" : "FAIL",
   };
   return assertBenchmarkEvidence(manifest);
@@ -347,17 +437,31 @@ export async function runExportDialogStateEvidence({ browser, url }) {
 }
 
 /** Fast wiring probe; release evidence always uses the fixed 30-run path above. */
-export async function smokeProjectionBrowserBenchmark({ browser, url, rows = 1000 }) {
+export async function smokeProjectionBrowserBenchmark({
+  browser, url, rows = 1000, proveMaximumPrintPdf = false,
+}) {
   const temporaryBuild = await mkdtemp(join(tmpdir(), "clay-release-f-benchmark-smoke-"));
   try {
     const harness = await buildProjectionBenchmarkHarness(temporaryBuild);
     const { context, page, errors } = await openHarness(browser, url, harness, rows);
     try {
       const csv = normalizeSample(await rawSample(page, rows, "cold"));
-      const preview = normalizeSample(await previewSample(page, rows, "cold"));
+      const previewResult = await previewSample(
+        page, rows, "cold",
+        proveMaximumPrintPdf ? join(temporaryBuild, "maximum-print.pdf") : undefined,
+      );
+      if (proveMaximumPrintPdf && !previewResult.maximumPrint)
+        throw new Error("maximum Print smoke proof metadata is missing");
+      const preview = normalizeSample(previewResult);
       const cancel = normalizeSample(await cancelSample(page, rows, "cold"));
       if (errors.length) throw new Error(errors.join("; "));
-      return { csv, preview, cancel, harnessSha256: harness.harnessSha256 };
+      return {
+        csv, preview, cancel, harnessSha256: harness.harnessSha256,
+        ...(proveMaximumPrintPdf ? {
+          maximumPrintPdfExact: true,
+          maximumPrint: previewResult.maximumPrint,
+        } : {}),
+      };
     } finally {
       await context.close();
     }

@@ -35,6 +35,45 @@ export function sha256Evidence(bytes) {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 }
 
+function stringArray(value, label) {
+  if (!Array.isArray(value) || value.some(item => typeof item !== "string"))
+    throw new Error(`${label} must be an array of strings`);
+  return [...value];
+}
+
+/**
+ * Closes the local-only interval over the user-observed CSV and Print actions.
+ * Browser request/WebSocket events are fail-closed; object URLs are retained
+ * as a separate local transport class and must back every observed download.
+ */
+export function assertLocalExportActionEgress(input) {
+  if (!plainRecord(input)) throw new Error("local export action egress observation is missing");
+  const actions = stringArray(input.actions, "local export actions");
+  if (!sameJson(actions, ["csv", "print"]))
+    throw new Error("local export actions must observe CSV followed by Print");
+  const requests = stringArray(input.requests, "local export requests");
+  if (requests.length > 0)
+    throw new Error(`local export HTTP/network egress observed: ${requests.join(", ")}`);
+  const webSockets = stringArray(input.webSockets, "local export WebSockets");
+  if (webSockets.length > 0)
+    throw new Error(`local export WebSocket egress observed: ${webSockets.join(", ")}`);
+  const blobUrls = stringArray(input.blobUrls, "local export blob URLs");
+  const downloadUrls = stringArray(input.downloadUrls, "local export download URLs");
+  if (blobUrls.length < 1 || downloadUrls.length < 1)
+    throw new Error("local CSV download needs an observed local blob URL");
+  if ([...blobUrls, ...downloadUrls].some(value => !value.startsWith("blob:")))
+    throw new Error("local export download URLs must use the blob protocol");
+  if (downloadUrls.some(value => !blobUrls.includes(value)))
+    throw new Error("local export download URL was not created as an observed blob URL");
+  return {
+    actions,
+    httpRequests: 0,
+    webSockets: 0,
+    blobUrls,
+    downloadUrls,
+  };
+}
+
 function normalizedPdfText(value) {
   return value.replace(/(\p{N})-\s+(?=\p{N})/gu, "$1-").replace(/\s+/gu, " ").trim();
 }
@@ -153,7 +192,9 @@ export function createCertificateEnvironment({
   return environment;
 }
 
-const OWNED_EVIDENCE_OUTPUTS = new Set(["benchmark.json", "release.json", "runtime"]);
+const OWNED_EVIDENCE_OUTPUTS = new Set([
+  "benchmark.json", "maximum-print.pdf", "release.json", "runtime",
+]);
 
 export async function prepareEvidenceOutput(directory) {
   const root = resolve(directory);
@@ -229,9 +270,10 @@ export function assertBenchmarkEvidence(input) {
   const expectedDigest = sha256Evidence(Buffer.from(canonicalEvidenceJson({
     methodology: manifest.methodology,
     samples: manifest.samples,
+    maximumPrint: manifest.maximumPrint,
   })));
   if (manifest.rawResultsSha256 !== expectedDigest)
-    throw new Error("benchmark raw-results digest does not match samples and methodology");
+    throw new Error("benchmark raw-results digest does not match samples, methodology, and maximum Print proof");
   const expectedResults = summarizeBenchmarkSamples(manifest.samples);
   if (!sameJson(manifest.results, expectedResults))
     throw new Error("benchmark result does not match nearest-rank p95 raw samples");
@@ -408,12 +450,13 @@ export async function verifyReleaseEvidenceDirectory(directory, expectedSource) 
   const runtimeArtifacts = report.artifacts.map(artifact => ({
     ...artifact, file: `runtime/${artifact.file}`,
   }));
-  if (!sameJson([...releaseArtifacts.keys()].sort(), runtimeArtifacts.map(item => item.file).sort()))
-    throw new Error("outer release manifest does not list every runtime artifact exactly once");
-  for (const artifact of runtimeArtifacts) {
+  const expectedArtifacts = [...runtimeArtifacts, benchmark.maximumPrint.artifact];
+  if (!sameJson([...releaseArtifacts.keys()].sort(), expectedArtifacts.map(item => item.file).sort()))
+    throw new Error("outer release manifest does not list every runtime and benchmark artifact exactly once");
+  for (const artifact of expectedArtifacts) {
     const outer = releaseArtifacts.get(artifact.file);
     if (!outer || !sameJson(outer, artifact))
-      throw new Error(`${artifact.file} metadata differs between runtime and release manifests`);
+      throw new Error(`${artifact.file} metadata differs from its owning evidence report`);
     const bytes = await readFile(join(root, artifact.file));
     if (bytes.byteLength !== artifact.bytes || sha256Evidence(bytes) !== artifact.sha256)
       throw new Error(`${artifact.file} artifact bytes or digest do not match release manifest`);
@@ -456,10 +499,13 @@ export async function writeReleaseEvidenceDirectory(directory, reportInput, benc
         sha256: sha256Evidence(benchmarkBytes),
       },
     ],
-    artifacts: report.artifacts.map(artifact => ({
-      ...artifact,
-      file: `runtime/${artifact.file}`,
-    })),
+    artifacts: [
+      ...report.artifacts.map(artifact => ({
+        ...artifact,
+        file: `runtime/${artifact.file}`,
+      })),
+      benchmark.maximumPrint.artifact,
+    ],
     verdict: report.verdict,
   });
   await mkdir(join(root, "runtime"), { recursive: true });

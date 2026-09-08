@@ -35,7 +35,7 @@ import { parseImportFile } from "./importData";
 import { buildTrustReceipt } from "./change-contract";
 import { useLensController } from "./useLensController";
 import { LazySurfaceBoundary } from "./LazySurfaceBoundary";
-import { ModalDialog } from "./ModalDialog";
+import { ModalDialog, ModalScopedPortal } from "./ModalDialog";
 import { useWorkspaceMode, type WorkspaceMode } from "./workspace-mode";
 
 type Phase = "loading" | "onboarding" | "main" | "error";
@@ -1619,20 +1619,23 @@ export function App(): React.JSX.Element {
         </LazySurfaceBoundary>
       ) : null}
       {confirmDialog}
-      <div className="toasts" aria-live="polite" aria-atomic="true">
-        {toasts.map(t => (
-          <div key={t.id} className={`toast toast-${t.kind}`}
-            role={t.kind === "danger" ? "alert" : "status"}>
-            {t.msg}
-            {t.action ? (
-              <button
-                className="toast-action"
-                onClick={() => { t.action!.run(); setToasts(x => x.filter(y => y.id !== t.id)); }}
-              >{t.action.label}</button>
-            ) : null}
-          </div>
-        ))}
-      </div>
+      <ModalScopedPortal>
+        <div className="toasts" data-modal-scoped-feedback
+          aria-live="polite" aria-atomic="true">
+          {toasts.map(t => (
+            <div key={t.id} className={`toast toast-${t.kind}`}
+              role={t.kind === "danger" ? "alert" : "status"}>
+              {t.msg}
+              {t.action ? (
+                <button
+                  className="toast-action"
+                  onClick={() => { t.action!.run(); setToasts(x => x.filter(y => y.id !== t.id)); }}
+                >{t.action.label}</button>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      </ModalScopedPortal>
     </div>
   );
 }

@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState, type RefObject } from "react";
-import { flushSync } from "react-dom";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   projectionCsvTextV1,
   type ProjectionArtifactV1, type ProjectionPlaintextV1, type ProjectionRequestV1,
 } from "@clay/kernel/projection";
 import { ModalDialog } from "./ModalDialog";
+import { prepareProjectionPrintDocument } from "./projection-print";
 import type { WorkerClient } from "./worker-client";
 import "./ExportDialog.css";
 
@@ -82,12 +82,22 @@ export function ExportDialog(props: {
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
   const [page, setPage] = useState(0);
-  const printAll = page < 0;
+  const [printing, setPrinting] = useState(false);
+  const [printError, setPrintError] = useState<string | null>(null);
+  const printRootRef = useRef<HTMLElement | null>(null);
+  const printControllerRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
   const redactionKey = redactedFieldIds.join("\u0000");
 
   useEffect(() => {
     let active = true;
     const controller = new AbortController();
+    printControllerRef.current?.abort();
+    printControllerRef.current = null;
+    printRootRef.current?.remove();
+    printRootRef.current = null;
+    setPrinting(false);
+    setPrintError(null);
     setArtifact(null);
     setError(null);
     setPage(0);
@@ -106,13 +116,18 @@ export function ExportDialog(props: {
   }, [props.worker, props.request, includeRecordIds, redactionKey, retry]);
 
   useEffect(() => {
-    const onPrint = (event: Event): void => flushSync(() =>
-      setPage(event.type === "beforeprint" ? -1 : 0));
-    window.addEventListener("beforeprint", onPrint);
-    window.addEventListener("afterprint", onPrint);
+    mountedRef.current = true;
+    const removePrintRoot = (): void => {
+      printRootRef.current?.remove();
+      printRootRef.current = null;
+    };
+    window.addEventListener("afterprint", removePrintRoot);
     return () => {
-      window.removeEventListener("beforeprint", onPrint);
-      window.removeEventListener("afterprint", onPrint);
+      mountedRef.current = false;
+      printControllerRef.current?.abort();
+      printControllerRef.current = null;
+      removePrintRoot();
+      window.removeEventListener("afterprint", removePrintRoot);
     };
   }, []);
 
@@ -123,8 +138,7 @@ export function ExportDialog(props: {
   const currentPage = Math.max(page, 0);
   const pageStart = currentPage * PREVIEW_PAGE_SIZE;
   const pageEnd = Math.min(pageStart + PREVIEW_PAGE_SIZE, manifest?.rowCount ?? 0);
-  const visibleRows = printAll ? plaintext?.rows ?? []
-    : plaintext?.rows.slice(pageStart, pageEnd) ?? [];
+  const visibleRows = plaintext?.rows.slice(pageStart, pageEnd) ?? [];
 
   const toggleRedaction = (fieldId: string): void => {
     setRedactedFieldIds(current => current.includes(fieldId)
@@ -149,9 +163,29 @@ export function ExportDialog(props: {
     queueMicrotask(() => URL.revokeObjectURL(url));
   };
 
-  const printProjection = (): void => {
-    flushSync(() => setPage(-1));
-    window.print();
+  const printProjection = async (): Promise<void> => {
+    if (!plaintext || printing) return;
+    printControllerRef.current?.abort();
+    printRootRef.current?.remove();
+    printRootRef.current = null;
+    const controller = new AbortController();
+    printControllerRef.current = controller;
+    setPrintError(null);
+    setPrinting(true);
+    try {
+      const root = await prepareProjectionPrintDocument(
+        plaintext, readableScope(plaintext), { signal: controller.signal },
+      );
+      if (controller.signal.aborted) { root.remove(); return; }
+      printRootRef.current = root;
+      window.print();
+    } catch (reason) {
+      if ((reason as { name?: unknown }).name !== "AbortError" && mountedRef.current)
+        setPrintError(reason instanceof Error ? reason.message : "The print document could not be prepared.");
+    } finally {
+      if (printControllerRef.current === controller) printControllerRef.current = null;
+      if (mountedRef.current) setPrinting(false);
+    }
   };
 
   const manifestRows = manifest && plaintext ? [
@@ -174,8 +208,11 @@ export function ExportDialog(props: {
     className="relation-dialog export-dialog"
     backdropClassName="modal-backdrop relation-backdrop export-dialog-backdrop"
     ariaLabelledBy="export-dialog-title"
-    ariaDescribedBy={error
-      ? "export-dialog-description export-dialog-error" : "export-dialog-description"}
+    ariaDescribedBy={[
+      "export-dialog-description",
+      ...(error ? ["export-dialog-error"] : []),
+      ...(printError ? ["export-dialog-print-error"] : []),
+    ].join(" ")}
     onClose={props.onClose}
     returnFocusRef={props.returnFocusRef}
   >
@@ -194,7 +231,7 @@ export function ExportDialog(props: {
     <fieldset className="record-fields export-options">
       <legend>Advanced export policy</legend>
       <label>
-        <input type="checkbox" checked={includeRecordIds}
+        <input type="checkbox" checked={includeRecordIds} disabled={printing}
           onChange={event => setIncludeRecordIds(event.currentTarget.checked)} />
         Include Clay record IDs and relation ID columns
       </label>
@@ -202,7 +239,7 @@ export function ExportDialog(props: {
         role="group" aria-labelledby="export-redaction-values-label">
         <span id="export-redaction-values-label">Redact values</span>
         {props.fieldChoices.map((field, index) => <label key={field.fieldId}>
-          <input type="checkbox" checked={redacted.has(field.fieldId)}
+          <input type="checkbox" checked={redacted.has(field.fieldId)} disabled={printing}
             aria-label={`Redact ${field.label} values, field ${index + 1}`}
             onChange={() => toggleRedaction(field.fieldId)} />
           {field.label}
@@ -217,6 +254,13 @@ export function ExportDialog(props: {
       <strong>Export preview unavailable.</strong>
       <span>{error}</span>
       <button type="button" onClick={() => setRetry(value => value + 1)}>Try again</button>
+    </div> : null}
+    {printing ? <div className="relation-preview-note export-loading" role="status" aria-live="polite">
+      Preparing the complete print document in responsive batches…
+    </div> : null}
+    {printError ? <div id="export-dialog-print-error"
+      className="relation-preview-note export-error" role="alert">
+      <strong>Print unavailable.</strong><span>{printError}</span>
     </div> : null}
 
     {manifest && plaintext ? <>
@@ -234,7 +278,7 @@ export function ExportDialog(props: {
         </p>
       </section>
 
-      {manifest.rowCount > PREVIEW_PAGE_SIZE && !printAll ? <nav
+      {manifest.rowCount > PREVIEW_PAGE_SIZE ? <nav
         className="projection-pagination" aria-label="Preview rows">
         <output aria-live="polite">
           Rows {pageStart + 1}–{pageEnd} of {manifest.rowCount}. Download and Print include all rows.
@@ -261,7 +305,7 @@ export function ExportDialog(props: {
           tabIndex={0}
         >
           <table className="dataview-grid">
-            <caption>{readableScope(plaintext)}{!printAll && manifest.rowCount > PREVIEW_PAGE_SIZE
+            <caption>{readableScope(plaintext)}{manifest.rowCount > PREVIEW_PAGE_SIZE
               ? ` · Rows ${pageStart + 1}–${pageEnd} of ${manifest.rowCount}` : ""}</caption>
             <thead><tr>{manifest.fields.map((field, index) => {
               const csvLabel = projectionCsvTextV1(field.label);
@@ -271,9 +315,7 @@ export function ExportDialog(props: {
                   ? <><br /><small className="projection-csv-safety-note">CSV: {csvLabel}</small></> : null}
               </th>;
             })}</tr></thead>
-            <tbody>{visibleRows.map((row, visibleIndex) => <tr key={
-              printAll ? visibleIndex : pageStart + visibleIndex
-            }>
+            <tbody>{visibleRows.map((row, visibleIndex) => <tr key={pageStart + visibleIndex}>
               {row.map((value, fieldIndex) => {
                 const csv = projectionCsvTextV1(value);
                 return <td key={fieldIndex}>
@@ -290,10 +332,12 @@ export function ExportDialog(props: {
 
     <footer className="relation-dialog-actions export-dialog-actions" style={{ flexWrap: "wrap" }}>
       <button type="button" onClick={props.onClose}>Cancel</button>
-      <button type="button" data-export-csv disabled={!artifact || !plaintext}
+      <button type="button" data-export-csv disabled={!artifact || !plaintext || printing}
         onClick={downloadCsv}>Download CSV</button>
-      <button type="button" className="primary" disabled={!artifact || !plaintext}
-        style={{ minHeight: 44 }} onClick={printProjection}>Print / Save as PDF</button>
+      <button type="button" className="primary" disabled={!artifact || !plaintext || printing}
+        style={{ minHeight: 44 }} onClick={() => void printProjection()}>
+        {printing ? "Preparing print…" : "Print / Save as PDF"}
+      </button>
     </footer>
   </ModalDialog>;
 }

@@ -24,6 +24,16 @@ let openPreview: ((state: ExportDialogState) => void) | null = null;
 let memoryTimer: ReturnType<typeof setInterval> | null = null;
 let memoryBaseline = 0;
 let memoryPeak = 0;
+let printCalls = 0;
+
+Object.assign(window, {
+  __releaseFEventLoopYielded: false,
+  __releaseFResponsiveAtPrint: false,
+});
+window.print = () => {
+  printCalls++;
+  window.__releaseFResponsiveAtPrint = window.__releaseFEventLoopYielded;
+};
 
 function heapBytes(): number {
   return Number((performance as Performance & { memory?: { usedJSHeapSize?: number } })
@@ -115,7 +125,11 @@ const api = {
     controller.abort();
     try { await pending; }
     catch (error) {
-      if ((error as { code?: unknown }).code === "E_CANCELLED") return;
+      const detail = (error as { detail?: unknown }).detail;
+      if ((error as { code?: unknown }).code === "E_CANCELLED"
+          && typeof detail === "object" && detail !== null
+          && (detail as { quiescent?: unknown }).quiescent === true
+          && (detail as { outcome?: unknown }).outcome === "cancelled") return;
       throw error;
     }
     throw new Error("cancelled projection resolved unexpectedly");
@@ -138,6 +152,7 @@ const api = {
     };
   },
   inputBytes: (): number => inputBytes,
+  printCalls: (): number => printCalls,
   beginMemorySample,
   endMemorySample,
 };
@@ -145,5 +160,9 @@ const api = {
 Object.assign(window, { __projectionBenchmark: api });
 
 declare global {
-  interface Window { __projectionBenchmark: typeof api }
+  interface Window {
+    __projectionBenchmark: typeof api;
+    __releaseFEventLoopYielded: boolean;
+    __releaseFResponsiveAtPrint: boolean;
+  }
 }

@@ -113,6 +113,25 @@ export type StatusInfo = {
   };
 };
 
+type ProjectionCancellationReceipt = Readonly<{
+  targetId: number;
+  quiescent: true;
+  outcome: "cancelled" | "completed" | "failed" | "not_found";
+}>;
+
+function parseProjectionCancellationReceipt(
+  value: unknown, targetId: number,
+): ProjectionCancellationReceipt {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw new Error("Worker cancellation quiescence acknowledgement is missing.");
+  const raw = value as Record<string, unknown>;
+  if (Object.keys(raw).length !== 3 || raw.targetId !== targetId || raw.quiescent !== true
+      || typeof raw.outcome !== "string"
+      || !["cancelled", "completed", "failed", "not_found"].includes(raw.outcome))
+    throw new Error("Worker cancellation quiescence acknowledgement is invalid.");
+  return raw as ProjectionCancellationReceipt;
+}
+
 function mintWorkerRequestId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(17));
   const alphabet = "abcdefghijklmnopqrstuvwxyz234567";
@@ -156,30 +175,95 @@ export class WorkerClient {
     };
   }
 
+  private beginCall<T>(
+    op: string,
+    payload?: Record<string, unknown>,
+    transfer?: Transferable[],
+  ): { id: number; promise: Promise<T> } {
+    const id = this.nextId++;
+    const promise = new Promise<T>((resolve, reject) => {
+      this.pending.set(id, {
+        resolve: resolve as (v: unknown) => void,
+        reject,
+        cleanup: () => undefined,
+      });
+      this.worker.postMessage({ id, requestId: mintWorkerRequestId(), op, payload }, transfer ?? []);
+    });
+    return { id, promise };
+  }
+
   private call<T>(
     op: string,
     payload?: Record<string, unknown>,
     transfer?: Transferable[],
-    signal?: AbortSignal,
   ): Promise<T> {
+    return this.beginCall<T>(op, payload, transfer).promise;
+  }
+
+  private callProjection(
+    request: ProjectionRequestV1, signal?: AbortSignal,
+  ): Promise<ProjectionTransportV1> {
     if (signal?.aborted)
       return Promise.reject(new ClayError("E_CANCELLED", "The local export projection was cancelled."));
-    const id = this.nextId++;
-    return new Promise<T>((resolve, reject) => {
+    const target = this.beginCall<ProjectionTransportV1>("projectPlaintextV1", request);
+    if (!signal) return target.promise;
+    return new Promise<ProjectionTransportV1>((resolve, reject) => {
+      let cancelling = false;
+      const cleanup = (): void => signal.removeEventListener("abort", abort);
       const abort = (): void => {
-        if (!this.pending.delete(id)) return;
-        signal?.removeEventListener("abort", abort);
-        const cancelId = this.nextId++;
-        this.worker.postMessage({
-          id: cancelId, requestId: mintWorkerRequestId(), op: "cancelProjectionV1",
-          payload: { targetId: id },
+        if (cancelling) return;
+        cancelling = true;
+        cleanup();
+        const acknowledgement = this.call<unknown>(
+          "cancelProjectionV1", { targetId: target.id },
+        );
+        void Promise.allSettled([target.promise, acknowledgement]).then(results => {
+          const [terminal, acknowledged] = results;
+          if (acknowledged.status === "rejected") {
+            reject(new Error(`Worker cancellation quiescence acknowledgement failed: ${
+              acknowledged.reason instanceof Error
+                ? acknowledged.reason.message : String(acknowledged.reason)}`));
+            return;
+          }
+          let receipt: ProjectionCancellationReceipt;
+          try {
+            receipt = parseProjectionCancellationReceipt(acknowledged.value, target.id);
+          } catch (error) {
+            reject(error instanceof Error ? error : new Error(String(error)));
+            return;
+          }
+          if (terminal.status === "fulfilled") {
+            reject(new Error("Worker emitted a late artifact instead of honoring cancellation quiescence."));
+            return;
+          }
+          if (terminal.reason instanceof ClayError && terminal.reason.code === "E_CANCELLED") {
+            if (receipt.outcome !== "cancelled") {
+              reject(new Error(
+                "Worker cancellation terminal and quiescence outcome disagree.",
+              ));
+              return;
+            }
+            reject(new ClayError(
+              "E_CANCELLED", terminal.reason.message,
+              { targetId: receipt.targetId, quiescent: true, outcome: receipt.outcome },
+            ));
+            return;
+          }
+          reject(terminal.reason instanceof Error ? terminal.reason
+            : new Error("Worker projection failed while cancellation was pending."));
         });
-        reject(new ClayError("E_CANCELLED", "The local export projection was cancelled."));
       };
-      const cleanup = (): void => signal?.removeEventListener("abort", abort);
-      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject, cleanup });
-      signal?.addEventListener("abort", abort, { once: true });
-      this.worker.postMessage({ id, requestId: mintWorkerRequestId(), op, payload }, transfer ?? []);
+      signal.addEventListener("abort", abort, { once: true });
+      void target.promise.then(value => {
+        if (cancelling) return;
+        cleanup();
+        resolve(value);
+      }, error => {
+        if (cancelling) return;
+        cleanup();
+        reject(error);
+      });
+      if (signal.aborted) abort();
     });
   }
 
@@ -342,9 +426,7 @@ export class WorkerClient {
   async projectExport(
     request: ProjectionRequestV1, signal?: AbortSignal,
   ): Promise<ProjectionArtifactV1> {
-    const transported = await this.call<ProjectionTransportV1>(
-      "projectPlaintextV1", request, undefined, signal,
-    );
+    const transported = await this.callProjection(request, signal);
     const canonicalProjection = decodeProjectionTransportV1(transported);
     return Object.freeze({
       projection: canonicalProjection,

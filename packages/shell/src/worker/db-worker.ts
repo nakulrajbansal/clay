@@ -59,9 +59,26 @@ let modelAccess: {
 // worker console (visible in DevTools).
 type TraceEntry = { at: string; intent: string; events: DebugEvent[] };
 const traceLog: TraceEntry[] = [];
-const activeProjections = new Set<number>();
 const cancelledProjections = new Set<number>();
+type ProjectionOutcome = "cancelled" | "completed" | "failed";
+type ProjectionLifecycle = {
+  terminal: Promise<ProjectionOutcome>;
+  resolve: (outcome: ProjectionOutcome) => void;
+};
+const projectionLifecycles = new Map<number, ProjectionLifecycle>();
 const TRACE_CAP = 25;
+
+function beginProjectionLifecycle(id: number): void {
+  let resolve!: (outcome: ProjectionOutcome) => void;
+  const terminal = new Promise<ProjectionOutcome>(done => { resolve = done; });
+  projectionLifecycles.set(id, { terminal, resolve });
+}
+
+function finishProjectionLifecycle(id: number, outcome: ProjectionOutcome): void {
+  const lifecycle = projectionLifecycles.get(id);
+  projectionLifecycles.delete(id);
+  lifecycle?.resolve(outcome);
+}
 
 function recordTrace(entry: TraceEntry): void {
   traceLog.unshift(entry);
@@ -228,22 +245,23 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "registryTables":
       return [...mustStore().registrySnapshot().values()];
     case "projectPlaintextV1":
-      activeProjections.add(req.id);
       try {
         const artifact = await projectPlaintextV1Cooperative(mustStore(), p as ProjectionRequestV1, {
           isCancelled: () => cancelledProjections.has(req.id),
         });
         return projectionTransportV1(artifact);
       } finally {
-        activeProjections.delete(req.id);
         cancelledProjections.delete(req.id);
       }
     case "cancelProjectionV1": {
       const targetId = Number(p.targetId);
       if (!Number.isSafeInteger(targetId) || targetId < 1)
         throw new ClayError("E_VALIDATION", "projection cancellation target is invalid");
-      if (activeProjections.has(targetId)) cancelledProjections.add(targetId);
-      return null;
+      const lifecycle = projectionLifecycles.get(targetId);
+      if (!lifecycle) return { targetId, quiescent: true, outcome: "not_found" };
+      cancelledProjections.add(targetId);
+      const outcome = await lifecycle.terminal;
+      return { targetId, quiescent: true, outcome };
     }
     case "storePort": {
       const port = ports[0];
@@ -408,7 +426,10 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
 
 self.onmessage = (ev: MessageEvent): void => {
   const req = ev.data as Request;
+  const projectionRequest = req.op === "projectPlaintextV1";
+  if (projectionRequest) beginProjectionLifecycle(req.id);
   void (async () => {
+    let projectionOutcome: ProjectionOutcome = "failed";
     try {
       const result = await handle(req, ev.ports);
       const transfer: Transferable[] = [];
@@ -423,6 +444,7 @@ self.onmessage = (ev: MessageEvent): void => {
         addTransfer(bytes.bytes); addTransfer(bytes.plaintext); addTransfer(bytes.csv);
       }
       (self as unknown as Worker).postMessage({ id: req.id, ok: true, result }, transfer);
+      if (projectionRequest) projectionOutcome = "completed";
     } catch (e) {
       (self as unknown as Worker).postMessage({
         id: req.id, ok: false,
@@ -431,6 +453,10 @@ self.onmessage = (ev: MessageEvent): void => {
           message: e instanceof Error ? e.message : String(e),
         },
       });
+      if (projectionRequest && e instanceof ClayError && e.code === "E_CANCELLED")
+        projectionOutcome = "cancelled";
+    } finally {
+      if (projectionRequest) finishProjectionLifecycle(req.id, projectionOutcome);
     }
   })();
 };

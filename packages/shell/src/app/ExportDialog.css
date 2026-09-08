@@ -21,6 +21,7 @@
 .export-redaction-options { flex-wrap: wrap; overflow-x: visible; }
 .export-redaction-options > span { flex-basis: 100%; }
 .export-redaction-options label { white-space: normal; overflow-wrap: anywhere; }
+.projection-print-root { display: none; }
 
 
 @media (max-width: 480px) {
@@ -30,7 +31,7 @@
 }
 
 @media print {
-  @page { margin: 12mm; }
+  @page { size: A4 landscape; margin: 10mm; }
   body > * { visibility: hidden !important; }
   body > .export-dialog-backdrop {
     position: static;
@@ -53,4 +54,36 @@
   .projection-print-document th { position: static; }
   .projection-empty-marker,
   .projection-csv-safety-note { display: none !important; }
+
+  body:has(> .projection-print-root[data-print-ready="true"]) > .export-dialog-backdrop {
+    display: none !important;
+  }
+  body > .projection-print-root[data-print-ready="true"] {
+    display: block !important;
+    visibility: visible !important;
+    color: #172033;
+    background: #fff;
+    font: 9pt/1.3 system-ui, sans-serif;
+  }
+  .projection-print-root,
+  .projection-print-root * { visibility: visible !important; }
+  .projection-print-root .projection-print-header { margin: 0 0 5mm; }
+  .projection-print-root .projection-print-header h1 { margin: 0 0 1mm; font-size: 18pt; }
+  .projection-print-root .projection-print-header p { margin: 0; }
+  .projection-print-sheet { break-after: page; page-break-after: always; }
+  .projection-print-sheet:last-child { break-after: auto; page-break-after: auto; }
+  .projection-print-segment { margin: 0 0 2mm; font-size: 11pt; }
+  .projection-print-table {
+    width: 100%; border-collapse: collapse; table-layout: fixed;
+    font-size: 6pt; line-height: 1.2;
+  }
+  .projection-print-table caption { margin-bottom: 2mm; text-align: left; }
+  .projection-print-table th,
+  .projection-print-table td {
+    border: .25mm solid #9aa2b1; padding: 1.2mm; overflow-wrap: anywhere;
+    vertical-align: top;
+  }
+  .projection-print-table th { background: #edf0f5; text-align: left; }
+  .projection-print-table thead { display: table-row-group; }
+  .projection-print-table tr { break-inside: avoid; page-break-inside: avoid; }
 }

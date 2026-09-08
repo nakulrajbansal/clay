@@ -109,11 +109,17 @@ test("local-export browser evidence observes real dialog states and doubles ever
   const browserBenchmark = await readFile(new URL(
     "scripts/local-export-browser-benchmark.mjs", root,
   ), "utf8");
+  const evidenceLibrary = await readFile(new URL(
+    "scripts/local-export-evidence-lib.mjs", root,
+  ), "utf8");
   const benchmarkWorker = await readFile(new URL(
     "packages/shell/test/browser/projection-benchmark-worker.ts", root,
   ), "utf8");
   const exportDialog = await readFile(new URL(
     "packages/shell/src/app/ExportDialog.tsx", root,
+  ), "utf8");
+  const projectionPrint = await readFile(new URL(
+    "packages/shell/src/app/projection-print.ts", root,
   ), "utf8");
   assert.match(harness, /import "\.\.\/\.\.\/src\/app\/Operations\.css"/,
     "the benchmark owner must load the production modal and dialog layout styles");
@@ -124,13 +130,26 @@ test("local-export browser evidence observes real dialog states and doubles ever
   assert.match(exportDialog,
     /manifest\.rowCount > PREVIEW_PAGE_SIZE[\s\S]*?Rows \{pageStart \+ 1\}–\{pageEnd\} of \{manifest\.rowCount\}/,
     "large previews must disclose the exact visible range and total");
+  assert.doesNotMatch(exportDialog, /flushSync|setPage\(-1\)/,
+    "native Print must never synchronously expand the React preview");
   assert.match(exportDialog,
-    /onPrint[\s\S]*?event\.type === "beforeprint" \? -1 : 0[\s\S]*?addEventListener\("beforeprint", onPrint\)[\s\S]*?addEventListener\("afterprint", onPrint\)/,
-    "native Print must expand all rows and then restore a bounded preview");
-  assert.match(exportDialog, /flushSync\(\(\) => setPage\(-1\)\)[\s\S]*?window\.print\(\)/);
+    /await prepareProjectionPrintDocument[\s\S]*?window\.print\(\)/,
+    "native Print must wait for the isolated bounded print document");
+  assert.match(projectionPrint,
+    /PRINT_ROWS_PER_SHEET = 150[\s\S]*?PRINT_FIELDS_PER_SHEET = 4[\s\S]*?await yieldToMain\(\)/,
+    "print preparation must yield after bounded 600-cell sheets");
   assert.match(browserBenchmark,
     /expectedRows = Math\.min\(rows, 100\)[\s\S]*?projection-pagination[\s\S]*?Rows 1–\$\{expectedRows\} of \$\{rows\}/,
     "the browser benchmark must time a complete first preview page with exact total disclosure");
+  assert.match(browserBenchmark,
+    /renderedCells[\s\S]*?maxSheetCells > 600[\s\S]*?responsiveBeforePrint[\s\S]*?pdfTextMatchesExactSequence/,
+    "the browser benchmark must certify bounded, responsive, exact maximum Print output");
+  assert.match(browserBenchmark,
+    /join\(outDir, "maximum-print\.pdf"\)[\s\S]*?maximumPrint[\s\S]*?rawResultsSha256/,
+    "the maximum Print PDF and its measurements must be retained in benchmark evidence");
+  assert.match(evidenceLibrary,
+    /expectedArtifacts = \[\.\.\.runtimeArtifacts, benchmark\.maximumPrint\.artifact\]/,
+    "outer release verification must rehash the retained maximum Print PDF");
   assert.match(source, /schema: "LocalExportEvidenceManifestV2"/);
   assert.match(source, /writeReleaseEvidenceDirectory\(dirname\(outDir\), report, benchmarkEvidence\)/);
   assert.doesNotMatch(source, /schema: "LocalExportEvidenceManifestV1"/);
@@ -186,8 +205,26 @@ test("local-export browser evidence observes real dialog states and doubles ever
     "the record journey must bind identity, headings, and values");
   assert.match(source, /recordCsvRows[\s\S]*?expectedRecordCsv/,
     "the record journey must read back its exact CSV");
-  assert.match(source, /recordPrintBaseline[\s\S]*?printCalls === recordPrintBaseline \+ 1/,
-    "the record journey must invoke native Print");
+  assert.match(source,
+    /recordPrintBaseline[\s\S]*?waitForFunction[\s\S]*?recordPrintBaseline \+ 1/,
+    "the record journey must invoke native Print and await its completion");
+  const desktopCsvAction = source.indexOf("const downloadPromise = page.waitForEvent");
+  const desktopPrintAction = source.indexOf(
+    'await dialog.getByRole("button", { name: "Print / Save as PDF", exact: true }).click()',
+  );
+  const desktopEgressClosure = source.indexOf("const exportEgress = assertLocalExportActionEgress");
+  assert.ok(desktopCsvAction >= 0 && desktopCsvAction < desktopPrintAction
+      && desktopPrintAction < desktopEgressClosure,
+  "the zero-egress interval must close only after observed CSV and Print actions");
+  assert.match(source,
+    /blobUrls[\s\S]*?downloadUrls[\s\S]*?context\.on\("request"[\s\S]*?monitorWebSockets[\s\S]*?webSockets\.slice\(webSocketBaseline\)/,
+    "the action interval must separately classify blob downloads and WebSockets");
+  assert.match(harness,
+    /detail[\s\S]*?quiescent[^\n]*=== true[\s\S]*?outcome[^\n]*=== "cancelled"/,
+    "the benchmark must accept cancellation only with worker quiescence proof");
+  assert.match(benchmarkWorker,
+    /cancelProjectionV1[\s\S]*?await lifecycle\.terminal[\s\S]*?quiescent: true, outcome/,
+    "the benchmark worker must acknowledge cancellation only after terminal publication");
   assert.match(source,
     /const keyboardAssertions = \[\];[\s\S]*?assertions:\s*keyboardAssertions/,
     "keyboard manifest assertions must be populated only by observed checks");
