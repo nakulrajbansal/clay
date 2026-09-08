@@ -6,6 +6,11 @@ import {
   type WriteFenceV1 as WriteFence,
 } from "@clay/schema/catalog";
 import { enumerateCanonicalStateV1 } from "./canonical-state";
+import { DAILY_TIME_ZONE_SETTING } from "./daily-calendar";
+import {
+  DAILY_NAVIGATION_SETTING,
+} from "./daily-navigation";
+import { DAILY_SOURCE_LIBRARY_SETTING } from "./daily-source-profile";
 import { isThenable, type DbDriver } from "./db";
 import { DeviceCatalog } from "./device-catalog";
 import { ClayError } from "./errors";
@@ -25,6 +30,16 @@ import { stateLeafHashV1 } from "./state-merkle";
 import type { StateMerkleChange } from "./state-merkle-index";
 import { ClayStore } from "./store";
 import { TargetAuthorityStore } from "./target-authority";
+
+const QUICK_CAPTURE_LAST_TABLE_SETTING = "quick_capture_last_table_v1";
+const RESERVED_SETTING_OWNERS = new Map<string, string>([
+  ["shell_id", "starter activation"],
+  [DAILY_SOURCE_LIBRARY_SETTING, "Daily Home source authority"],
+  [DAILY_NAVIGATION_SETTING, "Daily Home navigation authority"],
+  [DAILY_TIME_ZONE_SETTING, "Daily Home calendar authority"],
+  [QUICK_CAPTURE_LAST_TABLE_SETTING, "Daily Home capture authority"],
+  ["sample_rows", "starter sample provenance authority"],
+]);
 
 type JsonValue = null | boolean | number | string | JsonValue[] | JsonRecord;
 type JsonRecord = { [key: string]: JsonValue };
@@ -86,8 +101,9 @@ function copyTarget(input: TargetEvidence): TargetEvidence {
 }
 
 function assertSettingKeyAvailable(key: string): void {
-  if (key === "shell_id")
-    throw invalid("reserved setting 'shell_id' may only be changed by starter activation");
+  const owner = RESERVED_SETTING_OWNERS.get(key);
+  if (owner)
+    throw invalid(`reserved setting '${key}' may only be changed by ${owner}`);
 }
 
 function selectedCatalogShell(

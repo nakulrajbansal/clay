@@ -2,7 +2,7 @@
 import type {
   AttachmentFile, AttachmentMetadata, AttachmentStorageSummary,
   AutomationDefinition, AutomationDefinitionInput, AutomationRun, AutomationSimulation,
-  BatchMutation, BatchReceipt, ClayNotification, DebugEvent, FieldProvenance,
+  BatchMutation, BatchReceipt, ClayNotification, DailyHomeSnapshot, DebugEvent, FieldProvenance,
   GlobalSearchResult,
   HistoryEntry, LivePanel, PanelProvenance,
   PrivateMetricEvent, PrivateMetricsSummary, RegTable, RelationConversionPreview,
@@ -252,6 +252,36 @@ export class WorkerClient {
   }
   undoAutomationRun(id: string): Promise<AutomationRun> {
     return this.call("undoAutomationRun", { id });
+  }
+  private dailyHomeRuntimeTimeZone(): string {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  }
+  dailyHome(): Promise<DailyHomeSnapshot> {
+    return this.call("dailyHome", { timeZone: this.dailyHomeRuntimeTimeZone() });
+  }
+  resolveDailyHomeDate(value: string): Promise<string> {
+    return this.call("dailyHomeResolveDate", {
+      value, timeZone: this.dailyHomeRuntimeTimeZone(),
+    });
+  }
+  compareAndSetDailySource<T>(
+    expectedRevision: number, value: T,
+  ): Promise<{ ok: boolean; current: unknown }> {
+    return this.call("dailyHomeSourceCompareAndSet", { expectedRevision, value });
+  }
+  compareAndSetDailyNavigation<T>(
+    expectedRevision: number, value: T,
+  ): Promise<{ ok: boolean; current: unknown }> {
+    return this.call("dailyHomeNavigationCompareAndSet", { expectedRevision, value });
+  }
+  initializeDailyHomeTimeZone(timeZone: string): Promise<string> {
+    return this.call("dailyHomeInitializeTimeZone", { timeZone });
+  }
+  quickCapture(table: string, row: Record<string, unknown>, tableId: string): Promise<BatchReceipt> {
+    return this.call("dailyHomeQuickCapture", { table, row, tableId });
+  }
+  undoQuickCapture(batchId: string): Promise<BatchReceipt> {
+    return this.call("dailyHomeUndoCapture", { batchId });
   }
   notifications(limit = 100): Promise<ClayNotification[]> {
     return this.call("notifications", { limit });

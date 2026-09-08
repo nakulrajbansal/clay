@@ -519,7 +519,7 @@ function sameCompleteness(left: Completeness, right: Completeness): boolean {
 }
 
 function expectedSectionCounts(
-  snapshot: DailyHomeSnapshot,
+  sources: DailyHomeSnapshot["sources"],
   sectionId: SectionId,
   renderedMinimum: number,
 ): CountSet {
@@ -527,7 +527,7 @@ function expectedSectionCounts(
   const occurrenceGaps = new Map<Gap["sourceId"], Gap>();
   const renderedGaps = new Map<Gap["sourceId"], Gap>();
   for (const sourceId of SECTION_SOURCES[sectionId]) {
-    const source = snapshot.sources.find(candidate => candidate.sourceId === sourceId);
+    const source = sources.find(candidate => candidate.sourceId === sourceId);
     if (!source) invalid("snapshot section source");
     const occurrence = source.page.counts.sourceOccurrences;
     occurrenceMinimum = safeAdd(occurrenceMinimum, countMinimum(occurrence));
@@ -546,6 +546,50 @@ function expectedSectionCounts(
     sourceOccurrences: completeness(occurrenceMinimum, occurrenceGaps),
     renderedUnique: completeness(renderedMinimum, renderedGaps),
   };
+}
+
+/**
+ * Derive the five rendered section pages from canonical source occurrences.
+ * The helper intentionally has no continuation policy: callers with a source
+ * cursor must create a matching, basis-bound section cursor themselves.
+ */
+export function deriveDailyHomeSections(
+  sources: DailyHomeSnapshot["sources"],
+): DailyHomeSnapshot["sections"] {
+  if (sources.some(source => source.page.continuation.kind === "cursor"))
+    invalid("snapshot projection section cursor required");
+  const occurrenceSeen = new Set<string>();
+  const candidates: DailyItem[] = [];
+  for (const source of sources) {
+    for (const item of source.page.items) {
+      const key = occurrenceKey(item);
+      if (occurrenceSeen.has(key)) continue;
+      occurrenceSeen.add(key);
+      candidates.push(item);
+    }
+  }
+  const renderedSeen = new Set<string>();
+  const bySection = new Map<SectionId, DailyItem[]>(
+    DAILY_HOME_SECTION_IDS_V1.map(sectionId => [sectionId, []]),
+  );
+  for (const item of candidates.sort(compareCanonicalItems)) {
+    const key = renderedKey(item);
+    if (renderedSeen.has(key)) continue;
+    renderedSeen.add(key);
+    bySection.get(sectionForSource(itemSourceId(item)))!.push(item);
+  }
+  return DAILY_HOME_SECTION_IDS_V1.map(sectionId => {
+    const items = bySection.get(sectionId)!;
+    return {
+      sectionId,
+      page: {
+        items,
+        returned: items.length,
+        counts: expectedSectionCounts(sources, sectionId, items.length),
+        continuation: { kind: "end" as const },
+      },
+    };
+  });
 }
 
 function verifiedPageSize(
@@ -650,7 +694,7 @@ function verifySections(
       invalid("snapshot section coverage");
     }
 
-    const expectedCounts = expectedSectionCounts(snapshot, section.sectionId, allExpected.length);
+    const expectedCounts = expectedSectionCounts(snapshot.sources, section.sectionId, allExpected.length);
     if (!sameCompleteness(section.page.counts.sourceOccurrences, expectedCounts.sourceOccurrences)
         || !sameCompleteness(section.page.counts.renderedUnique, expectedCounts.renderedUnique)) {
       const partial = section.page.counts.sourceOccurrences.kind === "partial"

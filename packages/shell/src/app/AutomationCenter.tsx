@@ -50,10 +50,26 @@ function defaultDraft(tables: RegTable[]): Draft {
   };
 }
 
+function recurringRecordDraft(tables: RegTable[]): Draft {
+  const base = defaultDraft(tables);
+  const target = tables[0];
+  return {
+    ...base,
+    name: target ? `Create recurring ${humanize(target.name)}` : "Create recurring record",
+    trigger: "schedule",
+    action: "create_record",
+    targetTable: target?.name ?? "",
+    targetField: writable(target)[0]?.name ?? "",
+  };
+}
+
 export function AutomationCenter(props: {
   worker: WorkerClient;
   tables: RegTable[];
   notifications: ClayNotification[];
+  initialRecipe?: "recurring_record";
+  initialAutomationId?: string;
+  mutationsAvailable?: boolean;
   onNotifications: (notifications: ClayNotification[]) => void;
   onClose: () => void;
   onOpenRecord: (table: string, id: string) => void;
@@ -62,12 +78,16 @@ export function AutomationCenter(props: {
   onInfo: (message: string) => void;
   onConfirm?: (message: string) => Promise<boolean>;
 }): React.JSX.Element {
+  const mutationsAvailable = props.mutationsAvailable ?? true;
   const [tab, setTab] = useState<"rules" | "inbox" | "history">("rules");
   const [rules, setRules] = useState<AutomationDefinition[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [runs, setRuns] = useState<AutomationRun[]>([]);
-  const [draft, setDraft] = useState<Draft>(() => defaultDraft(props.tables));
-  const [building, setBuilding] = useState(false);
+  const [draft, setDraft] = useState<Draft>(() => props.initialRecipe === "recurring_record"
+    ? recurringRecordDraft(props.tables) : defaultDraft(props.tables));
+  const [building, setBuilding] = useState(
+    props.initialRecipe === "recurring_record" && mutationsAvailable,
+  );
   const [busy, setBusy] = useState(false);
   const [simulation, setSimulation] = useState<AutomationSimulation | null>(null);
   const [simulatedRule, setSimulatedRule] = useState<AutomationDefinition | null>(null);
@@ -275,21 +295,27 @@ export function AutomationCenter(props: {
           Run history <span>{runs.length}</span></button>
       </nav>
 
+      {!mutationsAvailable ? <div className="automation-unavailable" role="status">
+        <strong>Automation changes are unavailable.</strong>
+        <span>You can review exact rules, reminders, and history. Creating, running, marking read, and undo stay disabled until their worker authority routes are certified.</span>
+      </div> : null}
+
       <div className="automation-body">
         {tab === "rules" ? (
           building ? (
             <section className="automation-builder">
               <div className="automation-builder-title"><button className="link"
                 onClick={() => { setBuilding(false); setSimulation(null); }}>← Rules</button>
-                <div><strong>Build a local rule</strong><span>Save disabled, inspect a simulation, then enable.</span></div></div>
+                <div><strong>{props.initialRecipe === "recurring_record"
+                  ? "Create a recurring record" : "Build a local rule"}</strong><span>Save disabled, inspect a simulation, then enable.</span></div></div>
               <div className="automation-step"><span className="automation-step-number">1</span><div>
-                <label>Rule name<input autoFocus value={draft.name}
+                <label>Rule name<input autoFocus aria-label="Rule name" value={draft.name}
                   onChange={event => setDraft(current => ({ ...current, name: event.target.value }))}
                   placeholder="Create kickoff task for new deals" /></label>
               </div></div>
               <div className="automation-step"><span className="automation-step-number">2</span><div>
                 <div className="automation-inline">
-                  <label>When<select value={draft.trigger}
+                  <label>When<select aria-label="When" value={draft.trigger}
                     onChange={event => setDraft(current => ({ ...current,
                       trigger: event.target.value as TriggerKind }))}>
                     <option value="record_created">a record is created</option>
@@ -337,7 +363,7 @@ export function AutomationCenter(props: {
                 ) : null}
               </div></div>
               <div className="automation-step"><span className="automation-step-number">3</span><div>
-                <label>Then<select value={draft.action}
+                <label>Then<select aria-label="Then" value={draft.action}
                   onChange={event => setDraft(current => ({ ...current, action: event.target.value as ActionKind }))}>
                   <option value="notify">show a reminder</option>
                   {draft.trigger !== "schedule" ? <option value="set_fields">update the matching record</option> : null}
@@ -375,7 +401,7 @@ export function AutomationCenter(props: {
                       value => setDraft(current => ({ ...current, actionValue: value })),
                     )}</label>
                 </div> : <div className="automation-inline">
-                  <label>Table<select value={draft.targetTable}
+                  <label>Table<select aria-label="Record table" value={draft.targetTable}
                     onChange={event => {
                       const next = props.tables.find(table => table.name === event.target.value);
                       setDraft(current => ({ ...current, targetTable: event.target.value,
@@ -405,7 +431,9 @@ export function AutomationCenter(props: {
           ) : <section className="automation-rule-list">
             <div className="automation-list-head"><div><strong>Your rules</strong>
               <span>Runs only on this device while Clay is open.</span></div>
-              <button className="primary" onClick={() => { setDraft(defaultDraft(props.tables)); setBuilding(true); }}>＋ New rule</button></div>
+              <button className="primary" disabled={!mutationsAvailable}
+                title={!mutationsAvailable ? "Unavailable until automation authority is certified" : undefined}
+                onClick={() => { setDraft(defaultDraft(props.tables)); setBuilding(true); }}>＋ New rule</button></div>
             {pendingEnable ? <div className="automation-enable-preview" aria-live="polite">
               <div><span>Simulation</span><strong>{pendingEnable.rule.name}</strong>
                 <p>{pendingEnable.simulation.matchedRecords} match · {pendingEnable.simulation.plannedMutations} data changes · {pendingEnable.simulation.plannedNotifications} reminders</p></div>
@@ -417,14 +445,18 @@ export function AutomationCenter(props: {
               <strong>Loading rules…</strong></div>
               : rules.length === 0 ? <div className="automation-empty"><span aria-hidden="true">↻</span>
               <strong>Turn repeat work into a rule</strong><p>Start with a reminder or a safe field update.</p></div>
-              : rules.map(rule => <article className="automation-rule" key={rule.id}>
+              : rules.map(rule => <article className="automation-rule" key={rule.id}
+                data-automation-id={rule.id}
+                aria-current={rule.id === props.initialAutomationId ? "true" : undefined}>
                 <button className={`automation-toggle${rule.enabled ? " on" : ""}`}
                   role="switch" aria-checked={rule.enabled}
-                  aria-label={`${rule.enabled ? "Disable" : "Enable"} ${rule.name}`} disabled={busy}
+                  aria-label={`${rule.enabled ? "Disable" : "Enable"} ${rule.name}`}
+                  disabled={busy || !mutationsAvailable}
                   onClick={() => void toggle(rule)}><span /></button>
                 <div><strong>{rule.name}</strong><span>{humanize(rule.trigger.kind)} · {rule.actions.map(action => humanize(action.kind)).join(", ")}</span></div>
-                <button onClick={() => void runNow(rule)} disabled={busy}>Run now</button>
+                <button onClick={() => void runNow(rule)} disabled={busy || !mutationsAvailable}>Run now</button>
                 <button className="link danger" aria-label={`Delete ${rule.name}`}
+                  disabled={!mutationsAvailable}
                   onClick={() => void (async () => {
                     if (props.onConfirm && !await props.onConfirm(
                       `Delete “${rule.name}”? Existing run history remains visible.`)) return;
@@ -440,9 +472,11 @@ export function AutomationCenter(props: {
               <div><strong>{notification.title}</strong><p>{notification.body}</p>
                 <small>{notification.at.slice(0,16).replace("T"," ")}</small></div>
               {notification.table && notification.recordId ? <button onClick={() => {
-                void props.worker.markNotificationRead(notification.id).then(refresh);
+                if (mutationsAvailable) void props.worker.markNotificationRead(notification.id).then(refresh);
                 props.onClose(); props.onOpenRecord(notification.table!, notification.recordId!);
-              }}>Open record</button> : <button onClick={() => void props.worker.markNotificationRead(notification.id).then(refresh)}>
+              }}>Open record</button> : <button disabled={!mutationsAvailable}
+                title={!mutationsAvailable ? "Unavailable until notification authority is certified" : undefined}
+                onClick={() => void props.worker.markNotificationRead(notification.id).then(refresh)}>
                 Mark read</button>}
             </article>)}
         </section> : <section className="automation-history">
@@ -454,7 +488,8 @@ export function AutomationCenter(props: {
                 <div><strong>{rule?.name ?? "Deleted rule"}</strong><span>{run.matchedRecords} matched · {run.changed} changed · {run.at.slice(0,16).replace("T"," ")}</span></div>
                 {run.status === "failed" ? <code>{run.errorCode}</code>
                   : run.undone ? <span className="run-undone">Undone</span>
-                    : <button disabled={busy} onClick={() => void undoRun(run)}>Undo run</button>}</article>;
+                    : <button disabled={busy || !mutationsAvailable}
+                      onClick={() => void undoRun(run)}>Undo run</button>}</article>;
             })}
         </section>}
       </div>

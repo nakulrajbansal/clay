@@ -30,6 +30,36 @@ export { compileQuery, runQuery, type CompiledQuery, type QueryRow,
   type QueryValue, type RecordLink } from "./query";
 export { coerceValue, nowIso, uuidv7, validateInsert, validatePatch } from "./rows";
 export {
+  DAILY_HOME_SECTION_IDS_V1, DAILY_HOME_SOURCE_IDS_V1,
+  type DailyHomeItemV1 as DailyHomeItem,
+  type DailyHomeSnapshotV1 as DailyHomeSnapshot,
+  type DailySourceLibraryV1 as DailySourceLibrary,
+} from "@clay/schema/daily-home";
+export {
+  buildDailyHomeSnapshot, decodeDailyHomeCursor, deriveDailyHomeSections,
+  encodeDailyHomeCursor,
+  verifyDailyHomeCursor, verifyDailyHomeSnapshot,
+} from "./daily-home-basis";
+export {
+  OPERATIONAL_VIEWS_SETTING, projectDailyHome,
+  type DailyHomeProjectionContext, type DailyHomeProjectionReader,
+} from "./daily-home-projection";
+export {
+  DAILY_NAVIGATION_SETTING, loadDailyNavigationState,
+  rememberDailyRecordOpened, toggleDailyFavorite,
+  type DailyNavigationState, type DailyNavigationStorage, type DailyRecordReference,
+} from "./daily-navigation";
+export {
+  DAILY_TIME_ZONE_SETTING, localCalendarContext, parseDailyTemporal,
+  resolveDailyRelativeDate, resolveLocalDateTime,
+} from "./daily-calendar";
+export {
+  DAILY_SOURCE_LIBRARY_SETTING, loadDailySourceLibrary, removeReviewedDailySource,
+  resetDailySourceLibrary, resolveDailySourceProfiles, upsertReviewedDailySource,
+  type DailySourceIssueReason, type DailySourceProfileStorage, type DailySourceResolution,
+  type ReviewedDailySourceProfile,
+} from "./daily-source-profile";
+export {
   applyForwardOps, applyInverseOps, deriveInverse, validateMigrationPlan,
   type ForwardOpT, type InverseOpT, type MigrationPlanT,
 } from "./migrate";

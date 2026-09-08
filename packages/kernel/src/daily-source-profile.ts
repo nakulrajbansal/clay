@@ -4,6 +4,9 @@ import {
   type DailySourceProfileV1,
 } from "@clay/schema/daily-home";
 import type { RegColumn, RegTable, Registry } from "./registry";
+import { sha256HexSync } from "./state-digest";
+
+export const DAILY_SOURCE_LIBRARY_SETTING = "daily_source_library_v1";
 
 export type DailySourceIssueReason =
   | "table_missing"
@@ -153,4 +156,121 @@ export function resolveDailySourceProfiles(
     }
   }
   return Object.freeze({ ready: Object.freeze(ready), issues: Object.freeze(issues) });
+}
+
+export type DailySourceProfileStorage = {
+  getSetting<T>(key: string): Promise<T | null | undefined>;
+  compareAndSetDailySource<T>(
+    expectedRevision: number, value: T,
+  ): Promise<{ ok: boolean; current: unknown }>;
+};
+
+export type ReviewedDailySourceProfile = Pick<
+  DailySourceProfileV1,
+  "tableId" | "labelFieldId" | "dueFieldId" | "completion" | "labelSnapshot" | "dueLabelSnapshot"
+>;
+
+function profileIdFor(tableId: string): string {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz234567";
+  const digest = sha256HexSync(new TextEncoder().encode(
+    `clay.daily-source-profile.v1\u0000${tableId}`,
+  ));
+  const value = BigInt(`0x${digest}`);
+  let encoded = "";
+  for (let index = 0; index < 26; index++) {
+    const shift = BigInt(256 - ((index + 1) * 5));
+    encoded += alphabet[Number((value >> shift) & 31n)]!;
+  }
+  return `dsp_${encoded}`;
+}
+
+export function loadDailySourceLibrary(raw: unknown): DailySourceLibraryV1 {
+  if (raw === null || raw === undefined) return { schema: 1, revision: 0, profiles: [] };
+  const parsed = DailySourceLibraryV1.safeParse(raw);
+  if (!parsed.success) throw new TypeError("invalid Daily Home source library");
+  return parsed.data;
+}
+
+export async function upsertReviewedDailySource(
+  storage: DailySourceProfileStorage,
+  input: ReviewedDailySourceProfile,
+): Promise<DailySourceLibraryV1> {
+  let raw: unknown = await storage.getSetting<unknown>(DAILY_SOURCE_LIBRARY_SETTING);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const current = loadDailySourceLibrary(raw);
+    const profile: DailySourceProfileV1 = {
+      schema: 1,
+      profileId: profileIdFor(input.tableId),
+      tableId: input.tableId,
+      labelFieldId: input.labelFieldId,
+      dueFieldId: input.dueFieldId,
+      completion: input.completion,
+      enabled: true,
+      ...(input.labelSnapshot ? { labelSnapshot: input.labelSnapshot } : {}),
+      ...(input.dueLabelSnapshot ? { dueLabelSnapshot: input.dueLabelSnapshot } : {}),
+    };
+    const existing = current.profiles.findIndex(candidate => candidate.tableId === input.tableId);
+    const profiles = existing === -1
+      ? [...current.profiles, profile]
+      : current.profiles.map((candidate, index) => index === existing ? profile : candidate);
+    const candidate = DailySourceLibraryV1.safeParse({
+      schema: 1,
+      revision: current.revision + 1,
+      profiles,
+    });
+    if (!candidate.success) throw new TypeError("invalid reviewed Daily Home source");
+    const result = await storage.compareAndSetDailySource(
+      current.revision, candidate.data,
+    );
+    if (result.ok) return candidate.data;
+    raw = result.current;
+  }
+  throw new Error("Today setup changed in another window; try again");
+}
+
+export async function removeReviewedDailySource(
+  storage: DailySourceProfileStorage,
+  profileId: string,
+): Promise<DailySourceLibraryV1> {
+  let raw: unknown = await storage.getSetting<unknown>(DAILY_SOURCE_LIBRARY_SETTING);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const current = loadDailySourceLibrary(raw);
+    const candidate = DailySourceLibraryV1.parse({
+      schema: 1,
+      revision: current.revision + 1,
+      profiles: current.profiles.filter(profile => profile.profileId !== profileId),
+    });
+    const result = await storage.compareAndSetDailySource(current.revision, candidate);
+    if (result.ok) return candidate;
+    raw = result.current;
+  }
+  throw new Error("Today setup changed in another window; try again");
+}
+
+function recoverableRevision(raw: unknown): number {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return 0;
+  const descriptor = Reflect.getOwnPropertyDescriptor(raw, "revision");
+  const value = descriptor && "value" in descriptor ? descriptor.value : 0;
+  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : 0;
+}
+
+export async function resetDailySourceLibrary(
+  storage: DailySourceProfileStorage,
+): Promise<DailySourceLibraryV1> {
+  let raw: unknown = await storage.getSetting<unknown>(DAILY_SOURCE_LIBRARY_SETTING);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const parsed = DailySourceLibraryV1.safeParse(raw);
+    const expectedRevision = parsed.success ? parsed.data.revision : recoverableRevision(raw);
+    if (expectedRevision >= Number.MAX_SAFE_INTEGER)
+      throw new Error("Today setup revision cannot be advanced safely");
+    const candidate = DailySourceLibraryV1.parse({
+      schema: 1,
+      revision: expectedRevision + 1,
+      profiles: [],
+    });
+    const result = await storage.compareAndSetDailySource(expectedRevision, candidate);
+    if (result.ok) return candidate;
+    raw = result.current;
+  }
+  throw new Error("Today setup changed in another window; try again");
 }

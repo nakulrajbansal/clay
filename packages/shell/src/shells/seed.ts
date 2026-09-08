@@ -737,14 +737,15 @@ export function seedStarterShell(store: ClayStore, id: StarterShellId): void {
     sampleIds[t.name] = t.sampleRows.map(row =>
       String(store.insert(t.name, materializeSampleRow(t, row, seedInstant)).id));
   }
-  store.setSetting("sample_rows", sampleIds);
+  store.setSetting("sample_rows", { format: 1, tables: sampleIds });
   store.setSetting("shell_id", bundle.shellId);
 }
 
 /** One-click sample removal (G9): kernel-local, soft-deleted (reversible). */
 export function removeSampleRows(store: ClayStore): void {
-  const marker = store.getSetting<Record<string, string[]>>("sample_rows") ?? {};
-  for (const [table, ids] of Object.entries(marker))
+  const marker = store.getSetting<{ format: 1; tables: Record<string, string[]> }>("sample_rows");
+  if (!marker || marker.format !== 1 || !marker.tables) return;
+  for (const [table, ids] of Object.entries(marker.tables))
     for (const id of ids) store.softDelete(table, id);
-  store.setSetting("sample_rows", {});
+  store.setSetting("sample_rows", { format: 1, tables: {} });
 }

@@ -4,7 +4,7 @@
 // serveStore RPC ports for the Bridge's AsyncStore (live and shadow).
 // Records never leave this worker except over those ports to the Bridge.
 import {
-  InProcessAsyncStore, portFromMessagePort, serveStore,
+  InProcessAsyncStore, portFromMessagePort, projectDailyHome, resolveDailyRelativeDate, serveStore,
   type DebugEvent, type LivePanel, type PanelProvenance, type PreviewHandle,
 } from "@clay/kernel";
 import { ClayError } from "@clay/kernel/errors";
@@ -139,6 +139,7 @@ async function runAuthorityMutation(
       diff: [],
     } },
   })).result;
+
   if (route === "setSetting") return (await target.executeMutation({
     requestId, route: "setting.set", payload: { key: payload.key, value: payload.value },
   })).result;
@@ -222,6 +223,35 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       return failClosedMutation(req.op);
     case "registryTables":
       return [...mustStore().registrySnapshot().values()];
+    case "dailyHome": {
+      const info = mustAuthority().bootInfo();
+      const target = mustAuthority().inspectAuthority().target;
+      const storedZone = mustStore().getSetting<unknown>("daily_time_zone_v1");
+      const timeZone = typeof storedZone === "string"
+        ? storedZone : typeof p.timeZone === "string" ? p.timeZone : null;
+      if (timeZone === null)
+        throw new Error("Daily Home calendar is not initialized");
+      return projectDailyHome(mustStore(), {
+        appInstanceId: info.selectedAppInstanceId,
+        activeGenerationId: target.activeGenerationId,
+        now: new Date(Date.now()).toISOString(),
+        timeZone,
+      });
+    }
+    case "dailyHomeResolveDate": {
+      const storedZone = mustStore().getSetting<unknown>("daily_time_zone_v1");
+      const timeZone = typeof storedZone === "string"
+        ? storedZone : typeof p.timeZone === "string" ? p.timeZone : null;
+      if (timeZone === null || typeof p.value !== "string")
+        throw new Error("Daily Home calendar is not initialized");
+      return resolveDailyRelativeDate(p.value, new Date(Date.now()).toISOString(), timeZone);
+    }
+    case "dailyHomeSourceCompareAndSet":
+    case "dailyHomeNavigationCompareAndSet":
+    case "dailyHomeInitializeTimeZone":
+    case "dailyHomeQuickCapture":
+    case "dailyHomeUndoCapture":
+      return failClosedMutation(req.op);
     case "storePort": {
       const port = ports[0];
       if (!port) throw new Error("storePort needs a transferred port");

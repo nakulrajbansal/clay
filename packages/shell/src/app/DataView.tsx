@@ -106,6 +106,7 @@ export function DataView(props: {
   store: AsyncStore;
   initialTable?: string | null;
   initialRecordId?: string | null;
+  initialSavedViewId?: string | null;
   onWrite: (table: string) => void;
   onImport: (file: File) => void;
   onClose: () => void;
@@ -115,6 +116,8 @@ export function DataView(props: {
   onConfirm?: (message: string) => Promise<boolean>;
   onSchemaChange?: () => void;
   onRecovery?: (result: "success" | "failed") => void;
+  onDailyHomeInvalidated?: () => void;
+  onRecordOpened?: (table: string, id: string) => void;
 }): React.JSX.Element {
   const { worker, store } = props;
   const [tables, setTables] = useState<RegTable[]>([]);
@@ -155,6 +158,11 @@ export function DataView(props: {
     name: string; type: string; targetTable?: string; cardinality?: "one" | "many";
   } | null>(null);
   const [renamingCol, setRenamingCol] = useState<{ from: string; value: string } | null>(null);
+
+  const openRecordDetail = (table: string, id: string, append = false): void => {
+    props.onRecordOpened?.(table, id);
+    setDetailStack(stack => append ? [...stack, { table, id }] : [{ table, id }]);
+  };
 
   useEffect(() => { setSelectedRows(new Set()); }, [selected, search, filter, activeViewId]);
 
@@ -257,22 +265,36 @@ export function DataView(props: {
       ]);
       setTables(t);
       setSemanticTrace(trace);
-      setViewLibrary(reconcileOperationalViews(loadOperationalViews(rawViews), t, {}, trace));
+      const reconciledViews = reconcileOperationalViews(loadOperationalViews(rawViews), t, {}, trace);
+      setViewLibrary(reconciledViews);
       setSamples(await worker.sampleCount());
       const recentBatches = await worker.operationBatches(1);
       setLastBatch(recentBatches[0] && !recentBatches[0].undone ? recentBatches[0] : null);
       if (t.length > 0) {
-        const want = props.initialTable && t.some(x => x.name === props.initialTable)
-          ? props.initialTable : t[0]!.name;
+        const restored = props.initialSavedViewId
+          ? reconciledViews.views.find(view => view.id === props.initialSavedViewId) : undefined;
+        if (props.initialSavedViewId && !restored)
+          props.onError("That saved view is no longer available. Showing the table instead.");
+        const want = restored?.table ?? (props.initialTable && t.some(x => x.name === props.initialTable)
+          ? props.initialTable : t[0]!.name);
         setSelected(want);
-        setVisibleFields(new Set(t.find(candidate => candidate.name === want)!
-          .columns.filter(column => !column.hidden && !column.inactive).map(column => column.name)));
+        if (restored) {
+          setSearch(restored.search);
+          setFilter(restored.filters[0] ?? null);
+          setSort(restored.orderBy[0] ?? null);
+          setVisibleFields(new Set(restored.visibleFields));
+          setActiveViewId(restored.id);
+        } else {
+          setVisibleFields(new Set(t.find(candidate => candidate.name === want)!
+            .columns.filter(column => !column.hidden && !column.inactive).map(column => column.name)));
+          setActiveViewId(null);
+        }
         await reload(want);
         if (props.initialRecordId)
           setDetailStack([{ table: want, id: props.initialRecordId }]);
       }
     })();
-  }, [worker, reload, props.initialTable, props.initialRecordId]);
+  }, [worker, reload, props.initialTable, props.initialRecordId, props.initialSavedViewId]);
 
   // Esc pops the deepest trusted surface first, then cancels a cell edit,
   // then closes the data workspace.
@@ -468,6 +490,7 @@ export function DataView(props: {
         },
       });
       setViewLibrary(await saveOperationalView(worker, view));
+      props.onDailyHomeInvalidated?.();
       setActiveViewId(view.id);
       setViewName(""); setSavingView(false);
       props.onInfo(`Saved “${view.name}” for daily use.`);
@@ -475,7 +498,10 @@ export function DataView(props: {
   };
 
   const removeView = async (id: string): Promise<void> => {
-    try { setViewLibrary(await deleteOperationalView(worker, id)); }
+    try {
+      setViewLibrary(await deleteOperationalView(worker, id));
+      props.onDailyHomeInvalidated?.();
+    }
     catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
   };
 
@@ -885,7 +911,7 @@ export function DataView(props: {
                     const activateCell = (): void => {
                       if (isDerived(c.type) || c.type === "relation"
                           || c.type === "rich_text" || c.type === "attachment") {
-                        setDetailStack([{ table: selected!, id: String(r.id) }]);
+                        openRecordDetail(selected!, String(r.id));
                         return;
                       }
                       if (!isEditing) setEditing({ rowId: String(r.id), col: c.name,
@@ -940,7 +966,7 @@ export function DataView(props: {
                   <td className="cell-actions">
                     <button className="link" title="Open record details"
                       aria-label={`Open ${accessibleRowLabel(table, r)} record details`}
-                      onClick={() => setDetailStack([{ table: selected!, id: String(r.id) }])}>
+                      onClick={() => openRecordDetail(selected!, String(r.id))}>
                       open
                     </button>
                     {restorable.has(String(r.id)) ? (
@@ -1052,9 +1078,7 @@ export function DataView(props: {
           tables={tables}
           store={store}
           worker={worker}
-          onNavigate={(nextTable, id) => setDetailStack(stack => [
-            ...stack, { table: nextTable, id },
-          ])}
+          onNavigate={(nextTable, id) => openRecordDetail(nextTable, id, true)}
           onClose={() => setDetailStack(stack => stack.slice(0, -1))}
           onWrite={changedTable => {
             props.onWrite(changedTable);

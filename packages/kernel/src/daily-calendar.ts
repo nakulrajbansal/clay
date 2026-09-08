@@ -4,6 +4,8 @@ import {
   type StoredDateTimeParts as DateTimeParts,
 } from "./stored-date";
 
+export const DAILY_TIME_ZONE_SETTING = "daily_time_zone_v1";
+
 export type ResolvedLocalDateTime = Readonly<{
   instant: string;
   localDateTime: string;
@@ -286,6 +288,29 @@ export function parseDailyTemporal(value: string, timeZone: string): ParsedDaily
     instant: result.instant,
     adjusted: result.adjusted,
   }));
+}
+
+export function resolveDailyRelativeDate(
+  value: string,
+  nowInstant: string,
+  timeZone: string,
+): string {
+  const normalized = value.trim().toLocaleLowerCase();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    const parsed = parseStoredDateValue(normalized);
+    if (!parsed || parsed.kind !== "date") throw new Error("invalid calendar date");
+    return normalized;
+  }
+  let days: number | null = normalized === "today" ? 0 : normalized === "tomorrow" ? 1 : null;
+  const relative = /^in ([0-9]{1,4}) days?$/.exec(normalized);
+  if (relative) days = Number(relative[1]);
+  if (days === null || days > 3_660)
+    throw new Error('Use YYYY-MM-DD, today, tomorrow, or “in N days”.');
+  const base = localCalendarContext(nowInstant, timeZone).localDate;
+  const [year, month, day] = base.split("-").map(Number) as [number, number, number];
+  const result = new Date(Date.UTC(year, month - 1, day + days));
+  if (!Number.isFinite(result.getTime())) throw new Error("relative date is out of range");
+  return result.toISOString().slice(0, 10);
 }
 
 export function localCalendarContext(

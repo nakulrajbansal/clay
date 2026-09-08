@@ -104,9 +104,12 @@ describe("production starter seed authority", () => {
       expect(panel.panel_id).toBe("alpha_table");
       expect(panel.code).not.toContain("//#blueprint");
       expect(panel.declared_queries).toEqual([expect.objectContaining({ from: "alpha" })]);
-      const sampleRows = authority.readSetting<Record<string, string[]>>("sample_rows")!;
+      const sampleRows = authority.readSetting<{
+        format: 1; tables: Record<string, string[]>;
+      }>("sample_rows")!;
+      expect(sampleRows.format).toBe(1);
       for (const table of ["alpha", "beta", "gamma", "delta"])
-        expect(sampleRows[table]).toEqual(authority.query({ from: table }).map(row => String(row.id)));
+        expect(sampleRows.tables[table]).toEqual(authority.query({ from: table }).map(row => String(row.id)));
       expect(authority.readSetting("shell_id")).toBe("tracker");
       expect(authority.inspectAuthority().targetReservations).toHaveLength(1);
       expect(authority.inspectAuthority().catalogReservations).toHaveLength(1);
@@ -142,7 +145,7 @@ describe("production starter seed authority", () => {
       expect(authority.readStore().headVersion()).toBe(1);
       expect(authority.readStore().registrySnapshot().size).toBe(0);
       expect(authority.readStore().livePanels()).toEqual([]);
-      expect(authority.readSetting("sample_rows")).toEqual({});
+      expect(authority.readSetting("sample_rows")).toEqual({ format: 1, tables: {} });
       expect(authority.readSetting("shell_id")).toBe("blank");
       expect(authority.inspectAuthority().targetReservations).toHaveLength(1);
     } finally {

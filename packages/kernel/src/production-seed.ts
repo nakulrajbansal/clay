@@ -518,7 +518,7 @@ export function executeCapturedStarterSeed(
     }
     sampleIds[table.name] = ids;
   }
-  STORE_SET_SETTING.call(store, "sample_rows", sampleIds);
+  STORE_SET_SETTING.call(store, "sample_rows", { format: 1, tables: sampleIds });
   STORE_SET_SETTING.call(store, "shell_id", bundle.shellId);
   return null;
 }

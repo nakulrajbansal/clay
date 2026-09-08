@@ -81,9 +81,11 @@ describe("sample fill round-2 (build-3 iteration)", () => {
     seedStarterShell(store, "approvals");            // has request_activity
     removeSampleRows(store);                          // clear template rows
     fillSampleRows(store);
-    const marker = store.getSetting<Record<string, string[]>>("sample_rows") ?? {};
-    expect(Object.keys(marker)).toContain("requests");
-    expect(Object.keys(marker)).not.toContain("request_activity");
+    const marker = store.getSetting<{
+      format: 1; tables: Record<string, string[]>;
+    }>("sample_rows") ?? { format: 1, tables: {} };
+    expect(Object.keys(marker.tables)).toContain("requests");
+    expect(Object.keys(marker.tables)).not.toContain("request_activity");
     store.close();
   });
 

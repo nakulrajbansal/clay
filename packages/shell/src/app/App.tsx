@@ -41,6 +41,7 @@ import { useWorkspaceMode, type WorkspaceMode } from "./workspace-mode";
 type Phase = "loading" | "onboarding" | "main" | "error";
 
 const DataView = lazy(() => import("./DataView").then(module => ({ default: module.DataView })));
+const TodayView = lazy(() => import("./TodayView").then(module => ({ default: module.TodayView })));
 const CommandPalette = lazy(() => import("./CommandPalette")
   .then(module => ({ default: module.CommandPalette })));
 const AutomationCenter = lazy(() => import("./AutomationCenter")
@@ -188,10 +189,19 @@ export function App(): React.JSX.Element {
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [showData, setShowData] = useState(false);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
+  const [quickCaptureMode, setQuickCaptureMode] = useState(false);
+  const [dailyRefresh, setDailyRefresh] = useState(0);
+  const invalidateDailyHome = useCallback((): void => {
+    setDailyRefresh(value => value + 1);
+  }, []);
   const [showAutomations, setShowAutomations] = useState(false);
+  const [automationRecipe, setAutomationRecipe] = useState<"recurring_record" | undefined>();
+  const [automationTargetId, setAutomationTargetId] = useState<string | undefined>();
   const [notifications, setNotifications] = useState<ClayNotification[]>([]);
+  const notificationProjectionSignature = useRef("");
   const [dataTable, setDataTable] = useState<string | null>(null);
   const [dataRecord, setDataRecord] = useState<string | null>(null);
+  const [dataSavedView, setDataSavedView] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [showShapeMap, setShowShapeMap] = useState(false);
   const [showPrivateMetrics, setShowPrivateMetrics] = useState(false);
@@ -220,6 +230,11 @@ export function App(): React.JSX.Element {
       if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "k"
           && phase === "main" && paletteCanStack) {
         event.preventDefault();
+        setQuickCaptureMode(false);
+        if (!dataStoreRef.current && workerRef.current) {
+          dataStoreRef.current = new StoreRpcClient(
+            portFromMessagePort(workerRef.current.openStorePort("live")));
+        }
         setShowCommandPalette(open => !open);
       }
     };
@@ -264,18 +279,18 @@ export function App(): React.JSX.Element {
       if (running || !workerRef.current) return;
       running = true;
       try {
-        const [runs, inbox] = await Promise.all([
-          workerRef.current.runAutomations(), workerRef.current.notifications(),
-        ]);
+        const inbox = await workerRef.current.notifications();
         if (!live) return;
-        setNotifications(inbox);
-        if (runs.some(run => run.changed > 0)) {
-          for (const table of registryTables) liveBridge?.notifyWrite(table.name);
+        const signature = JSON.stringify(inbox.map(notification => [
+          notification.id, notification.at, notification.read,
+        ]));
+        if (signature !== notificationProjectionSignature.current) {
+          notificationProjectionSignature.current = signature;
+          invalidateDailyHome();
         }
-        const failed = runs.filter(run => run.status === "failed").length;
-        if (failed > 0) pushToast(`${failed} automation run${failed === 1 ? "" : "s"} failed safely`, "danger");
+        setNotifications(inbox);
       } catch (error) {
-        if (live) pushToast(`Automation check failed: ${error instanceof Error ? error.message : String(error)}`, "danger");
+        if (live) pushToast(`Automation inbox check failed: ${error instanceof Error ? error.message : String(error)}`, "danger");
       } finally { running = false; }
     };
     void tick();
@@ -731,18 +746,36 @@ export function App(): React.JSX.Element {
     surfaceReturnFocus.current = null;
     target?.focus();
   };
-  const openData = (table?: string, recordId?: string): void => {
-    rememberSurfaceReturnFocus();
+  const ensureDataStore = (): StoreRpcClient => {
     dataStoreRef.current ??= new StoreRpcClient(
       portFromMessagePort(client().openStorePort("live")));
+    return dataStoreRef.current;
+  };
+  const openAutomations = (recipe?: "recurring_record", automationId?: string): void => {
+    setAutomationRecipe(recipe);
+    setAutomationTargetId(automationId);
+    setShowAutomations(true);
+  };
+  const openCommandPalette = (capture = false): void => {
+    rememberSurfaceReturnFocus();
+    ensureDataStore();
+    setQuickCaptureMode(capture);
+    setShowCommandPalette(true);
+  };
+
+  const openData = (table?: string, recordId?: string, savedViewId?: string): void => {
+    rememberSurfaceReturnFocus();
+    ensureDataStore();
     setDataTable(table ?? null);
     setDataRecord(recordId ?? null);
+    setDataSavedView(savedViewId ?? null);
     setShowData(true);
   };
   openRecordRef.current = (table, id): void => openData(table, id);
   const closeData = (): void => {
     setShowData(false);
     setDataRecord(null);
+    setDataSavedView(null);
   };
 
   const closePreview = (): void => {
@@ -1384,8 +1417,8 @@ export function App(): React.JSX.Element {
         onFork={() => void forkApp()}
         onRename={(id, name) => { renameApp(id, name); setApps(listApps()); }}
         onDelete={id => void deleteApp(id)}
-        onOpenSearch={() => setShowCommandPalette(true)}
-        onOpenAutomations={() => setShowAutomations(true)}
+        onOpenSearch={() => openCommandPalette(false)}
+        onOpenAutomations={() => openAutomations()}
         unreadNotifications={notifications.filter(notification => !notification.read).length}
         onOpenData={() => openData()}
         onOpenShapeMap={() => void openShapeMap()}
@@ -1418,6 +1451,26 @@ export function App(): React.JSX.Element {
         </div>
       ) : null}
       <div className="app-body">
+      {workspaceMode === "work" && workerRef.current ? (
+        <LazySurfaceBoundary label="Today">
+          <Suspense fallback={<SurfaceFallback label="Today" />}>
+            <TodayView
+              worker={workerRef.current}
+              tables={registryTables}
+              refreshToken={dailyRefresh}
+              onOpenRecord={(table, id) => openData(table, id)}
+              onOpenAutomation={id => openAutomations(undefined, id)}
+              onOpenSavedView={id => openData(undefined, undefined, id)}
+              onQuickCapture={() => openCommandPalette(true)}
+              onSetup={() => openData()}
+              onCreateRecurring={() => openAutomations("recurring_record")}
+              automationMutationsAvailable={false}
+              dailyHomeMutationsAvailable={false}
+              onError={message => pushToast(message, "danger")}
+            />
+          </Suspense>
+        </LazySurfaceBoundary>
+      ) : <>
       <LazySurfaceBoundary label="views">
       <main className="regions">
         <TimeSlider
@@ -1475,6 +1528,7 @@ export function App(): React.JSX.Element {
         )}
       </main>
       </LazySurfaceBoundary>
+      </>}
       {showHistory ? (
         <LazySurfaceBoundary label="history" modal>
         <Suspense fallback={<SurfaceFallback label="history" modal />}>
@@ -1497,10 +1551,17 @@ export function App(): React.JSX.Element {
               worker={workerRef.current}
               tables={registryTables}
               notifications={notifications}
+              initialRecipe={automationRecipe}
+              initialAutomationId={automationTargetId}
+              mutationsAvailable={false}
               onNotifications={setNotifications}
-              onClose={() => setShowAutomations(false)}
+              onClose={() => {
+                setShowAutomations(false);
+                setAutomationRecipe(undefined);
+                setAutomationTargetId(undefined);
+              }}
               onOpenRecord={(table, id) => openData(table, id)}
-              onWrite={table => liveBridge?.notifyWrite(table)}
+              onWrite={table => { liveBridge?.notifyWrite(table); invalidateDailyHome(); }}
               onError={message => pushToast(message, "danger")}
               onInfo={message => pushToast(message, "info")}
               onConfirm={askConfirm}
@@ -1508,18 +1569,20 @@ export function App(): React.JSX.Element {
           </Suspense>
         </LazySurfaceBoundary>
       ) : null}
-      {showCommandPalette && workerRef.current ? (
+      {showCommandPalette && workerRef.current && dataStoreRef.current ? (
         <LazySurfaceBoundary label="search and act" modal>
           <Suspense fallback={<SurfaceFallback label="search and act" modal />}>
             <CommandPalette
               worker={workerRef.current}
+              store={dataStoreRef.current}
               tables={registryTables}
-              onClose={() => setShowCommandPalette(false)}
+              captureMode={quickCaptureMode}
+              onClose={() => { setShowCommandPalette(false); setQuickCaptureMode(false); }}
               onOpenRecord={(table, id) => openData(table, id)}
               onOpenData={table => openData(table)}
-              onWrite={table => liveBridge?.notifyWrite(table)}
+              onWrite={table => { liveBridge?.notifyWrite(table); invalidateDailyHome(); }}
               onError={message => pushToast(message, "danger")}
-              onInfo={message => pushToast(message, "info")}
+              onInfo={(message, action) => pushToast(message, "info", action)}
             />
           </Suspense>
         </LazySurfaceBoundary>
@@ -1532,9 +1595,11 @@ export function App(): React.JSX.Element {
           store={dataStoreRef.current}
           initialTable={dataTable}
           initialRecordId={dataRecord}
+          initialSavedViewId={dataSavedView}
           returnFocusRef={surfaceReturnFocus}
           onImport={file => void importFile(file)}
-          onWrite={table => liveBridge?.notifyWrite(table)}
+          onWrite={table => { liveBridge?.notifyWrite(table); invalidateDailyHome(); }}
+          onDailyHomeInvalidated={invalidateDailyHome}
           onClose={closeData}
           onError={msg => pushToast(msg, "danger")}
           onInfo={msg => pushToast(msg, "info")}
