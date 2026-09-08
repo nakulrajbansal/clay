@@ -1,6 +1,12 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+import {
+  createProductionCssOptimizer,
+  CSS_BROWSER_TARGETS,
+} from "./config/css-optimizer.mjs";
 
 const sourceTree = process.env.CLAY_SOURCE_TREE ?? "unbound";
 if (sourceTree !== "unbound" && !/^[0-9a-f]{40}$/.test(sourceTree))
@@ -14,7 +20,11 @@ if (sourceTree !== "unbound") {
 }
 
 export default defineConfig({
-  plugins: [react(), {
+  plugins: [
+    createProductionCssOptimizer({
+      sourceRoot: fileURLToPath(new URL("./src/", import.meta.url)),
+    }),
+    react(), {
     name: "clay-source-tree",
     transformIndexHtml: () => [{
       tag: "meta", attrs: { name: "clay-source-tree", content: sourceTree }, injectTo: "head",
@@ -25,7 +35,7 @@ export default defineConfig({
     minify: "terser",
     terserOptions: { compress: { passes: 2 } },
     cssMinify: "lightningcss",
-    cssTarget: ["chrome111", "firefox113", "safari16.2"],
+    cssTarget: CSS_BROWSER_TARGETS.vite,
   },
   optimizeDeps: {
     exclude: ["@sqlite.org/sqlite-wasm"],

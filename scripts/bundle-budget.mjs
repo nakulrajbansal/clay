@@ -230,7 +230,7 @@ if (cssFiles.length === 0) {
 await check(
   "application styles",
   cssFiles,
-  { raw: 82_000, gzip: 17_000 },
+  { raw: 67_000, gzip: 17_000 },
 );
 
 const browserRuntimeMeasured = await measureFiles(
