@@ -10,8 +10,9 @@ export function RelationConversionDialog(props: {
   sourceTable: RegTable;
   tables: RegTable[];
   worker: WorkerClient;
+  runWrite: <T>(operation: () => Promise<T>) => Promise<T>;
   onClose: () => void;
-  onCommitted: (result: { relationField: string; convertedRows: number }) => void;
+  onCommitted: (result: { relationField: string; convertedRows: number }) => void | Promise<void>;
   onError: (message: string) => void;
 }): React.JSX.Element {
   const sourceFields = useMemo(() => props.sourceTable.columns.filter(column =>
@@ -47,8 +48,10 @@ export function RelationConversionDialog(props: {
     if (!preview) return;
     setBusy(true);
     try {
-      const result = await props.worker.convertTextToRelation({ ...preview, cardinality: "one" });
-      props.onCommitted(result);
+      await props.runWrite(async () => {
+        const result = await props.worker.convertTextToRelation({ ...preview, cardinality: "one" });
+        await props.onCommitted(result);
+      });
     } catch (error) {
       props.onError(error instanceof Error ? error.message : String(error));
       setPreview(null);

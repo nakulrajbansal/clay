@@ -648,7 +648,7 @@ function makeOutputFields(columns: readonly RegColumn[], includeRecordIds: boole
     });
     if (includeRecordIds && column.type === "relation") fields.push({
       label: `${fieldLabel(column)} Clay record IDs`,
-      name: `${column.name}_clay_record_id`, redacted: false,
+      name: `${column.name}_clay_record_id`, redacted: redactedNames.has(column.name),
       source: "relation_id", type: "text",
     });
   }
@@ -668,7 +668,8 @@ function outputRows(rows: readonly QueryRow[], columns: readonly RegColumn[],
       values.push(redactedNames.has(column.name)
         ? "[redacted]" : projectionDisplayTextV1(row[column.name]));
       if (includeRecordIds && column.type === "relation")
-        values.push(relationIds(row[column.name]).join(", "));
+        values.push(redactedNames.has(column.name)
+          ? "[redacted]" : relationIds(row[column.name]).join(", "));
     }
     return values;
   });

@@ -10,6 +10,8 @@ import type { WorkerClient } from "../src/app/worker-client";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+const runWrite = <T,>(operation: () => Promise<T>): Promise<T> => operation();
+
 async function waitFor(condition: () => boolean): Promise<void> {
   const start = Date.now();
   while (!condition()) {
@@ -52,7 +54,7 @@ describe("connected work record detail", () => {
       table={store.registrySnapshot().get("projects")!}
       recordId={String(project.id)} tables={[...store.registrySnapshot().values()]}
       store={new InProcessAsyncStore(store)} worker={worker}
-      onNavigate={() => undefined} onClose={() => undefined} onWrite={() => undefined}
+      runWrite={runWrite} onNavigate={() => undefined} onClose={() => undefined} onWrite={() => undefined}
       onError={message => { throw new Error(message); }} onInfo={() => undefined}
     />));
     await waitFor(() => document.body.textContent?.includes("receipt.pdf") ?? false);
@@ -94,7 +96,7 @@ describe("connected work record detail", () => {
         recordId={String(customer.id)}
         tables={[...store.registrySnapshot().values()]}
         store={new InProcessAsyncStore(store)}
-        onNavigate={(table, id) => navigated.push({ table, id })}
+        runWrite={runWrite} onNavigate={(table, id) => navigated.push({ table, id })}
         onClose={() => undefined}
         onWrite={() => undefined}
         onError={message => { throw new Error(message); }}

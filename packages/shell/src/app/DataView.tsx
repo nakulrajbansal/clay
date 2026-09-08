@@ -4,8 +4,8 @@
 // Designed as a spreadsheet the user already knows: tabs per table,
 // click-any-cell editing, a search box, and a clear add-row.
 import {
-  lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState,
-  type KeyboardEvent as ReactKeyboardEvent, type RefObject,
+  lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
+  useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type RefObject,
 } from "react";
 import { applyProjectionViewV1, projectionDisplayTextV1 } from "@clay/kernel/projection";
 import type {
@@ -13,6 +13,9 @@ import type {
   SemanticSchemaTraceV1,
 } from "@clay/kernel";
 import type { WorkerClient } from "./worker-client";
+import type {
+  RichTextDraftSnapshot, RichTextFieldIdentity, RichTextSaveCoordinator, RichTextSaveIntent,
+} from "./RecordDetail";
 import { loadAllTableRows } from "./paged-query";
 import { ModalDialog } from "./ModalDialog";
 import {
@@ -43,6 +46,210 @@ const RelationConversionDialog = lazy(() => import("./RelationConversionDialog")
 type EditingCell = { rowId: string; col: string; draft: string };
 type ActiveFilter = NonNullable<Query["where"]>[number];
 type SortOrder = NonNullable<Query["orderBy"]>[number];
+type ExportSession = {
+  ready: Promise<void>;
+  release: () => void;
+};
+type ExportUiState = {
+  selected: string | null;
+  table: RegTable | null;
+  visibleFields: ReadonlySet<string>;
+  search: string;
+  filter: ActiveFilter | null;
+  sort: SortOrder | null;
+  detail: { table: string; id: string } | null;
+};
+type DataViewCoordinatorSnapshot = Readonly<{
+  pendingWrites: number;
+  exportSessionActive: boolean;
+  richTextRevision: number;
+}>;
+type RichTextFieldState = {
+  value: string;
+  generation: number;
+  dirty: boolean;
+  pendingGenerations: Set<number>;
+  tail: Promise<void>;
+};
+
+/**
+ * One coordinator per live store. The WeakMap owns exactly as long as the
+ * store does, so closing and reopening Data cannot forget an in-flight write.
+ */
+class DataViewCoordinator implements RichTextSaveCoordinator {
+  readonly #pendingWrites = new Set<Promise<unknown>>();
+  readonly #listeners = new Set<() => void>();
+  readonly #richTextFields = new Map<string, RichTextFieldState>();
+  #projectionGate: Promise<void> = Promise.resolve();
+  #exportSession: ExportSession | null = null;
+  #richTextRevision = 0;
+  #snapshot: DataViewCoordinatorSnapshot = Object.freeze({
+    pendingWrites: 0, exportSessionActive: false, richTextRevision: 0,
+  });
+
+  readonly getSnapshot = (): DataViewCoordinatorSnapshot => this.#snapshot;
+
+  readonly subscribe = (listener: () => void): (() => void) => {
+    this.#listeners.add(listener);
+    return () => { this.#listeners.delete(listener); };
+  };
+
+  #publish(): void {
+    this.#snapshot = Object.freeze({
+      pendingWrites: this.#pendingWrites.size,
+      exportSessionActive: this.#exportSession !== null,
+      richTextRevision: this.#richTextRevision,
+    });
+    for (const listener of this.#listeners) listener();
+  }
+
+  runWrite<T>(operation: () => Promise<T>): Promise<T> {
+    // Capture the current projection gate at intent time. Register the write
+    // synchronously so every later export observes it, even after a remount.
+    const projectionGate = this.#projectionGate;
+    const pending = projectionGate.then(operation);
+    this.#pendingWrites.add(pending);
+    this.#publish();
+    const settled = (): void => {
+      this.#pendingWrites.delete(pending);
+      this.#publish();
+    };
+    void pending.then(settled, settled);
+    return pending;
+  }
+
+  #richTextKey(identity: RichTextFieldIdentity): string {
+    return JSON.stringify([identity.table, identity.recordId, identity.field]);
+  }
+
+  richTextDraft(identity: RichTextFieldIdentity): RichTextDraftSnapshot | null {
+    const state = this.#richTextFields.get(this.#richTextKey(identity));
+    return state ? Object.freeze({
+      value: state.value,
+      generation: state.generation,
+      dirty: state.dirty,
+      pending: state.pendingGenerations.size > 0,
+    }) : null;
+  }
+
+  updateRichTextDraft(
+    identity: RichTextFieldIdentity, value: string, dirty: boolean,
+  ): RichTextDraftSnapshot {
+    const key = this.#richTextKey(identity);
+    const state = this.#richTextFields.get(key) ?? {
+      value,
+      generation: 0,
+      dirty: false,
+      pendingGenerations: new Set<number>(),
+      tail: Promise.resolve(),
+    };
+    state.value = value;
+    state.generation++;
+    state.dirty = dirty;
+    this.#richTextFields.set(key, state);
+    return Object.freeze({
+      value: state.value,
+      generation: state.generation,
+      dirty: state.dirty,
+      pending: state.pendingGenerations.size > 0,
+    });
+  }
+
+  reconcileRichTextDraft(identity: RichTextFieldIdentity, canonicalValue: string): string {
+    const key = this.#richTextKey(identity);
+    const state = this.#richTextFields.get(key);
+    if (!state) return canonicalValue;
+    if (state.dirty || state.pendingGenerations.size > 0) return state.value;
+    this.#richTextFields.delete(key);
+    return canonicalValue;
+  }
+
+  hasPendingRichTextSave(identity: RichTextFieldIdentity): boolean {
+    return (this.#richTextFields.get(this.#richTextKey(identity))
+      ?.pendingGenerations.size ?? 0) > 0;
+  }
+
+  queueRichTextSave(
+    identity: RichTextFieldIdentity,
+    operation: (intent: RichTextSaveIntent) => Promise<void>,
+  ): Promise<void> | null {
+    const key = this.#richTextKey(identity);
+    const state = this.#richTextFields.get(key);
+    if (!state?.dirty || state.pendingGenerations.has(state.generation)) return null;
+    const generation = state.generation;
+    const intent: RichTextSaveIntent = Object.freeze({
+      value: state.value === "" ? null : state.value,
+      generation,
+    });
+    const previous = state.tail;
+    state.pendingGenerations.add(generation);
+    const pending = this.runWrite(async () => {
+      await previous;
+      await operation(intent);
+    });
+    state.tail = pending.then(() => undefined, () => undefined);
+    const settled = (): void => {
+      state.pendingGenerations.delete(generation);
+      if (state.generation === generation) state.dirty = false;
+      this.#richTextRevision++;
+      this.#publish();
+    };
+    void pending.then(settled, settled);
+    return pending;
+  }
+
+  beginExportSession(): ExportSession | null {
+    if (this.#exportSession) return null;
+    let releaseGate!: () => void;
+    let released = false;
+    const gate = new Promise<void>(resolve => { releaseGate = resolve; });
+    const previousGate = this.#projectionGate;
+    this.#projectionGate = gate;
+    const priorWrites = [...this.#pendingWrites];
+    const session: ExportSession = {
+      ready: (async () => {
+        await previousGate;
+        await Promise.allSettled(priorWrites);
+      })(),
+      release: () => {
+        if (released) return;
+        released = true;
+        releaseGate();
+      },
+    };
+    this.#exportSession = session;
+    this.#publish();
+    return session;
+  }
+
+  endExportSession(session: ExportSession): void {
+    if (this.#exportSession === session) {
+      this.#exportSession = null;
+      this.#publish();
+    }
+    session.release();
+  }
+
+  isExportSessionActive(session: ExportSession): boolean {
+    return this.#exportSession === session;
+  }
+
+  async runProjection<T>(session: ExportSession, operation: () => Promise<T>): Promise<T> {
+    await session.ready;
+    if (this.#exportSession !== session) throw new Error("Export session ended.");
+    return operation();
+  }
+}
+
+const dataViewCoordinators = new WeakMap<AsyncStore, DataViewCoordinator>();
+
+function coordinatorForStore(store: AsyncStore): DataViewCoordinator {
+  const existing = dataViewCoordinators.get(store);
+  if (existing) return existing;
+  const coordinator = new DataViewCoordinator();
+  dataViewCoordinators.set(store, coordinator);
+  return coordinator;
+}
 
 function coerceDraft(type: string, draft: string): unknown {
   if (draft === "") return null;
@@ -90,7 +297,7 @@ export function DataView(props: {
   initialTable?: string | null;
   initialRecordId?: string | null;
   onWrite: (table: string) => void;
-  onImport: (file: File) => void;
+  onImport: (file: File) => void | Promise<void>;
   onClose: () => void;
   returnFocusRef?: RefObject<HTMLElement | null>;
   onError: (msg: string) => void;
@@ -140,24 +347,30 @@ export function DataView(props: {
     name: string; type: string; targetTable?: string; cardinality?: "one" | "many";
   } | null>(null);
   const [renamingCol, setRenamingCol] = useState<{ from: string; value: string } | null>(null);
-  const pendingWritesRef = useRef(new Set<Promise<unknown>>());
-  const [pendingWrites, setPendingWrites] = useState(0);
+  const coordinator = useMemo(() => coordinatorForStore(store), [store]);
+  const coordination = useSyncExternalStore(
+    coordinator.subscribe, coordinator.getSnapshot, coordinator.getSnapshot,
+  );
+  const exportSessionRef = useRef<ExportSession | null>(null);
 
-  const runWrite = useCallback(<T,>(operation: () => Promise<T>): Promise<T> => {
-    const pending = Promise.resolve().then(operation);
-    pendingWritesRef.current.add(pending);
-    setPendingWrites(pendingWritesRef.current.size);
-    const settled = (): void => {
-      pendingWritesRef.current.delete(pending);
-      setPendingWrites(pendingWritesRef.current.size);
-    };
-    void pending.then(settled, settled);
-    return pending;
-  }, []);
-  const waitForWrites = useCallback(async (): Promise<void> => {
-    while (pendingWritesRef.current.size > 0)
-      await Promise.allSettled([...pendingWritesRef.current]);
-  }, []);
+  const runWrite = useCallback(<T,>(operation: () => Promise<T>): Promise<T> =>
+    coordinator.runWrite(operation), [coordinator]);
+  const beginExportSession = useCallback((): ExportSession | null => {
+    const session = coordinator.beginExportSession();
+    if (session) exportSessionRef.current = session;
+    return session;
+  }, [coordinator]);
+  const endExportSession = useCallback((session?: ExportSession): void => {
+    const active = session ?? exportSessionRef.current;
+    if (!active) return;
+    if (exportSessionRef.current === active) exportSessionRef.current = null;
+    coordinator.endExportSession(active);
+  }, [coordinator]);
+  const runProjection = useCallback(async <T,>(operation: () => Promise<T>): Promise<T> => {
+    const session = exportSessionRef.current;
+    if (!session) throw new Error("Export session is not active.");
+    return coordinator.runProjection(session, operation);
+  }, [coordinator]);
 
   useEffect(() => { setSelectedRows(new Set()); }, [selected, search, filter, activeViewId]);
 
@@ -180,28 +393,30 @@ export function DataView(props: {
   const commitAddColumn = async (): Promise<void> => {
     if (!addingCol || !selected || addingCol.name.trim() === "") return;
     try {
-      const column: Record<string, unknown> = {
-        name: addingCol.name, type: addingCol.type, required: false,
-      };
-      if (addingCol.type === "relation") {
-        const targetTable = addingCol.targetTable
-          ?? tables.find(candidate => candidate.name !== selected)?.name;
-        const target = tables.find(candidate => candidate.name === targetTable);
-        if (!target) throw new Error("Choose a table to link");
-        const display = target.columns.find(candidate => !candidate.hidden && !candidate.inactive
-          && ["text", "enum", "rich_text"].includes(candidate.type));
-        column.relation = {
-          target_table: target.name, cardinality: addingCol.cardinality ?? "one",
-          unique_targets: false, ...(display ? { display_field: display.name } : {}),
+      await runWrite(async () => {
+        const column: Record<string, unknown> = {
+          name: addingCol.name, type: addingCol.type, required: false,
         };
-      }
-      const nextTables = await worker.addColumn(selected, column as never);
-      acceptRegistry(nextTables, await worker.semanticTrace());
-      setAddingCol(null);
-      await reload(selected);
-      props.onWrite(selected);
-      props.onSchemaChange?.();
-      props.onInfo(`Added “${addingCol.name}” — rewind the timeline to undo.`);
+        if (addingCol.type === "relation") {
+          const targetTable = addingCol.targetTable
+            ?? tables.find(candidate => candidate.name !== selected)?.name;
+          const target = tables.find(candidate => candidate.name === targetTable);
+          if (!target) throw new Error("Choose a table to link");
+          const display = target.columns.find(candidate => !candidate.hidden && !candidate.inactive
+            && ["text", "enum", "rich_text"].includes(candidate.type));
+          column.relation = {
+            target_table: target.name, cardinality: addingCol.cardinality ?? "one",
+            unique_targets: false, ...(display ? { display_field: display.name } : {}),
+          };
+        }
+        const nextTables = await worker.addColumn(selected, column as never);
+        acceptRegistry(nextTables, await worker.semanticTrace());
+        setAddingCol(null);
+        await reload(selected);
+        props.onWrite(selected);
+        props.onSchemaChange?.();
+        props.onInfo(`Added “${addingCol.name}” — rewind the timeline to undo.`);
+      });
     } catch (e) { props.onError("Could not add column: " + (e as Error).message); }
   };
 
@@ -221,12 +436,14 @@ export function DataView(props: {
     setRenamingCol(null);
     if (value.trim() === "" || value === from) return;
     try {
-      const nextTables = await worker.renameColumn(selected, from, value);
-      acceptRegistry(nextTables, await worker.semanticTrace());
-      await reload(selected);
-      props.onWrite(selected);
-      props.onSchemaChange?.();
-      props.onInfo(`Renamed “${from}” to “${value}” — panels updated too.`);
+      await runWrite(async () => {
+        const nextTables = await worker.renameColumn(selected, from, value);
+        acceptRegistry(nextTables, await worker.semanticTrace());
+        await reload(selected);
+        props.onWrite(selected);
+        props.onSchemaChange?.();
+        props.onInfo(`Renamed “${from}” to “${value}” — panels updated too.`);
+      });
     } catch (e) { props.onError("Could not rename: " + (e as Error).message); }
   };
 
@@ -236,6 +453,12 @@ export function DataView(props: {
     : allColumns.filter(column => visibleFields.has(column.name));
   const detail = detailStack.at(-1) ?? null;
   const detailTable = detail ? tables.find(candidate => candidate.name === detail.table) ?? null : null;
+  const exportUiStateRef = useRef<ExportUiState>({
+    selected, table, visibleFields, search, filter, sort, detail,
+  });
+  useLayoutEffect(() => {
+    exportUiStateRef.current = { selected, table, visibleFields, search, filter, sort, detail };
+  }, [selected, table, visibleFields, search, filter, sort, detail]);
 
   const reload = useCallback(async (name: string): Promise<void> => {
     const token = ++reloadTokenRef.current;
@@ -250,7 +473,12 @@ export function DataView(props: {
     setRestorable(new Set(restorableRows));
   }, [store, worker]);
 
-  useEffect(() => () => { reloadTokenRef.current++; }, []);
+  useEffect(() => () => {
+    reloadTokenRef.current++;
+    const session = exportSessionRef.current;
+    exportSessionRef.current = null;
+    if (session) coordinator.endExportSession(session);
+  }, [coordinator]);
 
   useEffect(() => {
     void (async () => {
@@ -415,11 +643,13 @@ export function DataView(props: {
   // anything the user typed or imported.
   const fillSamples = async (): Promise<void> => {
     try {
-      const res = await worker.fillSamples();
-      setSamples(await worker.sampleCount());
-      if (selected) await reload(selected);
-      for (const t of tables) props.onWrite(t.name);
-      props.onInfo(`Added ${res.added} sample row${res.added === 1 ? "" : "s"} across ${res.tables} table${res.tables === 1 ? "" : "s"}.`);
+      await runWrite(async () => {
+        const res = await worker.fillSamples();
+        setSamples(await worker.sampleCount());
+        if (selected) await reload(selected);
+        for (const t of tables) props.onWrite(t.name);
+        props.onInfo(`Added ${res.added} sample row${res.added === 1 ? "" : "s"} across ${res.tables} table${res.tables === 1 ? "" : "s"}.`);
+      });
     } catch (e) {
       props.onError(e instanceof Error ? e.message : String(e));
     }
@@ -428,11 +658,13 @@ export function DataView(props: {
     if (props.onConfirm && !await props.onConfirm(
       "Clear all generated sample rows? Your own records stay untouched, and samples remain restorable.")) return;
     try {
-      await worker.removeSamples();
-      setSamples(0);
-      if (selected) await reload(selected);
-      for (const t of tables) props.onWrite(t.name);
-      props.onInfo("Sample rows cleared. Only generated rows were removed — your own data is untouched, and the cleared rows sit under “deleted rows” if you want them back.");
+      await runWrite(async () => {
+        await worker.removeSamples();
+        setSamples(0);
+        if (selected) await reload(selected);
+        for (const t of tables) props.onWrite(t.name);
+        props.onInfo("Sample rows cleared. Only generated rows were removed — your own data is untouched, and the cleared rows sit under “deleted rows” if you want them back.");
+      });
     } catch (e) {
       props.onError(e instanceof Error ? e.message : String(e));
     }
@@ -472,16 +704,19 @@ export function DataView(props: {
           visibleFieldIds: columns.map(column => fieldId(column.name)),
         },
       });
-      setViewLibrary(await saveOperationalView(worker, view));
-      setActiveViewId(view.id);
-      setViewName(""); setSavingView(false);
-      props.onInfo(`Saved “${view.name}” for daily use.`);
+      await runWrite(async () => {
+        setViewLibrary(await saveOperationalView(worker, view));
+        setActiveViewId(view.id);
+        setViewName(""); setSavingView(false);
+        props.onInfo(`Saved “${view.name}” for daily use.`);
+      });
     } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
   };
 
   const removeView = async (id: string): Promise<void> => {
-    try { setViewLibrary(await deleteOperationalView(worker, id)); }
-    catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    try {
+      await runWrite(async () => setViewLibrary(await deleteOperationalView(worker, id)));
+    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
   };
 
   const runBulkUpdate = async (): Promise<void> => {
@@ -489,16 +724,18 @@ export function DataView(props: {
     const column = allColumns.find(candidate => candidate.name === bulkField);
     if (!column) return;
     try {
-      const receipt = await worker.applyBatch(
-        `Update ${selectedRows.size} ${selected.replace(/_/g, " ")} records`,
-        [...selectedRows].map(id => ({
-          kind: "update" as const, table: selected, id,
-          patch: { [bulkField]: coerceDraft(column.type, bulkValue) },
-        })),
-      );
-      setLastBatch(receipt); setSelectedRows(new Set()); setBulkValue("");
-      await reload(selected); props.onWrite(selected);
-      props.onInfo(`Updated ${receipt.changed} records. Undo is available here.`);
+      await runWrite(async () => {
+        const receipt = await worker.applyBatch(
+          `Update ${selectedRows.size} ${selected.replace(/_/g, " ")} records`,
+          [...selectedRows].map(id => ({
+            kind: "update" as const, table: selected, id,
+            patch: { [bulkField]: coerceDraft(column.type, bulkValue) },
+          })),
+        );
+        setLastBatch(receipt); setSelectedRows(new Set()); setBulkValue("");
+        await reload(selected); props.onWrite(selected);
+        props.onInfo(`Updated ${receipt.changed} records. Undo is available here.`);
+      });
     } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
   };
 
@@ -507,57 +744,106 @@ export function DataView(props: {
     if (props.onConfirm && !await props.onConfirm(
       `Archive ${selectedRows.size} selected record${selectedRows.size === 1 ? "" : "s"}? You can undo this batch.`)) return;
     try {
-      const receipt = await worker.applyBatch(
-        `Archive ${selectedRows.size} selected ${selected.replace(/_/g, " ")}`,
-        [...selectedRows].map(id => ({ kind: "soft_delete" as const, table: selected, id })),
-      );
-      setLastBatch(receipt); setSelectedRows(new Set());
-      await reload(selected); props.onWrite(selected);
-      props.onInfo(`Archived ${receipt.changed} records. Undo is available here.`);
+      await runWrite(async () => {
+        const receipt = await worker.applyBatch(
+          `Archive ${selectedRows.size} selected ${selected.replace(/_/g, " ")}`,
+          [...selectedRows].map(id => ({ kind: "soft_delete" as const, table: selected, id })),
+        );
+        setLastBatch(receipt); setSelectedRows(new Set());
+        await reload(selected); props.onWrite(selected);
+        props.onInfo(`Archived ${receipt.changed} records. Undo is available here.`);
+      });
     } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
   };
 
   const undoLastBatch = async (): Promise<void> => {
     if (!lastBatch || lastBatch.undone) return;
     try {
-      const undone = await worker.undoBatch(lastBatch.id);
-      setLastBatch(undone);
-      if (selected) { await reload(selected); props.onWrite(selected); }
-      props.onInfo(`Undid “${undone.summary}”.`);
+      await runWrite(async () => {
+        const undone = await worker.undoBatch(lastBatch.id);
+        setLastBatch(undone);
+        if (selected) { await reload(selected); props.onWrite(selected); }
+        props.onInfo(`Undid “${undone.summary}”.`);
+      });
     } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
   };
 
-  const openCurrentViewExport = async (): Promise<void> => {
-    await waitForWrites();
-    if (selected) await reload(selected);
-    if (!table || !semanticTrace) {
-      props.onError("Export is not ready. Reopen Data.");
-      return;
-    }
+  const importIntoData = async (file: File): Promise<void> => {
     try {
+      await runWrite(async () => { await props.onImport(file); });
+    } catch (error) {
+      props.onError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const openCurrentViewExport = async (): Promise<void> => {
+    const session = beginExportSession();
+    if (!session) return;
+    try {
+      await session.ready;
+      const selectedAtReload = exportUiStateRef.current.selected;
+      if (selectedAtReload) await reload(selectedAtReload);
+      const [nextTables, nextTrace] = await Promise.all([
+        worker.registryTables(), worker.semanticTrace(),
+      ]);
+      if (exportSessionRef.current !== session
+          || !coordinator.isExportSessionActive(session)) return;
+      const current = exportUiStateRef.current;
+      if (current.selected !== selectedAtReload)
+        throw new Error("The Data view changed while export was preparing. Try again.");
+      const nextTable = nextTables.find(candidate => candidate.name === current.selected);
+      if (!nextTable) throw new Error("Export is not ready. Reopen Data.");
+      const previousNames = current.table?.columns
+        .filter(column => !column.hidden && !column.inactive).map(column => column.name) ?? [];
+      const nextAllColumns = nextTable.columns.filter(column => !column.hidden && !column.inactive);
+      const nextVisibleFields = reconcileVisibleFieldNames(
+        current.visibleFields, previousNames, nextAllColumns.map(column => column.name),
+      );
+      const nextColumns = nextAllColumns.filter(column => nextVisibleFields.has(column.name));
+      acceptRegistry(nextTables, nextTrace);
       setExportScope(buildCurrentViewProjectionScopeV1({
-        trace: semanticTrace, table, columns, search, filter, sort,
+        trace: nextTrace, table: nextTable, columns: nextColumns,
+        search: current.search, filter: current.filter, sort: current.sort,
         dateAnchor: localDateAnchorV1(),
       }));
     } catch (error) {
+      endExportSession(session);
       props.onError(error instanceof Error ? error.message : String(error));
     }
   };
 
   const openRecordExport = async (): Promise<void> => {
-    await waitForWrites();
-    if (selected) await reload(selected);
-    if (!semanticTrace || !detail || !detailTable) {
-      props.onError("Export is not ready. Reopen Data.");
-      return;
-    }
+    const record = exportUiStateRef.current.detail;
+    const session = beginExportSession();
+    if (!session) return;
     try {
+      await session.ready;
+      const selectedAtReload = exportUiStateRef.current.selected;
+      if (selectedAtReload) await reload(selectedAtReload);
+      const [nextTables, nextTrace] = await Promise.all([
+        worker.registryTables(), worker.semanticTrace(),
+      ]);
+      if (exportSessionRef.current !== session
+          || !coordinator.isExportSessionActive(session)) return;
+      const currentRecord = exportUiStateRef.current.detail;
+      if (!record || !currentRecord
+          || currentRecord.table !== record.table || currentRecord.id !== record.id)
+        throw new Error("The record changed while export was preparing. Try again.");
+      const nextTable = nextTables.find(candidate => candidate.name === record.table);
+      if (!nextTable) throw new Error("Export is not ready. Reopen Data.");
+      acceptRegistry(nextTables, nextTrace);
       setExportScope(buildRecordProjectionScopeV1({
-        trace: semanticTrace, table: detailTable, recordId: detail.id,
+        trace: nextTrace, table: nextTable, recordId: record.id,
       }));
     } catch (error) {
+      endExportSession(session);
       props.onError(error instanceof Error ? error.message : String(error));
     }
+  };
+
+  const closeExport = (): void => {
+    setExportScope(null);
+    endExportSession();
   };
 
   const q = search.trim();
@@ -625,11 +911,12 @@ export function DataView(props: {
             ⬆ Import file
             <input className="visually-hidden-file" type="file" aria-label="Import CSV or JSON"
               accept=".csv,.tsv,.txt,.json"
-              onChange={e => { const f = e.target.files?.[0]; if (f) props.onImport(f); e.target.value = ""; }} />
+              onChange={e => { const f = e.target.files?.[0]; if (f) void importIntoData(f); e.target.value = ""; }} />
           </label>
           {table ? <button ref={exportButtonRef} className="dataview-import"
             type="button" aria-label="Preview Print / CSV for current Data view"
-            disabled={pendingWrites > 0} aria-busy={pendingWrites > 0}
+            disabled={coordination.pendingWrites > 0 || coordination.exportSessionActive}
+            aria-busy={coordination.pendingWrites > 0 || coordination.exportSessionActive}
             onClick={() => void openCurrentViewExport()}>Print / CSV</button> : null}
           <button className="dataview-close" aria-label="Close data view"
             title="Close (Esc)" onClick={props.onClose}>✕</button>
@@ -1066,16 +1353,17 @@ export function DataView(props: {
             ⬆ Upload a spreadsheet (CSV or JSON)
             <input className="visually-hidden-file" type="file"
               aria-label="Upload a CSV or JSON spreadsheet" accept=".csv,.tsv,.txt,.json"
-              onChange={e => { const f = e.target.files?.[0]; if (f) props.onImport(f); e.target.value = ""; }} />
+              onChange={e => { const f = e.target.files?.[0]; if (f) void importIntoData(f); e.target.value = ""; }} />
           </label>
         </div>
       )}
       {exportScope ? <Suspense fallback={null}><ExportDialog
           worker={worker}
+          runProjection={runProjection}
           request={exportScope.request}
           fieldChoices={exportScope.fieldChoices}
           returnFocusRef={exportScope.request.kind === "current_view" ? exportButtonRef : undefined}
-          onClose={() => setExportScope(null)}
+          onClose={closeExport}
         /></Suspense> : null}
       {detail && detailTable ? (
         <Suspense fallback={<div className="record-detail-loading" role="status">Loading record…</div>}>
@@ -1086,7 +1374,9 @@ export function DataView(props: {
           store={store}
           worker={worker}
           runWrite={runWrite}
-          exportPending={pendingWrites > 0}
+          richTextCoordinator={coordinator}
+          richTextRevision={coordination.richTextRevision}
+          exportPending={coordination.pendingWrites > 0 || coordination.exportSessionActive}
           onNavigate={(nextTable, id) => setDetailStack(stack => [
             ...stack, { table: nextTable, id },
           ])}
@@ -1108,20 +1398,19 @@ export function DataView(props: {
           sourceTable={table}
           tables={tables}
           worker={worker}
+          runWrite={runWrite}
           onClose={() => setShowRelationDialog(false)}
           onError={props.onError}
-          onCommitted={result => {
-            void (async () => {
-              setShowRelationDialog(false);
-              const [nextTables, nextTrace] = await Promise.all([
-                worker.registryTables(), worker.semanticTrace(),
-              ]);
-              acceptRegistry(nextTables, nextTrace);
-              await reload(table.name);
-              props.onWrite(table.name);
-              props.onSchemaChange?.();
-              props.onInfo(`Connected ${result.convertedRows} rows. Rewind the timeline to undo.`);
-            })();
+          onCommitted={async result => {
+            setShowRelationDialog(false);
+            const [nextTables, nextTrace] = await Promise.all([
+              worker.registryTables(), worker.semanticTrace(),
+            ]);
+            acceptRegistry(nextTables, nextTrace);
+            await reload(table.name);
+            props.onWrite(table.name);
+            props.onSchemaChange?.();
+            props.onInfo(`Connected ${result.convertedRows} rows. Rewind the timeline to undo.`);
           }}
         />
         </Suspense>

@@ -86,6 +86,7 @@ function App(): React.JSX.Element {
     </button>
     {open ? <ExportDialog
       worker={exportWorker}
+      runProjection={operation => operation()}
       request={request}
       fieldChoices={request.fieldIds.map((fieldId, index) => ({
         fieldId, label: index === 0 ? "Title" : `Field ${index.toString().padStart(2, "0")}`,

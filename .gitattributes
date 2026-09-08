@@ -15,6 +15,9 @@
 *.html text eol=lf
 *.cmd  text eol=crlf
 
+# Frozen CSV export evidence is byte-exact (UTF-8 BOM + CRLF), not host text.
+packages/kernel/test/fixtures/projection-current-view-v1.csv binary
+
 # Binary assets must never be normalized.
 *.png  binary
 *.jpg  binary

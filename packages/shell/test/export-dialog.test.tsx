@@ -35,6 +35,8 @@ const request: ProjectionRequestV1 = {
   options: { includeRecordIds: false, redactedFieldIds: [] },
 };
 
+const runProjection = <T,>(operation: () => Promise<T>): Promise<T> => operation();
+
 const flush = async (): Promise<void> => {
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
 };
@@ -73,7 +75,7 @@ describe("local export owner preview", () => {
     let closes = 0;
     await act(async () => root.render(<ExportDialog
       worker={{ projectExport }}
-      request={request}
+      runProjection={runProjection} request={request}
       fieldChoices={[
         { fieldId: request.fieldIds[0]!, label: "Title" },
         { fieldId: request.fieldIds[1]!, label: "Notes" },
@@ -163,7 +165,7 @@ describe("local export owner preview", () => {
     const root = createRoot(host);
     await act(async () => root.render(<ExportDialog
       worker={{ projectExport: async () => largeArtifact }}
-      request={request}
+      runProjection={runProjection} request={request}
       fieldChoices={[]}
       onClose={() => root.unmount()}
     />));
@@ -212,7 +214,7 @@ describe("local export owner preview", () => {
     const root = createRoot(host);
     await act(async () => root.render(<ExportDialog
       worker={{ projectExport: async () => offsetArtifact }}
-      request={request}
+      runProjection={runProjection} request={request}
       fieldChoices={[]}
       onClose={() => root.unmount()}
     />));
@@ -231,7 +233,7 @@ describe("local export owner preview", () => {
     const host = document.createElement("div"); document.body.append(host);
     const root = createRoot(host);
     await act(async () => root.render(<ExportDialog
-      worker={{ projectExport: () => pending }} request={request} fieldChoices={[]}
+      worker={{ projectExport: () => pending }} runProjection={runProjection} request={request} fieldChoices={[]}
       onClose={() => root.unmount()} />));
     const status = document.body.querySelector<HTMLElement>('[role="status"]')!;
     expect(status).not.toBeNull();
@@ -260,7 +262,7 @@ describe("local export owner preview", () => {
       worker={{ projectExport: (_request, signal) => {
         projectionSignal = signal;
         return pending;
-      } }} request={request} fieldChoices={[]}
+      } }} runProjection={runProjection} request={request} fieldChoices={[]}
       onClose={() => { closed = true; root.unmount(); }} />));
     const dialog = document.body.querySelector<HTMLElement>(".export-dialog")!;
     const started = performance.now();

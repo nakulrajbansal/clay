@@ -221,6 +221,42 @@ describe("ProjectionPlaintextV1 current Data view", () => {
     } finally { store.close(); }
   });
 
+  it("redacts generated relation IDs whenever their source relation is redacted", async () => {
+    const { store } = await projectionFixture();
+    try {
+      const trace = store.semanticSchemaTrace();
+      const table = trace.tables.find(entry => entry.name === "jobs")!;
+      const field = (name: string) => trace.fields.find(entry =>
+        entry.tableId === table.tableId && entry.fieldName === name)!.fieldId;
+      const row = store.query({ from: "jobs" }).find(entry => entry.title === "=2+3")!;
+      const relationId = (row.customer as { id: string }).id;
+      const artifact = projectPlaintextV1(store, {
+        schema: 1,
+        kind: "record",
+        expectedSchemaVersion: trace.atVersion,
+        tableId: table.tableId,
+        fieldIds: [field("title"), field("customer")],
+        recordId: String(row.id),
+        options: { includeRecordIds: true, redactedFieldIds: [field("customer")] },
+      });
+      const plaintext = decodeProjectionArtifactV1(artifact);
+      expect(plaintext.manifest.fields.map(output => ({
+        name: output.name, redacted: output.redacted,
+      }))).toEqual([
+        { name: "_clay_record_id", redacted: false },
+        { name: "title", redacted: false },
+        { name: "customer", redacted: true },
+        { name: "customer_clay_record_id", redacted: true },
+      ]);
+      expect(plaintext.manifest.redactions).toEqual(["Customer"]);
+      expect(plaintext.rows).toEqual([[
+        String(row.id), "=2+3", "[redacted]", "[redacted]",
+      ]]);
+      expect(new TextDecoder().decode(artifact.plaintext)).not.toContain(relationId);
+      expect(new TextDecoder().decode(artifact.csv)).not.toContain(relationId);
+    } finally { store.close(); }
+  });
+
   it("does not write Store/history or call network while projecting", async () => {
     const { store, driver } = await projectionFixture();
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network forbidden"));

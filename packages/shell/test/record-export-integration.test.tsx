@@ -10,6 +10,8 @@ import type { WorkerClient } from "../src/app/worker-client";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+const runWrite = <T,>(operation: () => Promise<T>): Promise<T> => operation();
+
 async function waitFor(condition: () => boolean): Promise<void> {
   const started = Date.now();
   while (!condition()) {
@@ -37,7 +39,7 @@ it("offers the one-record export boundary without writing the record", async () 
     table={store.registrySnapshot().get("tasks")!}
     recordId={String(row.id)} tables={[store.registrySnapshot().get("tasks")!]}
     store={new InProcessAsyncStore(store)} worker={worker}
-    onNavigate={() => undefined} onClose={() => undefined} onWrite={() => undefined}
+    runWrite={runWrite} onNavigate={() => undefined} onClose={() => undefined} onWrite={() => undefined}
     onExport={() => { exports++; }}
     onError={message => { throw new Error(message); }} onInfo={() => undefined}
   />));

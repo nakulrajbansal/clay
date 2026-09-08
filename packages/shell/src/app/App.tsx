@@ -1533,7 +1533,7 @@ export function App(): React.JSX.Element {
           initialTable={dataTable}
           initialRecordId={dataRecord}
           returnFocusRef={surfaceReturnFocus}
-          onImport={file => void importFile(file)}
+          onImport={importFile}
           onWrite={table => liveBridge?.notifyWrite(table)}
           onClose={closeData}
           onError={msg => pushToast(msg, "danger")}
