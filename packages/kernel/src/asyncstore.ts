@@ -11,15 +11,22 @@ type QueryT = import("@clay/schema").Query;
 
 export type StoreMutationContext = { requestId: string };
 
+function requiredStoreRequestId(context: StoreMutationContext | undefined): string {
+  const requestId = context?.requestId;
+  if (typeof requestId !== "string" || !/^req_[a-z2-7]{26}$/.test(requestId))
+    throw new ClayError("E_VALIDATION", "Store mutation request identity is invalid");
+  return requestId;
+}
+
 export interface AsyncStore {
   query(q: QueryT): Promise<QueryRow[]>;
   insert(
-    table: string, row: Record<string, unknown>, context?: StoreMutationContext,
+    table: string, row: Record<string, unknown>, context: StoreMutationContext,
   ): Promise<QueryRow>;
   update(
-    table: string, id: string, patch: Record<string, unknown>, context?: StoreMutationContext,
+    table: string, id: string, patch: Record<string, unknown>, context: StoreMutationContext,
   ): Promise<QueryRow>;
-  softDelete(table: string, id: string, context?: StoreMutationContext): Promise<void>;
+  softDelete(table: string, id: string, context: StoreMutationContext): Promise<void>;
   /** Serializable registry snapshot (array form; backs clay.meta.schema). */
   registryTables(): Promise<RegTable[]>;
 }
@@ -27,13 +34,20 @@ export interface AsyncStore {
 export class InProcessAsyncStore implements AsyncStore {
   constructor(private readonly store: ClayStore) {}
   async query(q: QueryT): Promise<QueryRow[]> { return this.store.query(q); }
-  async insert(table: string, row: Record<string, unknown>): Promise<QueryRow> {
+  async insert(
+    table: string, row: Record<string, unknown>, _context: StoreMutationContext,
+  ): Promise<QueryRow> {
+    requiredStoreRequestId(_context);
     return this.store.insert(table, row);
   }
-  async update(table: string, id: string, patch: Record<string, unknown>): Promise<QueryRow> {
+  async update(
+    table: string, id: string, patch: Record<string, unknown>, _context: StoreMutationContext,
+  ): Promise<QueryRow> {
+    requiredStoreRequestId(_context);
     return this.store.update(table, id, patch);
   }
-  async softDelete(table: string, id: string): Promise<void> {
+  async softDelete(table: string, id: string, _context: StoreMutationContext): Promise<void> {
+    requiredStoreRequestId(_context);
     this.store.softDelete(table, id);
   }
   async registryTables(): Promise<RegTable[]> {
@@ -158,6 +172,10 @@ function mintStoreRequestId(): string {
   return `req_${encoded}`;
 }
 
+export function createStoreMutationContext(): Readonly<StoreMutationContext> {
+  return Object.freeze({ requestId: mintStoreRequestId() });
+}
+
 /** Main-thread side: an AsyncStore that proxies over a port. */
 export class StoreRpcClient implements AsyncStore {
   #accepting = true;
@@ -205,9 +223,14 @@ export class StoreRpcClient implements AsyncStore {
   ): Promise<T> {
     if (!this.#accepting)
       return Promise.reject(new ClayError("E_CONFLICT", "Store RPC is quiescing"));
-    const requestId = context?.requestId ?? mintStoreRequestId();
-    if (!/^req_[a-z2-7]{26}$/.test(requestId))
-      return Promise.reject(new ClayError("E_VALIDATION", "StoreRpc request identity is invalid"));
+    let requestId: string;
+    try {
+      requestId = ["insert", "update", "softDelete"].includes(op)
+        ? requiredStoreRequestId(context)
+        : mintStoreRequestId();
+    } catch (error) {
+      return Promise.reject(error);
+    }
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
       this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
@@ -219,7 +242,7 @@ export class StoreRpcClient implements AsyncStore {
   insert(
     table: string,
     row: Record<string, unknown>,
-    context?: StoreMutationContext,
+    context: StoreMutationContext,
   ): Promise<QueryRow> {
     return this.call("insert", { table, row }, context);
   }
@@ -227,11 +250,11 @@ export class StoreRpcClient implements AsyncStore {
     table: string,
     id: string,
     patch: Record<string, unknown>,
-    context?: StoreMutationContext,
+    context: StoreMutationContext,
   ): Promise<QueryRow> {
     return this.call("update", { table, id, patch }, context);
   }
-  softDelete(table: string, id: string, context?: StoreMutationContext): Promise<void> {
+  softDelete(table: string, id: string, context: StoreMutationContext): Promise<void> {
     return this.call("softDelete", { table, id }, context);
   }
   registryTables(): Promise<RegTable[]> { return this.call("registryTables", {}); }

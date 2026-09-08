@@ -14,6 +14,10 @@ import type { WorkerClient } from "../src/app/worker-client";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+const mutationIdentity = {
+  createMutationContext: () => ({ requestId: `req_${"u".repeat(26)}` }),
+};
+
 async function waitFor(condition: () => boolean): Promise<void> {
   const started = Date.now();
   while (!condition()) {
@@ -61,7 +65,7 @@ describe("Daily Workbench UI", () => {
 
   it("activates the same first item that the palette renders", async () => {
     let openedData = 0;
-    const worker = { globalSearch: async () => [{
+    const worker = { ...mutationIdentity, globalSearch: async () => [{
       table: "tasks", id: "018f0000-0000-7000-8000-000000000001",
       label: "Call Acme", secondary: "open", matchedFields: ["title"], score: 80,
       updatedAt: "2026-09-02T12:00:00.000Z",
@@ -79,7 +83,7 @@ describe("Daily Workbench UI", () => {
 
   it("opens a global result directly from keyboard-ready search", async () => {
     const opened: Array<{ table: string; id: string }> = [];
-    const worker = {
+    const worker = { ...mutationIdentity,
       globalSearch: async () => [{
         table: "tasks", id: "018f0000-0000-7000-8000-000000000001",
         label: "Call Acme", secondary: "open", matchedFields: ["title"],
@@ -104,7 +108,7 @@ describe("Daily Workbench UI", () => {
   it("makes the first matching record the keyboard action for a nonempty search", async () => {
     const opened: Array<{ table: string; id: string }> = [];
     const table = { name: "tasks", columns: [{ name: "title", type: "text", required: true }] };
-    const worker = { globalSearch: async (query: string) => query ? [{
+    const worker = { ...mutationIdentity, globalSearch: async (query: string) => query ? [{
       table: "tasks", id: "018f0000-0000-7000-8000-000000000001",
       label: "Alice task", secondary: "open", matchedFields: ["title"], score: 100,
       updatedAt: "2026-09-02T12:00:00.000Z",
@@ -127,6 +131,52 @@ describe("Daily Workbench UI", () => {
     await unmount();
   });
 
+  it("reuses quick-create identity after a lost response", async () => {
+    const table = {
+      name: "tasks",
+      columns: [{ name: "title", type: "text", required: true }],
+    } as RegTable;
+    const contexts: string[] = [];
+    let minted = 0;
+    const errors: string[] = [];
+    const opened: string[] = [];
+    const worker = {
+      globalSearch: async () => [],
+      createMutationContext: () => {
+        minted++;
+        return { requestId: `req_${"v".repeat(26)}` };
+      },
+      applyBatch: async (
+        _summary: string,
+        _mutations: BatchMutation[],
+        context: { requestId: string },
+      ) => {
+        contexts.push(context.requestId);
+        if (contexts.length === 1) throw new Error("response lost");
+        return { created: [{ table: "tasks", id: "task-1" }] };
+      },
+    } as unknown as WorkerClient;
+    const { unmount } = await mount(<CommandPalette
+      worker={worker} tables={[table]} onClose={() => undefined}
+      onOpenRecord={(_table, id) => opened.push(id)} onOpenData={() => undefined}
+      onWrite={() => undefined} onError={message => errors.push(message)} onInfo={() => undefined}
+    />);
+    await waitFor(() => document.body.textContent?.includes("New Tasks") ?? false);
+    await act(async () => [...document.body.querySelectorAll<HTMLButtonElement>("button")]
+      .find(button => button.textContent?.includes("New Tasks"))!.click());
+    const title = document.body.querySelector<HTMLInputElement>(".command-create-fields input")!;
+    await act(async () => typeInto(title, "Only once"));
+    const submit = (): void => [...document.body.querySelectorAll<HTMLButtonElement>("button")]
+      .find(button => button.textContent === "Create record")!.click();
+    await act(async () => submit());
+    await waitFor(() => errors.length === 1);
+    await act(async () => submit());
+    await waitFor(() => opened.length === 1);
+    expect(minted).toBe(1);
+    expect(contexts).toEqual([`req_${"v".repeat(26)}`, `req_${"v".repeat(26)}`]);
+    await unmount();
+  });
+
   it("ignores a stale table load after the user switches tables", async () => {
     let releaseActive!: (rows: QueryRow[]) => void;
     let releaseDeleted!: (rows: QueryRow[]) => void;
@@ -142,7 +192,7 @@ describe("Daily Workbench UI", () => {
         id: "018f0000-0000-7000-8000-000000000010", name: "Current project",
       }];
     } } as AsyncStore;
-    const worker = {
+    const worker = { ...mutationIdentity,
       registryTables: async () => tables,
       semanticTrace: async () => null,
       restorableRows: async () => [], operationBatches: async () => [],
@@ -176,7 +226,7 @@ describe("Daily Workbench UI", () => {
     const initialized = new Promise<void>(resolve => { initializedResolve = resolve; });
     let archivedResolve!: () => void;
     const archived = new Promise<void>(resolve => { archivedResolve = resolve; });
-    const worker = {
+    const worker = { ...mutationIdentity,
       registryTables: async () => [...store.registrySnapshot().values()],
       semanticTrace: async () => store.semanticSchemaTrace(),
       sampleCount: async () => 0,
@@ -243,7 +293,7 @@ describe("Daily Workbench UI", () => {
     const store = await taskStore();
     let addedResolve!: () => void;
     const added = new Promise<void>(resolve => { addedResolve = resolve; });
-    const worker = {
+    const worker = { ...mutationIdentity,
       registryTables: async () => [...store.registrySnapshot().values()],
       semanticTrace: async () => store.semanticSchemaTrace(), sampleCount: async () => 0,
       operationBatches: async () => [], getSetting: async () => null,
@@ -268,7 +318,7 @@ describe("Daily Workbench UI", () => {
     const store = await taskStore(); store.insert("tasks", { title: "First" });
     let initializedResolve!: () => void;
     const initialized = new Promise<void>(resolve => { initializedResolve = resolve; });
-    const worker = {
+    const worker = { ...mutationIdentity,
       registryTables: async () => [...store.registrySnapshot().values()],
       semanticTrace: async () => store.semanticSchemaTrace(), sampleCount: async () => 0,
       operationBatches: async () => { initializedResolve(); return []; }, getSetting: async () => null,
@@ -300,7 +350,7 @@ describe("Daily Workbench UI", () => {
 
   it("shows search failures inline without claiming there are no matches", async () => {
     const errors: string[] = [];
-    const worker = { globalSearch: async () => {
+    const worker = { ...mutationIdentity, globalSearch: async () => {
       throw new Error("Global search is limited to 20,000 records; narrow the table first.");
     } } as unknown as WorkerClient;
     const { unmount } = await mount(<CommandPalette worker={worker} tables={[]}
@@ -323,7 +373,7 @@ describe("Automation Center UI", () => {
       if (!saved) throw new Error("rule was not saved");
       return saved;
     };
-    const worker = {
+    const worker = { ...mutationIdentity,
       listAutomations: async () => saved ? [saved] : [],
       automationRuns: async () => [],
       upsertAutomation: async (input: AutomationDefinitionInput) => {

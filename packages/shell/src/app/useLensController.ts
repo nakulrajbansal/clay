@@ -97,6 +97,7 @@ export function useLensController(input: {
         const built = build(current);
         const written = await input.client!.compareAndSetSetting(
           SAVED_LENS_SETTING_KEY, current.revision, built.next,
+          input.client!.createMutationContext(),
         );
         if (written.ok) {
           if (currentAppId.current === appId) setLibrary(built.next);

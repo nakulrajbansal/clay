@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import type { GlobalSearchResult, RegColumn, RegTable } from "@clay/kernel";
-import type { WorkerClient } from "./worker-client";
+import type { WorkerClient, WorkerMutationContext } from "./worker-client";
 import { ModalDialog } from "./ModalDialog";
 import "./Operations.css";
 
@@ -33,6 +33,10 @@ export function CommandPalette(props: {
   const [active, setActive] = useState(0);
   const [creating, setCreating] = useState<RegTable | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
+  const pendingCreate = useRef<{
+    key: string;
+    context: WorkerMutationContext;
+  } | null>(null);
   const fields = useMemo(() => (creating?.columns ?? []).filter(column =>
     !column.hidden && !column.inactive && !isDerived(column)
       && column.type !== "relation" && column.type !== "attachment" && column.type !== "json"),
@@ -105,11 +109,16 @@ export function CommandPalette(props: {
       const value = draft[column.name] ?? "";
       if (value !== "") row[column.name] = coerce(column, value);
     }
+    const summary = `Create ${humanize(creating.name)} record`;
+    const mutations = [{ kind: "insert" as const, table: creating.name, row }];
+    const operationKey = JSON.stringify({ summary, mutations });
+    const context = pendingCreate.current?.key === operationKey
+      ? pendingCreate.current.context : props.worker.createMutationContext();
+    pendingCreate.current = { key: operationKey, context };
     setBusy(true);
     try {
-      const receipt = await props.worker.applyBatch(`Create ${humanize(creating.name)} record`, [{
-        kind: "insert", table: creating.name, row,
-      }]);
+      const receipt = await props.worker.applyBatch(summary, mutations, context);
+      pendingCreate.current = null;
       const created = receipt.created[0];
       if (!created) throw new Error("Clay did not return the created record");
       props.onWrite(creating.name);

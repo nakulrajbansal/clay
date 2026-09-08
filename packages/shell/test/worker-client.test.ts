@@ -51,6 +51,8 @@ function harness(reply?: (message: Posted) => unknown): {
   return { client: new WorkerClient(worker as unknown as Worker), posted, transfers };
 }
 
+const mutation = (client: WorkerClient) => client.createMutationContext();
+
 describe("WorkerClient boot boundary", () => {
   it("returns a canonical catalog projection and sends bounded cache hints", async () => {
     const bootInfo = {
@@ -87,10 +89,10 @@ describe("WorkerClient files and automation boundaries", () => {
     const { client, posted, transfers } = harness();
     const bytes = new ArrayBuffer(8);
     await client.addAttachment({ table: "projects", rowId: "row", field: "files",
-      name: "receipt.pdf", mime: "application/pdf", bytes });
+      name: "receipt.pdf", mime: "application/pdf", bytes }, mutation(client));
     await client.listAutomations();
-    await client.runAutomations();
-    await client.undoAutomationRun("run");
+    await client.runAutomations(mutation(client));
+    await client.undoAutomationRun("run", mutation(client));
     expect(posted.map(message => message.op)).toEqual([
       "addAttachment", "listAutomations", "runAutomations", "undoAutomationRun",
     ]);
@@ -108,19 +110,24 @@ describe("WorkerClient files and automation boundaries", () => {
       trigger: { kind: "manual" as const, table: "deals", conditions: [] },
       actions: [{ kind: "notify" as const, title: "Review", body: "Review this deal." }],
     };
-    await client.upsertAutomation(automation);
-    await client.deleteAutomation("auto_00000000000000000000000000000000");
+    await client.upsertAutomation(automation, mutation(client));
+    await client.deleteAutomation(
+      "auto_00000000000000000000000000000000", mutation(client));
     await client.simulateAutomation("auto_00000000000000000000000000000000");
-    await client.runAutomations();
-    await client.runAutomationNow("auto_00000000000000000000000000000000");
-    await client.undoAutomationRun("00000000-0000-7000-8000-000000000000");
-    await client.markNotificationRead("00000000-0000-7000-8000-000000000001");
-    await client.recordPrivateMetric({ type: "trust_surface_opened", surface: "history" });
-    await client.setPrivateMetricsEnabled(false);
-    await client.clearPrivateMetrics();
-    await client.recordFilter("deals", { status: "won" });
-    await client.acceptSuggestion("deals", "add_view");
-    await client.dismissSuggestion("deals", "add_view");
+    await client.runAutomations(mutation(client));
+    await client.runAutomationNow(
+      "auto_00000000000000000000000000000000", mutation(client));
+    await client.undoAutomationRun(
+      "00000000-0000-7000-8000-000000000000", mutation(client));
+    await client.markNotificationRead(
+      "00000000-0000-7000-8000-000000000001", mutation(client));
+    await client.recordPrivateMetric(
+      { type: "trust_surface_opened", surface: "history" }, mutation(client));
+    await client.setPrivateMetricsEnabled(false, mutation(client));
+    await client.clearPrivateMetrics(mutation(client));
+    await client.recordFilter("deals", { status: "won" }, mutation(client));
+    await client.acceptSuggestion("deals", "add_view", mutation(client));
+    await client.dismissSuggestion("deals", "add_view", mutation(client));
 
     expect(posted.map(message => message.op)).toEqual([
       "upsertAutomation", "deleteAutomation", "simulateAutomation", "runAutomations",
@@ -143,7 +150,7 @@ describe("WorkerClient files and automation boundaries", () => {
 describe("WorkerClient sample boundary", () => {
   it("posts an explicit empty removal payload", async () => {
     const { client, posted } = harness();
-    await client.removeSamples();
+    await client.removeSamples(mutation(client));
     expect(posted).toHaveLength(1);
     expect(posted[0]?.op).toBe("removeSamples");
     expect(posted[0]?.payload).toEqual({});
@@ -152,14 +159,47 @@ describe("WorkerClient sample boundary", () => {
 });
 
 describe("WorkerClient daily-work boundary", () => {
+  it("rejects durable work without a caller-owned identity before transport", async () => {
+    const { client, posted } = harness();
+    await expect((client.applyBatch as unknown as (
+      summary: string, mutations: unknown[], context?: unknown,
+    ) => Promise<unknown>)("Create task", [{
+      kind: "insert", table: "tasks", row: { title: "Stable" },
+    }])).rejects.toThrow("worker mutation request identity is invalid");
+    expect(posted).toHaveLength(0);
+    const source = readFileSync(new URL("../src/app/worker-client.ts", import.meta.url), "utf8");
+    expect(source).not.toContain("context?: WorkerMutationContext");
+    expect(source).not.toContain("context === undefined");
+  });
+
+  it("reuses one caller-owned request identity across a reconstructed mutation", async () => {
+    const first = harness();
+    const replacement = harness();
+    const logicalRequest = { requestId: `req_${"z".repeat(26)}` };
+    const mutations = [{
+      kind: "update" as const,
+      table: "tasks",
+      id: "018f0000-0000-7000-8000-000000000001",
+      patch: { status: "done" },
+    }];
+
+    await first.client.applyBatch("Complete selected", mutations, logicalRequest);
+    await replacement.client.applyBatch("Complete selected", mutations, logicalRequest);
+
+    expect(first.posted[0]?.requestId).toBe(logicalRequest.requestId);
+    expect(replacement.posted[0]?.requestId).toBe(logicalRequest.requestId);
+    expect(replacement.posted[0]?.payload).toEqual(first.posted[0]?.payload);
+  });
+
   it("pins global search, atomic batches, and undo to explicit operations", async () => {
     const { client, posted } = harness();
     await client.globalSearch("acme", 12);
     await client.applyBatch("Complete selected", [{
       kind: "update", table: "tasks", id: "018f0000-0000-7000-8000-000000000001",
       patch: { status: "done" },
-    }]);
-    await client.undoBatch("018f0000-0000-7000-8000-000000000002");
+    }], mutation(client));
+    await client.undoBatch(
+      "018f0000-0000-7000-8000-000000000002", mutation(client));
     expect(posted.map(message => message.op)).toEqual([
       "globalSearch", "applyBatch", "undoBatch",
     ]);
@@ -171,7 +211,7 @@ describe("WorkerClient daily-work boundary", () => {
 describe("WorkerClient connected-record boundary", () => {
   it("serializes reversible column removal as an explicit command", async () => {
     const { client, posted } = harness();
-    await client.removeColumn("projects", "obsolete");
+    await client.removeColumn("projects", "obsolete", mutation(client));
     expect(posted[0]).toMatchObject({
       op: "removeColumn", payload: { table: "projects", column: "obsolete" },
     });
@@ -191,7 +231,8 @@ describe("WorkerClient connected-record boundary", () => {
       matchedRows: 3, unmatchedRows: 1, ambiguousRows: 0, duplicateSourceRows: 1,
       unmatchedSamples: ["Unknown"], ambiguousSamples: [],
     };
-    await client.convertTextToRelation({ ...preview, cardinality: "one" });
+    await client.convertTextToRelation(
+      { ...preview, cardinality: "one" }, mutation(client));
     expect(posted[1]).toMatchObject({
       op: "convertTextToRelation",
       payload: { ...preview, cardinality: "one" },
@@ -212,7 +253,7 @@ describe("WorkerClient structural workflow boundary", () => {
         display_field: "name",
       },
     };
-    await client.addRelationColumn("projects", column);
+    await client.addRelationColumn("projects", column, mutation(client));
     expect(posted[0]).toEqual(expect.objectContaining({
       op: "addRelationColumn",
       payload: { table: "projects", column },
@@ -299,7 +340,7 @@ describe("WorkerClient model credential boundary", () => {
         allowAmbientCredentials: true,
       } as ModelAccess);
       if (revoke) client.revokeAccountSession();
-      const pending = client.intent("add a board");
+      const pending = client.intent("add a board", mutation(client));
       const response = new Promise<void>(resolve => {
         plannerPort!.onmessage = () => resolve();
         plannerPort!.start();
@@ -380,7 +421,7 @@ describe("WorkerClient model credential boundary", () => {
       { provider: "clay", backendUrl: "http://127.0.0.1:8788", session: "old-session" }, null,
     ));
     const beforeCalls = modelBridge.rawPlan.mock.calls.length;
-    const pending = client.intent("add a board");
+    const pending = client.intent("add a board", mutation(client));
     const observed: Record<string, unknown>[] = [];
     plannerPort!.onmessage = event => observed.push(event.data as Record<string, unknown>);
     plannerPort!.start();
@@ -401,7 +442,7 @@ describe("WorkerClient model credential boundary", () => {
         message => message.kind === "planner.cancel",
       )).toBe(true));
       const messagesBeforeRejectedIntent = posted.length;
-      await expect(client.intent("must wait for new access")).rejects.toThrow(/access.*progress/i);
+      await expect(client.intent("must wait for new access", mutation(client))).rejects.toThrow(/access.*progress/i);
       expect(posted).toHaveLength(messagesBeforeRejectedIntent);
     } finally {
       publishNew(withCredential(
@@ -434,7 +475,7 @@ describe("WorkerClient model credential boundary", () => {
       { provider: "clay", backendUrl: "https://a.example", session: "c".repeat(48) }, null,
     ));
     const beforeCalls = modelBridge.rawPlan.mock.calls.length;
-    const pending = client.intent("add a board");
+    const pending = client.intent("add a board", mutation(client));
     const observed: Record<string, unknown>[] = [];
     plannerPort!.onmessage = event => observed.push(event.data as Record<string, unknown>);
     plannerPort!.start();
@@ -458,7 +499,7 @@ describe("WorkerClient model credential boundary", () => {
     )).toBe(true));
     modelBridge.rawPlan.mockResolvedValueOnce("{}");
     const beforeTransports = modelBridge.transports.length;
-    const later = client.intent("must remain signed out");
+    const later = client.intent("must remain signed out", mutation(client));
     const laterPort = plannerPort!;
     laterPort.onmessage = () => {};
     laterPort.start();
@@ -487,7 +528,7 @@ describe("WorkerClient model credential boundary", () => {
     await client.setModelAccess(withCredential(
       { provider: "anthropic", backendUrl: null, session: null }, canary,
     ));
-    const pending = client.intent(`use ${canary} as data`).catch(error => error as Error);
+    const pending = client.intent(`use ${canary} as data`, mutation(client)).catch(error => error as Error);
     const messagesBeforeTermination = posted.length;
     client.terminate();
     const error = await pending;
@@ -514,7 +555,7 @@ describe("WorkerClient model credential boundary", () => {
       { provider: "anthropic", backendUrl: null, session: null }, credentialCanary,
     ));
     const beforeCalls = modelBridge.rawPlan.mock.calls.length;
-    const pending = client.intent("add a board");
+    const pending = client.intent("add a board", mutation(client));
     const observed: Record<string, unknown>[] = [];
     plannerPort!.onmessage = event => observed.push(event.data as Record<string, unknown>);
     plannerPort!.start();
@@ -580,7 +621,7 @@ describe("WorkerClient model credential boundary", () => {
     await client.setModelAccess(withCredential(
       { provider: "anthropic", backendUrl: null, session: null }, credentialCanary,
     ));
-    const pending = client.intent("add a board");
+    const pending = client.intent("add a board", mutation(client));
     const response = new Promise<Record<string, unknown>>(resolve => {
       plannerPort!.onmessage = event => resolve(event.data as Record<string, unknown>);
       plannerPort!.start();
@@ -625,7 +666,7 @@ describe("WorkerClient model credential boundary", () => {
       { provider: "anthropic" as const, backendUrl: null, session: null },
       credentialCanary,
     ));
-    const pending = client.intent("add a board");
+    const pending = client.intent("add a board", mutation(client));
     const response = new Promise<Record<string, unknown>>(resolve => {
       plannerPort!.onmessage = event => resolve(event.data as Record<string, unknown>);
       plannerPort!.start();
@@ -663,7 +704,7 @@ describe("WorkerClient model credential boundary", () => {
     await client.setModelAccess({
       provider: "clay", apiKey: null, backendUrl: "http://127.0.0.1:8788", session: null,
     });
-    const pending = client.intent("add a board");
+    const pending = client.intent("add a board", mutation(client));
     const nextMessage = (): Promise<Record<string, unknown>> => new Promise(resolve => {
       plannerPort!.onmessage = event => resolve(event.data as Record<string, unknown>);
       plannerPort!.start();
@@ -722,7 +763,7 @@ describe("WorkerClient model credential boundary", () => {
     await client.setModelAccess({
       provider: "clay", apiKey: null, backendUrl: "http://127.0.0.1:8788", session: null,
     });
-    const pending = client.intent("add a board");
+    const pending = client.intent("add a board", mutation(client));
     expect(plannerPort).not.toBeNull();
     const nextMessage = (): Promise<Record<string, unknown>> => new Promise(resolve => {
       plannerPort!.onmessage = event => resolve(event.data as Record<string, unknown>);
@@ -765,7 +806,7 @@ describe("WorkerClient model credential boundary", () => {
       terminate(): void {},
     };
     const client = new WorkerClient(worker as unknown as Worker);
-    const pending = client.intent("add a board");
+    const pending = client.intent("add a board", mutation(client));
     await Promise.resolve();
     client.terminate();
 
@@ -787,7 +828,7 @@ describe("WorkerClient model credential boundary", () => {
     try {
       const pending = client.shutdown();
       const rejected = expect(pending).rejects.toThrow(/acknowledge|settle/i);
-      const late = client.intent("late planner").catch(error => error as Error);
+      const late = client.intent("late planner", mutation(client)).catch(error => error as Error);
       await Promise.resolve();
       expect(posted.some(message => message.op === "intent")).toBe(false);
       await vi.advanceTimersByTimeAsync(2_501);
@@ -823,7 +864,7 @@ describe("WorkerClient model credential boundary", () => {
       null,
     ));
     const beforeRawPlanCalls = modelBridge.rawPlan.mock.calls.length;
-    const pendingIntent = client.intent("add a board");
+    const pendingIntent = client.intent("add a board", mutation(client));
     const cancelObserved = new Promise<void>(resolve => {
       transferredPlannerPort!.onmessage = event => {
         const message = event.data as { kind?: string };

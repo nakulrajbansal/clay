@@ -1,4 +1,4 @@
-import { OperationId } from "@clay/schema";
+import { OperationId, RequestId } from "@clay/schema";
 import {
   TargetEvidenceV1,
   type ProductionRequestReceiptV1 as ProductionRequestReceipt,
@@ -1134,6 +1134,29 @@ export class ProductionMutationCoordinator {
     return run;
   }
 
+  replayPlannerDecision(
+    requestIdInput: unknown,
+    decisionInput: unknown,
+  ): Promise<ProductionMutationResult> {
+    if (this.#poisoned)
+      return Promise.reject(invalid("production authority is poisoned; reopen for reservation recovery"));
+    const parsedRequestId = RequestId.safeParse(requestIdInput);
+    if (!parsedRequestId.success || (decisionInput !== "keep" && decisionInput !== "discard"))
+      return Promise.reject(invalid("planner decision replay identity is invalid"));
+    const requestId = parsedRequestId.data;
+    const route = decisionInput === "keep" ? "planner.keep" : "planner.discard";
+    const run = this.#tail.then(() => {
+      if (this.#poisoned)
+        throw invalid("production authority is poisoned; reopen for reservation recovery");
+      const replayed = this.#durablePlannerDecisionReplay(requestId, route);
+      if (!replayed)
+        throw new ClayError("E_CONFLICT", "no durable planner decision matches the request");
+      return replayed;
+    });
+    this.#tail = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
   executeOperationalMetric(input: unknown): Promise<ProductionMutationResult> {
     if (this.#poisoned)
       return Promise.reject(invalid("production authority is poisoned; reopen for reservation recovery"));
@@ -1357,16 +1380,41 @@ export class ProductionMutationCoordinator {
     if (!persisted) return null;
     const expected = receiptTarget(persisted, false, this.#target.digestSchema);
     const fingerprint = requestFingerprint(expected, request);
-    if (fingerprint !== persisted.requestSha256)
+    const starterShellId = request.route === "starter.seed" ? request.payload.shellId : null;
+    return this.#terminalReceiptReplay(
+      persisted, request.requestId, request.route, fingerprint, starterShellId,
+    );
+  }
+
+  #durablePlannerDecisionReplay(
+    requestId: string,
+    route: "planner.keep" | "planner.discard",
+  ): ProductionMutationResult | null {
+    const persisted = readProductionRequestReceipt(this.#driver, requestId);
+    if (!persisted) return null;
+    if (persisted.state === "no_op")
+      throw invalid("durable planner decision has an invalid terminal state");
+    return this.#terminalReceiptReplay(persisted, requestId, route, null, null);
+  }
+
+  #terminalReceiptReplay(
+    persisted: PersistedProductionRequestReceipt,
+    requestId: string,
+    route: CapturedProductionMutation["route"],
+    expectedRequestSha256: string | null,
+    starterShellId: string | null,
+  ): ProductionMutationResult {
+    const expected = receiptTarget(persisted, false, this.#target.digestSchema);
+    if (expectedRequestSha256 !== null && expectedRequestSha256 !== persisted.requestSha256)
       throw invalid(PRODUCTION_REQUEST_PREFIX + "identity was reused for another mutation");
     const expectedOperationV1 = productionOperationIdV1(
-      this.#fence.authorityIncarnationId, request.requestId,
+      this.#fence.authorityIncarnationId, requestId,
     );
     const expectedOperationV2 = productionOperationIdV2(
-      this.#fence.authorityIncarnationId, request.requestId, request.route,
+      this.#fence.authorityIncarnationId, requestId, route,
     );
-    if (persisted.operationId !== expectedOperationV1
-        && persisted.operationId !== expectedOperationV2)
+    if (persisted.operationId !== expectedOperationV2
+        && (expectedRequestSha256 === null || persisted.operationId !== expectedOperationV1))
       throw invalid(PRODUCTION_REQUEST_PREFIX + "receipt operation identity is invalid");
     if (persisted.state === "prepared")
       throw invalid("prepared production request requires explicit recovery");
@@ -1377,10 +1425,10 @@ export class ProductionMutationCoordinator {
       throw invalid("terminal production request receipt is incomplete");
     const decodedResponse = decodeProductionResponse(persisted.responseJson);
     if (decodedResponse.kind === "envelope") {
-      if (decodedResponse.route !== request.route
+      if (decodedResponse.route !== route
           || persisted.operationId !== expectedOperationV2)
         throw invalid(PRODUCTION_REQUEST_PREFIX + "response route binding is invalid");
-    } else if (persisted.operationId !== expectedOperationV1) {
+    } else if (expectedRequestSha256 === null || persisted.operationId !== expectedOperationV1) {
       throw invalid("legacy production response operation identity is invalid");
     }
     const response = decodedResponse.result;
@@ -1403,11 +1451,11 @@ export class ProductionMutationCoordinator {
         persisted, targetAuthority.reservations(), catalog.revisionReservations(),
       );
     }
-    if (decodedResponse.kind === "envelope" && usesSampleProvenance(request.route))
+    if (decodedResponse.kind === "envelope" && usesSampleProvenance(route))
       assertLiveSampleProvenance(this.#driver, this.#store, resulting);
-    if (request.route === "starter.seed"
-        && (selectedCatalogShell(catalog, resulting) !== request.payload.shellId
-          || STORE_GET_SETTING.call(this.#store, "shell_id") !== request.payload.shellId))
+    if (route === "starter.seed" && starterShellId !== null
+        && (selectedCatalogShell(catalog, resulting) !== starterShellId
+          || STORE_GET_SETTING.call(this.#store, "shell_id") !== starterShellId))
       throw invalid("production starter seed shell metadata failed replay read-back");
     if (persisted.state === "failed") {
       const message = response !== null && !Array.isArray(response)
@@ -1416,7 +1464,7 @@ export class ProductionMutationCoordinator {
       throw invalid(`production request failed previously: ${message}`);
     }
     return mutationResult(
-      request.requestId,
+      requestId,
       persisted.operationId,
       persisted.state === "committed",
       true,

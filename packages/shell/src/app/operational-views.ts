@@ -176,8 +176,10 @@ export function reconcileOperationalViews(
 
 type ViewStorage = {
   getSetting<T>(key: string): Promise<T | null>;
+  createMutationContext(): Readonly<{ requestId: string }>;
   compareAndSetSetting<T>(
     key: string, expectedRevision: number, value: T,
+    context: Readonly<{ requestId: string }>,
   ): Promise<{ ok: boolean; current: unknown }>;
 };
 
@@ -193,7 +195,7 @@ export async function saveOperationalView(
       views: [...current.views.filter(candidate => candidate.id !== view.id), view].slice(-50),
     };
     const result = await storage.compareAndSetSetting(
-      OPERATIONAL_VIEWS_KEY, current.revision, next);
+      OPERATIONAL_VIEWS_KEY, current.revision, next, storage.createMutationContext());
     if (result.ok) return next;
     current = loadOperationalViews(result.current);
   }
@@ -211,7 +213,7 @@ export async function deleteOperationalView(
       views: current.views.filter(view => view.id !== id),
     };
     const result = await storage.compareAndSetSetting(
-      OPERATIONAL_VIEWS_KEY, current.revision, next);
+      OPERATIONAL_VIEWS_KEY, current.revision, next, storage.createMutationContext());
     if (result.ok) return next;
     current = loadOperationalViews(result.current);
   }

@@ -9,16 +9,24 @@ import {
 import { ClayError } from "@clay/kernel/errors";
 import { ProductionStoreAuthority } from "../../kernel/src/production-authority";
 
-const workerBoot = vi.hoisted(() => ({ target: null as unknown }));
-
-vi.mock("@clay/kernel/worker-authority", () => ({
-  ProductionStoreAuthority: {
-    bootBrowser: async (): Promise<unknown> => {
-      if (!workerBoot.target) throw new Error("worker authority test target is missing");
-      return workerBoot.target;
-    },
-  },
+const workerBoot = vi.hoisted(() => ({
+  target: null as unknown,
+  calls: [] as unknown[],
 }));
+
+vi.mock("@clay/kernel/worker-authority", async importOriginal => {
+  const original = await importOriginal<typeof import("@clay/kernel/worker-authority")>();
+  return {
+    ...original,
+    ProductionStoreAuthority: {
+      bootBrowser: async (input: unknown): Promise<unknown> => {
+        workerBoot.calls.push(input);
+        if (!workerBoot.target) throw new Error("worker authority test target is missing");
+        return workerBoot.target;
+      },
+    },
+  };
+});
 
 const opaque = (prefix: string, char: string): string => `${prefix}_${char.repeat(26)}`;
 const legacyInventory = {
@@ -93,7 +101,11 @@ async function loadWorker(target: unknown): Promise<WorkerScope> {
   vi.stubGlobal("self", scope);
   vi.resetModules();
   await import("../src/worker/db-worker");
-  expect(await dispatch(scope, { id: 1, op: "boot", payload: {} }))
+  expect(await dispatch(scope, {
+    id: 1,
+    op: "boot",
+    payload: { requestedAppId: opaque("app", "a"), appCache: [] },
+  }))
     .toMatchObject({ ok: true });
   return scope;
 }
@@ -111,10 +123,61 @@ async function dispatch(
 
 afterEach(() => {
   workerBoot.target = null;
+  workerBoot.calls.length = 0;
   vi.unstubAllGlobals();
 });
 
 describe("db-worker authority payload boundary", () => {
+  it("validates every boot request and returns fresh opened-authority state", async () => {
+    let catalogGeneration = "1";
+    let reconciliations = 0;
+    const target = {
+      readStore: () => ({}),
+      reconcileInterruptedPlannerAttempts: async () => { reconciliations++; return 0; },
+      close: () => {},
+      bootInfo: () => ({
+        seeded: false,
+        shellId: null,
+        selectedAppInstanceId: opaque("app", "a"),
+        catalogGeneration,
+        apps: [{ id: opaque("app", "a"), name: "My app", shellId: "blank" }],
+      }),
+    };
+    const scope = await loadWorker(target);
+    catalogGeneration = "2";
+
+    const duplicate = await dispatch(scope, {
+      id: 2,
+      op: "boot",
+      payload: { requestedAppId: opaque("app", "a"), appCache: [] },
+    });
+    const malformed = await dispatch(scope, {
+      id: 3,
+      op: "boot",
+      payload: { requestedAppId: opaque("app", "a"), appCache: [], extra: true },
+    });
+    const differentTarget = await dispatch(scope, {
+      id: 4,
+      op: "boot",
+      payload: { requestedAppId: opaque("app", "b"), appCache: [] },
+    });
+
+    expect(duplicate).toMatchObject({
+      ok: true,
+      result: { selectedAppInstanceId: opaque("app", "a"), catalogGeneration: "2" },
+    });
+    expect(malformed).toMatchObject({
+      ok: false,
+      error: { message: expect.stringMatching(/boot|unknown|invalid/i) },
+    });
+    expect(differentTarget).toMatchObject({
+      ok: false,
+      error: { message: expect.stringMatching(/target|opened|different|requested/i) },
+    });
+    expect(workerBoot.calls).toHaveLength(1);
+    expect(reconciliations).toBe(1);
+  });
+
   it("passes accessor payloads untouched to descriptor-only route validation", async () => {
     const { authority } = await productionAuthority(true);
     try {

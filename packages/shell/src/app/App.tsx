@@ -154,7 +154,9 @@ function makeBridge(client: WorkerClient, target: "live" | "shadow",
       onFault(panelId, { code: "E_STRIKES", message: reason }),
     // live bridge only: feed the Observer's repeated-filter heuristic
     onEvent: target === "live"
-      ? (_panel, name, payload) => { void client.recordFilter(name, payload); }
+      ? (_panel, name, payload) => {
+          void client.recordFilter(name, payload, client.createMutationContext());
+        }
       : undefined,
   }, { allowWrites: target === "live" });
 }
@@ -271,6 +273,7 @@ export function App(): React.JSX.Element {
     if (!workerRef.current) throw new Error("worker not ready");
     return workerRef.current;
   };
+  const mutationContext = () => client().createMutationContext();
 
   useEffect(() => {
     if (phase !== "main" || !workerRef.current) return;
@@ -281,7 +284,8 @@ export function App(): React.JSX.Element {
       running = true;
       try {
         const [runs, inbox] = await Promise.all([
-          workerRef.current.runAutomations(), workerRef.current.notifications(),
+          workerRef.current.runAutomations(workerRef.current.createMutationContext()),
+          workerRef.current.notifications(),
         ]);
         if (!live) return;
         setNotifications(inbox);
@@ -314,7 +318,7 @@ export function App(): React.JSX.Element {
   const recordFault = useCallback((panelId: string, fault: PanelFault): void => {
     void client().recordPrivateMetric({
       type: "fault_seen", fault: privateFaultKind(fault.code),
-    }).catch(() => undefined);
+    }, mutationContext()).catch(() => undefined);
     setFaults(f => (f[panelId] ? f : { ...f, [panelId]: fault }));
   }, []);
 
@@ -343,7 +347,7 @@ export function App(): React.JSX.Element {
   }, []);
 
   const recordPrivateMetric = useCallback((event: PrivateMetricEvent): void => {
-    void client().recordPrivateMetric(event).catch(() => undefined);
+    void client().recordPrivateMetric(event, mutationContext()).catch(() => undefined);
   }, []);
 
   // Ambient: re-derive the Observer's nudges on a gentle idle cadence so a
@@ -377,7 +381,9 @@ export function App(): React.JSX.Element {
       if (parsed.columns.length === 0 || parsed.rows.length === 0)
         throw new Error("No rows found — check the file has a header row and data.");
       const res = await client().importTable(
-        { table: parsed.table, columns: parsed.columns, rows: parsed.rows });
+        { table: parsed.table, columns: parsed.columns, rows: parsed.rows },
+        mutationContext(),
+      );
       await refreshPanels();
       setDataTable(res.table);   // if the Data editor is open, jump to the new table
       setFeed(f => [...f, { kind: "info", text: `Imported ${res.imported} row${res.imported === 1 ? "" : "s"} into “${res.table}”.` }]);
@@ -429,7 +435,8 @@ export function App(): React.JSX.Element {
         if (!boot.seeded) {
           if (cache.length > 0) {
             // a freshly created additional app pending its first seed
-            await withTimeout(wc.seed(activeApp.shellId as StarterShellId),
+            await withTimeout(wc.seed(
+              activeApp.shellId as StarterShellId, wc.createMutationContext()),
               20_000, "Setting up the app");
           } else {
             setPhase("onboarding");         // first run ever — pick a template
@@ -454,7 +461,8 @@ export function App(): React.JSX.Element {
         setFieldProvenance(bootFieldProvenance);
         setPhase("main");
         void wc.recordPrivateMetric({ type: "app_ready",
-          entry: boot.seeded ? "existing" : "new_starter" }).catch(() => undefined);
+          entry: boot.seeded ? "existing" : "new_starter" },
+        wc.createMutationContext()).catch(() => undefined);
       } catch (e) {
         // Never hang on the spinner: surface the failure and let the user
         // recover (retry, switch to another app, or start over).
@@ -474,7 +482,7 @@ export function App(): React.JSX.Element {
     createApp(shellName(id), id);
     if (first) {
       // the worker already holds this app's (empty, "default") files open
-      await client().seed(id);
+      await client().seed(id, mutationContext());
       setApps(listApps());
       setCurrentId(currentApp()?.id ?? null);
       setLiveBridge(makeBridge(client(), "live", pushToast, recordFault, askConfirm,
@@ -509,7 +517,8 @@ export function App(): React.JSX.Element {
     const cur = currentApp();
     const entry = addForkEntry(`${cur?.name ?? "My app"} (copy)`, cur?.shellId ?? "blank");
     try {
-      await withTimeout(client().forkApp(entry.id), 20000, "Duplicating the app");
+      await withTimeout(client().forkApp(entry.id, mutationContext()),
+        20000, "Duplicating the app");
     } catch {
       removeApp(entry.id);
       pushToast("Couldn’t duplicate this app.", "danger");
@@ -523,7 +532,8 @@ export function App(): React.JSX.Element {
       `Delete “${entry?.name ?? "this app"}” and all of its data? `
       + "This cannot be undone. (Export a .clay backup first if unsure.)"))) return;
     removeApp(id);
-    try { await client().deleteApp(id); } catch { /* files may already be gone */ }
+    try { await client().deleteApp(id, mutationContext()); }
+    catch { /* files may already be gone */ }
     reloadApp();
   };
 
@@ -567,12 +577,12 @@ export function App(): React.JSX.Element {
       setBusy(true);
       try {
         if (clearing) {
-          const result = await client().removeSamples();
+          const result = await client().removeSamples(mutationContext());
           setFeed(f => [...f, { kind: "info", text: result.affected === 0
             ? `No active sample rows needed clearing. ${result.recovery.recoverable} generated row${result.recovery.recoverable === 1 ? " remains" : "s remain"} recoverable under deleted rows.`
             : `Cleared ${result.affected} generated sample row${result.affected === 1 ? "" : "s"}; ${result.recovery.recoverable} can be restored from deleted rows.` }]);
         } else {
-          const res = await client().fillSamples();
+          const res = await client().fillSamples(mutationContext());
           setFeed(f => [...f, {
             kind: "info",
             text: res.added > 0
@@ -593,7 +603,7 @@ export function App(): React.JSX.Element {
     }
     setBusy(true);
     try {
-      handleOutcome(await client().intent(text));
+      handleOutcome(await client().intent(text, mutationContext()));
     } catch (e) {
       setFeed(f => [...f, { kind: "failure", reasons: [String(e)] }]);
     } finally {
@@ -605,13 +615,13 @@ export function App(): React.JSX.Element {
 
   const acceptSuggestion = (s: Suggestion): void => {
     if (busy || preview || scrub) return;
-    void client().acceptSuggestion(s.subject, s.kind);
+    void client().acceptSuggestion(s.subject, s.kind, mutationContext());
     setSuggestions(list => list.filter(x => x.id !== s.id));
     void runIntent(s.intent, "observer_suggestion");
   };
 
   const dismissSuggestion = (s: Suggestion): void => {
-    void client().dismissSuggestion(s.subject, s.kind);
+    void client().dismissSuggestion(s.subject, s.kind, mutationContext());
     setSuggestions(list => list.filter(x => x.id !== s.id));
   };
 
@@ -624,7 +634,7 @@ export function App(): React.JSX.Element {
     setFeed(f => [...f, { kind: "info", text: `Repairing ${panelId} (${fault.message.slice(0, 80)})…` }]);
     setBusy(true);
     try {
-      const outcome = await client().repairPanel(panelId, fault.message);
+      const outcome = await client().repairPanel(panelId, fault.message, mutationContext());
       if (outcome.status === "preview") pendingRecovery.current = "panel_repair";
       else recordPrivateMetric({ type: "recovery_finished",
         method: "panel_repair", result: "failed" });
@@ -640,7 +650,7 @@ export function App(): React.JSX.Element {
 
   const revertPanel = async (panelId: string): Promise<void> => {
     try {
-      setPanels(await client().revertPanel(panelId));
+      setPanels(await client().revertPanel(panelId, mutationContext()));
       setHistory(await client().history());
       await refreshProvenance();
       setFaults(f => { const { [panelId]: _drop, ...rest } = f; return rest; });
@@ -695,7 +705,8 @@ export function App(): React.JSX.Element {
       `Replace this app with the contents of "${file.name}"? `
       + `Your current data will be overwritten — export a backup first if unsure.`))) return;
     try {
-      const result = await client().importArchive(await file.arrayBuffer());
+      const result = await client().importArchive(
+        await file.arrayBuffer(), mutationContext());
       if (result.invalidPanels.length > 0) {
         window.alert(
           `Imported, but ${result.invalidPanels.length} panel(s) failed validation `
@@ -761,9 +772,10 @@ export function App(): React.JSX.Element {
     if (!preview) return;
     let version: number;
     try {
-      ({ version } = await client().keep());
+      ({ version } = await client().keep(mutationContext()));
     } catch (error) {
-      try { await client().discard(); } catch { /* preview may already be closed */ }
+      try { await client().discard(mutationContext()); }
+      catch { /* preview may already be closed */ }
       setFeed(feedItems => [...feedItems, { kind: "failure", reasons: [String(error)] }]);
       closePreview();
       await refreshPanels();
@@ -813,7 +825,7 @@ export function App(): React.JSX.Element {
 
   const discard = async (): Promise<void> => {
     if (!preview) return;
-    await client().discard();
+    await client().discard(mutationContext());
     recordPrivateMetric({ type: "preview_decided", decision: "discarded",
       repaired: preview.repaired, diff: deriveSafeDiffKind(preview.diff) });
     if (pendingRecovery.current) {
@@ -1047,7 +1059,7 @@ export function App(): React.JSX.Element {
       return;
     }
     try {
-      await client().makeLatest(version);
+      await client().makeLatest(version, mutationContext());
       setScrub(null);
       await refreshPanels();
       setFeed(f => [...pruneFeedAfterVersion(f, version),
@@ -1073,7 +1085,8 @@ export function App(): React.JSX.Element {
       + "This is the one action Clay cannot undo."))) return;
     try {
       if (!workerRef.current) throw new Error("worker unavailable");
-      await withTimeout(workerRef.current.reset(), 5_000, "Erasing local data");
+      await withTimeout(workerRef.current.reset(workerRef.current.createMutationContext()),
+        5_000, "Erasing local data");
     } catch {
       try {
         await wipeOpfsWithoutWorker();
@@ -1088,7 +1101,7 @@ export function App(): React.JSX.Element {
   };
 
   const removeSamples = async (): Promise<void> => {
-    const result = await client().removeSamples();
+    const result = await client().removeSamples(mutationContext());
     liveBridge?.notifyWrite("items");
     for (const p of panels)
       for (const q of p.declared_queries) liveBridge?.notifyWrite(q.from);
@@ -1177,7 +1190,7 @@ export function App(): React.JSX.Element {
   const canDrag = !scrub && !preview && busy === false;
   const applyLayout = async (placements: ReturnType<typeof reorder>): Promise<void> => {
     setDragId(null);
-    const updated = await client().commitLayout(placements);
+    const updated = await client().commitLayout(placements, mutationContext());
     setPanels(updated);
     setHistory(await client().history());
     await refreshProvenance();
@@ -1193,7 +1206,9 @@ export function App(): React.JSX.Element {
     if (dim.w !== undefined && (p.placement.w ?? defaultW(p)) === dim.w) return;
     if (dim.h !== undefined && p.placement.h === dim.h) return;
     const updated = await client().commitLayout(
-      [{ panel_id: panelId, region: p.placement.region, order: p.placement.order, ...dim }]);
+      [{ panel_id: panelId, region: p.placement.region, order: p.placement.order, ...dim }],
+      mutationContext(),
+    );
     setPanels(updated);
     setHistory(await client().history());
     await refreshProvenance();
@@ -1207,7 +1222,7 @@ export function App(): React.JSX.Element {
   // Small changes never call the model (ADR-022c): rename and remove are
   // instant local commits on the same timeline as language reshapes.
   const renamePanelLocal = async (panelId: string, title: string): Promise<void> => {
-    const updated = await client().renamePanel(panelId, title);
+    const updated = await client().renamePanel(panelId, title, mutationContext());
     setPanels(updated);
     setHistory(await client().history());
     await refreshProvenance();
@@ -1216,7 +1231,7 @@ export function App(): React.JSX.Element {
     const title = panels.find(p => p.panel_id === panelId)?.title ?? panelId;
     if (!(await askConfirm(
       `Remove “${title}”? Your data is untouched — rewind the timeline to bring the panel back.`))) return;
-    const updated = await client().removePanel(panelId);
+    const updated = await client().removePanel(panelId, mutationContext());
     setPanels(updated);
     setHistory(await client().history());
     await refreshProvenance();
@@ -1254,7 +1269,8 @@ export function App(): React.JSX.Element {
 
   const setPrivateMetricsEnabled = async (enabled: boolean): Promise<boolean> => {
     try {
-      setPrivateMetricsSummary(await client().setPrivateMetricsEnabled(enabled));
+      setPrivateMetricsSummary(await client().setPrivateMetricsEnabled(
+        enabled, mutationContext()));
       return true;
     } catch (error) {
       pushToast(error instanceof Error ? error.message : String(error), "danger");
@@ -1264,7 +1280,7 @@ export function App(): React.JSX.Element {
 
   const clearPrivateMetrics = async (): Promise<boolean> => {
     try {
-      setPrivateMetricsSummary(await client().clearPrivateMetrics());
+      setPrivateMetricsSummary(await client().clearPrivateMetrics(mutationContext()));
       return true;
     } catch (error) {
       pushToast(error instanceof Error ? error.message : String(error), "danger");
@@ -1560,7 +1576,8 @@ export function App(): React.JSX.Element {
           current={scrub?.version ?? head}
           onJump={v => { void scrubTo(v); closeHistory(); }}
           onRestore={v => void restoreTo(v)}
-          onSetCheckpoint={(v, label) => void client().setCheckpoint(v, label).then(setHistory)}
+          onSetCheckpoint={(v, label) => void client()
+            .setCheckpoint(v, label, mutationContext()).then(setHistory)}
           onClose={closeHistory}
         />
         </Suspense>
@@ -1654,7 +1671,7 @@ export function App(): React.JSX.Element {
         onExport={() => void exportArchive()}
         onImport={file => void importArchive(file)}
         onPurgeAttachments={async () => {
-          const result = await client().purgeDeletedAttachments();
+          const result = await client().purgeDeletedAttachments(mutationContext());
           pushToast(result.files === 0 ? "No removed files are old enough to clean up"
             : `Cleaned up ${result.files} file${result.files === 1 ? "" : "s"}`, "info");
         }}

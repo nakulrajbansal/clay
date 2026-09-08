@@ -42,6 +42,7 @@ describe("useLensController stale reconciliation", () => {
     const notices: string[] = [];
     const latest: { current: ReturnType<typeof useLensController> | null } = { current: null };
     const client = {
+      createMutationContext: () => ({ requestId: `req_${"u".repeat(26)}` }),
       getSetting: async (key: string) => key === SAVED_LENS_SETTING_KEY ? library : null,
       setSetting: async () => null,
     } as unknown as WorkerClient;
@@ -67,6 +68,7 @@ describe("useLensController stale reconciliation", () => {
     const notices: string[] = [];
     const latest: { current: ReturnType<typeof useLensController> | null } = { current: null };
     const client = {
+      createMutationContext: () => ({ requestId: `req_${"u".repeat(26)}` }),
       getSetting: () => load,
       compareAndSetSetting: compare,
     } as unknown as WorkerClient;
@@ -89,6 +91,7 @@ describe("useLensController stale reconciliation", () => {
   it("merges a save into the latest revision through compare-and-set", async () => {
     let stored: SavedLensLibraryV1 = library;
     const client = {
+      createMutationContext: () => ({ requestId: `req_${"u".repeat(26)}` }),
       getSetting: async () => stored,
       compareAndSetSetting: async (_key: string, expectedRevision: number, value: unknown) => {
         if (expectedRevision !== stored.revision) return { ok: false, current: stored };

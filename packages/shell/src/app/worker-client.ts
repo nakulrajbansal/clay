@@ -35,6 +35,8 @@ export type BootInfo = {
   apps: BootAppEntry[];
 };
 
+export type WorkerMutationContext = Readonly<{ requestId: string }>;
+
 const APP_ID = /^app_[a-z2-7]{26}$/;
 const UINT64 = /^(?:0|[1-9][0-9]{0,19})$/;
 const CACHE_ID = /^(?:default|[a-zA-Z0-9_-]{1,80})$/;
@@ -125,6 +127,26 @@ function mintWorkerRequestId(): string {
     }
   }
   return `req_${encoded}`;
+}
+
+function captureWorkerMutationContext(value: WorkerMutationContext): WorkerMutationContext {
+  if (typeof value !== "object" || value === null || Array.isArray(value)
+      || (Object.getPrototypeOf(value) !== Object.prototype
+        && Object.getPrototypeOf(value) !== null))
+    throw new TypeError("worker mutation request identity is invalid");
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  if (Reflect.ownKeys(descriptors).length !== 1)
+    throw new TypeError("worker mutation request identity is invalid");
+  const descriptor = descriptors.requestId;
+  if (!descriptor || !("value" in descriptor) || !descriptor.enumerable
+      || typeof descriptor.value !== "string"
+      || !/^req_[a-z2-7]{26}$/.test(descriptor.value))
+    throw new TypeError("worker mutation request identity is invalid");
+  return Object.freeze({ requestId: descriptor.value });
+}
+
+export function createWorkerMutationContext(): WorkerMutationContext {
+  return Object.freeze({ requestId: mintWorkerRequestId() });
 }
 
 export type ModelAccess = {
@@ -283,20 +305,56 @@ export class WorkerClient {
     };
   }
 
-  private call<T>(op: string, payload?: Record<string, unknown>, transfer?: Transferable[]): Promise<T> {
+  private call<T>(
+    requestId: string,
+    op: string,
+    payload?: Record<string, unknown>,
+    transfer?: Transferable[],
+  ): Promise<T> {
     if (this.#terminated) return Promise.reject(new Error("DB worker was terminated"));
     if (!this.#accepting && op !== "shutdown")
       return Promise.reject(new Error("DB worker shutdown is in progress"));
+    if (typeof requestId !== "string" || !/^req_[a-z2-7]{26}$/.test(requestId))
+      return Promise.reject(new TypeError("worker request identity is invalid"));
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
       this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
       try {
-        this.worker.postMessage({ id, requestId: mintWorkerRequestId(), op, payload }, transfer ?? []);
+        this.worker.postMessage({ id, requestId, op, payload }, transfer ?? []);
       } catch (error) {
         this.pending.delete(id);
         reject(error instanceof Error ? error : new Error(String(error)));
       }
     });
+  }
+
+  private ephemeralCall<T>(
+    op: string,
+    payload?: Record<string, unknown>,
+    transfer?: Transferable[],
+  ): Promise<T> {
+    return this.call(mintWorkerRequestId(), op, payload, transfer);
+  }
+
+  private mutationCall<T>(
+    op: string,
+    payload: Record<string, unknown> | undefined,
+    context: WorkerMutationContext,
+    transfer?: Transferable[],
+  ): Promise<T> {
+    let captured: WorkerMutationContext;
+    try {
+      captured = captureWorkerMutationContext(context);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    return this.call(captured.requestId, op, payload, transfer);
+  }
+
+  /** Mint once at the user-operation boundary and pass the same context to a
+   * reconstructed WorkerClient when an authenticated response was lost. */
+  createMutationContext(): WorkerMutationContext {
+    return createWorkerMutationContext();
   }
 
   /** Terminate the worker, close every per-call planner port, and reject work
@@ -323,7 +381,10 @@ export class WorkerClient {
         this.terminate();
         throw new Error("active planner did not settle before shutdown");
       }
-      const acknowledged = await settlesWithin(this.call("shutdown"), timeoutMs);
+      const shutdownRequest = createWorkerMutationContext();
+      const acknowledged = await settlesWithin(
+        this.call(shutdownRequest.requestId, "shutdown"), timeoutMs,
+      );
       this.terminate();
       if (!acknowledged) throw new Error("worker did not acknowledge quiescent shutdown");
     })();
@@ -355,7 +416,10 @@ export class WorkerClient {
 
   async boot(request: BootRequest): Promise<BootInfo> {
     const captured = parseBootRequest(request);
-    return parseBootInfo(await this.call<unknown>("boot", captured));
+    const context = createWorkerMutationContext();
+    return parseBootInfo(await this.call<unknown>(
+      context.requestId, "boot", captured,
+    ));
   }
   async setModelAccess(
     pendingAccess: ModelAccess | PromiseLike<ModelAccess>,
@@ -602,11 +666,16 @@ export class WorkerClient {
     active.port.start();
   }
 
-  async #plannerCall(op: "intent" | "repairPanel", payload: Record<string, unknown>): Promise<IntentOutcome> {
+  async #plannerCall(
+    op: "intent" | "repairPanel",
+    payload: Record<string, unknown>,
+    context: WorkerMutationContext,
+  ): Promise<IntentOutcome> {
     if (this.#terminated) throw new Error("DB worker was terminated");
     if (!this.#accepting) throw new Error("DB worker shutdown is in progress");
     if (this.#modelAccessPreparationGeneration !== this.#modelAccessGeneration)
       throw new Error("model access update is in progress");
+    const logicalRequest = captureWorkerMutationContext(context);
     const channel = new MessageChannel();
     let markSettled!: () => void;
     const settled = new Promise<void>(resolve => { markSettled = resolve; });
@@ -621,11 +690,16 @@ export class WorkerClient {
     this.#activePlanners.add(active);
     this.#servePlanner(active, access, lifecycle);
     try {
-      const outcome = await this.call<IntentOutcome>(op, payload, [channel.port2]);
+      const outcome = await this.call<IntentOutcome>(
+        logicalRequest.requestId, op, payload, [channel.port2],
+      );
       if (active.closed || this.#terminated || lifecycle !== this.#lifecycle
           || active.accessGeneration !== this.#modelAccessGeneration) {
         if (outcome?.status === "preview") {
-          try { await this.call<null>("discard"); }
+          try {
+            const discard = createWorkerMutationContext();
+            await this.call<null>(discard.requestId, "discard");
+          }
           catch (error) {
             this.terminate();
             throw new Error("stale planner preview could not be discarded", { cause: error });
@@ -643,203 +717,262 @@ export class WorkerClient {
     }
   }
 
-  deleteApp(appId: string): Promise<null> { return this.call("deleteApp", { appId }); }
-  forkApp(newAppId: string): Promise<null> { return this.call("forkApp", { newAppId }); }
+  deleteApp(appId: string, context: WorkerMutationContext): Promise<null> {
+    return this.mutationCall("deleteApp", { appId }, context);
+  }
+  forkApp(newAppId: string, context: WorkerMutationContext): Promise<null> {
+    return this.mutationCall("forkApp", { newAppId }, context);
+  }
   async status(): Promise<StatusInfo> {
     const access = Object.freeze({ ...this.#modelAccess });
-    const status = await this.call<Omit<StatusInfo, "modelConnection">>("status");
+    const status = await this.ephemeralCall<Omit<StatusInfo, "modelConnection">>("status");
     return { ...status, modelConnection: await this.#modelConnection(access) };
   }
-  seed(shellId: string): Promise<null> { return this.call("seed", { shellId }); }
-  importTable(payload: { table: string; columns: unknown[]; rows: unknown[] }):
-    Promise<{ table: string; imported: number; columns: number }> {
-    return this.call("importTable", payload);
+  seed(shellId: string, context: WorkerMutationContext): Promise<null> {
+    return this.mutationCall("seed", { shellId }, context);
   }
-  panels(): Promise<LivePanel[]> { return this.call("panels"); }
-  panelProvenance(): Promise<PanelProvenance[]> { return this.call("panelProvenance"); }
-  semanticTrace(): Promise<SemanticSchemaTraceV1> { return this.call("semanticTrace"); }
-  fieldProvenance(): Promise<FieldProvenance[]> { return this.call("fieldProvenance"); }
-  recordPrivateMetric(event: PrivateMetricEvent): Promise<null> {
-    return this.call("recordPrivateMetric", { event });
+  importTable(
+    payload: { table: string; columns: unknown[]; rows: unknown[] },
+    context: WorkerMutationContext,
+  ):
+    Promise<{ table: string; imported: number; columns: number }> {
+    return this.mutationCall("importTable", payload, context);
+  }
+  panels(): Promise<LivePanel[]> { return this.ephemeralCall("panels"); }
+  panelProvenance(): Promise<PanelProvenance[]> { return this.ephemeralCall("panelProvenance"); }
+  semanticTrace(): Promise<SemanticSchemaTraceV1> { return this.ephemeralCall("semanticTrace"); }
+  fieldProvenance(): Promise<FieldProvenance[]> { return this.ephemeralCall("fieldProvenance"); }
+  recordPrivateMetric(event: PrivateMetricEvent, context: WorkerMutationContext): Promise<null> {
+    return this.mutationCall("recordPrivateMetric", { event }, context);
   }
   privateMetricsSummary(): Promise<PrivateMetricsSummary> {
-    return this.call("privateMetricsSummary");
+    return this.ephemeralCall("privateMetricsSummary");
   }
-  setPrivateMetricsEnabled(enabled: boolean): Promise<PrivateMetricsSummary> {
-    return this.call("setPrivateMetricsEnabled", { enabled });
+  setPrivateMetricsEnabled(
+    enabled: boolean, context: WorkerMutationContext,
+  ): Promise<PrivateMetricsSummary> {
+    return this.mutationCall("setPrivateMetricsEnabled", { enabled }, context);
   }
-  clearPrivateMetrics(): Promise<PrivateMetricsSummary> {
-    return this.call("clearPrivateMetrics");
+  clearPrivateMetrics(context: WorkerMutationContext): Promise<PrivateMetricsSummary> {
+    return this.mutationCall("clearPrivateMetrics", undefined, context);
   }
-  commitLayout(placements: { panel_id: string; region: "top" | "main" | "side"; order: number; w?: number; h?: number; col?: number | null }[]): Promise<LivePanel[]> {
-    return this.call("commitLayout", { placements });
+  commitLayout(
+    placements: { panel_id: string; region: "top" | "main" | "side"; order: number; w?: number; h?: number; col?: number | null }[],
+    context: WorkerMutationContext,
+  ): Promise<LivePanel[]> {
+    return this.mutationCall("commitLayout", { placements }, context);
   }
-  renamePanel(panelId: string, title: string): Promise<LivePanel[]> {
-    return this.call("renamePanel", { panelId, title });
+  renamePanel(panelId: string, title: string, context: WorkerMutationContext): Promise<LivePanel[]> {
+    return this.mutationCall("renamePanel", { panelId, title }, context);
   }
   addAttachment(input: {
     table: string; rowId: string; field: string; name: string; mime: string; bytes: ArrayBuffer;
-  }): Promise<AttachmentMetadata> {
-    return this.call("addAttachment", input, [input.bytes]);
+  }, context: WorkerMutationContext): Promise<AttachmentMetadata> {
+    return this.mutationCall("addAttachment", input, context, [input.bytes]);
   }
   attachmentsForRecord(table: string, rowId: string, field: string): Promise<AttachmentMetadata[]> {
-    return this.call("attachmentsForRecord", { table, rowId, field });
+    return this.ephemeralCall("attachmentsForRecord", { table, rowId, field });
   }
   readAttachment(id: string): Promise<AttachmentFile> {
-    return this.call("readAttachment", { id });
+    return this.ephemeralCall("readAttachment", { id });
   }
-  removeAttachment(table: string, rowId: string, field: string, id: string): Promise<null> {
-    return this.call("removeAttachment", { table, rowId, field, id });
+  removeAttachment(
+    table: string, rowId: string, field: string, id: string,
+    context: WorkerMutationContext,
+  ): Promise<null> {
+    return this.mutationCall("removeAttachment", { table, rowId, field, id }, context);
   }
   attachmentStorage(): Promise<AttachmentStorageSummary> {
-    return this.call("attachmentStorage", {});
+    return this.ephemeralCall("attachmentStorage", {});
   }
-  purgeDeletedAttachments(): Promise<{ files: number; bytes: number }> {
-    return this.call("purgeDeletedAttachments", {});
+  purgeDeletedAttachments(
+    context: WorkerMutationContext,
+  ): Promise<{ files: number; bytes: number }> {
+    return this.mutationCall("purgeDeletedAttachments", {}, context);
   }
   listAutomations(): Promise<AutomationDefinition[]> {
-    return this.call("listAutomations", {});
+    return this.ephemeralCall("listAutomations", {});
   }
-  upsertAutomation(input: AutomationDefinitionInput): Promise<AutomationDefinition> {
-    return this.call("upsertAutomation", { input });
+  upsertAutomation(
+    input: AutomationDefinitionInput, context: WorkerMutationContext,
+  ): Promise<AutomationDefinition> {
+    return this.mutationCall("upsertAutomation", { input }, context);
   }
-  deleteAutomation(id: string): Promise<null> {
-    return this.call("deleteAutomation", { id });
+  deleteAutomation(id: string, context: WorkerMutationContext): Promise<null> {
+    return this.mutationCall("deleteAutomation", { id }, context);
   }
   simulateAutomation(id: string): Promise<AutomationSimulation> {
-    return this.call("simulateAutomation", { id });
+    return this.ephemeralCall("simulateAutomation", { id });
   }
-  runAutomations(): Promise<AutomationRun[]> {
-    return this.call("runAutomations", {});
+  runAutomations(context: WorkerMutationContext): Promise<AutomationRun[]> {
+    return this.mutationCall("runAutomations", {}, context);
   }
-  runAutomationNow(id: string): Promise<AutomationRun> {
-    return this.call("runAutomationNow", { id });
+  runAutomationNow(id: string, context: WorkerMutationContext): Promise<AutomationRun> {
+    return this.mutationCall("runAutomationNow", { id }, context);
   }
   automationRuns(automationId?: string, limit = 100): Promise<AutomationRun[]> {
-    return this.call("automationRuns", { automationId: automationId ?? null, limit });
+    return this.ephemeralCall("automationRuns", { automationId: automationId ?? null, limit });
   }
-  undoAutomationRun(id: string): Promise<AutomationRun> {
-    return this.call("undoAutomationRun", { id });
+  undoAutomationRun(id: string, context: WorkerMutationContext): Promise<AutomationRun> {
+    return this.mutationCall("undoAutomationRun", { id }, context);
   }
   notifications(limit = 100): Promise<ClayNotification[]> {
-    return this.call("notifications", { limit });
+    return this.ephemeralCall("notifications", { limit });
   }
-  markNotificationRead(id: string): Promise<null> {
-    return this.call("markNotificationRead", { id });
+  markNotificationRead(id: string, context: WorkerMutationContext): Promise<null> {
+    return this.mutationCall("markNotificationRead", { id }, context);
   }
   globalSearch(term: string, limit = 20): Promise<GlobalSearchResult[]> {
-    return this.call("globalSearch", { term, limit });
+    return this.ephemeralCall("globalSearch", { term, limit });
   }
-  applyBatch(summary: string, mutations: BatchMutation[]): Promise<BatchReceipt> {
-    return this.call("applyBatch", { source: "user", summary, mutations });
+  applyBatch(
+    summary: string,
+    mutations: BatchMutation[],
+    context: WorkerMutationContext,
+  ): Promise<BatchReceipt> {
+    return this.mutationCall("applyBatch", { source: "user", summary, mutations }, context);
   }
   operationBatches(limit = 50): Promise<BatchReceipt[]> {
-    return this.call("operationBatches", { limit });
+    return this.ephemeralCall("operationBatches", { limit });
   }
-  undoBatch(id: string): Promise<BatchReceipt> {
-    return this.call("undoBatch", { id });
+  undoBatch(id: string, context: WorkerMutationContext): Promise<BatchReceipt> {
+    return this.mutationCall("undoBatch", { id }, context);
   }
   rowHistory(table: string, id: string):
     Promise<{ at: string; values: Record<string, unknown> }[]> {
-    return this.call("rowHistory", { table, id });
+    return this.ephemeralCall("rowHistory", { table, id });
   }
   previewRelationConversion(input: RelationConversionRequest): Promise<RelationConversionPreview> {
-    return this.call("previewRelationConversion", input);
+    return this.ephemeralCall("previewRelationConversion", input);
   }
   convertTextToRelation(
     input: RelationConversionPreview & { cardinality: "one" },
+    context: WorkerMutationContext,
   ): Promise<RelationConversionResult> {
-    return this.call("convertTextToRelation", input);
+    return this.mutationCall("convertTextToRelation", input, context);
   }
-  addColumn(table: string, column: { name: string; type: string } & Record<string, unknown>):
+  addColumn(
+    table: string,
+    column: { name: string; type: string } & Record<string, unknown>,
+    context: WorkerMutationContext,
+  ):
     Promise<RegTable[]> {
-    return this.call("addColumn", { table, column });
+    return this.mutationCall("addColumn", { table, column }, context);
   }
   addRelationColumn(
     table: string,
     column: { name: string; type: "relation"; relation: RelationFieldSpec } & Record<string, unknown>,
+    context: WorkerMutationContext,
   ): Promise<RegTable[]> {
-    return this.call("addRelationColumn", { table, column });
+    return this.mutationCall("addRelationColumn", { table, column }, context);
   }
-  renameColumn(table: string, from: string, to: string): Promise<RegTable[]> {
-    return this.call("renameColumn", { table, from, to });
+  renameColumn(
+    table: string, from: string, to: string, context: WorkerMutationContext,
+  ): Promise<RegTable[]> {
+    return this.mutationCall("renameColumn", { table, from, to }, context);
   }
-  removeColumn(table: string, column: string): Promise<RegTable[]> {
-    return this.call("removeColumn", { table, column });
+  removeColumn(table: string, column: string, context: WorkerMutationContext): Promise<RegTable[]> {
+    return this.mutationCall("removeColumn", { table, column }, context);
   }
-  removePanel(panelId: string): Promise<LivePanel[]> {
-    return this.call("removePanel", { panelId });
+  removePanel(panelId: string, context: WorkerMutationContext): Promise<LivePanel[]> {
+    return this.mutationCall("removePanel", { panelId }, context);
   }
-  history(): Promise<HistoryEntry[]> { return this.call("history"); }
-  setCheckpoint(version: number, label: string): Promise<HistoryEntry[]> {
-    return this.call("setCheckpoint", { version, label });
+  history(): Promise<HistoryEntry[]> { return this.ephemeralCall("history"); }
+  setCheckpoint(
+    version: number, label: string, context: WorkerMutationContext,
+  ): Promise<HistoryEntry[]> {
+    return this.mutationCall("setCheckpoint", { version, label }, context);
   }
-  panelsAt(version: number): Promise<LivePanel[]> { return this.call("panelsAt", { version }); }
-  makeLatest(version: number): Promise<LivePanel[]> { return this.call("makeLatest", { version }); }
-  intent(text: string): Promise<IntentOutcome> {
+  panelsAt(version: number): Promise<LivePanel[]> {
+    return this.ephemeralCall("panelsAt", { version });
+  }
+  makeLatest(version: number, context: WorkerMutationContext): Promise<LivePanel[]> {
+    return this.mutationCall("makeLatest", { version }, context);
+  }
+  intent(text: string, context: WorkerMutationContext): Promise<IntentOutcome> {
     if (typeof text !== "string" || containsProtectedSecret(text, this.#modelAccess))
       return Promise.reject(new ClayError(
         "E_VALIDATION", "Intent cannot contain active credential material",
       ));
-    return this.#plannerCall("intent", { text });
+    return this.#plannerCall("intent", { text }, context);
   }
-  repairPanel(panelId: string, _error: string): Promise<IntentOutcome> {
-    return this.#plannerCall("repairPanel", { panelId });
+  repairPanel(
+    panelId: string, _error: string, context: WorkerMutationContext,
+  ): Promise<IntentOutcome> {
+    return this.#plannerCall("repairPanel", { panelId }, context);
   }
-  revertPanel(panelId: string): Promise<LivePanel[]> {
-    return this.call("revertPanel", { panelId });
+  revertPanel(panelId: string, context: WorkerMutationContext): Promise<LivePanel[]> {
+    return this.mutationCall("revertPanel", { panelId }, context);
   }
-  keep(): Promise<{ version: number }> { return this.call("keep"); }
-  discard(): Promise<null> { return this.call("discard"); }
-  removeSamples(): Promise<{
+  keep(context: WorkerMutationContext): Promise<{ version: number }> {
+    return this.mutationCall("keep", undefined, context);
+  }
+  discard(context: WorkerMutationContext): Promise<null> {
+    return this.mutationCall("discard", undefined, context);
+  }
+  removeSamples(context: WorkerMutationContext): Promise<{
     affected: number;
     recovery: { kind: "soft_delete"; recoverable: number };
-  }> { return this.call("removeSamples", {}); }
-  fillSamples(): Promise<{ added: number; tables: number }> { return this.call("fillSamples"); }
-  sampleCount(): Promise<number> { return this.call("sampleCount"); }
-  reset(): Promise<null> { return this.call("reset"); }
-  registryTables(): Promise<RegTable[]> { return this.call("registryTables"); }
-  restoreRow(table: string, id: string): Promise<Record<string, unknown>> {
-    return this.call("restoreRow", { table, id });
+  }> { return this.mutationCall("removeSamples", {}, context); }
+  fillSamples(context: WorkerMutationContext): Promise<{ added: number; tables: number }> {
+    return this.mutationCall("fillSamples", undefined, context);
+  }
+  sampleCount(): Promise<number> { return this.ephemeralCall("sampleCount"); }
+  reset(context: WorkerMutationContext): Promise<null> {
+    return this.mutationCall("reset", undefined, context);
+  }
+  registryTables(): Promise<RegTable[]> { return this.ephemeralCall("registryTables"); }
+  restoreRow(
+    table: string, id: string, context: WorkerMutationContext,
+  ): Promise<Record<string, unknown>> {
+    return this.mutationCall("restoreRow", { table, id }, context);
   }
   restorableRows(table: string): Promise<string[]> {
-    return this.call("restorableRows", { table });
+    return this.ephemeralCall("restorableRows", { table });
   }
-  suggestions(): Promise<Suggestion[]> { return this.call("suggestions"); }
-  debugLog(): Promise<TraceEntry[]> { return this.call("debugLog"); }
-  recordFilter(name: string, payload: unknown): Promise<null> {
-    return this.call("recordFilter", { name, payload });
+  suggestions(): Promise<Suggestion[]> { return this.ephemeralCall("suggestions"); }
+  debugLog(): Promise<TraceEntry[]> { return this.ephemeralCall("debugLog"); }
+  recordFilter(name: string, payload: unknown, context: WorkerMutationContext): Promise<null> {
+    return this.mutationCall("recordFilter", { name, payload }, context);
   }
-  dismissSuggestion(subject: string, kind: string): Promise<null> {
-    return this.call("dismissSuggestion", { subject, kind });
+  dismissSuggestion(
+    subject: string, kind: string, context: WorkerMutationContext,
+  ): Promise<null> {
+    return this.mutationCall("dismissSuggestion", { subject, kind }, context);
   }
-  acceptSuggestion(subject: string, kind: string): Promise<null> {
-    return this.call("acceptSuggestion", { subject, kind });
+  acceptSuggestion(
+    subject: string, kind: string, context: WorkerMutationContext,
+  ): Promise<null> {
+    return this.mutationCall("acceptSuggestion", { subject, kind }, context);
   }
   exportArchive(): Promise<{ bytes: ArrayBuffer; filename: string }> {
-    return this.call("exportArchive");
+    return this.ephemeralCall("exportArchive");
   }
-  importArchive(bytes: ArrayBuffer): Promise<{
+  importArchive(bytes: ArrayBuffer, context: WorkerMutationContext): Promise<{
     manifest: { app: string; versions: number }; invalidPanels: string[];
   }> {
-    return this.call("importArchive", { bytes }, [bytes]);
+    return this.mutationCall("importArchive", { bytes }, context, [bytes]);
   }
-  getSetting<T>(key: string): Promise<T | null> { return this.call("getSetting", { key }); }
-  setSetting(key: string, value: unknown): Promise<null> {
-    return this.call("setSetting", { key, value });
+  getSetting<T>(key: string): Promise<T | null> {
+    return this.ephemeralCall("getSetting", { key });
   }
-  deleteSetting(key: string): Promise<null> { return this.call("deleteSetting", { key }); }
+  setSetting(key: string, value: unknown, context: WorkerMutationContext): Promise<null> {
+    return this.mutationCall("setSetting", { key, value }, context);
+  }
+  deleteSetting(key: string, context: WorkerMutationContext): Promise<null> {
+    return this.mutationCall("deleteSetting", { key }, context);
+  }
   compareAndSetSetting<T>(
-    key: string, expectedRevision: number, value: T,
+    key: string, expectedRevision: number, value: T, context: WorkerMutationContext,
   ): Promise<{ ok: boolean; current: unknown }> {
-    return this.call("compareAndSetSetting", { key, expectedRevision, value });
+    return this.mutationCall("compareAndSetSetting", { key, expectedRevision, value }, context);
   }
 
   /** Open a serveStore RPC port on the worker for the Bridge's AsyncStore. */
   openStorePort(target: "live" | "shadow"): MessagePort {
     if (!this.#accepting) throw new Error("DB worker shutdown is in progress");
     const channel = new MessageChannel();
-    void this.call("storePort", { target }, [channel.port2]);
+    void this.ephemeralCall("storePort", { target }, [channel.port2]);
     channel.port1.start();
     return channel.port1;
   }

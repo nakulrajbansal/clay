@@ -210,6 +210,57 @@ it("uses byte-identical semantic assignments in preview and Keep", async () => {
 describe("pipeline stages", () => {
   const tracker = (): Shell => shells.find(s => s.shell_id === "tracker")!;
 
+  it("durably finalizes a begun attempt when planning-base capture throws", async () => {
+    const finalized: Array<{
+      attemptId: string;
+      outcome: "clarify" | "failed";
+      errorCode?: string;
+    }> = [];
+    const authority: ConstructorParameters<typeof MutationPipeline>[0] = {
+      beginAttempt: async () => "attempt-capture-failure",
+      capturePlanningBase: () => {
+        throw new ClayError("E_INTERNAL", "planning base unavailable");
+      },
+      preparePreview: async () => {
+        throw new Error("preview must not be prepared after capture failure");
+      },
+      assertPlanningBase: () => undefined,
+      finalizeAttempt: async (attemptId, outcome, errorCode) => {
+        finalized.push({ attemptId, outcome, ...(errorCode ? { errorCode } : {}) });
+      },
+      keep: async () => {
+        throw new Error("Keep must not run after capture failure");
+      },
+      discard: async () => {
+        throw new Error("Discard must not run after capture failure");
+      },
+    };
+
+    await expect(new MutationPipeline(authority, new ScriptedPlanner([])).run(INTENT))
+      .rejects.toMatchObject({ code: "E_INTERNAL", message: "planning base unavailable" });
+    expect(finalized).toEqual([{
+      attemptId: "attempt-capture-failure",
+      outcome: "failed",
+      errorCode: "E_INTERNAL",
+    }]);
+
+    const finalizationFailure = new ClayError(
+      "E_STALE_WRITE_EPOCH", "finalization authority is unavailable",
+    );
+    let finalizationCalls = 0;
+    const unavailableAuthority: ConstructorParameters<typeof MutationPipeline>[0] = {
+      ...authority,
+      finalizeAttempt: async () => {
+        finalizationCalls++;
+        throw finalizationFailure;
+      },
+    };
+    await expect(new MutationPipeline(
+      unavailableAuthority, new ScriptedPlanner([]),
+    ).run(INTENT)).rejects.toBe(finalizationFailure);
+    expect(finalizationCalls).toBe(1);
+  });
+
   it("discard leaves the live store untouched (preview-before-commit)", async () => {
     const { store, table, panelId } = await seedShellStore(tracker());
     const planner = new ScriptedPlanner([

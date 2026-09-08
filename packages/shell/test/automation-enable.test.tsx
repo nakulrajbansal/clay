@@ -16,6 +16,7 @@ it("shows a simulation before re-enabling an existing rule", async () => {
     createdAt: "2026-09-02T12:00:00.000Z", updatedAt: "2026-09-02T12:00:00.000Z" } as AutomationDefinition;
   let writes = 0;
   const worker = {
+    createMutationContext: () => ({ requestId: `req_${"u".repeat(26)}` }),
     listAutomations: async () => [rule], automationRuns: async () => [], notifications: async () => [],
     simulateAutomation: async () => ({ automationId: rule.id, matchedRecords: 2,
       plannedMutations: 0, plannedNotifications: 2, sampleLabels: ["One", "Two"] }),

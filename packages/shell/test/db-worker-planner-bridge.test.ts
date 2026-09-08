@@ -8,13 +8,21 @@ import {
 import { ProductionStoreAuthority } from "../../kernel/src/production-authority";
 
 const workerBoot = vi.hoisted(() => ({ target: null as unknown }));
-vi.mock("@clay/kernel/worker-authority", () => ({
-  ProductionStoreAuthority: {
-    bootBrowser: async (): Promise<unknown> => workerBoot.target,
-  },
-}));
+vi.mock("@clay/kernel/worker-authority", async importOriginal => {
+  const original = await importOriginal<typeof import("@clay/kernel/worker-authority")>();
+  return {
+    ...original,
+    ProductionStoreAuthority: {
+      bootBrowser: async (): Promise<unknown> => workerBoot.target,
+    },
+  };
+});
 
 const opaque = (prefix: string, char: string): string => `${prefix}_${char.repeat(26)}`;
+const BOOT_PAYLOAD = Object.freeze({
+  requestedAppId: opaque("app", "a"),
+  appCache: Object.freeze([]),
+});
 const ROW_CANARY = "row-value-must-never-reach-model";
 type WorkerScope = {
   onmessage: ((event: MessageEvent) => void) | null;
@@ -87,7 +95,8 @@ async function loadUnbootedWorker(authority: ProductionStoreAuthority): Promise<
 
 async function loadWorker(authority: ProductionStoreAuthority): Promise<WorkerScope> {
   const scope = await loadUnbootedWorker(authority);
-  expect(await dispatch(scope, { id: 1, op: "boot", payload: {} })).toMatchObject({ ok: true });
+  expect(await dispatch(scope, { id: 1, op: "boot", payload: BOOT_PAYLOAD }))
+    .toMatchObject({ ok: true });
   return scope;
 }
 
@@ -167,7 +176,9 @@ describe("per-intent DB-worker planner bridge", () => {
     const channel = new MessageChannel();
     const scope = await loadUnbootedWorker(authority);
     try {
-      const bootEvent = { data: { id: 1, op: "boot", payload: {} }, ports: [] } as unknown as MessageEvent;
+      const bootEvent = {
+        data: { id: 1, op: "boot", payload: BOOT_PAYLOAD }, ports: [],
+      } as unknown as MessageEvent;
       scope.onmessage?.(bootEvent);
       await started;
 
@@ -201,7 +212,7 @@ describe("per-intent DB-worker planner bridge", () => {
       .mockRejectedValue(new Error("reconciliation failed"));
     const scope = await loadUnbootedWorker(authority);
 
-    expect(await dispatch(scope, { id: 1, op: "boot", payload: {} })).toMatchObject({
+    expect(await dispatch(scope, { id: 1, op: "boot", payload: BOOT_PAYLOAD })).toMatchObject({
       ok: false, error: { message: "reconciliation failed" },
     });
     expect(close).toHaveBeenCalledOnce();
@@ -245,7 +256,7 @@ describe("per-intent DB-worker planner bridge", () => {
       } as unknown as MessageEvent);
       await observed;
       expect(authority.readStore().attemptStats().failed).toBe(0);
-      expect(await dispatch(scope, { id: 64, op: "boot", payload: {} }))
+      expect(await dispatch(scope, { id: 64, op: "boot", payload: BOOT_PAYLOAD }))
         .toMatchObject({ ok: true });
       expect(authority.readStore().attemptStats().failed).toBe(0);
       channel.port1.postMessage({
@@ -551,6 +562,54 @@ describe("per-intent DB-worker planner bridge", () => {
     } finally { authority.close(); }
   });
 
+  it.each(["keep", "discard"] as const)(
+    "replays a durably settled %s after worker restart and lost response",
+    async decision => {
+      const authority = await authorityWithProject();
+      try {
+        const firstWorker = await loadWorker(authority);
+        const before = authority.readStore().headVersion();
+        const outcome = await plannerCall(
+          firstWorker,
+          "intent",
+          { text: "add a panel" },
+          (request, port) => port.postMessage(
+            response(request, { ok: true, raw: validPlan() }),
+          ),
+        );
+        expect(outcome).toMatchObject({ ok: true, result: { status: "preview" } });
+        const requestId = `req_${(decision === "keep" ? "r" : "s").repeat(26)}`;
+        const lost = await dispatch(firstWorker, { id: 76, requestId, op: decision });
+        expect(lost).toMatchObject({ ok: true });
+        const settledVersion = authority.readStore().headVersion();
+        expect(settledVersion).toBe(decision === "keep" ? before + 1 : before);
+
+        const restartedWorker = await loadWorker(authority);
+        const replayed = await dispatch(restartedWorker, {
+          id: 77, requestId, op: decision,
+        });
+        expect(replayed).toEqual({
+          id: 77,
+          ok: true,
+          result: decision === "keep" ? { version: settledVersion } : null,
+        });
+        expect(authority.readStore().headVersion()).toBe(settledVersion);
+        expect(authority.readStore().attemptStats())
+          .toMatchObject(decision === "keep" ? { kept: 1 } : { discarded: 1 });
+        const wrongDecision = decision === "keep" ? "discard" : "keep";
+        const wrongReplay = await dispatch(restartedWorker, {
+          id: 78, requestId, op: wrongDecision,
+        });
+        expect(wrongReplay).toMatchObject({ id: 78, ok: false });
+        expect(String((wrongReplay.error as { message?: unknown }).message))
+          .toMatch(/receipt operation identity|route binding/i);
+      } finally {
+        authority.close();
+      }
+    },
+    15_000,
+  );
+
   it("waits for Store RPC before shutdown acknowledgement", async () => {
     const authority = await authorityWithProject();
     const endpoint = authority.asyncStore();
@@ -622,7 +681,9 @@ describe("per-intent DB-worker planner bridge", () => {
         (request, port) => port.postMessage(response(request, { ok: true, raw: validPlan() })));
       expect(outcome).toMatchObject({ ok: true, result: { status: "preview" } });
 
-      const shutdown = await dispatch(scope, { id: 70, op: "shutdown" });
+      const shutdown = await dispatch(scope, {
+        id: 70, requestId: opaque("req", "s"), op: "shutdown",
+      });
       expect(shutdown).toMatchObject({ ok: true, result: null });
       expect(closeObserved).toBe(true);
       expect(authority.readStore().headVersion()).toBe(before);

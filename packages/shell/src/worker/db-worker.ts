@@ -5,7 +5,7 @@
 // Records never leave this worker except over those ports to the Bridge.
 import type {
   DebugEvent, LivePanel, PanelProvenance,
-  PreparedMutationCommand, PreparedMutationPreview,
+  PreparedMutationPreview,
 } from "@clay/kernel";
 import { portFromMessagePort, serveStore } from "@clay/kernel/worker-rpc";
 import type { StoreServerControl } from "@clay/kernel/worker-rpc";
@@ -44,24 +44,24 @@ type Request = {
 
 
 let authority: ProductionStoreAuthority | null = null;
-let authorityBoot: Promise<ProductionStoreAuthority> | null = null;
 type WorkerBootProjection = {
   persistent: true; seeded: boolean; shellId: string | null;
   selectedAppInstanceId: string; catalogGeneration: string;
   apps: Array<{ id: string; name: string; shellId: string }>;
 };
-let bootResult: Promise<WorkerBootProjection> | null = null;
+type AuthorityBoot = Readonly<{
+  key: string;
+  promise: Promise<WorkerBootProjection>;
+}>;
+let authorityBoot: AuthorityBoot | null = null;
+let openedBootAliases: ReadonlySet<string> | null = null;
 let store: ProductionStoreReader | null = null;
 let persistent = false;
 type PendingPreview = {
   preview: PreparedMutationPreview;
   decision: "open" | "keeping" | "discarding";
 };
-type SettledDecision =
-  | { kind: "keep"; requestId: string; command: PreparedMutationCommand; version: number }
-  | { kind: "discard"; requestId: string; command: PreparedMutationCommand };
 let pending: PendingPreview | null = null;
-let settledDecision: SettledDecision | null = null;
 let pipelineRun: Promise<IntentOutcome> | null = null;
 let shuttingDown = false;
 let shutdownRun: Promise<null> | null = null;
@@ -397,46 +397,69 @@ function enforceProductionMutationRoute(op: string): void {
 }
 
 async function bootProductionAuthority(input: unknown): Promise<WorkerBootProjection> {
-  if (bootResult) return bootResult;
+  const workerAuthority = await import("@clay/kernel/worker-authority");
+  const captured = workerAuthority.captureBrowserBootInput(input);
+  const key = JSON.stringify(captured);
+  const project = (target: ProductionStoreAuthority): WorkerBootProjection => {
+    const info = target.bootInfo();
+    return Object.freeze({
+      persistent: true as const,
+      seeded: info.seeded,
+      shellId: info.shellId,
+      selectedAppInstanceId: info.selectedAppInstanceId,
+      catalogGeneration: info.catalogGeneration,
+      apps: info.apps.map(app => Object.freeze({ ...app })),
+    });
+  };
+  if (authority) {
+    const info = authority.bootInfo();
+    if (captured.requestedAppId !== null
+        && captured.requestedAppId !== info.selectedAppInstanceId
+        && !openedBootAliases?.has(captured.requestedAppId))
+      throw new ClayError("E_CATALOG_CONFLICT",
+        "boot requested a different target than the opened worker authority");
+    return project(authority);
+  }
+  if (authorityBoot) {
+    if (authorityBoot.key !== key)
+      throw new ClayError("E_CATALOG_CONFLICT",
+        "concurrent boot request does not match the initializing target");
+    return authorityBoot.promise;
+  }
   const current = (async (): Promise<WorkerBootProjection> => {
-    const { ProductionStoreAuthority } = await import("@clay/kernel/worker-authority");
-    const candidateBoot = authorityBoot ??= ProductionStoreAuthority.bootBrowser(input);
     let candidate: ProductionStoreAuthority | null = null;
     try {
-      candidate = await candidateBoot;
+      candidate = await workerAuthority.ProductionStoreAuthority.bootBrowser(captured);
       await candidate.reconcileInterruptedPlannerAttempts();
       const candidateStore = candidate.readStore();
-      const info = candidate.bootInfo();
-      const projection = Object.freeze({
-        persistent: true as const,
-        seeded: info.seeded,
-        shellId: info.shellId,
-        selectedAppInstanceId: info.selectedAppInstanceId,
-        catalogGeneration: info.catalogGeneration,
-        apps: info.apps.map(app => Object.freeze({ ...app })),
-      });
+      const projection = project(candidate);
       authority = candidate;
       store = candidateStore;
       persistent = true;
+      openedBootAliases = new Set([
+        projection.selectedAppInstanceId,
+        ...(captured.requestedAppId === null ? [] : [captured.requestedAppId]),
+      ]);
       return projection;
     } catch (error) {
-      if (authorityBoot === candidateBoot) authorityBoot = null;
       if (candidate && authority !== candidate) {
         try { candidate.close(); } catch { /* candidate was never published */ }
       }
       throw error;
     }
   })();
-  bootResult = current;
-  try { return await current; }
-  catch (error) {
-    if (bootResult === current) bootResult = null;
-    throw error;
+  const inFlight = Object.freeze({ key, promise: current });
+  authorityBoot = inFlight;
+  try {
+    return await current;
+  } finally {
+    if (authorityBoot === inFlight) authorityBoot = null;
   }
 }
 
 function authorityRequestId(req: Request): string {
-  if (req.requestId === undefined) return mustAuthority().createRequestId();
+  if (req.requestId === undefined)
+    throw new ClayError("E_TARGET_AUTHORITY_INVALID", "worker request identity is required");
   if (!/^req_[a-z2-7]{26}$/.test(req.requestId))
     throw new ClayError("E_TARGET_AUTHORITY_INVALID", "worker request identity is invalid");
   return req.requestId;
@@ -643,7 +666,6 @@ async function executePipelineText(text: string, plannerPort: MessagePort): Prom
     };
   }
   pending = { preview: result.preview, decision: "open" };
-  settledDecision = null;
   return {
     status: "preview",
     preview: {
@@ -688,12 +710,14 @@ function openPendingPreview(decision: "keeping" | "discarding"): PendingPreview 
 }
 
 async function keepPendingPreview(req: Request): Promise<{ version: number }> {
-  const planner = mustAuthority().plannerMutations();
-  if (!pending && req.requestId && settledDecision?.kind === "keep"
-      && settledDecision.requestId === req.requestId) {
-    const version = await planner.keep(req.requestId, settledDecision.command);
+  const currentAuthority = mustAuthority();
+  if (!pending && req.requestId) {
+    const version = await currentAuthority.replayPlannerDecision(req.requestId, "keep");
+    if (typeof version !== "number")
+      throw new ClayError("E_INTERNAL", "durable planner Keep result is invalid");
     return { version };
   }
+  const planner = currentAuthority.plannerMutations();
   const current = openPendingPreview("keeping");
   const requestId = authorityRequestId(req);
   let version: number;
@@ -704,9 +728,6 @@ async function keepPendingPreview(req: Request): Promise<{ version: number }> {
     throw error;
   }
   if (pending === current) pending = null;
-  settledDecision = {
-    kind: "keep", requestId, command: current.preview.command, version,
-  };
   try { current.preview.shadow.close(); } catch { /* committed state is already terminal */ }
   try {
     if (typeof navigator !== "undefined" && navigator.storage?.persist)
@@ -716,12 +737,12 @@ async function keepPendingPreview(req: Request): Promise<{ version: number }> {
 }
 
 async function discardPendingPreview(req: Request): Promise<null> {
-  const planner = mustAuthority().plannerMutations();
-  if (!pending && req.requestId && settledDecision?.kind === "discard"
-      && settledDecision.requestId === req.requestId) {
-    await planner.discard(req.requestId, settledDecision.command);
+  const currentAuthority = mustAuthority();
+  if (!pending && req.requestId) {
+    await currentAuthority.replayPlannerDecision(req.requestId, "discard");
     return null;
   }
+  const planner = currentAuthority.plannerMutations();
   const current = openPendingPreview("discarding");
   const requestId = authorityRequestId(req);
   try {
@@ -731,9 +752,6 @@ async function discardPendingPreview(req: Request): Promise<null> {
     throw error;
   }
   if (pending === current) pending = null;
-  settledDecision = {
-    kind: "discard", requestId, command: current.preview.command,
-  };
   try { current.preview.shadow.close(); } catch { /* discarded state is already terminal */ }
   return null;
 }

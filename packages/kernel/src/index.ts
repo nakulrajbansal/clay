@@ -75,7 +75,7 @@ export {
   type AttemptRecord, type MetricsSummary, type DiffKind, type Outcome,
 } from "./metrics";
 export {
-  InProcessAsyncStore, StoreRpcClient, portFromMessagePort, serveStore,
+  createStoreMutationContext, InProcessAsyncStore, StoreRpcClient, portFromMessagePort, serveStore,
   type AsyncStore, type MessagePortLike, type StoreMutationContext,
   type StoreRequest, type StoreResponse,
 } from "./asyncstore";
