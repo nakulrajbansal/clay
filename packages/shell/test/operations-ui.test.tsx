@@ -4,7 +4,8 @@ import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 import {
   ClayStore, InProcessAsyncStore, deriveInverse,
-  type AutomationDefinition, type AutomationDefinitionInput, type AsyncStore,
+  type AutomationDefinitionV2, type AutomationDraftInputV2,
+  type AutomationSimulationProofV1, type AsyncStore,
   type BatchMutation, type ForwardOpT, type Query, type QueryRow, type RegTable,
 } from "@clay/kernel";
 import { AutomationCenter } from "../src/app/AutomationCenter";
@@ -405,43 +406,92 @@ describe("Daily Workbench UI", () => {
 });
 
 describe("Automation Center UI", () => {
-  it("requires the save, simulate, then enable flow", async () => {
+  it("requires stable draft save, target-bound simulation, then exact-proof enable", async () => {
     const store = await taskStore();
     const table = store.registrySnapshot().get("tasks")!;
-    let saved: AutomationDefinition | null = null;
-    const savedRule = (): AutomationDefinition => {
+    const trace = store.semanticSchemaTrace();
+    let saved: AutomationDefinitionV2 | null = null;
+    const savedRule = (): AutomationDefinitionV2 => {
       if (!saved) throw new Error("rule was not saved");
       return saved;
+    };
+    const target = {
+      v: 1 as const,
+      appInstanceId: `app_${"a".repeat(26)}`,
+      activeGenerationId: `gen_${"b".repeat(26)}`,
+      lineageEpoch: "1",
+      stateRevision: "4",
+      stateDigest: `sha256:${"c".repeat(64)}`,
     };
     const worker = { ...mutationIdentity,
       listAutomations: async () => saved ? [saved] : [],
       automationRuns: async () => [],
-      upsertAutomation: async (input: AutomationDefinitionInput) => {
+      automationRecipes: async () => [],
+      automationRuntimeStatus: async () => ({
+        v: 1, engine: "local_worker_session", sessionActive: true,
+        backgroundExecution: false, offDeviceExecution: false,
+        modelAccess: false, networkAccess: false,
+        headline: "Automations run on this device while Clay is open.",
+        detail: "If Clay is closed or this device sleeps, scheduled work waits until a Clay session is available.",
+        enabledDefinitions: saved?.enabled ? 1 : 0,
+        disabledDefinitions: saved?.enabled ? 0 : Number(saved !== null),
+        needsRepairDefinitions: 0,
+      }),
+      automationRuntimeOverview: async () => ({ v: 1 as const, rules: [], runs: [] }),
+      semanticTrace: async () => trace,
+      saveAutomationDraft: async (input: AutomationDraftInputV2) => {
         saved = {
           ...input,
-          id: input.id ?? "auto_018f0000000070008000000000000001",
+          id: "auto_018f0000000070008000000000000001",
+          definitionRevision: 1,
+          state: "draft",
+          enabled: false,
+          needsRepair: false,
+          enableProof: null,
           createdAt: "2026-09-02T12:00:00.000Z",
           updatedAt: "2026-09-02T12:00:00.000Z",
-        } as AutomationDefinition;
+        } as AutomationDefinitionV2;
         return saved;
       },
       simulateAutomation: async () => ({
+        v: 1,
+        id: `asim_${"d".repeat(64)}`,
+        target,
+        purpose: "enable",
         automationId: savedRule().id,
-        matchedRecords: 1, plannedMutations: 0, plannedNotifications: 1,
+        definitionRevision: 1,
+        definitionDigest: `sha256:${"e".repeat(64)}`,
+        schemaRevision: 1,
+        referenceFingerprint: `sha256:${"f".repeat(64)}`,
+        dataRevision: 1,
+        evaluatedAt: "2026-09-02T12:00:00.000Z",
+        expiresAt: "2026-09-02T12:05:00.000Z",
+        snapshotDigest: `sha256:${"1".repeat(64)}`,
+        matchedRecords: 1,
+        matchedScope: { kind: "records", recordIds: ["row"] },
+        plannedMutations: 0,
+        plannedNotifications: 1,
+        plannedEffects: [{ kind: "notify", count: 1 }],
         sampleLabels: ["Call Acme"],
-      }),
+        runtime: { mode: "local", requiresAppOpen: true, timeZone: "UTC" },
+        undo: "no_data_changes",
+      } as AutomationSimulationProofV1),
+      enableAutomation: async () => {
+        saved = { ...savedRule(), state: "enabled", enabled: true } as AutomationDefinitionV2;
+        return saved;
+      },
       notifications: async () => [],
     } as unknown as WorkerClient;
-    const { container, unmount } = await mount(<AutomationCenter
+    const { unmount } = await mount(<AutomationCenter
       worker={worker} tables={[table]} notifications={[]}
       onNotifications={() => undefined} onClose={() => undefined}
       onOpenRecord={() => undefined} onWrite={() => undefined}
       onError={message => { throw new Error(message); }} onInfo={() => undefined}
     />);
-    await waitFor(() => document.body.textContent?.includes("New rule") ?? false);
+    await waitFor(() => document.body.textContent?.includes("Build a custom rule") ?? false);
     await act(async () => {
       [...document.body.querySelectorAll<HTMLButtonElement>("button")]
-        .find(button => button.textContent?.includes("New rule"))!.click();
+        .find(button => button.textContent?.includes("Build a custom rule"))!.click();
     });
     const inputs = document.body.querySelectorAll<HTMLInputElement>(".automation-builder input");
     const name = inputs[0]!;
@@ -454,14 +504,14 @@ describe("Automation Center UI", () => {
       [...document.body.querySelectorAll<HTMLButtonElement>("button")]
         .find(button => button.textContent === "Save and simulate")!.click();
     });
-    await waitFor(() => document.body.textContent?.includes("Simulation") ?? false);
-    expect(savedRule().enabled).toBe(false);
+    await waitFor(() => document.body.textContent?.includes("Target-bound simulation") ?? false);
+    expect(savedRule()).toMatchObject({ v: 2, state: "draft", enabled: false });
     await act(async () => {
       [...document.body.querySelectorAll<HTMLButtonElement>("button")]
         .find(button => button.textContent === "Enable rule")!.click();
     });
     await waitFor(() => savedRule().enabled === true);
-    expect(saved).toMatchObject({ name: "Follow up", enabled: true });
+    expect(saved).toMatchObject({ name: "Follow up", state: "enabled", enabled: true });
     await unmount();
     store.close();
   });

@@ -60,7 +60,7 @@ function transportedArtifact(): ProjectionArtifactV1 {
 function expectJsonDeepFrozen(value: unknown): void {
   if (!value || typeof value !== "object") return;
   expect(Object.isFrozen(value)).toBe(true);
-  for (const child of Object.values(value)) expectJsonDeepFrozen(child);
+for (const child of Object.values(value)) expectJsonDeepFrozen(child);
 }
 
 function harness(reply?: (message: Posted) => unknown): {
@@ -152,17 +152,34 @@ describe("WorkerClient boot boundary", () => {
 });
 
 describe("WorkerClient files and automation boundaries", () => {
+  it("exposes replayable durable request handles for every automation write", async () => {
+    const { client, posted } = harness();
+    const first = client.deleteAutomation("auto_00000000000000000000000000000000");
+    expect(first.requestId).toMatch(/^req_[a-z2-7]{26}$/);
+    await first;
+    await client.deleteAutomation(
+      "auto_00000000000000000000000000000000", { requestId: first.requestId },
+    );
+    expect(posted).toMatchObject([
+      { op: "deleteAutomation", requestId: first.requestId },
+      { op: "deleteAutomation", requestId: first.requestId },
+    ]);
+  });
+
   it("transfers file bytes and exposes only bounded workflow commands", async () => {
     const { client, posted, transfers } = harness();
     const bytes = new ArrayBuffer(8);
     await client.addAttachment({ table: "projects", rowId: "row", field: "files",
       name: "receipt.pdf", mime: "application/pdf", bytes }, mutation(client));
     await client.listAutomations();
-    await client.runAutomations(mutation(client));
-    await client.undoAutomationRun("run", mutation(client));
+    await client.automationRuntimeOverview(25);
+    await client.runAutomations();
+    await client.undoAutomationRun("run");
     expect(posted.map(message => message.op)).toEqual([
-      "addAttachment", "listAutomations", "runAutomations", "undoAutomationRun",
+      "addAttachment", "listAutomations", "automationRuntimeOverview",
+      "runAutomations", "undoAutomationRun",
     ]);
+    expect(posted[2]?.payload).toEqual({ limit: 25 });
     expect(transfers[0]).toEqual([bytes]);
     expect(posted[0]?.payload).toMatchObject({
       table: "projects", field: "files", name: "receipt.pdf",
@@ -177,17 +194,17 @@ describe("WorkerClient files and automation boundaries", () => {
       trigger: { kind: "manual" as const, table: "deals", conditions: [] },
       actions: [{ kind: "notify" as const, title: "Review", body: "Review this deal." }],
     };
-    await client.upsertAutomation(automation, mutation(client));
-    await client.deleteAutomation(
-      "auto_00000000000000000000000000000000", mutation(client));
+    await client.upsertAutomation(automation);
+    await client.deleteAutomation("auto_00000000000000000000000000000000");
     await client.simulateAutomation("auto_00000000000000000000000000000000");
-    await client.runAutomations(mutation(client));
+    await client.runAutomations();
     await client.runAutomationNow(
-      "auto_00000000000000000000000000000000", mutation(client));
-    await client.undoAutomationRun(
-      "00000000-0000-7000-8000-000000000000", mutation(client));
-    await client.markNotificationRead(
-      "00000000-0000-7000-8000-000000000001", mutation(client));
+      "auto_00000000000000000000000000000000",
+      1,
+      { v: 1, id: `asim_${"a".repeat(64)}` } as never,
+    );
+    await client.undoAutomationRun("00000000-0000-7000-8000-000000000000");
+    await client.markNotificationRead("00000000-0000-7000-8000-000000000001");
     await client.recordPrivateMetric(
       { type: "trust_surface_opened", surface: "history" }, mutation(client));
     await client.setPrivateMetricsEnabled(false, mutation(client));

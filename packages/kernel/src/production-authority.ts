@@ -4,6 +4,11 @@ import type {
   WriteFenceV1 as WriteFence,
 } from "@clay/schema/catalog";
 import type { AsyncStore, StoreMutationContext } from "./asyncstore";
+import {
+  validateAutomationTargetIdentity,
+  type AutomationSimulationProofV1,
+  type AutomationTargetIdentityV1,
+} from "./automation-v2";
 import { enumerateCanonicalStateV1 } from "./canonical-state";
 import { removeLegacyCredentialSettingsForAuthorityBoot } from "./credential-policy";
 import {
@@ -148,13 +153,14 @@ export function captureBrowserBootInput(value: unknown): ProductionBrowserBootIn
 }
 
 type ProductionStoreReaderMethod =
-  | "attachmentStorage" | "attachmentsForRecord" | "attemptStats" | "automationRuns"
+  | "attachmentStorage" | "attachmentsForRecord" | "attemptStats" | "automationRecipes"
+  | "automationRuntimeOverview" | "automationRuntimeStatus" | "automationRuns"
   | "fieldProvenance" | "getSetting" | "globalSearch" | "headVersion" | "history"
   | "listAutomations" | "listNotifications" | "listIntakeForms" | "intakeInbox"
   | "intakeDeliveryFailures" | "intakeReceipts" | "livePanels" | "operationBatches"
   | "panelProvenance" | "previewRelationConversion"
   | "privateMetricsSummary" | "query" | "queryBounded" | "readAttachment" | "registrySnapshot"
-  | "restorableRows" | "rowHistory" | "semanticSchemaTrace" | "simulateAutomation"
+  | "restorableRows" | "rowHistory" | "semanticSchemaTrace"
   | "suggestions";
 
 export type ProductionStoreReader = Readonly<Pick<
@@ -165,6 +171,9 @@ const PINNED_READS = Object.freeze({
   attachmentStorage: ClayStore.prototype.attachmentStorage,
   attachmentsForRecord: ClayStore.prototype.attachmentsForRecord,
   attemptStats: ClayStore.prototype.attemptStats,
+  automationRecipes: ClayStore.prototype.automationRecipes,
+  automationRuntimeOverview: ClayStore.prototype.automationRuntimeOverview,
+  automationRuntimeStatus: ClayStore.prototype.automationRuntimeStatus,
   automationRuns: ClayStore.prototype.automationRuns,
   fieldProvenance: ClayStore.prototype.fieldProvenance,
   getSetting: ClayStore.prototype.getSetting,
@@ -190,7 +199,6 @@ const PINNED_READS = Object.freeze({
   restorableRows: ClayStore.prototype.restorableRows,
   rowHistory: ClayStore.prototype.rowHistory,
   semanticSchemaTrace: ClayStore.prototype.semanticSchemaTrace,
-  simulateAutomation: ClayStore.prototype.simulateAutomation,
   suggestions: ClayStore.prototype.suggestions,
 });
 const STORE_PENDING_PLANNER_ATTEMPTS: ClayStore["pendingPlannerAttempts"] =
@@ -205,6 +213,9 @@ function createStoreReader(
     attachmentStorage: PINNED_READS.attachmentStorage.bind(store),
     attachmentsForRecord: PINNED_READS.attachmentsForRecord.bind(store),
     attemptStats: PINNED_READS.attemptStats.bind(store),
+    automationRecipes: PINNED_READS.automationRecipes.bind(store),
+    automationRuntimeOverview: PINNED_READS.automationRuntimeOverview.bind(store),
+    automationRuntimeStatus: PINNED_READS.automationRuntimeStatus.bind(store),
     automationRuns: PINNED_READS.automationRuns.bind(store),
     fieldProvenance: PINNED_READS.fieldProvenance.bind(store),
     getSetting: PINNED_READS.getSetting.bind(store),
@@ -231,7 +242,6 @@ function createStoreReader(
     restorableRows: PINNED_READS.restorableRows.bind(store),
     rowHistory: PINNED_READS.rowHistory.bind(store),
     semanticSchemaTrace: PINNED_READS.semanticSchemaTrace.bind(store),
-    simulateAutomation: PINNED_READS.simulateAutomation.bind(store),
     suggestions: PINNED_READS.suggestions.bind(store),
   };
   return Object.freeze(reader);
@@ -1389,6 +1399,22 @@ export class ProductionStoreAuthority {
     if (STORE_PENDING_PLANNER_ATTEMPTS.call(this.#store).length !== 0)
       throw invalid("interrupted planner attempt reconciliation is incomplete");
     return attempts.length;
+  }
+
+  simulateAutomation(input: unknown): Promise<AutomationSimulationProofV1> {
+    return this.#coordinator.simulateAutomation(input);
+  }
+
+  currentAutomationTarget(): AutomationTargetIdentityV1 {
+    const target = this.inspectAuthority().target;
+    return validateAutomationTargetIdentity({
+      v: 1,
+      appInstanceId: target.appInstanceId,
+      activeGenerationId: target.activeGenerationId,
+      lineageEpoch: target.lineageEpoch,
+      stateRevision: target.protectionRevision,
+      stateDigest: target.stateSha256,
+    });
   }
 
   /** Fixed device-local telemetry path; never a canonical production request. */

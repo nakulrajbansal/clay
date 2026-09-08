@@ -53,6 +53,27 @@ export {
   type AutomationTrigger, type AutomationValue, type ClayNotification,
 } from "./automation";
 export {
+  AUTOMATION_RECIPE_IDS, automationDefinitionDigest, automationRecipeCatalog,
+  automationSha256, compileAutomationRecipeDraft, plannedEffectsFor,
+  resolveAutomationDraftV2, resolveStableField, resolveStableTable,
+  stableAutomationJson, validateAutomationEnableProof, validateAutomationSimulationProof,
+  validateAutomationTargetIdentity,
+  type AutomationDefinitionAny, type AutomationDefinitionV2, type AutomationDraftInputV2,
+  type AutomationCommittedResultV1, type AutomationEnableProofV1, type AutomationEnableRequestV1,
+  type AutomationExecutionResultV1, type AutomationLegacyDefinitionV1,
+  type AutomationNoOpResultV1, type AutomationPauseRequestV1, type AutomationRecipeCardV1,
+  type AutomationRecipeDraftRequestV1, type AutomationRecipeOptionV1,
+  type AutomationPurpose, type AutomationRecipeId, type AutomationRuntimeMode,
+  type AutomationRuleRuntimeStateV1, type AutomationRunRuntimeStateV1,
+  type AutomationRuntimeOverviewV1, type AutomationRuntimeStatusV1,
+  type AutomationRunNowRequestV1, type AutomationRunUndoReasonV1,
+  type AutomationSimulationProofV1, type AutomationSimulationRequestV1,
+  type AutomationState, type AutomationTargetIdentityV1,
+  type ClosedAutomationActionV2, type ClosedAutomationTriggerV2,
+  type ClosedPlannedEffectV1, type ClosedTypedConditionV2,
+  type StableAutomationValueV2, type StableFieldRef, type StableTableRef,
+} from "./automation-v2";
+export {
   ClayStore,
   type AttachmentFile, type AttachmentInput, type AttachmentMetadata,
   type AttachmentStorageSummary, type BatchMutation, type BatchReceipt, type BatchSource,

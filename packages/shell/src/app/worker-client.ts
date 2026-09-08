@@ -1,7 +1,11 @@
 // Typed promise wrapper over the DB worker's command protocol.
 import type {
   AttachmentFile, AttachmentMetadata, AttachmentStorageSummary,
-  AutomationDefinition, AutomationDefinitionInput, AutomationRun, AutomationSimulation,
+  AutomationDefinition, AutomationDefinitionAny, AutomationDefinitionInput,
+  AutomationDefinitionV2, AutomationDraftInputV2, AutomationExecutionResultV1,
+  AutomationRecipeCardV1, AutomationRecipeDraftRequestV1, AutomationRun,
+  AutomationRuntimeOverviewV1, AutomationRuntimeStatusV1,
+  AutomationSimulation, AutomationSimulationProofV1,
   BatchMutation, BatchReceipt, ClayNotification, CommitImportResult, DebugEvent, FieldProvenance,
   GlobalSearchResult,
   HistoryEntry, IntakeAcceptanceReceipt, IntakeAutoAcceptSimulation, IntakeDeliveryFailure,
@@ -34,6 +38,8 @@ import type {
 } from "../worker/release-c/import-session-coordinator";
 
 export type TraceEntry = { at: string; intent: string; events: DebugEvent[] };
+
+export type DurableMutationPromise<T> = Promise<T> & Readonly<{ requestId: string }>;
 
 export type BootAppEntry = {
   id: string;
@@ -676,14 +682,20 @@ export class WorkerClient {
     payload: Record<string, unknown> | undefined,
     context: WorkerMutationContext,
     transfer?: Transferable[],
-  ): Promise<T> {
+  ): DurableMutationPromise<T> {
     let captured: WorkerMutationContext;
     try {
       captured = captureWorkerMutationContext(context);
     } catch (error) {
-      return Promise.reject(error);
+      return Promise.reject(error) as DurableMutationPromise<T>;
     }
-    return this.call(captured.requestId, op, payload, transfer);
+    const completion = this.call<T>(
+      captured.requestId, op, payload, transfer,
+    ) as DurableMutationPromise<T>;
+    Object.defineProperty(completion, "requestId", {
+      value: captured.requestId, enumerable: true, configurable: false, writable: false,
+    });
+    return completion;
   }
 
   /** Mint once at the user-operation boundary and pass the same context to a
@@ -1252,39 +1264,102 @@ export class WorkerClient {
   ): Promise<IntakeAcceptanceReceipt> {
     return this.mutationCall("undoIntakeReceipt", { receiptId }, context);
   }
-  listAutomations(): Promise<AutomationDefinition[]> {
+  automationRecipes(): Promise<AutomationRecipeCardV1[]> {
+    return this.ephemeralCall("automationRecipes", {});
+  }
+  automationRuntimeStatus(): Promise<AutomationRuntimeStatusV1> {
+    return this.ephemeralCall("automationRuntimeStatus", {});
+  }
+  automationRuntimeOverview(limit = 100): Promise<AutomationRuntimeOverviewV1> {
+    return this.ephemeralCall("automationRuntimeOverview", { limit });
+  }
+  listAutomations(): Promise<AutomationDefinitionAny[]> {
     return this.ephemeralCall("listAutomations", {});
   }
+  /** Legacy V1 import/edit path. enabled=true is rejected by the kernel. */
   upsertAutomation(
-    input: AutomationDefinitionInput, context: WorkerMutationContext,
-  ): Promise<AutomationDefinition> {
+    input: AutomationDefinitionInput,
+    context: WorkerMutationContext = createWorkerMutationContext(),
+  ): DurableMutationPromise<AutomationDefinition> {
     return this.mutationCall("upsertAutomation", { input }, context);
   }
-  deleteAutomation(id: string, context: WorkerMutationContext): Promise<null> {
+  saveAutomationDraft(
+    input: AutomationDraftInputV2,
+    expectedRevision?: number,
+    context: WorkerMutationContext = createWorkerMutationContext(),
+  ): DurableMutationPromise<AutomationDefinitionV2> {
+    return this.mutationCall(
+      "saveAutomationDraft", { input, expectedRevision: expectedRevision ?? null }, context,
+    );
+  }
+  saveAutomationRecipeDraft(
+    request: AutomationRecipeDraftRequestV1,
+    context: WorkerMutationContext = createWorkerMutationContext(),
+  ): DurableMutationPromise<AutomationDefinitionV2> {
+    return this.mutationCall("saveAutomationRecipeDraft", { request }, context);
+  }
+  deleteAutomation(
+    id: string,
+    context: WorkerMutationContext = createWorkerMutationContext(),
+  ): DurableMutationPromise<null> {
     return this.mutationCall("deleteAutomation", { id }, context);
   }
-  simulateAutomation(id: string): Promise<AutomationSimulation> {
-    return this.ephemeralCall("simulateAutomation", { id });
+  simulateAutomation(
+    id: string,
+    expectedRevision?: number,
+    purpose?: "enable" | "run_now" | "proposal_review",
+  ): Promise<AutomationSimulationProofV1> {
+    return this.ephemeralCall("simulateAutomation", { id,
+      ...(expectedRevision === undefined ? {} : { expectedRevision }),
+      ...(purpose === undefined ? {} : { purpose }),
+    });
   }
-  runAutomations(context: WorkerMutationContext): Promise<AutomationRun[]> {
+  enableAutomation(
+    id: string,
+    expectedRevision: number,
+    simulation: AutomationSimulationProofV1,
+    context: WorkerMutationContext = createWorkerMutationContext(),
+  ): DurableMutationPromise<AutomationDefinitionV2> {
+    return this.mutationCall("enableAutomation", { id, expectedRevision, simulation }, context);
+  }
+  pauseAutomation(
+    id: string,
+    expectedRevision: number,
+    context: WorkerMutationContext = createWorkerMutationContext(),
+  ): DurableMutationPromise<AutomationDefinitionV2> {
+    return this.mutationCall("pauseAutomation", { id, expectedRevision }, context);
+  }
+  runAutomations(
+    context: WorkerMutationContext = createWorkerMutationContext(),
+  ): DurableMutationPromise<AutomationRun[]> {
     return this.mutationCall("runAutomations", {}, context);
   }
-  runAutomationNow(id: string, context: WorkerMutationContext): Promise<AutomationRun> {
-    return this.mutationCall("runAutomationNow", { id }, context);
+  runAutomationNow(
+    id: string,
+    expectedRevision: number,
+    simulation: AutomationSimulationProofV1,
+    context: WorkerMutationContext = createWorkerMutationContext(),
+  ): DurableMutationPromise<AutomationExecutionResultV1> {
+    return this.mutationCall("runAutomationNow", { id, expectedRevision, simulation }, context);
   }
   automationRuns(automationId?: string, limit = 100): Promise<AutomationRun[]> {
     return this.ephemeralCall("automationRuns", { automationId: automationId ?? null, limit });
   }
-  undoAutomationRun(id: string, context: WorkerMutationContext): Promise<AutomationRun> {
+  undoAutomationRun(
+    id: string,
+    context: WorkerMutationContext = createWorkerMutationContext(),
+  ): DurableMutationPromise<AutomationRun> {
     return this.mutationCall("undoAutomationRun", { id }, context);
   }
   notifications(limit = 100): Promise<ClayNotification[]> {
     return this.ephemeralCall("notifications", { limit });
   }
-  markNotificationRead(id: string, context: WorkerMutationContext): Promise<null> {
+  markNotificationRead(
+    id: string,
+    context: WorkerMutationContext = createWorkerMutationContext(),
+  ): DurableMutationPromise<null> {
     return this.mutationCall("markNotificationRead", { id }, context);
-  }
-  globalSearch(term: string, limit = 20): Promise<GlobalSearchResult[]> {
+  }  globalSearch(term: string, limit = 20): Promise<GlobalSearchResult[]> {
     return this.ephemeralCall("globalSearch", { term, limit });
   }
   applyBatch(

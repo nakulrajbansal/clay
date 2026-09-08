@@ -25,6 +25,39 @@ export interface DbDriver {
   exportDatabases(): Promise<{ user: Uint8Array; system: Uint8Array }>;
 }
 
+export type AutomationPhysicalTransactionCapability = Readonly<
+  | { kind: "test_memory"; releaseCertificate: true }
+  | { kind: "unavailable"; releaseCertificate: false }
+>;
+
+const AUTOMATION_TRANSACTION_CAPABILITIES =
+  new WeakMap<object, AutomationPhysicalTransactionCapability>();
+
+export function automationPhysicalTransactionCapability(
+  driver: DbDriver,
+): AutomationPhysicalTransactionCapability {
+  return AUTOMATION_TRANSACTION_CAPABILITIES.get(driver)
+    ?? Object.freeze({ kind: "unavailable", releaseCertificate: false });
+}
+
+export function inheritAutomationPhysicalTransactionCapability(
+  source: DbDriver,
+  target: DbDriver,
+): void {
+  AUTOMATION_TRANSACTION_CAPABILITIES.set(
+    target,
+    automationPhysicalTransactionCapability(source),
+  );
+}
+
+function markAutomationTransactionCapability(
+  driver: DbDriver,
+  capability: AutomationPhysicalTransactionCapability,
+): DbDriver {
+  AUTOMATION_TRANSACTION_CAPABILITIES.set(driver, Object.freeze({ ...capability }));
+  return driver;
+}
+
 type DriverAuthorityState = {
   transactionDepth: number;
   transactionControlDepth: number;
@@ -61,7 +94,8 @@ export const SYSTEM_TABLES = [
   "tables_registry", "version_log", "panel_blobs", "panel_tombstones",
   "usage_events", "suggestions", "settings", "checkpoints", "attempts", "inactive_cells",
   "operation_batches",
-  "automations", "automation_runs", "automation_matches", "record_events", "notifications",
+  "automations", "automation_runs", "automation_matches", "automation_trigger_ledger",
+  "record_events", "notifications",
 ] as const;
 
 let sqlite3Promise: Promise<Sqlite3Static> | null = null;
@@ -347,6 +381,7 @@ class SqliteWasmDriver implements DbDriver {
 
     // system.db: fixed table set, row-copied
     const target = new SqliteWasmDriver(copy, s);
+    markAutomationTransactionCapability(target, automationPhysicalTransactionCapability(this));
     target.exec(SYSTEM_SCHEMA_SQL);
     for (const table of SYSTEM_TABLES) {
       copyRows(this, `sys.${table}`, target, `sys.${table}`);
@@ -420,7 +455,9 @@ export async function openDriverFromBytes(
   db.exec("PRAGMA trusted_schema = OFF");
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("ATTACH ':memory:' AS sys");
-  const driver = new SqliteWasmDriver(db, s);
+  const driver = markAutomationTransactionCapability(new SqliteWasmDriver(db, s), {
+    kind: "test_memory", releaseCertificate: true,
+  });
   driver.exec(SYSTEM_SCHEMA_SQL);
 
   const temp = new s.oo1.DB(":memory:");
@@ -505,7 +542,9 @@ export async function openMemoryDriver(): Promise<DbDriver> {
   const db = new s.oo1.DB(":memory:");
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("ATTACH ':memory:' AS sys");
-  return new SqliteWasmDriver(db, s);
+  return markAutomationTransactionCapability(new SqliteWasmDriver(db, s), {
+    kind: "test_memory", releaseCertificate: true,
+  });
 }
 
 /**
@@ -758,27 +797,65 @@ CREATE TABLE IF NOT EXISTS sys.inactive_cells(
 CREATE TABLE IF NOT EXISTS sys.operation_batches(
   id TEXT PRIMARY KEY, at TEXT NOT NULL, source TEXT NOT NULL,
   summary TEXT NOT NULL, changed_count INTEGER NOT NULL,
-  created_json TEXT NOT NULL, undone_at TEXT);
+  created_json TEXT NOT NULL, undone_at TEXT,
+  automation_target_json TEXT, automation_definition_revision INTEGER,
+  automation_definition_digest TEXT, automation_run_id TEXT);
 CREATE TABLE IF NOT EXISTS sys.automations(
   id TEXT PRIMARY KEY, definition_json TEXT NOT NULL,
-  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_event_seq INTEGER NOT NULL);
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_event_seq INTEGER NOT NULL,
+  authority_target_json TEXT, authority_definition_revision INTEGER,
+  authority_definition_digest TEXT, cursor_target_json TEXT,
+  cursor_definition_revision INTEGER, cursor_definition_digest TEXT,
+  last_schedule_period TEXT, schedule_target_json TEXT,
+  schedule_definition_revision INTEGER, schedule_definition_digest TEXT,
+  legacy_definition_json TEXT, storage_version INTEGER NOT NULL DEFAULT 2);
 CREATE TABLE IF NOT EXISTS sys.automation_runs(
   id TEXT PRIMARY KEY, automation_id TEXT NOT NULL, at TEXT NOT NULL,
   trigger_key TEXT NOT NULL, status TEXT NOT NULL,
   matched_count INTEGER NOT NULL, changed_count INTEGER NOT NULL,
   batch_id TEXT, error_code TEXT, undone_at TEXT,
-  UNIQUE(automation_id, trigger_key));
+  target_json TEXT NOT NULL, definition_revision INTEGER NOT NULL,
+  definition_digest TEXT NOT NULL, trigger_kind TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sys.automation_matches(
-  automation_id TEXT NOT NULL, row_id TEXT NOT NULL,
-  PRIMARY KEY(automation_id, row_id));
+  automation_id TEXT NOT NULL, row_id TEXT NOT NULL, target_json TEXT NOT NULL,
+  definition_revision INTEGER NOT NULL, definition_digest TEXT NOT NULL,
+  snapshot_digest TEXT, run_id TEXT, baseline INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(automation_id, target_json, definition_revision, definition_digest, row_id));
+CREATE TABLE IF NOT EXISTS sys.automation_trigger_ledger(
+  automation_id TEXT NOT NULL, trigger_key TEXT NOT NULL, target_json TEXT NOT NULL,
+  definition_revision INTEGER NOT NULL, definition_digest TEXT NOT NULL,
+  run_id TEXT NOT NULL, created_at TEXT NOT NULL,
+  disposition TEXT NOT NULL DEFAULT 'success'
+    CHECK(disposition IN ('success','activation_baseline','evaluated_no_change')),
+  PRIMARY KEY(automation_id, target_json, definition_revision, definition_digest,
+              trigger_key, disposition));
 CREATE TABLE IF NOT EXISTS sys.record_events(
   seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, at TEXT NOT NULL,
   table_name TEXT NOT NULL, row_id TEXT NOT NULL, kind TEXT NOT NULL,
-  changed_fields_json TEXT NOT NULL, origin TEXT NOT NULL, row_json TEXT);
+  changed_fields_json TEXT NOT NULL, origin TEXT NOT NULL, row_json TEXT,
+  table_id TEXT, schema_revision INTEGER, snapshot_digest TEXT,
+  changed_field_ids_json TEXT);
 CREATE TABLE IF NOT EXISTS sys.notifications(
   id TEXT PRIMARY KEY, at TEXT NOT NULL, automation_id TEXT NOT NULL,
   run_id TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL,
-  table_name TEXT, row_id TEXT, read_at TEXT, dismissed_at TEXT);
+  table_name TEXT, row_id TEXT, read_at TEXT, dismissed_at TEXT,
+  target_json TEXT, definition_revision INTEGER, definition_digest TEXT);
+CREATE TABLE IF NOT EXISTS sys.automation_source_dispositions(
+  id TEXT PRIMARY KEY, automation_id TEXT NOT NULL, event_seq INTEGER NOT NULL,
+  target_json TEXT NOT NULL, definition_revision INTEGER NOT NULL,
+  definition_digest TEXT NOT NULL, snapshot_digest TEXT NOT NULL,
+  evaluated_at TEXT NOT NULL, retain_until TEXT NOT NULL,
+  UNIQUE(automation_id, event_seq, target_json, definition_revision,
+    definition_digest, snapshot_digest));
+CREATE TABLE IF NOT EXISTS sys.automation_retry_handles(
+  id TEXT PRIMARY KEY, automation_id TEXT NOT NULL, target_json TEXT NOT NULL,
+  definition_revision INTEGER NOT NULL, definition_digest TEXT NOT NULL,
+  logical_trigger_key TEXT NOT NULL, event_seq INTEGER,
+  snapshot_digest TEXT, attempt_number INTEGER NOT NULL,
+  retry_at TEXT NOT NULL, expires_at TEXT NOT NULL, consumed_at TEXT);
+CREATE TABLE IF NOT EXISTS sys.automation_scheduler_state(
+  id INTEGER PRIMARY KEY CHECK(id = 1), target_json TEXT NOT NULL,
+  after_automation_id TEXT, updated_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS sys.idx_record_events_table_seq
   ON record_events(table_name, seq);
 CREATE INDEX IF NOT EXISTS sys.idx_automation_runs_rule
