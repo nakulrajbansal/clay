@@ -50,10 +50,36 @@ export interface ExternalBackupDependencies {
   authority: ExternalBackupAuthority;
   validateArchiveStage: IsolatedArchiveStageValidator;
   now(): string;
+  /** Internal trusted path: the caller transferred sole ownership of this buffer. */
+  archiveBytesOwnership?: "transferred";
 }
 
 function sha256(bytes: Uint8Array): string {
   return `sha256:${sha256HexSync(bytes)}`;
+}
+
+function canReleaseTransferredBytes(bytes: Uint8Array): bytes is Uint8Array<ArrayBuffer> {
+  if (!(bytes.buffer instanceof ArrayBuffer)
+      || bytes.byteOffset !== 0
+      || bytes.byteLength !== bytes.buffer.byteLength) return false;
+  return typeof Reflect.get(bytes.buffer, "transfer") === "function";
+}
+
+function releaseTransferredBytes(bytes: Uint8Array<ArrayBuffer>): boolean {
+  try {
+    // Wipe secrets before surrendering the backing store, then shrink it to
+    // zero. Filling alone leaves a 384 MiB allocation live while read-back is
+    // allocated; ArrayBuffer transfer(0) detaches and releases that ownership.
+    bytes.fill(0);
+    const transfer = Reflect.get(bytes.buffer, "transfer");
+    if (typeof transfer !== "function") return false;
+    const released = Reflect.apply(transfer, bytes.buffer, [0]);
+    return released instanceof ArrayBuffer
+      && released.byteLength === 0
+      && bytes.byteLength === 0;
+  } catch {
+    return false;
+  }
 }
 
 function evidenceEquals(left: TargetEvidence, right: TargetEvidence): boolean {
@@ -228,8 +254,9 @@ function publicationGenerationIsCoherent(
 }
 
 /**
- * Execute one worker-snapshotted automatic backup. The archive bytes are copied
- * at entry and never returned, logged, sent to authority, or used as a path.
+ * Execute one worker-snapshotted automatic backup. Public callers are copied at
+ * entry; the production worker transfer path can hand over sole ownership.
+ * Bytes are never returned, logged, sent to authority, or used as a path.
  */
 export async function runExternalBackup(
   runInput: unknown,
@@ -237,8 +264,12 @@ export async function runExternalBackup(
   dependencies: ExternalBackupDependencies,
 ): Promise<BackupResult> {
   if (!(archiveBytesInput instanceof Uint8Array)) return failed("invalid_run");
+  const receivesTransferredOwnership = dependencies.archiveBytesOwnership === "transferred";
+  if (receivesTransferredOwnership && !canReleaseTransferredBytes(archiveBytesInput))
+    return failed("adapter_uncertified");
   // Snapshot before parsing caller metadata or crossing an await boundary.
-  const archiveBytes = archiveBytesInput.slice();
+  const archiveBytes = receivesTransferredOwnership
+    ? archiveBytesInput : archiveBytesInput.slice();
   const runResult = BackupRunV1.safeParse(runInput);
   if (!runResult.success) return failed("invalid_run");
   const run = runResult.data;
@@ -282,9 +313,17 @@ export async function runExternalBackup(
     }
   }
 
+  // The external writer has resolved, so no further write may retain this
+  // buffer. Detach and release the worker snapshot before allocating the
+  // directory read-back; zero-filling without detachment would leave two
+  // archive-sized ArrayBuffers live in the presentation process.
+  if (!canReleaseTransferredBytes(archiveBytes)
+      || !releaseTransferredBytes(archiveBytes))
+    return failed("adapter_uncertified");
+
   let finalBytes: Uint8Array;
   try {
-    finalBytes = (await dependencies.directory.readExact(fileName)).slice();
+    finalBytes = await dependencies.directory.readExact(fileName);
   } catch (error) {
     return failed(closedIoReason(error));
   }
@@ -294,7 +333,7 @@ export async function runExternalBackup(
   let stage: BackupStageValidation;
   try {
     const parsed = BackupStageValidationV1.safeParse(
-      await dependencies.validateArchiveStage(finalBytes.slice(), structuredClone(run.expected.target)),
+      await dependencies.validateArchiveStage(finalBytes, structuredClone(run.expected.target)),
     );
     if (!parsed.success) return failed("backup_invalid");
     stage = parsed.data;

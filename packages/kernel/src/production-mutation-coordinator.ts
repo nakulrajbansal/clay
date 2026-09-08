@@ -5,6 +5,14 @@ import {
   type TargetEvidenceV1 as TargetEvidence,
   type WriteFenceV1 as WriteFence,
 } from "@clay/schema/catalog";
+import {
+  BackupPublicationRequestV1,
+  BackupSelectedTargetV1,
+  type BackupPublicationReceiptV1 as BackupPublicationReceipt,
+  type BackupPublicationRequestV1 as BackupPublicationRequest,
+  type BackupRecordV1 as BackupRecord,
+  type BackupSelectedTargetV1 as BackupSelectedTarget,
+} from "@clay/schema/backup";
 import { enumerateCanonicalStateV1 } from "./canonical-state";
 import { isThenable, type DbDriver } from "./db";
 import { DeviceCatalog } from "./device-catalog";
@@ -46,6 +54,7 @@ import {
   captureSampleRemoval,
   executeCapturedSampleFill,
   executeCapturedSampleRemoval,
+  executeRestoredSampleReattestation,
   type CapturedSampleFill,
 } from "./production-samples";
 import { sha256HexSync } from "./state-digest";
@@ -70,6 +79,17 @@ type CapturedProductionMutation = Readonly<{
   | { route: "samples.fill"; payload: CapturedSampleFill }
   | { route: "samples.remove"; payload: Readonly<Record<string, never>> }
   | { route: "starter.seed"; payload: CapturedStarterSeedBundle }
+  | { route: "recovery.restoreRow"; payload: Readonly<{ table: string; id: string }> }
+  | { route: "recovery.undoBatch"; payload: Readonly<{ id: string }> }
+  | { route: "recovery.rewind"; payload: Readonly<{ version: number }> }
+  | {
+    route: "archive.restore.samples";
+    payload: Readonly<{
+      sourceArchiveSha256: string;
+      sourceAuthorityIncarnationId: string;
+      sourceTargetStateSha256: string;
+    }>;
+  }
   | { route: "setting.set"; payload: Readonly<{ key: string; value: JsonValue }> }
   | { route: "setting.delete"; payload: Readonly<{ key: string }> }
   | {
@@ -304,6 +324,26 @@ function captureMutation(input: unknown): CapturedProductionMutation {
           route,
           payload: captureStarterSeedBundle(payload),
         });
+      case "recovery.restoreRow": {
+        exactKeys(payload, ["table", "id"]);
+        if (typeof p.table !== "string" || typeof p.id !== "string"
+            || p.table.length > 64 || p.id.length > 128) throw new Error();
+        return Object.freeze({ requestId, route, payload: Object.freeze({
+          table: p.table, id: p.id,
+        }) });
+      }
+      case "recovery.undoBatch": {
+        exactKeys(payload, ["id"]);
+        if (typeof p.id !== "string" || p.id.length > 128) throw new Error();
+        return Object.freeze({ requestId, route, payload: Object.freeze({ id: p.id }) });
+      }
+      case "recovery.rewind": {
+        exactKeys(payload, ["version"]);
+        if (!Number.isSafeInteger(p.version) || (p.version as number) < 0) throw new Error();
+        return Object.freeze({ requestId, route, payload: Object.freeze({
+          version: p.version as number,
+        }) });
+      }
       case "setting.set": {
         exactKeys(payload, ["key", "value"]);
         const key = p.key;
@@ -383,7 +423,7 @@ function requestFingerprint(expected: TargetEvidence, request: CapturedProductio
   return `sha256:${sha256HexSync(new TextEncoder().encode(stableJson(payload)))}`;
 }
 
-type AuthorityIdPrefix = "app" | "gen" | "ns" | "op" | "rel" | "req";
+type AuthorityIdPrefix = "app" | "gen" | "ns" | "op" | "rel" | "req" | "job";
 
 function encodeAuthorityId(prefix: AuthorityIdPrefix, bytes: Uint8Array): string {
   const alphabet = "abcdefghijklmnopqrstuvwxyz234567";
@@ -415,6 +455,8 @@ export function mintProductionAuthorityId(prefix: AuthorityIdPrefix): string {
     throw unavailable("trusted operation identity source failed");
   if (prefix === "req" && !/^req_[a-z2-7]{26}$/.test(id))
     throw unavailable("trusted request identity source failed");
+  if (prefix === "job" && !/^job_[a-z2-7]{26}$/.test(id))
+    throw unavailable("trusted restore-job identity source failed");
   return id;
 }
 
@@ -433,6 +475,10 @@ const STORE_COMMIT: ClayStore["commit"] = ClayStore.prototype.commit;
 const STORE_GET_SETTING: ClayStore["getSetting"] = ClayStore.prototype.getSetting;
 const STORE_SET_SETTING: ClayStore["setSetting"] = ClayStore.prototype.setSetting;
 const STORE_DELETE_SETTING: ClayStore["deleteSetting"] = ClayStore.prototype.deleteSetting;
+const STORE_RESTORE_ROW: ClayStore["restoreRow"] = ClayStore.prototype.restoreRow;
+const STORE_UNDO_BATCH: ClayStore["undoBatch"] = ClayStore.prototype.undoBatch;
+const STORE_ROLLBACK_TO: ClayStore["rollbackTo"] = ClayStore.prototype.rollbackTo;
+const STORE_LIVE_PANELS: ClayStore["livePanels"] = ClayStore.prototype.livePanels;
 const STORE_SAMPLE_PROVENANCE: ClayStore["sampleRowProvenance"] =
   ClayStore.prototype.sampleRowProvenance;
 
@@ -529,6 +575,28 @@ function executeCapturedMutation(
         );
         return capturedExecution(outcome.result, outcome.sampleProvenance);
       }
+    case "recovery.restoreRow":
+      return capturedExecution(captureJsonValue(STORE_RESTORE_ROW.call(
+        store, request.payload.table, request.payload.id,
+      ), new WeakSet()));
+    case "recovery.undoBatch":
+      return capturedExecution(captureJsonValue(
+        STORE_UNDO_BATCH.call(store, request.payload.id), new WeakSet(),
+      ));
+    case "recovery.rewind":
+      STORE_ROLLBACK_TO.call(store, request.payload.version, { truncate: true });
+      return capturedExecution(captureJsonValue(STORE_LIVE_PANELS.call(store), new WeakSet()));
+    case "archive.restore.samples": {
+      const outcome = executeRestoredSampleReattestation(
+        store,
+        operationId,
+        request.payload.sourceArchiveSha256,
+        request.payload.sourceAuthorityIncarnationId,
+      );
+      return capturedExecution(
+        captureJsonValue(outcome.result, new WeakSet()), outcome.sampleProvenance,
+      );
+    }
     case "setting.set":
       STORE_SET_SETTING.call(store, request.payload.key, request.payload.value);
       return capturedExecution(null);
@@ -633,6 +701,120 @@ function canonicalChanges(
   return changes;
 }
 
+/**
+ * Complete the sample-ledger re-attestation inside the caller's guarded
+ * restore transaction. Catalog selection of the fresh app must already be
+ * staged in that same outer transaction.
+ */
+export function commitRestoredSampleReattestation(input: Readonly<{
+  driver: DbDriver;
+  store: ClayStore;
+  fence: WriteFence;
+  expectedCatalogGeneration: string;
+  expectedTarget: TargetEvidence;
+  requestId: string;
+  nowMs: number;
+  sourceArchiveSha256: string;
+  sourceAuthorityIncarnationId: string;
+}>): TargetEvidence {
+  const expected = copyTarget(input.expectedTarget);
+  if (!/^req_[a-z2-7]{26}$/.test(input.requestId)
+      || !/^(?:0|[1-9][0-9]{0,19})$/.test(input.expectedCatalogGeneration)
+      || !Number.isSafeInteger(input.nowMs) || input.nowMs < 0
+      || !/^sha256:[0-9a-f]{64}$/.test(input.sourceArchiveSha256)
+      || !/^auth_[a-z2-7]{26}$/.test(input.sourceAuthorityIncarnationId))
+    throw invalid("restored sample re-attestation input is invalid");
+  const request: CapturedProductionMutation = Object.freeze({
+    requestId: input.requestId,
+    route: "archive.restore.samples" as const,
+    payload: Object.freeze({
+      sourceArchiveSha256: input.sourceArchiveSha256,
+      sourceAuthorityIncarnationId: input.sourceAuthorityIncarnationId,
+      sourceTargetStateSha256: expected.stateSha256,
+    }),
+  });
+  assertCapturedMutationBytes(request);
+  const at = trustedInstant(() => input.nowMs);
+  const catalog = DeviceCatalog.openExisting(input.driver);
+  const target = TargetAuthorityStore.open(input.driver);
+  catalog.assertWriteFence(input.fence, at.milliseconds);
+  if (catalog.snapshot().catalogGeneration !== input.expectedCatalogGeneration
+      || !sameTarget(catalog.selectedTargetStorage().target, expected)
+      || !sameTarget(target.evidence(), expected))
+    throw new ClayError("E_GENERATION_NOT_SELECTED", "restored sample target is stale");
+  const before = enumerateCanonicalStateV1(
+    input.driver, input.store.validationRegistrySnapshot(),
+  );
+  if (before.stateSha256 !== expected.stateSha256)
+    throw invalid("restored sample prestate is not canonical");
+
+  const operationId = productionOperationIdV2(
+    input.fence.authorityIncarnationId, request.requestId, request.route,
+  );
+  const fingerprint = requestFingerprint(expected, request);
+  target.reserveProtectionRevision(operationId, at.instant, expected, fingerprint);
+  const catalogReservation = catalog.reserveSelectedProtectionRevision({
+    expectedCatalogGeneration: input.expectedCatalogGeneration,
+    expectedTarget: expected,
+    operationId,
+    requestSha256: fingerprint,
+    fence: input.fence,
+    nowMs: at.milliseconds,
+  });
+  const prepared = preparedReceipt(
+    request, fingerprint, expected, operationId, at.instant,
+  );
+  writeProductionRequestReceipt(input.driver, prepared, null, null);
+  const invoked = invokedReceipt(prepared, at.instant);
+  writeProductionRequestReceipt(input.driver, invoked, null, "prepared");
+
+  const execution = executeCapturedMutation(input.store, request, null, operationId);
+  const after = enumerateCanonicalStateV1(
+    input.driver, input.store.validationRegistrySnapshot(),
+  );
+  const changes = canonicalChanges(before, after);
+  if (changes.length === 0)
+    throw invalid("restored sample re-attestation did not change canonical state");
+  const encoded = encodeProductionResponse(
+    request.route, execution.result, execution.sampleProvenance,
+  );
+  const committed = target.commitReservedProtectionRevision({
+    operationId,
+    expectedTarget: expected,
+    finalizedAt: at.instant,
+    changes,
+    requestSha256: fingerprint,
+    mutate: () => undefined,
+    registry: input.store.validationRegistrySnapshot(),
+  });
+  catalog.publishSelectedTarget({
+    expectedCatalogGeneration: catalogReservation.reservedCatalogGeneration,
+    expectedTarget: expected,
+    publishedTarget: committed,
+    operationId,
+    requestSha256: fingerprint,
+    fence: input.fence,
+    nowMs: at.milliseconds,
+  });
+  writeProductionRequestReceipt(
+    input.driver,
+    terminalReceipt(invoked, "committed", committed, encoded.sha256, at.instant),
+    encoded.json,
+    "invoked",
+  );
+  assertLiveSampleProvenance(input.driver, input.store, committed);
+  const canonical = enumerateCanonicalStateV1(
+    input.driver, input.store.validationRegistrySnapshot(),
+  );
+  const receipt = readProductionRequestReceipt(input.driver, request.requestId);
+  if (canonical.stateSha256 !== committed.stateSha256
+      || !sameTarget(target.evidence(), committed)
+      || !sameTarget(catalog.selectedTargetStorage().target, committed)
+      || receipt?.state !== "committed" || receipt.operationId !== operationId)
+    throw invalid("restored sample re-attestation failed mirrored canonical read-back");
+  return copyTarget(committed);
+}
+
 class SimulatedInvocationCrash extends Error {
   constructor() { super("simulated crash after durable invocation"); }
 }
@@ -656,6 +838,11 @@ export function armProductionMutationFailureForTest(
 }
 
 /** Package-private: only ProductionStoreAuthority can construct this coordinator. */
+export type ProductionBackupSelection = Readonly<{
+  selected: BackupSelectedTarget;
+  fence: WriteFence;
+}>;
+
 export class ProductionMutationCoordinator {
   readonly #driver: DbDriver;
   readonly #writeAuthority: LiveWriteAuthority;
@@ -712,6 +899,70 @@ export class ProductionMutationCoordinator {
       if (this.#poisoned)
         throw invalid("production authority is poisoned; reopen for reservation recovery");
       return read();
+    });
+    this.#tail = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  backupSelection(): Promise<ProductionBackupSelection> {
+    const run = this.#tail.then(() => {
+      if (this.#poisoned)
+        throw invalid("production authority is poisoned; reopen for reservation recovery");
+      this.#ensureWriteFence();
+      const catalog = DeviceCatalog.openExisting(this.#driver);
+      const snapshot = catalog.snapshot();
+      const target = catalog.selectedTargetStorage().target;
+      if (snapshot.selectedAppInstanceId === null
+          || snapshot.selectedAppInstanceId !== target.appInstanceId
+          || snapshot.catalogGeneration !== this.#catalogGeneration
+          || snapshot.writeEpoch !== this.#fence.writeEpoch
+          || !sameTarget(target, this.#target))
+        throw new ClayError("E_GENERATION_NOT_SELECTED", "backup target is not current");
+      return Object.freeze({
+        selected: BackupSelectedTargetV1.parse({
+          schema: 1,
+          authorityIncarnationId: snapshot.authorityIncarnationId,
+          catalogGeneration: snapshot.catalogGeneration,
+          selectedAppInstanceId: snapshot.selectedAppInstanceId,
+          selectedActiveGenerationId: target.activeGenerationId,
+          writeEpoch: snapshot.writeEpoch,
+          target,
+        }),
+        fence: Object.freeze({ ...this.#fence }),
+      });
+    });
+    this.#tail = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  backupRecords(): Promise<BackupRecord[]> {
+    return this.serializeRead(async () => {
+      const catalog = DeviceCatalog.openExisting(this.#driver);
+      return catalog.backupRecords(this.#target.appInstanceId);
+    });
+  }
+
+  publishBackup(input: BackupPublicationRequest): Promise<BackupPublicationReceipt> {
+    const captured = BackupPublicationRequestV1.parse(input);
+    const run = this.#tail.then(() => {
+      if (this.#poisoned)
+        throw invalid("production authority is poisoned; reopen for reservation recovery");
+      this.#ensureWriteFence();
+      const now = trustedInstant(this.#clock).milliseconds;
+      const catalog = DeviceCatalog.openExisting(this.#driver);
+      const receipt = this.#writeAuthority.run(() => catalog.publishBackup({
+        request: captured,
+        operationId: mintProductionAuthorityId("op"),
+        nowMs: now,
+      }));
+      const after = catalog.snapshot();
+      const selected = catalog.selectedTargetStorage().target;
+      if (!sameTarget(selected, this.#target)
+          || after.selectedAppInstanceId !== this.#target.appInstanceId
+          || after.writeEpoch !== this.#fence.writeEpoch)
+        throw invalid("backup publication changed the selected production target");
+      this.#catalogGeneration = after.catalogGeneration;
+      return receipt;
     });
     this.#tail = run.then(() => undefined, () => undefined);
     return run;

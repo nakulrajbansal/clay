@@ -17,10 +17,10 @@ import { sha256HexSync } from "./state-digest";
 
 const TARGET_TABLE = "sys.production_request_receipts";
 const CATALOG_TABLE = "catalog.production_request_receipts";
-const MAX_RESPONSE_BYTES = 2_000_000;
+const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 const MAX_SAMPLE_ROUTE_SCAN_RECEIPTS = 100_000;
 const MAX_SAMPLE_PRODUCER_RECEIPTS = 10_001;
-const MAX_SAMPLE_PRODUCER_RESPONSE_BYTES = 8_000_000;
+const MAX_SAMPLE_PRODUCER_RESPONSE_BYTES = 40 * 1024 * 1024;
 
 export type PersistedProductionRequestReceipt = ProductionRequestReceipt & {
   responseJson: string | null;

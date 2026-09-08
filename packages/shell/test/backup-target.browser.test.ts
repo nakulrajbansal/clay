@@ -6,6 +6,7 @@ import type {
 } from "@clay/kernel/backup";
 import {
   ChromiumBackupDirectoryAdapter,
+  createChromiumExclusiveFileCreator,
   type BrowserDirectoryHandle,
   type BrowserFileHandle,
   type BrowserWritableFileStream,
@@ -321,6 +322,47 @@ describe("Chromium external-backup directory adapter", () => {
     });
     expect(directory.events).toEqual(["query-readwrite", "request-readwrite"]);
     expect(store.handles.get(targetId)).toBe(directory);
+  });
+
+  it("rechecks a stored handle without prompting and downgrades revoked permission", async () => {
+    const directory = new FakeDirectory();
+    const store = new MemoryHandleStore();
+    await store.save(targetId, directory);
+    const subject = adapter(directory, store);
+    directory.permissions.push("granted", "denied");
+    await expect(subject.probe(target())).resolves.toEqual({
+      status: "authorized",
+      target: target(),
+    });
+    await expect(subject.probe(target())).resolves.toEqual({
+      status: "unavailable",
+      reasonCode: "permission_required",
+    });
+    expect(directory.requestCalls).toBe(0);
+  });
+
+  it("uses the production Web-Lock/exclusive-writer bridge without truncating a collision", async () => {
+    const locks = {
+      request: async <T>(
+        _name: string,
+        _options: { mode: "exclusive" },
+        callback: () => Promise<T>,
+      ): Promise<T> => callback(),
+    };
+    const directory = new FakeDirectory();
+    const creator = createChromiumExclusiveFileCreator(locks);
+    const reservation = await creator(directory, fileName);
+    if (!("fileHandle" in reservation)) throw new Error("expected a held production reservation");
+    await reservation.writable.write(new Uint8Array([1, 2, 3]));
+    await reservation.writable.close();
+    reservation.release();
+    expect(directory.files.get(fileName)).toEqual(new Uint8Array([1, 2, 3]));
+
+    const preserved = directory.files.get(fileName)!.slice();
+    await expect(creator(directory, fileName)).rejects.toMatchObject({
+      reasonCode: "destination_collision",
+    });
+    expect(directory.files.get(fileName)).toEqual(preserved);
   });
 
   it("keeps a denied folder choice unconfigured and reports only the closed reason", async () => {

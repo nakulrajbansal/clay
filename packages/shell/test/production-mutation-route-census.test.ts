@@ -108,8 +108,12 @@ describe("production mutation route census", () => {
         expect(body).not.toContain("p.appId");
         expect(body).not.toContain("openBrowserDriver(");
       }
-      if (classification.enforcement === "authority")
-        expect(body, `${name} must use ProductionStoreAuthority`).toContain(`runAuthorityMutation("${name}"`);
+      if (classification.enforcement === "authority") {
+        const routedThroughAuthority = body.includes(`runAuthorityMutation("${name}"`)
+          || (name === "publishBackup" && body.includes("mustAutomaticBackup().publish("))
+          || (name === "restoreAsNew" && body.includes("mustRestoreAsNew().restore("));
+        expect(routedThroughAuthority, `${name} must use ProductionStoreAuthority`).toBe(true);
+      }
       if (classification.enforcement === "authority-store-port")
         expect(body, `${name} must serve the authority adapter`).toContain("serveProductionStore(");
     }
@@ -131,7 +135,7 @@ describe("production mutation route census", () => {
       exports: Record<string, string>;
     };
     expect(driver).toContain("pool.getFileNames()");
-    expect(driver).toContain("classifyDurableFileInventory(names)");
+    expect(driver).toContain("classifyDurableFileInventory(await browserDurableFileNames())");
     expect(driver).toContain("AS sys");
     expect(driver).toContain("AS catalog");
     expect(guard).toContain("export function createLiveWriteGuard");
@@ -185,12 +189,47 @@ describe("production mutation route census", () => {
     const authority = source("packages/kernel/src/production-authority.ts");
     const body = caseBody(worker, "exportArchive");
     expect(DB_WORKER_ROUTE_CENSUS.exportArchive)
-      .toEqual({ enforcement: "read", mutates: "none" });
-    expect(body).toContain("mustAuthority().exportArchive()");
+      .toEqual({ enforcement: "device-trust", mutates: "lifecycle" });
+    expect(body).toContain("mustAutomaticBackup().prepareManualDownload()");
     expect(body).not.toContain("store.exportArchive(");
     expect(body).not.toContain("failClosedMutation(");
     expect(authority).toContain('await import("./archive-authority")');
-    expect(authority).not.toMatch(/^import .*archive-authority/m);
+    const authorityModule = ts.createSourceFile(
+      "production-authority.ts", authority, ts.ScriptTarget.ESNext, true,
+    );
+    const archiveImports = authorityModule.statements.filter(
+      (statement): statement is ts.ImportDeclaration => ts.isImportDeclaration(statement)
+        && ts.isStringLiteral(statement.moduleSpecifier)
+        && statement.moduleSpecifier.text === "./archive-authority",
+    );
+    expect(archiveImports).toHaveLength(1);
+    expect(archiveImports[0]?.importClause?.isTypeOnly).toBe(true);
+  });
+
+  it("validates authenticated restore bytes and hands the worker to the fresh authority", () => {
+    const worker = source("packages/shell/src/worker/db-worker.ts");
+    expect(Reflect.get(DB_WORKER_ROUTE_CENSUS, "validateRestoreArchive"))
+      .toEqual({ enforcement: "read", mutates: "none" });
+    expect(Reflect.get(DB_WORKER_ROUTE_CENSUS, "restoreAsNew"))
+      .toEqual({ enforcement: "authority", mutates: "lifecycle" });
+
+    expect(worker).toContain(
+      "let restoreAsNew: RestoreAsNewWorkerCoordinator<ProductionRestoredAuthority> | null = null",
+    );
+    const validateBody = caseBody(worker, "validateRestoreArchive");
+    expect(validateBody).toContain("mustRestoreAsNew().validate(");
+    expect(validateBody).toContain('transferredBytes(p.bytes, "Restore archive")');
+    expect(validateBody).not.toContain("failClosedMutation(");
+
+    const restoreBody = caseBody(worker, "restoreAsNew");
+    expect(restoreBody).toContain("mustRestoreAsNew().restore(p.grant)");
+    expect(restoreBody).toContain("installRestoredAuthority(");
+    expect(restoreBody).not.toContain("failClosedMutation(");
+    expect(worker).toContain("authority = restored.authority");
+    expect(worker).toContain("store = authority.readStore()");
+    expect(worker).toContain("automaticBackup = null");
+    expect(worker).toContain("restoreAsNew = null");
+    expect(worker).toContain("previous.close()");
   });
 
   it("routes import and sample operations through captured authority commands", () => {

@@ -219,6 +219,7 @@ export function captureSampleRowProvenance(
 }
 
 const STORE_GET_SETTING: ClayStore["getSetting"] = ClayStore.prototype.getSetting;
+const STORE_SET_SETTING: ClayStore["setSetting"] = ClayStore.prototype.setSetting;
 const STORE_VALIDATION_REGISTRY: ClayStore["validationRegistrySnapshot"] =
   ClayStore.prototype.validationRegistrySnapshot;
 const STORE_SOFT_DELETE: ClayStore["softDelete"] = ClayStore.prototype.softDelete;
@@ -246,6 +247,62 @@ export function readSampleRowProvenance(store: ClayStore): SampleRowProvenance {
   }
   for (const key of Object.keys(result)) Object.freeze(result[key]!);
   return Object.freeze(result);
+}
+
+export function restoredSampleProvenanceCount(store: ClayStore): number {
+  return verifiedProvenance(store).length;
+}
+
+/**
+ * Replace source operation identities after authenticated restore while
+ * preserving every validated table/row coordinate. The caller must surround
+ * this with the target+catalog reservation protocol in one physical commit.
+ */
+export function executeRestoredSampleReattestation(
+  store: ClayStore,
+  operationId: string,
+  sourceArchiveSha256: string,
+  sourceAuthorityIncarnationId: string,
+): Readonly<{
+  result: Readonly<{
+    rebound: number;
+    sourceArchiveSha256: string;
+    sourceAuthorityIncarnationId: string;
+  }>;
+  sampleProvenance: readonly SampleProvenanceCoordinate[];
+}> {
+  if (!/^op_[a-z2-7]{26}$/.test(operationId)
+      || !/^sha256:[0-9a-f]{64}$/.test(sourceArchiveSha256)
+      || !/^auth_[a-z2-7]{26}$/.test(sourceAuthorityIncarnationId))
+    throw invalid("restored sample re-attestation binding is invalid");
+  const source = verifiedProvenance(store);
+  if (source.length === 0)
+    throw invalid("restored sample re-attestation requires source provenance");
+  const entries = source.map(entry => Object.freeze({
+    tableId: entry.tableId,
+    rowId: entry.rowId,
+    operationId,
+  }));
+  STORE_SET_SETTING.call(store, "sample_provenance_v1", Object.freeze({
+    schema: 1,
+    entries,
+  }));
+  const persisted = verifiedProvenance(store);
+  if (persisted.length !== entries.length
+      || persisted.some((entry, index) => entry.tableId !== entries[index]!.tableId
+        || entry.rowId !== entries[index]!.rowId || entry.operationId !== operationId))
+    throw invalid("restored sample re-attestation failed canonical read-back");
+  return Object.freeze({
+    result: Object.freeze({
+      rebound: entries.length,
+      sourceArchiveSha256,
+      sourceAuthorityIncarnationId,
+    }),
+    sampleProvenance: Object.freeze(entries.map(entry => Object.freeze({
+      tableId: entry.tableId,
+      rowId: entry.rowId,
+    }))),
+  });
 }
 
 /** Run only in a disposable stage or the guarded physical commit transaction. */

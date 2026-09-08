@@ -402,6 +402,25 @@ function parseEnvelope(bytes: Uint8Array): ParsedEnvelope {
   };
 }
 
+/**
+ * Strictly parse the bounded COSE framing for async key selection. The returned
+ * header is an unauthenticated hint only; callers must still verify the MAC
+ * before inspecting the payload or making any freshness claim.
+ */
+export function inspectAuthenticatedArchiveV5Header(
+  envelope: Uint8Array,
+): AuthenticatedArchiveHeaderV1 {
+  const { header } = parseEnvelope(envelope);
+  return {
+    authenticationVersion: 1,
+    archiveFormat: 5,
+    contentType: CLAY_ARCHIVE_CONTENT_TYPE,
+    keyId: copyBytes(header.keyId),
+    seriesId: copyBytes(header.seriesId),
+    generation: header.generation,
+  };
+}
+
 export function sealAuthenticatedArchiveV5(
   payloadInput: Uint8Array,
   backupTrustKeyInput: Uint8Array,
@@ -430,9 +449,10 @@ export function sealAuthenticatedArchiveV5(
   }
 }
 
-export function verifyAuthenticatedArchiveV5(
+function verifyAuthenticatedArchiveV5Internal(
   envelope: Uint8Array,
   resolveKey: BackupTrustKeyResolver,
+  copyPayload: boolean,
 ): VerifiedAuthenticatedArchiveV5 {
   if (typeof resolveKey !== "function") throw invalid("trusted key resolver is unavailable");
   const parsed = parseEnvelope(envelope);
@@ -469,6 +489,28 @@ export function verifyAuthenticatedArchiveV5(
       keyId: copyBytes(parsed.header.keyId),
       seriesId: copyBytes(parsed.header.seriesId),
     },
-    payload: copyBytes(parsed.payload),
+    payload: copyPayload ? copyBytes(parsed.payload) : parsed.payload,
   };
+}
+
+/**
+ * Verify a caller-retained envelope and return one detached payload copy.
+ */
+export function verifyAuthenticatedArchiveV5(
+  envelope: Uint8Array,
+  resolveKey: BackupTrustKeyResolver,
+): VerifiedAuthenticatedArchiveV5 {
+  return verifyAuthenticatedArchiveV5Internal(envelope, resolveKey, true);
+}
+
+/**
+ * Verify bytes whose ownership has already been transferred to the trusted
+ * worker. The payload aliases that one envelope buffer, so callers must keep
+ * exclusive ownership until every staged payload read has finished.
+ */
+export function verifyAuthenticatedArchiveV5Owned(
+  envelope: Uint8Array,
+  resolveKey: BackupTrustKeyResolver,
+): VerifiedAuthenticatedArchiveV5 {
+  return verifyAuthenticatedArchiveV5Internal(envelope, resolveKey, false);
 }

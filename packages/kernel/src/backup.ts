@@ -1,4 +1,5 @@
 export {
+  BackupAuthenticationV1,
   AutomaticBackupFileName,
   BackupAdapterArtifactBindingV1,
   BackupFailureReasonCodeV1,
@@ -41,6 +42,26 @@ export {
   type ManualBackupDownloadV1 as ManualBackupDownload,
   type ValidatedBackupArtifactV1 as ValidatedBackupArtifact,
 } from "@clay/schema/backup";
+export {
+  BackupTrustCoordinator,
+  type BackupFreshnessAssessment,
+  type BackupTrustRecordStore,
+  type BackupTrustReservationV1,
+  type BackupTrustStatusV1,
+} from "./backup-trust";
+export {
+  BackupTrustEnrollment,
+  decodeRecoveryKitV1,
+  encodeRecoveryKitV1,
+  generateBackupTrustMaterialV1,
+  type BackupTrustEnrollmentStatus,
+  type BackupTrustMaterialV1,
+  type SecureRandomFill,
+} from "./recovery-kit";
+export {
+  inspectAuthenticatedArchiveV5Header,
+  type AuthenticatedArchiveHeaderV1,
+} from "./archive-authentication";
 export {
   buildAutomaticBackupFileName,
   runExternalBackup,

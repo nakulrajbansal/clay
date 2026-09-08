@@ -596,11 +596,15 @@ describe("archive format 5 authority evidence", () => {
         restoredAt: "2026-09-05T21:00:00.000Z",
       };
       let freshDriver: DbDriver | undefined;
+      let installedTarget: unknown = null;
       const restored = await restoreAuthorityArchiveAsNew(archive, identity, async () => {
         freshDriver = await openMemoryDriver();
         return freshDriver;
+      }, {
+        afterAuthorityReadBack: context => { installedTarget = context.target; },
       });
       restoredStore = restored.store;
+      expect(installedTarget).toEqual(restored.target);
       expect(restored.sourceAuthority.evidence.target).toEqual(source.target.evidence());
       expect(restored.target).toEqual({
         appInstanceId: identity.appInstanceId,

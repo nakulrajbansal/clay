@@ -9,8 +9,25 @@ import type {
   RelationConversionRequest, RelationConversionResult, SemanticSchemaTraceV1, Suggestion,
 } from "@clay/kernel";
 import { ClayError } from "@clay/kernel/errors";
-import type { ProductionArchiveExport } from "@clay/kernel/worker-authority";
+import type { AuthenticatedFormat5RestoreGrant } from "@clay/kernel/recovery";
+import type {
+  BackupPublicationReceipt,
+  BackupPublicationRequest,
+  BackupRecord,
+  BackupRun,
+  BackupSelectedTarget,
+  BackupStageValidation,
+  BackupTarget,
+} from "@clay/kernel/backup";
+import type {
+  ProductionAuthenticatedArchiveExport,
+  ProductionBackupSelection,
+} from "@clay/kernel/worker-authority";
 import type { IntentOutcome } from "../worker/db-worker";
+import type {
+  BackupTrustRuntimeStatus,
+  ImportedRecoveryKitStatus,
+} from "../worker/backup-trust-runtime";
 
 export type TraceEntry = { at: string; intent: string; events: DebugEvent[] };
 
@@ -33,6 +50,23 @@ export type BootInfo = {
   catalogGeneration: string;
   apps: BootAppEntry[];
 };
+
+export type AuthorityCommitNotice = Readonly<{
+  appInstanceId: string;
+  activeGenerationId: string;
+  lineageEpoch: string;
+  protectionRevision: string;
+  digestSchema: 1;
+  stateSha256: string;
+}>;
+
+export type RecoveryRecordCandidate = Readonly<{
+  table: string;
+  id: string;
+  deleted: boolean;
+  historyAt: string;
+  attachmentCount: number;
+}>;
 
 const APP_ID = /^app_[a-z2-7]{26}$/;
 const UINT64 = /^(?:0|[1-9][0-9]{0,19})$/;
@@ -96,6 +130,28 @@ function parseBootInfo(value: unknown): BootInfo {
     apps,
   };
 }
+
+function parseAuthorityCommitNotice(value: unknown): AuthorityCommitNotice | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+      || Object.getPrototypeOf(value) !== Object.prototype) return null;
+  const raw = value as Record<string, unknown>;
+  if (Object.keys(raw).sort().join("\u0000")
+        !== "activeGenerationId\u0000appInstanceId\u0000digestSchema\u0000lineageEpoch\u0000protectionRevision\u0000stateSha256"
+      || typeof raw.appInstanceId !== "string" || !APP_ID.test(raw.appInstanceId)
+      || typeof raw.activeGenerationId !== "string" || !/^gen_[a-z2-7]{26}$/.test(raw.activeGenerationId)
+      || typeof raw.lineageEpoch !== "string" || !UINT64.test(raw.lineageEpoch)
+      || typeof raw.protectionRevision !== "string" || !UINT64.test(raw.protectionRevision)
+      || raw.digestSchema !== 1 || typeof raw.stateSha256 !== "string"
+      || !/^sha256:[0-9a-f]{64}$/.test(raw.stateSha256)) return null;
+  return Object.freeze({
+    appInstanceId: raw.appInstanceId,
+    activeGenerationId: raw.activeGenerationId,
+    lineageEpoch: raw.lineageEpoch,
+    protectionRevision: raw.protectionRevision,
+    digestSchema: 1,
+    stateSha256: raw.stateSha256,
+  });
+}
 export type StatusInfo = {
   persistent: boolean; persisted: boolean;
   usageBytes: number | null; quotaBytes: number | null;
@@ -131,9 +187,18 @@ export class WorkerClient {
   private readonly pending = new Map<number, {
     resolve: (v: unknown) => void; reject: (e: Error) => void;
   }>();
+  private readonly authorityCommitListeners = new Set<
+    (notice: AuthorityCommitNotice) => void
+  >();
 
   constructor(private readonly worker: Worker) {
     worker.onmessage = (ev): void => {
+      const event = ev.data as { kind?: unknown; evidence?: unknown };
+      if (event?.kind === "authority_commit") {
+        const notice = parseAuthorityCommitNotice(event.evidence);
+        if (notice) for (const listener of this.authorityCommitListeners) listener(notice);
+        return;
+      }
       const msg = ev.data as {
         id: number; ok: boolean; result?: unknown;
         error?: string | { code?: string; message?: string };
@@ -161,6 +226,11 @@ export class WorkerClient {
   /** Terminate the worker, releasing its OPFS access handles. Call before a
    * reload so the next worker can acquire the pool without contention. */
   terminate(): void { try { this.worker.terminate(); } catch { /* already gone */ } }
+
+  onAuthorityCommit(listener: (notice: AuthorityCommitNotice) => void): () => void {
+    this.authorityCommitListeners.add(listener);
+    return () => { this.authorityCommitListeners.delete(listener); };
+  }
 
   async boot(request: BootRequest): Promise<BootInfo> {
     const captured = parseBootRequest(request);
@@ -269,6 +339,9 @@ export class WorkerClient {
   operationBatches(limit = 50): Promise<BatchReceipt[]> {
     return this.call("operationBatches", { limit });
   }
+  recoveryCandidates(): Promise<RecoveryRecordCandidate[]> {
+    return this.call("recoveryCandidates");
+  }
   undoBatch(id: string): Promise<BatchReceipt> {
     return this.call("undoBatch", { id });
   }
@@ -334,7 +407,67 @@ export class WorkerClient {
   acceptSuggestion(subject: string, kind: string): Promise<null> {
     return this.call("acceptSuggestion", { subject, kind });
   }
-  exportArchive(): Promise<Omit<ProductionArchiveExport, "bytes"> & { bytes: ArrayBuffer }> {
+  backupTrustStatus(): Promise<BackupTrustRuntimeStatus> {
+    return this.call("backupTrustStatus");
+  }
+  beginBackupTrustEnrollment(): Promise<{
+    enrollmentId: string;
+    fileName: string;
+    bytes: ArrayBuffer;
+  }> {
+    return this.call("beginBackupTrustEnrollment");
+  }
+  confirmBackupTrustEnrollment(
+    enrollmentId: string,
+    bytes: ArrayBuffer,
+  ): Promise<Extract<BackupTrustRuntimeStatus, { status: "ready" }>> {
+    return this.call("confirmBackupTrustEnrollment", { enrollmentId, bytes }, [bytes]);
+  }
+  importRecoveryKit(
+    bytes: ArrayBuffer,
+  ): Promise<ImportedRecoveryKitStatus> {
+    return this.call("importRecoveryKit", { bytes }, [bytes]);
+  }
+  activateImportedBackupSeries(
+    seriesId: string,
+    expectedActiveSeriesId: string | null,
+  ): Promise<Extract<BackupTrustRuntimeStatus, { status: "ready" }>> {
+    return this.call("activateImportedBackupSeries", {
+      seriesId,
+      expectedActiveSeriesId,
+      confirmation: "use_imported_recovery_kit_for_future_backups",
+    });
+  }
+  backupSelection(): Promise<ProductionBackupSelection> {
+    return this.call("backupSelection");
+  }
+  prepareAutomaticBackup(
+    target: BackupTarget,
+    reason: BackupRun["reason"],
+  ): Promise<{ run: BackupRun; bytes: ArrayBuffer }> {
+    return this.call("prepareAutomaticBackup", { target, reason });
+  }
+  validateBackupStage(
+    bytes: ArrayBuffer,
+    expected: BackupSelectedTarget["target"],
+  ): Promise<BackupStageValidation> {
+    return this.call("validateBackupStage", { bytes, expected }, [bytes]);
+  }
+  publishBackup(request: BackupPublicationRequest): Promise<BackupPublicationReceipt> {
+    return this.call("publishBackup", { request });
+  }
+  backupRecords(): Promise<BackupRecord[]> {
+    return this.call("backupRecords");
+  }
+  validateRestoreArchive(bytes: ArrayBuffer): Promise<AuthenticatedFormat5RestoreGrant> {
+    return this.call("validateRestoreArchive", { bytes }, [bytes]);
+  }
+  restoreAsNew(grant: AuthenticatedFormat5RestoreGrant): Promise<BootInfo> {
+    return this.call<unknown>("restoreAsNew", { grant }).then(parseBootInfo);
+  }
+  exportArchive(): Promise<
+    Omit<ProductionAuthenticatedArchiveExport, "bytes"> & { bytes: ArrayBuffer }
+  > {
     return this.call("exportArchive");
   }
   importArchive(bytes: ArrayBuffer): Promise<{

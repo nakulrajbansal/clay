@@ -22,10 +22,10 @@ export type DecodedProductionResponse =
     sampleProvenance: readonly SampleProvenanceCoordinate[] | null;
   }>;
 
-const MAX_RESPONSE_BYTES = 2_000_000;
+const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 const MAX_DEPTH = 64;
-const MAX_NODES = 100_000;
-const MAX_PROVENANCE = 10_000;
+const MAX_NODES = 500_000;
+const MAX_PROVENANCE = 100_000;
 export const PRODUCTION_RESPONSE_PREFIX = "clay-response-v1:";
 
 function invalid(message: string): ClayError {
@@ -33,7 +33,8 @@ function invalid(message: string): ClayError {
 }
 
 export function isSampleProducingRoute(route: string): boolean {
-  return route === "starter.seed" || route === "samples.fill";
+  return route === "starter.seed" || route === "samples.fill"
+    || route === "archive.restore.samples";
 }
 
 export function productionResponseRoutePrefix(route: string): string {

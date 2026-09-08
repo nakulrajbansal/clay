@@ -6,7 +6,11 @@ const AUTHORITY_ID = /^auth_[a-z2-7]{26}$/;
 const REQUEST_ID = /^req_[a-z2-7]{26}$/;
 const ROUTE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
-const SAMPLE_PRODUCER_ROUTES = ["starter.seed", "samples.fill"] as const;
+const SAMPLE_PRODUCER_ROUTES = [
+  "starter.seed",
+  "samples.fill",
+  "archive.restore.samples",
+] as const;
 
 export type SampleProducerRoute = typeof SAMPLE_PRODUCER_ROUTES[number];
 

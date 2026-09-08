@@ -39,7 +39,7 @@ const matches = (pattern: RegExp, value: unknown): value is string =>
 
 const GRANT_KEYS = [
   "schema", "kind", "validationId", "archiveFormat", "cryptographicallyAuthenticated",
-  "authentication", "archiveSha256", "archiveTarget", "preservedAppInstanceId",
+  "authentication", "freshness", "archiveSha256", "archiveTarget", "preservedAppInstanceId",
   "destinationAppInstanceId", "installMode", "validatedAt",
 ] as const;
 const TARGET_KEYS = [
@@ -71,6 +71,7 @@ export function parseAuthenticatedFormat5RestoreGrant(
       || !matches(VALIDATION_ID, grant.validationId)
       || grant.archiveFormat !== 5
       || grant.cryptographicallyAuthenticated !== true
+      || (grant.freshness !== "current" && grant.freshness !== "unknown")
       || !matches(SHA256, grant.archiveSha256)
       || !matches(APP_ID, target.appInstanceId)
       || !matches(GENERATION_ID, target.activeGenerationId)

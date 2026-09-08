@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   CLAY_ARCHIVE_CONTENT_TYPE,
   hmacSha256ChunksSync,
+  inspectAuthenticatedArchiveV5Header,
   sealAuthenticatedArchiveV5,
   verifyAuthenticatedArchiveV5,
+  verifyAuthenticatedArchiveV5Owned,
   type AuthenticatedArchiveHeaderV1,
 } from "../src/archive-authentication";
 
@@ -36,6 +38,17 @@ describe("authenticated format-5 COSE_Mac0 envelope", () => {
     expect(toHex(actual)).toBe("b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7");
   });
 
+  it("strictly inspects only the unauthenticated key-selection header", () => {
+    const envelope = sealAuthenticatedArchiveV5(payload, key, header);
+    const inspected = inspectAuthenticatedArchiveV5Header(envelope);
+    expect(inspected).toEqual(header);
+    inspected.keyId.fill(0);
+    expect(inspectAuthenticatedArchiveV5Header(envelope).keyId).toEqual(header.keyId);
+    const trailing = new Uint8Array(envelope.byteLength + 1);
+    trailing.set(envelope);
+    expect(() => inspectAuthenticatedArchiveV5Header(trailing)).toThrow(/trailing|framing/i);
+  });
+
   it("selects the trusted key by an unauthenticated hint then returns copied authenticated bytes", () => {
     const envelope = sealAuthenticatedArchiveV5(payload, key, header);
     let observedKeyId = "";
@@ -51,6 +64,14 @@ describe("authenticated format-5 COSE_Mac0 envelope", () => {
     envelope.fill(0);
     expect(verified.payload).toEqual(payload);
     expect(verified.header.keyId).toEqual(header.keyId);
+  });
+
+  it("authenticates a transferred envelope over bounded views without cloning its payload", () => {
+    const envelope = sealAuthenticatedArchiveV5(payload, key, header);
+    const verified = verifyAuthenticatedArchiveV5Owned(envelope, () => key);
+    expect(verified.payload.buffer).toBe(envelope.buffer);
+    expect(verified.payload.byteOffset).toBeGreaterThan(envelope.byteOffset);
+    expect(verified.payload).toEqual(payload);
   });
 
   it("rejects payload, protected-header, and tag tampering", () => {

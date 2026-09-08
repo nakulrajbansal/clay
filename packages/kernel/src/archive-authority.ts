@@ -34,6 +34,7 @@ import {
   CLAY_ARCHIVE_CONTENT_TYPE,
   sealAuthenticatedArchiveV5,
   verifyAuthenticatedArchiveV5,
+  verifyAuthenticatedArchiveV5Owned,
   type AuthenticatedArchiveHeaderV1,
   type BackupTrustKeyResolver,
 } from "./archive-authentication";
@@ -327,9 +328,13 @@ function collectPendingJobs(driver: DbDriver) {
       jobId: row.job_id,
       authorityIncarnationId: row.authority_incarnation_id,
       appInstanceId: row.app_instance_id,
+      generationId: row.generation_id,
+      namespaceId: row.namespace_id,
       kind: row.kind,
       state: row.state,
       operationId: row.operation_id,
+      sourceArchiveSha256: row.source_archive_sha256,
+      sourceProvenanceId: row.source_provenance_id,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }));
@@ -420,6 +425,8 @@ function collectCatalogAuthority(
     pendingJobs,
     lineageReservations,
     generationEvents,
+    backupRecords: catalog.backupRecords().sort((left, right) =>
+      left.backupId.localeCompare(right.backupId)),
   };
 }
 
@@ -981,6 +988,48 @@ function validateAuthorityHistory(evidence: ArchiveAuthorityEvidence): void {
   if (activeReservationCount > 1)
     throw invalid("catalog contains multiple active revision reservations");
 
+  const backupRecords = catalog.backupRecords;
+  const backupByOperation = new Map<string, (typeof backupRecords)[number]>();
+  const backupGenerationIds = new Set<string>();
+  const backupSeriesGenerations = new Set<string>();
+  const backupFileNames = new Set<string>();
+  for (let index = 0; index < backupRecords.length; index++) {
+    const backup = backupRecords[index]!;
+    if (index > 0 && backupRecords[index - 1]!.backupId >= backup.backupId)
+      throw invalid("catalog backup records are reordered or duplicated");
+    const backupEvent = catalog.generationEvents.find(event =>
+      event.eventKind === "backup_published"
+      && event.catalogGeneration === backup.publicationCatalogGeneration);
+    const generation = generationById.get(backup.evidence.activeGenerationId);
+    const matchesGeneration = generation !== undefined
+      && sameTarget(backup.evidence, generation.descriptor.target);
+    const matchesRevision = reservations.some(reservation =>
+      reservation.state === "committed"
+      && reservation.appInstanceId === backup.evidence.appInstanceId
+      && reservation.publishedActiveGenerationId === backup.evidence.activeGenerationId
+      && reservation.publishedLineageEpoch === backup.evidence.lineageEpoch
+      && reservation.revision === backup.evidence.protectionRevision
+      && reservation.stateSha256 === backup.evidence.stateSha256);
+    const seriesGeneration = `${backup.authentication.seriesId}:${backup.authentication.generation}`;
+    if (!entryByApp.has(backup.evidence.appInstanceId)
+        || !generation
+        || generation.descriptor.target.appInstanceId !== backup.evidence.appInstanceId
+        || (!matchesGeneration && !matchesRevision)
+        || BigInt(backup.publicationCatalogGeneration) > BigInt(catalog.catalogGeneration)
+        || !backupEvent || backupEvent.operationId === null
+        || backupEvent.appInstanceId !== backup.evidence.appInstanceId
+        || backupEvent.at !== backup.validatedAt
+        || backupByOperation.has(backupEvent.operationId)
+        || backupGenerationIds.has(backup.generationId)
+        || backupSeriesGenerations.has(seriesGeneration)
+        || backupFileNames.has(backup.fileName))
+      throw invalid("catalog backup history is incomplete or inconsistent");
+    backupByOperation.set(backupEvent.operationId, backup);
+    backupGenerationIds.add(backup.generationId);
+    backupSeriesGenerations.add(seriesGeneration);
+    backupFileNames.add(backup.fileName);
+  }
+
   const events = catalog.generationEvents;
   const eventByGeneration = new Map<string, CatalogGenerationEvent>();
   let previousEventEpoch = 0n;
@@ -1012,6 +1061,12 @@ function validateAuthorityHistory(evidence: ArchiveAuthorityEvidence): void {
     } else if (event.eventKind === "app_metadata") {
       if (!entryByApp.has(event.appInstanceId!))
         throw invalid("catalog metadata event references an unknown app");
+    } else if (event.eventKind === "backup_published") {
+      const backup = event.operationId === null ? undefined : backupByOperation.get(event.operationId);
+      if (!backup || backup.publicationCatalogGeneration !== event.catalogGeneration
+          || backup.evidence.appInstanceId !== event.appInstanceId
+          || backup.validatedAt !== event.at)
+        throw invalid("catalog backup publication event is invalid");
     } else if (event.eventKind !== "app_seed" && event.eventKind !== "lease_issued") {
       if (!reservation || reservation.appInstanceId !== event.appInstanceId)
         throw invalid("catalog revision event is orphaned");
@@ -1367,6 +1422,7 @@ export async function importAuthenticatedAuthorityArchive(
   bytes: Uint8Array,
   resolveKey: BackupTrustKeyResolver,
   openFresh?: () => Promise<DbDriver>,
+  ownership: "retained" | "transferred" = "retained",
 ): Promise<{
   store: ClayStore;
   manifest: ArchiveManifest;
@@ -1381,7 +1437,9 @@ export async function importAuthenticatedAuthorityArchive(
     evidence: ArchiveAuthorityEvidence;
   };
 }> {
-  const verified = verifyAuthenticatedArchiveV5(bytes, resolveKey);
+  const verified = ownership === "transferred"
+    ? verifyAuthenticatedArchiveV5Owned(bytes, resolveKey)
+    : verifyAuthenticatedArchiveV5(bytes, resolveKey);
   const imported = await importAuthorityArchive(verified.payload, openFresh);
   if (imported.manifest.format !== 5
       || imported.authority.kind !== "format5_internal_consistency") {
@@ -1411,7 +1469,9 @@ export async function validateAuthenticatedAuthorityArchiveStage(
 ): Promise<BackupStageValidation> {
   let imported: Awaited<ReturnType<typeof importAuthenticatedAuthorityArchive>> | undefined;
   try {
-    imported = await importAuthenticatedAuthorityArchive(bytes, resolveKey);
+    imported = await importAuthenticatedAuthorityArchive(
+      bytes, resolveKey, undefined, "transferred",
+    );
     if (!sameTarget(imported.authority.evidence.target, expectedTarget))
       return { schema: 1, status: "invalid", evidence: null };
     const authentication = imported.authority.authentication;
@@ -1440,10 +1500,28 @@ export async function validateAuthenticatedAuthorityArchiveStage(
  * then mint only the caller-provided worker-owned identity. Source authority,
  * reservations, receipts, and counters are evidence and are never installed.
  */
+export type ArchiveRestoreInstallContext = Readonly<{
+  driver: DbDriver;
+  store: ClayStore;
+  manifest: ArchiveManifest;
+  sourceAuthority: Extract<ArchiveAuthorityClaim, { format: 5 }>;
+  target: TargetEvidence;
+  generation: ReturnType<typeof ArchiveGenerationEvidenceV1.parse>;
+}>;
+
+export type ArchiveRestoreInstallHooks = Readonly<{
+  wrapFreshDriver?: (driver: DbDriver) => Readonly<{
+    driver: DbDriver;
+    runAuthorized: (write: () => void) => void;
+  }>;
+  afterAuthorityReadBack?: (context: ArchiveRestoreInstallContext) => TargetEvidence | void;
+}>;
+
 export async function restoreAuthorityArchiveAsNew(
   bytes: Uint8Array,
   rawIdentity: ArchiveRestoreIdentity,
   openFresh: () => Promise<DbDriver>,
+  hooks: ArchiveRestoreInstallHooks = {},
 ): Promise<{
   store: ClayStore;
   manifest: ArchiveManifest;
@@ -1464,10 +1542,7 @@ export async function restoreAuthorityArchiveAsNew(
     throw invalid("restore-as-new requires certified format 5 authority evidence");
   }
   const sourceAuthority = validated.authority;
-  if (hasNonemptySampleProvenance(validated.store)) {
-    validated.store.close();
-    throw invalid("sample provenance requires private rebind before restore-as-new");
-  }
+  const sourceHasSamples = hasNonemptySampleProvenance(validated.store);
   const sourceIds = new Set(sourceAuthority.evidence.catalogAuthority.idRegistry
     .map(entry => entry.idValue));
   if ([identity.appInstanceId, identity.generationId, identity.namespaceId, identity.operationId]
@@ -1483,7 +1558,12 @@ export async function restoreAuthorityArchiveAsNew(
     validated.store.close();
   }
 
-  let freshDriver: DbDriver | undefined;
+  let physicalFreshDriver: DbDriver | undefined;
+  let installedDriver: DbDriver | undefined;
+  let writeSession: ReturnType<NonNullable<ArchiveRestoreInstallHooks["wrapFreshDriver"]>>
+    | undefined;
+  let installedTarget: TargetEvidence | undefined;
+  let installedGeneration: ReturnType<typeof ArchiveGenerationEvidenceV1.parse> | undefined;
   const imported = await ClayStore.importArchive(legacy, async () => {
     const candidate = await openFresh();
     try {
@@ -1496,73 +1576,103 @@ export async function restoreAuthorityArchiveAsNew(
       );
       if (objects.length !== 0)
         throw invalid("restore-as-new target is not physically empty");
-      freshDriver = candidate;
+      physicalFreshDriver = candidate;
       return candidate;
     } catch (error) {
       candidate.close();
       throw error;
     }
+  }, {
+    wrapFreshDriver: physical => {
+      writeSession = hooks.wrapFreshDriver?.(physical);
+      installedDriver = writeSession?.driver ?? physical;
+      return installedDriver;
+    },
+    runFreshInstall: install => {
+      const authorize = writeSession?.runAuthorized ?? ((write: () => void) => write());
+      authorize(install);
+    },
+    afterReadBack: (installedStore, driver) => {
+      const canonical = enumerateCanonicalStateV1(
+        driver, installedStore.validationRegistrySnapshot(),
+      );
+      if (canonical.stateSha256 !== sourceAuthority.evidence.target.stateSha256)
+        throw invalid("restored canonical state does not match the authenticated source");
+      StateMerkleIndex.createSchema(driver);
+      const merkle = StateMerkleIndex.initialize(
+        driver, canonical.leaves.map(entry => entry.seed),
+      ).audit();
+      const target = TargetEvidenceV1.parse({
+        appInstanceId: identity.appInstanceId,
+        activeGenerationId: identity.generationId,
+        lineageEpoch: "0",
+        protectionRevision: "0",
+        digestSchema: 1,
+        stateSha256: merkle.stateSha256,
+      });
+      TargetAuthorityStore.createSchema(driver);
+      const targetAuthority = TargetAuthorityStore.initialize(driver, {
+        schema: 1,
+        appInstanceId: target.appInstanceId,
+        activeGenerationId: target.activeGenerationId,
+        lineageEpoch: target.lineageEpoch,
+        lineageEpochHighWater: "0",
+        protectionRevision: target.protectionRevision,
+        protectionRevisionHighWater: "0",
+        digestSchema: target.digestSchema,
+      });
+      if (!sameTarget(targetAuthority.evidence(), target)
+          || targetAuthority.reservations().length !== 0
+          || driver.select("SELECT request_id FROM sys.production_request_receipts").length !== 0)
+        throw invalid("restore-as-new target authority failed read-back");
+      const generation = ArchiveGenerationEvidenceV1.parse({
+        schema: 1,
+        operationId: identity.operationId,
+        storageKey: identity.generationId,
+        descriptor: {
+          schema: 1,
+          generationId: identity.generationId,
+          target,
+          namespaceId: identity.namespaceId,
+          sourceArchiveSha256: digest(bytes),
+          sourceProvenanceId: null,
+          sealedAt: identity.restoredAt,
+          readBackAt: identity.restoredAt,
+        },
+      });
+      const finalTarget = hooks.afterAuthorityReadBack?.({
+        driver,
+        store: installedStore,
+        manifest: validated.manifest as ArchiveManifest,
+        sourceAuthority,
+        target,
+        generation,
+      }) ?? target;
+      const parsedFinalTarget = TargetEvidenceV1.parse(finalTarget);
+      if (parsedFinalTarget.appInstanceId !== target.appInstanceId
+          || parsedFinalTarget.activeGenerationId !== target.activeGenerationId
+          || parsedFinalTarget.lineageEpoch !== target.lineageEpoch
+          || parsedFinalTarget.digestSchema !== target.digestSchema
+          || !sameTarget(TargetAuthorityStore.open(driver).evidence(), parsedFinalTarget)
+          || (sourceHasSamples && parsedFinalTarget.protectionRevision === "0"))
+        throw invalid("restored sample provenance was not atomically re-attested");
+      installedTarget = parsedFinalTarget;
+      installedGeneration = generation;
+    },
   });
-  if (!freshDriver) {
+  if (!physicalFreshDriver || !installedDriver || !installedTarget || !installedGeneration) {
     imported.store.close();
     throw invalid("restore-as-new did not receive a fresh physical target");
   }
 
   try {
-    const canonical = enumerateCanonicalStateV1(
-      freshDriver, imported.store.validationRegistrySnapshot(),
-    );
-    if (canonical.stateSha256 !== sourceAuthority.evidence.target.stateSha256)
-      throw invalid("restored canonical state does not match the authenticated source");
-    StateMerkleIndex.createSchema(freshDriver);
-    const merkle = StateMerkleIndex.initialize(
-      freshDriver, canonical.leaves.map(entry => entry.seed),
-    ).audit();
-    const target = TargetEvidenceV1.parse({
-      appInstanceId: identity.appInstanceId,
-      activeGenerationId: identity.generationId,
-      lineageEpoch: "0",
-      protectionRevision: "0",
-      digestSchema: 1,
-      stateSha256: merkle.stateSha256,
-    });
-    TargetAuthorityStore.createSchema(freshDriver);
-    const targetAuthority = TargetAuthorityStore.initialize(freshDriver, {
-      schema: 1,
-      appInstanceId: target.appInstanceId,
-      activeGenerationId: target.activeGenerationId,
-      lineageEpoch: target.lineageEpoch,
-      lineageEpochHighWater: "0",
-      protectionRevision: target.protectionRevision,
-      protectionRevisionHighWater: "0",
-      digestSchema: target.digestSchema,
-    });
-    if (!sameTarget(targetAuthority.evidence(), target)
-        || targetAuthority.reservations().length !== 0
-        || freshDriver.select("SELECT request_id FROM sys.production_request_receipts").length !== 0)
-      throw invalid("restore-as-new target authority failed read-back");
-    const generation = ArchiveGenerationEvidenceV1.parse({
-      schema: 1,
-      operationId: identity.operationId,
-      storageKey: identity.generationId,
-      descriptor: {
-        schema: 1,
-        generationId: identity.generationId,
-        target,
-        namespaceId: identity.namespaceId,
-        sourceArchiveSha256: digest(bytes),
-        sourceProvenanceId: null,
-        sealedAt: identity.restoredAt,
-        readBackAt: identity.restoredAt,
-      },
-    });
     return {
       store: imported.store,
       manifest: validated.manifest as ArchiveManifest,
       invalidPanels: imported.invalidPanels,
       sourceAuthority,
-      target,
-      generation,
+      target: installedTarget,
+      generation: installedGeneration,
     };
   } catch (error) {
     imported.store.close();

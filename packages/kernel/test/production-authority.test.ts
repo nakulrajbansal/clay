@@ -6,16 +6,25 @@ import {
 } from "../src/index";
 import { enumerateCanonicalStateV1 } from "../src/canonical-state";
 import {
+  verifyAuthenticatedArchiveV5,
+} from "../src/archive-authentication";
+import {
   importAuthorityArchive,
   restoreAuthorityArchiveAsNew,
+  type ArchiveSealMaterialV1,
 } from "../src/archive-authority";
 import { DeviceCatalog } from "../src/device-catalog";
+import { runExternalBackup } from "../src/external-backup";
+import { createLiveWriteGuard, type LiveWriteSession } from "../src/live-write-guard";
+import { DeterministicDirectory } from "./external-backup-fakes";
 import {
   ProductionStoreAuthority,
   armProductionAuthorityFailureForTest,
   planLegacyBootstrap,
+  planPendingRestoreReconciliation,
   resolveCatalogInventory,
 } from "../src/production-authority";
+import { commitRestoredSampleReattestation } from "../src/production-mutation-coordinator";
 import {
   productionOperationIdV1,
   productionOperationIdV2,
@@ -25,6 +34,12 @@ import { StateMerkleIndex } from "../src/state-merkle-index";
 import { TargetAuthorityStore } from "../src/target-authority";
 
 const opaque = (prefix: string, char: string): string => `${prefix}_${char.repeat(26)}`;
+const ARCHIVE_SEAL: ArchiveSealMaterialV1 = {
+  backupTrustKey: Uint8Array.from({ length: 32 }, (_, index) => index),
+  keyId: Uint8Array.from({ length: 16 }, (_, index) => index + 0x10),
+  seriesId: Uint8Array.from({ length: 16 }, (_, index) => index + 0x20),
+  generation: 1n,
+};
 
 function operationIdForFixture(driver: DbDriver, requestId: string, route: string): string {
   const authorityRows = driver.select(
@@ -393,6 +408,31 @@ describe("production Store authority", () => {
         ["field", "Field Service", "inventory"],
       ]);
   });
+  it.each([
+    [[]],
+    [["/ns_pppppppppppppppppppppppppp-user.db"]],
+    [["/ns_pppppppppppppppppppppppppp-user.db", "/ns_pppppppppppppppppppppppppp-user.db-journal"]],
+    [["/ns_pppppppppppppppppppppppppp-system.db"]],
+    [["/ns_pppppppppppppppppppppppppp-user.db", "/ns_pppppppppppppppppppppppppp-system.db"]],
+    [["/ns_pppppppppppppppppppppppppp-user.db", "/ns_pppppppppppppppppppppppppp-system.db",
+      "/ns_pppppppppppppppppppppppppp-system.db-wal"]],
+  ] as const)("safely plans pending restore cleanup after a physical creation kill point %#", pending => {
+    const base = ["/clay-device-catalog-v1.db", "/system.db", "/user.db"];
+    expect(planPendingRestoreReconciliation({
+      names: [...base, ...pending],
+      active: [{ storageKey: "default", namespaceId: opaque("ns", "a") }],
+      pendingNamespaceId: opaque("ns", "p"),
+    }).survivors).toEqual(base);
+  });
+
+  it("refuses to reconcile a pending restore across unrelated durable data", () => {
+    expect(() => planPendingRestoreReconciliation({
+      names: ["/clay-device-catalog-v1.db", "/system.db", "/user.db", "/other.db"],
+      active: [{ storageKey: "default", namespaceId: opaque("ns", "a") }],
+      pendingNamespaceId: opaque("ns", "p"),
+    })).toThrow(/unrelated/i);
+  });
+
   it("does not expose a ClayStore physical driver through reflection", async () => {
     const { store: rawStore } = await legacyStore();
     try {
@@ -480,11 +520,24 @@ describe("production Store authority", () => {
     try {
       expect((authority.readStore() as unknown as Record<string, unknown>).exportArchive)
         .toBeUndefined();
-      const exported = await authority.exportArchive();
-      expect(exported).toMatchObject({ format: 5, filename: expect.stringMatching(/\.clay\.zip$/) });
+      const exported = await authority.exportAuthenticatedArchive(ARCHIVE_SEAL);
+      expect(exported).toMatchObject({
+        format: 5,
+        filename: expect.stringMatching(/\.clay$/),
+        authentication: {
+          schema: 1,
+          kind: "cose_mac0_hmac_256_256",
+          authenticationVersion: 1,
+          keyId: "101112131415161718191a1b1c1d1e1f",
+          seriesId: "202122232425262728292a2b2c2d2e2f",
+          generation: "1",
+        },
+      });
+      expect(Reflect.ownKeys(exported)).not.toContain("backupTrustKey");
       expect(exported.bytes).toBeInstanceOf(Uint8Array);
-      expect(exported.bytes.slice(0, 2)).toEqual(new Uint8Array([0x50, 0x4b]));
-      const parts = zipRead(exported.bytes);
+      expect(exported.bytes[0]).toBe(0xd1);
+      const verified = verifyAuthenticatedArchiveV5(exported.bytes, () => ARCHIVE_SEAL.backupTrustKey);
+      const parts = zipRead(verified.payload);
       const manifest = ArchiveManifestV5.parse(JSON.parse(new TextDecoder().decode(
         parts.find(part => part.name === "manifest.json")!.data,
       )));
@@ -494,7 +547,7 @@ describe("production Store authority", () => {
       expect(manifest).toMatchObject({ format: 5, app: "My app" });
       expect(evidence.target).toEqual(exported.target);
       expect(evidence.catalogAuthority.catalogGeneration).toBe(exported.catalogGeneration);
-      const staged = await importAuthorityArchive(exported.bytes);
+      const staged = await importAuthorityArchive(verified.payload);
       try {
         expect(staged.authority).toMatchObject({
           kind: "format5_internal_consistency",
@@ -505,6 +558,99 @@ describe("production Store authority", () => {
       } finally {
         staged.store.close();
       }
+    } finally {
+      authority.close();
+    }
+  });
+
+  it("writes, reads back, stages, publishes, and replays one authenticated automatic backup", async () => {
+    const driver = await cataloguedStore();
+    const authority = ProductionStoreAuthority.openExisting(driver, {
+      inventory: { ...legacyInventory, catalogPresent: true },
+      storageKey: "default",
+      releaseId: opaque("rel", "f"),
+      nowMs: 2_000,
+      leaseTtlMs: 5_000,
+    });
+    try {
+      const before = await authority.backupSelection();
+      const exported = await authority.exportAuthenticatedArchive(ARCHIVE_SEAL);
+      expect(exported.target).toEqual(before.selected.target);
+      expect(exported.catalogGeneration).toBe(before.selected.catalogGeneration);
+
+      const target = {
+        schema: 1 as const,
+        targetId: opaque("tgt", "e"),
+        appInstanceId: before.selected.selectedAppInstanceId,
+        adapter: "browser_directory" as const,
+        adapterCertificationId: opaque("btc", "f"),
+        authorizedAt: "2026-09-06T12:00:00.000Z",
+      };
+      const run = {
+        schema: 1 as const,
+        backupId: opaque("bkp", "g"),
+        generationId: opaque("backupgen", "h"),
+        target,
+        expected: before.selected,
+        fence: before.fence,
+        reason: "backup_now" as const,
+        attempt: "fresh" as const,
+        fileLabel: "My app",
+        createdAt: "2026-09-06T12:00:01.000Z",
+        archive: {
+          format: 5 as const,
+          byteLength: exported.bytes.byteLength,
+          archiveSha256: `sha256:${sha256HexSync(exported.bytes)}`,
+          authentication: exported.authentication,
+          shapeHead: authority.readStore().headVersion(),
+          shapeCurrent: authority.readStore().getSetting<number>("current_version")
+            ?? authority.readStore().headVersion(),
+        },
+      };
+      const directory = new DeterministicDirectory(target.targetId);
+      const dependencies = {
+        directory,
+        authority: {
+          readSelectedTarget: async () => (await authority.backupSelection()).selected,
+          publish: (request: Parameters<typeof authority.publishBackup>[0]) =>
+            authority.publishBackup(request),
+        },
+        validateArchiveStage: (bytes: Uint8Array, expected: typeof run.expected.target) =>
+          authority.validateAuthenticatedArchiveStage(
+            bytes, expected, ARCHIVE_SEAL.backupTrustKey,
+          ),
+        now: () => "2026-09-06T12:00:02.000Z",
+      };
+
+      await expect(runExternalBackup(run, exported.bytes, dependencies)).resolves.toMatchObject({
+        status: "published",
+        publication: "published",
+        record: { backupId: run.backupId, authentication: exported.authentication },
+      });
+      expect(await authority.backupRecords()).toEqual([
+        expect.objectContaining({ backupId: run.backupId, state: "valid" }),
+      ]);
+
+      const retry = {
+        ...run,
+        attempt: "publication_reconcile" as const,
+        reason: "retry" as const,
+        expected: (await authority.backupSelection()).selected,
+      };
+      await expect(runExternalBackup(retry, exported.bytes, {
+        ...dependencies,
+        now: () => "2026-09-06T12:00:03.000Z",
+      })).resolves.toMatchObject({
+        status: "published",
+        publication: "already_published",
+        record: { backupId: run.backupId },
+      });
+
+      await expect(authority.executeMutation({
+        requestId: opaque("req", "v"),
+        route: "setting.set",
+        payload: { key: "after_backup", value: true },
+      })).resolves.toMatchObject({ result: null });
     } finally {
       authority.close();
     }
@@ -566,24 +712,120 @@ describe("production Store authority", () => {
     }
   });
 
-  it("rejects sample-bearing restore before opening a fresh target without rebind", async () => {
+  it("re-attests sample provenance under a fresh restore operation before atomic publication", async () => {
     const source = await openSampleProvenanceFixture();
+    let restored: Awaited<ReturnType<typeof restoreAuthorityArchiveAsNew>> | null = null;
     try {
       const archive = await source.authority.exportArchive();
-      let openCalls = 0;
-      await expect(restoreAuthorityArchiveAsNew(archive.bytes, {
-        schema: 1,
+      const identity = {
+        schema: 1 as const,
         appInstanceId: opaque("app", "j"),
         generationId: opaque("gen", "k"),
         namespaceId: opaque("ns", "m"),
         operationId: opaque("op", "n"),
         restoredAt: "2026-09-06T12:00:00.000Z",
-      }, async () => {
-        openCalls++;
-        return openMemoryDriver();
-      })).rejects.toThrow(/sample provenance.*rebind|rebind.*sample provenance/i);
-      expect(openCalls).toBe(0);
+      };
+      let targetSession: LiveWriteSession | null = null;
+      let fence: ReturnType<DeviceCatalog["acquireWriteLease"]> | null = null;
+      let destinationGeneration = "";
+      const sourceArchiveSha256 = `sha256:${sha256HexSync(archive.bytes)}`;
+      restored = await restoreAuthorityArchiveAsNew(
+        archive.bytes,
+        identity,
+        async () => {
+          const driver = await openMemoryDriver();
+          driver.exec("ATTACH DATABASE ':memory:' AS catalog");
+          const catalog = DeviceCatalog.initializeFresh(driver);
+          const initial = catalog.snapshot();
+          const destinationSource = {
+            appInstanceId: opaque("app", "w"),
+            activeGenerationId: opaque("gen", "x"),
+            lineageEpoch: "0",
+            protectionRevision: "0",
+            digestSchema: 1 as const,
+            stateSha256: `sha256:${"1".repeat(64)}`,
+          };
+          catalog.seedSelectedTarget({
+            target: destinationSource,
+            namespaceId: opaque("ns", "y"),
+            storageKey: "default",
+            displayName: "Existing app",
+            shellId: "tracker",
+            operationId: opaque("op", "z"),
+            at: "2026-09-06T11:59:00.000Z",
+          });
+          const afterSeed = catalog.snapshot();
+          fence = catalog.acquireWriteLease({
+            expectedAuthorityIncarnationId: initial.authorityIncarnationId,
+            expectedCatalogGeneration: afterSeed.catalogGeneration,
+            expectedWriteEpoch: afterSeed.writeEpoch,
+            releaseId: opaque("rel", "r"),
+            nowMs: Date.parse("2026-09-06T11:59:59.000Z"),
+            ttlMs: 60_000,
+          });
+          destinationGeneration = catalog.snapshot().catalogGeneration;
+          return driver;
+        },
+        {
+          wrapFreshDriver: driver => {
+            targetSession = createLiveWriteGuard(driver);
+            return {
+              driver: targetSession.driver,
+              runAuthorized: write => { targetSession!.authority.run(write); },
+            };
+          },
+          afterAuthorityReadBack: context => {
+            const catalog = DeviceCatalog.openExisting(context.driver);
+            const sourceEntry = context.sourceAuthority.evidence.catalogAuthority.entry;
+            const afterAdd = catalog.addAppTarget({
+              expectedCatalogGeneration: destinationGeneration,
+              target: context.target,
+              namespaceId: identity.namespaceId,
+              storageKey: identity.namespaceId,
+              displayName: sourceEntry.displayName,
+              shellId: sourceEntry.shellId,
+              operationId: identity.operationId,
+              fence: fence!,
+              nowMs: Date.parse(identity.restoredAt),
+              select: true,
+              sourceArchiveSha256,
+              sourceProvenanceId: opaque("restoreval", "p"),
+            });
+            return commitRestoredSampleReattestation({
+              driver: context.driver,
+              store: context.store,
+              fence: fence!,
+              expectedCatalogGeneration: afterAdd.catalogGeneration,
+              expectedTarget: context.target,
+              requestId: opaque("req", "q"),
+              nowMs: Date.parse(identity.restoredAt),
+              sourceArchiveSha256,
+              sourceAuthorityIncarnationId:
+                context.sourceAuthority.evidence.catalogAuthority.authorityIncarnationId,
+            });
+          },
+        },
+      );
+
+      expect(restored.target.protectionRevision).toBe("1");
+      const ledger = restored.store.sampleRowProvenance();
+      expect(ledger).toHaveLength(1);
+      expect(ledger[0]!.operationId).not.toBe(source.ledger.entries[0]!.operationId);
+      const catalog = DeviceCatalog.openExisting(targetSession!.driver);
+      const target = TargetAuthorityStore.open(targetSession!.driver);
+      expect(catalog.selectedTargetStorage().target).toEqual(restored.target);
+      expect(target.evidence()).toEqual(restored.target);
+      expect(target.reservations().at(-1)?.operationId).toBe(ledger[0]!.operationId);
+      expect(catalog.revisionReservations().at(-1)?.operationId).toBe(ledger[0]!.operationId);
+      expect(targetSession!.driver.select(
+        "SELECT source_archive_sha256,source_provenance_id FROM catalog.generations WHERE generation_id=?",
+        [identity.generationId],
+      )).toEqual([{
+        source_archive_sha256: sourceArchiveSha256,
+        source_provenance_id: opaque("restoreval", "p"),
+      }]);
     } finally {
+      restored?.store.close();
       source.authority.close();
     }
   });
@@ -754,6 +996,70 @@ describe("production Store authority", () => {
         .toEqual(expect.arrayContaining([expect.objectContaining({ name: "status" })]));
       await expect(authority.executeMutation(request))
         .resolves.toEqual({ ...committed, replayed: true });
+    } finally {
+      authority.close();
+    }
+  });
+
+  it("authority-routes record, batch, and structural recovery with durable receipts", async () => {
+    const { driver, store: rawStore } = await legacyStore();
+    const rowId = String(rawStore.query({ from: "projects" })[0]!.id);
+    const operations: ForwardOpT[] = [{
+      op: "add_column", table: "projects",
+      column: { name: "status", type: "text", required: false },
+    }];
+    rawStore.commit({
+      intent: "add status",
+      summary: "Adds project status.",
+      migration: {
+        operations,
+        inverse: deriveInverse(operations, rawStore.registrySnapshot()),
+      },
+    });
+    const batch = rawStore.applyBatch({
+      source: "user",
+      summary: "Rename project",
+      mutations: [{ kind: "update", table: "projects", id: rowId, patch: { name: "Batched" } }],
+    });
+    const authority = ProductionStoreAuthority.adoptLegacy(driver, {
+      inventory: legacyInventory, storageKey: "default", displayName: "My app",
+      appInstanceId: opaque("app", "a"), generationId: opaque("gen", "b"),
+      namespaceId: opaque("ns", "c"), adoptionOperationId: opaque("op", "d"),
+      releaseId: opaque("rel", "e"), nowMs: Date.now(), leaseTtlMs: 60_000,
+    });
+    try {
+      const undone = await authority.executeMutation({
+        requestId: opaque("req", "h"),
+        route: "recovery.undoBatch",
+        payload: { id: batch.id },
+      });
+      expect(undone).toMatchObject({ changed: true, result: { undone: true } });
+      expect(authority.query({ from: "projects" })[0]?.name).toBe("Preserved");
+      await authority.executeMutation({
+        requestId: opaque("req", "i"),
+        route: "store.update",
+        payload: { table: "projects", id: rowId, patch: { name: "Latest" } },
+      });
+      const restored = await authority.executeMutation({
+        requestId: opaque("req", "j"),
+        route: "recovery.restoreRow",
+        payload: { table: "projects", id: rowId },
+      });
+      expect(restored).toMatchObject({ changed: true, result: { name: "Preserved" } });
+      const rewound = await authority.executeMutation({
+        requestId: opaque("req", "k"),
+        route: "recovery.rewind",
+        payload: { version: 1 },
+      });
+      expect(rewound.changed).toBe(true);
+      expect(authority.readStore().registrySnapshot().get("projects")?.columns
+        .some(column => column.name === "status")).toBe(false);
+      const receipts = driver.select(
+        "SELECT request_id,state FROM sys.production_request_receipts WHERE request_id IN (?,?,?)",
+        [opaque("req", "h"), opaque("req", "j"), opaque("req", "k")],
+      );
+      expect(receipts).toHaveLength(3);
+      expect(receipts.every(receipt => receipt.state === "committed")).toBe(true);
     } finally {
       authority.close();
     }

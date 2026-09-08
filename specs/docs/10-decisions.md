@@ -945,7 +945,10 @@ ADR-052 (2026-09-06) Format 5 uses a user-held COSE_Mac0 Backup Trust Key
   encrypted or authenticated secret container. Automatic-backup key access stays closed
   until the exact exported bytes are independently read back and test-imported.
 
-  A trusted generation high-water mark rejects known replay and forks. On a clean device
+  A trusted generation high-water mark rejects known replay and forks. Generation is
+  reserved before sealing, and abandonment leaves a permanent gap. At uint64 maximum,
+  abandonment keeps a permanent reservation bound to the same backup ID: that ID may
+  retry the terminal generation, but no different backup may reuse it. On a clean device
   with no independent checkpoint, a valid MAC establishes authenticity but not newest
   status, so freshness is shown as unknown. A hosted checkpoint may contain only series
   ID, generation, and envelope digest. It contains neither records nor key material.
@@ -1018,3 +1021,48 @@ CONSEQUENCE: B2's filesystem, orchestration, and fail-closed UI mechanics can in
 without widening production authority. Until the named archive/worker dependencies land
 and the full certification matrix passes, automatic backup and restore remain unavailable
 rather than simulated.
+
+### ADR-051 — Release B production recovery is authority-routed and crash-reconciled (2026-09-08)
+STATUS: accepted
+DECISION: The dependencies deferred by ADR-050 are now connected for the exact certified
+Release B browser artifact. The checked-in browser-directory certification is bound to the
+implementation, build, Chromium/Windows runtime, restart matrix, and focused suite digests;
+the factory enables it only on that runtime and otherwise remains unavailable. Runtime
+admission requires the exact user-agent patch, matching Windows Chromium UA-CH brands, and
+the certified ArrayBuffer transfer primitive; absence or divergence fails closed. Deliberate
+instrumentation that forges both UA and UA-CH is equivalent to modifying the trusted host and
+is outside this local single-user threat model. Exclusive creation uses the certified Web Locks
+plus exclusive writable bridge. Every filesystem boundary re-queries read/write permission,
+and choose/reauthorize are the only gesture paths.
+
+Successful authority commits feed an app-open-only coalescing controller: a 30-second idle
+trigger, five-minute minimum start interval, and fifteen-minute dirty deadline. A one-minute
+selected-target inspection repairs missed notifications while the page is open; no background
+or closed-browser claim is made. Pending authenticated generations persist the immutable
+archive bytes, run metadata, identity, and phase in IndexedDB, so retry never reseals a new
+artifact under an old generation.
+
+Recovery Kit import adds verifier material only. It never changes the active backup series.
+An explicit, confirmed compare-and-set activation command is the sole trust-rotation path.
+Manual user export reserves that active series, produces an authenticated `.clay` envelope,
+performs exact worker read-back validation, commits freshness, and only then transfers the
+single owned buffer for download; the unsigned inner format-5 archive is not exposed by the
+shell.
+
+Restore-as-new writes a source/envelope-bound pending job to the device catalog before
+creating a namespace. Catalog publication and target installation share one guarded physical
+transaction. A crash at any pre-publication creation point is reconciled at boot by deleting
+only the exact pending namespace and SQLite sidecars before clearing the job; unrelated or
+missing active files fail closed. Sample-bearing restores preserve validated table/row
+coordinates but replace source operation IDs with one fresh `archive.restore.samples`
+operation backed by mirrored target/catalog receipts and reservations, source archive and
+authority bindings, canonical read-back, and atomic publication.
+
+The trusted Recovery Center now previews and authority-routes recent row restore (including
+attachment references), batch undo, and structural rewind. Closed recovery error codes are
+kept in a bounded app-scoped durable history. Maximum-size archive buffers cross worker
+boundaries by transfer and are released before read-back allocation, keeping one full archive
+buffer in the browser presentation process.
+CONSEQUENCE: Release B can truthfully expose automatic backup, authenticated manual export,
+restore-as-new, and local recovery only where their exact authority/certification prerequisites
+hold. Unsupported runtimes and any incomplete or divergent durable state remain fail closed.

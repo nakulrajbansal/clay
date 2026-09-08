@@ -72,6 +72,101 @@ describe("WorkerClient files and automation boundaries", () => {
     });
   });
 
+  it("routes Recovery Kit enrollment and import bytes only to the trusted worker", async () => {
+    const kit = new ArrayBuffer(32);
+    const { client, posted, transfers } = harness(message => {
+      if (message.op === "beginBackupTrustEnrollment") return {
+        enrollmentId: `enroll_${"c".repeat(26)}`,
+        fileName: "clay-recovery-kit-010203040506.txt",
+        bytes: kit,
+      };
+      return { status: "ready" };
+    });
+
+    await client.backupTrustStatus();
+    await client.beginBackupTrustEnrollment();
+    const readBack = new ArrayBuffer(32);
+    await client.confirmBackupTrustEnrollment(`enroll_${"c".repeat(26)}`, readBack);
+    const imported = new ArrayBuffer(32);
+    await client.importRecoveryKit(imported);
+    const importedSeriesId = "20".repeat(16);
+    const activeSeriesId = "10".repeat(16);
+    await client.activateImportedBackupSeries(importedSeriesId, activeSeriesId);
+
+    expect(posted.map(message => message.op)).toEqual([
+      "backupTrustStatus",
+      "beginBackupTrustEnrollment",
+      "confirmBackupTrustEnrollment",
+      "importRecoveryKit",
+      "activateImportedBackupSeries",
+    ]);
+    expect(transfers[2]).toEqual([readBack]);
+    expect(transfers[3]).toEqual([imported]);
+    expect(posted[4]?.payload).toEqual({
+      seriesId: importedSeriesId,
+      expectedActiveSeriesId: activeSeriesId,
+      confirmation: "use_imported_recovery_kit_for_future_backups",
+    });
+  });
+
+  it("routes automatic backup staging and catalog publication through the worker", async () => {
+    const { client, posted, transfers } = harness();
+    const appInstanceId = `app_${"a".repeat(26)}`;
+    const target = {
+      schema: 1 as const,
+      targetId: `tgt_${"b".repeat(26)}`,
+      appInstanceId,
+      adapter: "browser_directory" as const,
+      adapterCertificationId: `btc_${"c".repeat(26)}`,
+      authorizedAt: "2026-09-06T12:00:00.000Z",
+    };
+    await client.backupSelection();
+    await client.prepareAutomaticBackup(target, "meaningful_write");
+    const bytes = new ArrayBuffer(8);
+    await client.validateBackupStage(bytes, {
+      appInstanceId,
+      activeGenerationId: `gen_${"d".repeat(26)}`,
+      lineageEpoch: "0",
+      protectionRevision: "1",
+      digestSchema: 1,
+      stateSha256: `sha256:${"e".repeat(64)}`,
+    });
+    await client.publishBackup({} as never);
+    await client.backupRecords();
+
+    expect(posted.map(message => message.op)).toEqual([
+      "backupSelection",
+      "prepareAutomaticBackup",
+      "validateBackupStage",
+      "publishBackup",
+      "backupRecords",
+    ]);
+    expect(posted[1]?.payload).toEqual({ target, reason: "meaningful_write" });
+    expect(transfers[2]).toEqual([bytes]);
+  });
+
+  it("routes authenticated restore validation and restore-as-new grants through the worker", async () => {
+    const bytes = new ArrayBuffer(16);
+    const restoredBoot = {
+      persistent: true,
+      seeded: true,
+      shellId: "tracker",
+      selectedAppInstanceId: `app_${"r".repeat(26)}`,
+      catalogGeneration: "12",
+      apps: [{ id: `app_${"r".repeat(26)}`, name: "Restored", shellId: "tracker" }],
+    } as const;
+    const { client, posted, transfers } = harness(message =>
+      message.op === "restoreAsNew" ? restoredBoot : null);
+    await client.validateRestoreArchive(bytes);
+    await expect(client.restoreAsNew({ schema: 1 } as never)).resolves.toEqual(restoredBoot);
+    expect(posted.map(message => message.op)).toEqual([
+      "validateRestoreArchive",
+      "restoreAsNew",
+    ]);
+    expect(transfers[0]).toEqual([bytes]);
+    expect(transfers[1]).toEqual([]);
+  });
+
   it("requests one authority archive and preserves its target metadata", async () => {
     const bytes = new ArrayBuffer(16);
     const target = {
@@ -85,9 +180,17 @@ describe("WorkerClient files and automation boundaries", () => {
     const response = {
       format: 5 as const,
       bytes,
-      filename: "field-service.clay.zip",
+      filename: "field-service.clay",
       target,
       catalogGeneration: "12",
+      authentication: {
+        schema: 1 as const,
+        kind: "cose_mac0_hmac_256_256" as const,
+        authenticationVersion: 1 as const,
+        keyId: "10".repeat(16),
+        seriesId: "20".repeat(16),
+        generation: "3",
+      },
     };
     const { client, posted, transfers } = harness(message =>
       message.op === "exportArchive" ? response : null);

@@ -3498,6 +3498,11 @@ export class ClayStore {
   static async importArchive(
     bytes: Uint8Array,
     openFresh?: () => Promise<DbDriver>,
+    installHooks?: {
+      wrapFreshDriver?: (driver: DbDriver) => DbDriver;
+      runFreshInstall?: (install: () => void) => void;
+      afterReadBack?: (store: ClayStore, driver: DbDriver) => void;
+    },
   ): Promise<{ store: ClayStore; manifest: ClayManifest; invalidPanels: string[] }> {
     const { manifest, user, system } = ClayStore.parseArchive(bytes);
     const archiveDriver = await openDriverFromBytes(user, system);
@@ -3549,10 +3554,11 @@ export class ClayStore {
           invalidPanels);
 
       if (!openFresh) return { store: staging, manifest, invalidPanels };
-      const fresh = await openFresh();
+      const physicalFresh = await openFresh();
+      const fresh = installHooks?.wrapFreshDriver?.(physicalFresh) ?? physicalFresh;
       const shape = staging.archiveCopyShape();
       let installed: ClayStore | null = null;
-      copyDatabase(staging.#driver, fresh, shape, () => {
+      const install = (): void => copyDatabase(staging.#driver, fresh, shape, () => {
         installed = ClayStore.fromDriver(
           fresh, { requireSemanticRegistry: manifest.format >= 3 });
         const readBackIssues = installed.verifyIntegrity(
@@ -3565,7 +3571,10 @@ export class ClayStore {
         if (readBackIssues.length > 0)
           throw new ClayError("E_VALIDATION",
             `installed archive failed read-back: ${readBackIssues.join("; ")}`, readBackIssues);
+        installHooks?.afterReadBack?.(installed, fresh);
       });
+      if (installHooks?.runFreshInstall) installHooks.runFreshInstall(install);
+      else install();
       staging.close();
       return { store: installed!, manifest, invalidPanels };
     } catch (e) {

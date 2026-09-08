@@ -21,6 +21,7 @@ const valid = (): AuthenticatedFormat5RestoreGrant => ({
     seriesId: "20".repeat(16),
     generation: "9",
   },
+  freshness: "current",
   archiveSha256: sha("8"),
   archiveTarget: {
     appInstanceId: id("app", "a"),
@@ -49,6 +50,7 @@ describe("authenticated format-5 restore presentation grant parser", () => {
     expect(parseAuthenticatedFormat5RestoreGrant({
       ...source, cryptographicallyAuthenticated: false,
     })).toBeNull();
+    expect(parseAuthenticatedFormat5RestoreGrant({ ...source, freshness: "future" })).toBeNull();
     expect(parseAuthenticatedFormat5RestoreGrant({
       ...source, checksumAuthenticated: true,
     })).toBeNull();

@@ -578,25 +578,31 @@ async function strictBrowserPool(s: Sqlite3Static): Promise<PoolUtil> {
     `durable browser storage could not be opened: ${String(lastError)}`);
 }
 
-/** Trusted worker inventory from the VFS itself, before any target is opened. */
-export async function browserDurableInventory(): Promise<DurableFileInventory> {
+/** Trusted worker file names from the VFS itself, before any target is opened. */
+export async function browserDurableFileNames(): Promise<string[]> {
   const s = await sqlite3();
   const pool = await strictBrowserPool(s);
   if (!pool.getFileNames)
     throw new ClayError("E_CATALOG_UNAVAILABLE", "durable file inventory is unavailable");
-  let names: string[];
   try {
     const actual = pool.getFileNames();
     if (!Array.isArray(actual)) throw new Error("inventory is not an array");
-    names = new Array<string>(actual.length);
+    const names = new Array<string>(actual.length);
     for (let index = 0; index < actual.length; index++) {
       if (typeof actual[index] !== "string") throw new Error("inventory name is invalid");
       names[index] = actual[index]!;
     }
+    if (new Set(names).size !== names.length)
+      throw new Error("inventory contains duplicate names");
+    return names.sort((left, right) => left.localeCompare(right));
   } catch {
     throw new ClayError("E_CATALOG_UNAVAILABLE", "durable file inventory is unreadable");
   }
-  return classifyDurableFileInventory(names);
+}
+
+/** Trusted worker inventory from the VFS itself, before any target is opened. */
+export async function browserDurableInventory(): Promise<DurableFileInventory> {
+  return classifyDurableFileInventory(await browserDurableFileNames());
 }
 
 /** Catalog-only probe. It is closed before the selected target is opened. */
@@ -718,6 +724,18 @@ export async function deleteAppStorage(appId: string): Promise<void> {
   const files = appFiles(appId);
   try { activePool.unlink(files.user); } catch { /* already gone */ }
   try { activePool.unlink(files.system); } catch { /* already gone */ }
+}
+
+/** Remove only an unpublished generation namespace after a failed lifecycle. */
+export async function deleteBrowserGenerationNamespace(namespaceId: string): Promise<void> {
+  if (!/^ns_[a-z2-7]{26}$/.test(namespaceId))
+    throw new ClayError("E_CATALOG_UNAVAILABLE", "durable namespace id is invalid");
+  if (!activePool?.unlink) return;
+  for (const file of [`/${namespaceId}-user.db`, `/${namespaceId}-system.db`]) {
+    for (const suffix of ["", "-journal", "-wal", "-shm"] as const) {
+      try { activePool.unlink(`${file}${suffix}`); } catch { /* absent or already removed */ }
+    }
+  }
 }
 
 export function systemSchemaSql(prefix: string): string {

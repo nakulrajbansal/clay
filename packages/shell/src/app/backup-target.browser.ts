@@ -17,12 +17,16 @@ type PermissionDescriptor = { mode: "readwrite" };
 export interface BrowserWritableFileStream {
   write(data: Uint8Array): Promise<void>;
   close(): Promise<void>;
+  abort?(): Promise<void>;
 }
 
 export interface BrowserFileHandle {
   readonly kind: "file";
   readonly name: string;
-  createWritable(options?: { keepExistingData?: boolean }): Promise<BrowserWritableFileStream>;
+  createWritable(options?: {
+    keepExistingData?: boolean;
+    mode?: "exclusive" | "siloed";
+  }): Promise<BrowserWritableFileStream>;
   getFile(): Promise<{
     readonly size: number;
     arrayBuffer(): Promise<ArrayBuffer>;
@@ -38,11 +42,88 @@ export interface BrowserDirectoryHandle {
   removeEntry(name: string): Promise<void>;
 }
 
-/** Injected only by a certified host that can atomically fail on collision. */
+export type BrowserExclusiveFileReservation = Readonly<{
+  fileHandle: BrowserFileHandle;
+  writable: BrowserWritableFileStream;
+  release(): void;
+}>;
+
+/** Injected only by a certified host that can reserve a never-overwritten file. */
 export type BrowserExclusiveFileCreator = (
   directory: BrowserDirectoryHandle,
   name: string,
-) => Promise<BrowserFileHandle>;
+) => Promise<BrowserFileHandle | BrowserExclusiveFileReservation>;
+
+type BrowserLockManager = {
+  request<T>(
+    name: string,
+    options: { mode: "exclusive" },
+    callback: () => Promise<T>,
+  ): Promise<T>;
+};
+
+function isNotFound(error: unknown): boolean {
+  return isNamedDomFailure(error, ["NotFoundError"]);
+}
+
+/**
+ * Chromium's production bridge holds a same-origin Web Lock and an exclusive
+ * FileSystemWritableFileStream for the complete write. It never opens a
+ * pre-existing nonempty file for replacement and therefore cannot truncate a
+ * colliding backup. The generated 130-bit filename identity makes a hostile
+ * pre-created empty-name collision infeasible; such a file contains no data to
+ * destroy, and exact read-back still gates publication.
+ */
+export function createChromiumExclusiveFileCreator(
+  locks: BrowserLockManager,
+): BrowserExclusiveFileCreator {
+  return (directory, name) => new Promise((resolve, reject) => {
+    const lockName = `clay-backup-exclusive-v1:${directory.name}:${name}`;
+    void locks.request(lockName, { mode: "exclusive" }, async () => {
+      let release!: () => void;
+      const held = new Promise<void>(done => { release = done; });
+      let created = false;
+      let writable: BrowserWritableFileStream | null = null;
+      try {
+        try {
+          await requireReadWritePermission(directory);
+          await directory.getFileHandle(name);
+          throw new BackupDirectoryIoError("destination_collision");
+        } catch (error) {
+          if (error instanceof BackupDirectoryIoError) throw error;
+          if (!isNotFound(error)) throw error;
+        }
+        await requireReadWritePermission(directory);
+        const fileHandle = await directory.getFileHandle(name, { create: true });
+        created = true;
+        await requireReadWritePermission(directory);
+        writable = await fileHandle.createWritable({
+          keepExistingData: true,
+          mode: "exclusive",
+        });
+        await requireReadWritePermission(directory);
+        const snapshot = await fileHandle.getFile();
+        if (snapshot.size !== 0)
+          throw new BackupDirectoryIoError("destination_collision");
+        resolve(Object.freeze({ fileHandle, writable, release }));
+        await held;
+      } catch (error) {
+        try {
+          if (writable) await requireReadWritePermission(directory);
+          if (writable?.abort) await writable.abort();
+          else if (writable) await writable.close();
+        } catch { /* release owns the first closed failure */ }
+        if (created) {
+          try {
+            await requireReadWritePermission(directory);
+            await directory.removeEntry(name);
+          } catch { /* exact owned cleanup */ }
+        }
+        reject(error);
+      }
+    }).catch(reject);
+  });
+}
 
 /** IndexedDB-like storage. `save` receives the handle itself for structured cloning. */
 export interface DirectoryHandleStore {
@@ -78,20 +159,24 @@ export function chromiumBackupEnvironmentFromGlobals(): ChromiumBackupEnvironmen
       return handle;
     }
     : undefined;
+  const navigatorValue = Reflect.get(globalThis, "navigator");
+  const locksValue = navigatorValue && typeof navigatorValue === "object"
+    ? Reflect.get(navigatorValue, "locks") : undefined;
+  const locks = locksValue && typeof locksValue === "object"
+      && typeof Reflect.get(locksValue, "request") === "function"
+    ? locksValue as BrowserLockManager : null;
   return {
     secureContext: globalThis.isSecureContext === true,
     topLevelContext,
     hasTransientUserActivation: () => {
-      const navigatorValue = Reflect.get(globalThis, "navigator");
-      if (!navigatorValue || typeof navigatorValue !== "object") return false;
-      const activation = Reflect.get(navigatorValue, "userActivation");
+      const currentNavigator = Reflect.get(globalThis, "navigator");
+      if (!currentNavigator || typeof currentNavigator !== "object") return false;
+      const activation = Reflect.get(currentNavigator, "userActivation");
       return !!activation && typeof activation === "object"
         && Reflect.get(activation, "isActive") === true;
     },
     showDirectoryPicker,
-    // The standard File System Access API has no exclusive-create primitive:
-    // getFileHandle({ create: true }) can open and later truncate a raced file.
-    createExclusiveFile: undefined,
+    createExclusiveFile: locks ? createChromiumExclusiveFileCreator(locks) : undefined,
   };
 }
 
@@ -167,6 +252,19 @@ function isDirectoryHandle(value: unknown): value is BrowserDirectoryHandle {
     && typeof Reflect.get(value, "removeEntry") === "function";
 }
 
+function isDirectoryFileHandle(value: unknown): value is BrowserFileHandle {
+  return !!value && typeof value === "object" && Reflect.get(value, "kind") === "file"
+    && typeof Reflect.get(value, "createWritable") === "function"
+    && typeof Reflect.get(value, "getFile") === "function";
+}
+
+function isExclusiveReservation(value: unknown): value is BrowserExclusiveFileReservation {
+  return !!value && typeof value === "object"
+    && isDirectoryFileHandle(Reflect.get(value, "fileHandle"))
+    && typeof Reflect.get(value, "writable") === "object"
+    && typeof Reflect.get(value, "release") === "function";
+}
+
 function permissionDescriptor(): PermissionDescriptor {
   return { mode: "readwrite" };
 }
@@ -218,36 +316,48 @@ class TargetDirectory implements BrowserBackupDirectory {
     const handle = await this.owner.reacquire(this.target);
 
     let fileHandle: BrowserFileHandle;
+    let writable: BrowserWritableFileStream | null = null;
+    let releaseReservation: (() => void) | null = null;
     try {
       if (!this.createExclusiveFile) throw new BackupDirectoryIoError("unsupported_api");
-      // The certified primitive atomically refuses an existing name. A
-      // lookup-then-create sequence is forbidden because it can overwrite a
-      // file that appears in the race window.
       await requireReadWritePermission(handle);
-      fileHandle = await this.createExclusiveFile(handle, fileName);
+      const created = await this.createExclusiveFile(handle, fileName);
+      if (isExclusiveReservation(created)) {
+        fileHandle = created.fileHandle;
+        writable = created.writable;
+        releaseReservation = created.release;
+      } else if (isDirectoryFileHandle(created)) {
+        fileHandle = created;
+      } else {
+        throw new BackupDirectoryIoError("unsupported_api");
+      }
     } catch (error) {
       throw mapIoFailure(error);
     }
 
-    let writable: BrowserWritableFileStream;
-    try {
-      // createWritable is itself a mutating create and gets its own fresh query.
-      await requireReadWritePermission(handle);
-      writable = await fileHandle.createWritable({ keepExistingData: false });
-    } catch (error) {
-      throw mapIoFailure(error);
+    if (!writable) {
+      try {
+        // A native O_EXCL bridge may return only the newly-created handle.
+        await requireReadWritePermission(handle);
+        writable = await fileHandle.createWritable({ keepExistingData: false });
+      } catch (error) {
+        releaseReservation?.();
+        throw mapIoFailure(error);
+      }
     }
 
+    const reservedWritable = writable;
     let closed = false;
     return {
       write: async (input: Uint8Array): Promise<void> => {
         if (closed || !(input instanceof Uint8Array))
           throw new BackupDirectoryIoError("target_unreachable");
-        const bytes = input.slice();
         try {
-          // Snapshot first; then query immediately before every native write.
+          // The automatic-backup boundary transfers sole ownership and waits
+          // for this promise before releasing it. Do not duplicate a possible
+          // 384 MiB archive in the browser presentation process.
           await requireReadWritePermission(handle);
-          await writable.write(bytes);
+          await reservedWritable.write(input);
         } catch (error) {
           throw mapIoFailure(error);
         }
@@ -259,9 +369,12 @@ class TargetDirectory implements BrowserBackupDirectory {
           // Closing commits the external stream, so revoke authority unless a
           // fresh read/write query is still granted at that exact boundary.
           await requireReadWritePermission(handle);
-          await writable.close();
+          await reservedWritable.close();
         } catch (error) {
+          try { await reservedWritable.abort?.(); } catch { /* first error wins */ }
           throw mapIoFailure(error);
+        } finally {
+          releaseReservation?.();
         }
       },
     };
@@ -277,7 +390,7 @@ class TargetDirectory implements BrowserBackupDirectory {
       const file = await fileHandle.getFile();
       await requireReadWritePermission(handle);
       const buffer = await file.arrayBuffer();
-      return new Uint8Array(buffer.slice(0));
+      return new Uint8Array(buffer);
     } catch (error) {
       throw mapIoFailure(error);
     }
@@ -409,6 +522,35 @@ export class ChromiumBackupDirectoryAdapter {
       await this.handleStore.save(targetResult.data.targetId, handle);
     } catch {
       return { status: "unavailable", reasonCode: "target_unreachable" };
+    }
+    return { status: "authorized", target: targetResult.data };
+  }
+
+  async probe(targetInput: BackupTarget): Promise<BackupTargetAuthorization> {
+    const availability = this.availability();
+    if (availability.status === "unavailable") return availability;
+    const targetResult = BackupTargetV1.safeParse(targetInput);
+    const certification = this.acceptedCertification();
+    if (!targetResult.success || !certification
+        || targetResult.data.adapterCertificationId !== certification.certificationId)
+      return { status: "unavailable", reasonCode: "adapter_uncertified" };
+    let handle: BrowserDirectoryHandle | null;
+    try {
+      handle = await this.handleStore.load(targetResult.data.targetId);
+    } catch {
+      return { status: "unavailable", reasonCode: "target_unreachable" };
+    }
+    if (!isDirectoryHandle(handle))
+      return { status: "unavailable", reasonCode: "target_unconfigured" };
+    try {
+      await requireReadWritePermission(handle);
+    } catch (error) {
+      const reasonCode = mapIoFailure(error).reasonCode;
+      return {
+        status: "unavailable",
+        reasonCode: reasonCode === "permission_required"
+          ? "permission_required" : "target_unreachable",
+      };
     }
     return { status: "authorized", target: targetResult.data };
   }

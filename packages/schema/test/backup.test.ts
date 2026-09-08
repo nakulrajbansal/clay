@@ -296,6 +296,7 @@ describe("Release B2 external-backup contracts", () => {
       archiveFormat: 5 as const,
       cryptographicallyAuthenticated: true as const,
       authentication,
+      freshness: "current" as const,
       archiveSha256: sha("8"),
       archiveTarget: evidence,
       preservedAppInstanceId: evidence.appInstanceId,

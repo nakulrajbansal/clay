@@ -1,0 +1,88 @@
+{
+  "schema": 1,
+  "certification": "release-b-browser-directory-v1",
+  "certificationId": "btc_4w6xbvamg5bdmccgp5kwlwg4pi",
+  "issuedAt": "2026-09-08T12:00:00.000Z",
+  "observedAt": "2026-09-08T20:11:26Z",
+  "implementation": "packages/shell/src/app/backup-target.browser.ts",
+  "artifactBinding": {
+    "codeSha256": "sha256:6b6832f14b5c1b932424b082f67d7a0771fb86ec9fc1d34bb64fa272019d8fc1",
+    "buildSha256": "sha256:3f866238be6c558cd1803d072b3b98d36e499145ce747f263f78b3a55cd1c5c4",
+    "matrixSha256": "sha256:e394e843be7127fa7fe46be09cb9ffb022dbb8c12de2d33e4a59d0e603ded98e",
+    "suiteSha256": "sha256:e939baa0cabe1d91c94e0e6257b9388efca675feb2eb85a6d6da7c35ca68d256"
+  },
+  "runtime": {
+    "distribution": "managed_web",
+    "osFamily": "windows",
+    "runtimeFamily": "chromium",
+    "runtimeVersion": "149.0.7827.55",
+    "architecture": "x64",
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36",
+    "userAgentData": {
+      "platform": "Windows",
+      "mobile": false,
+      "brands": [
+        { "brand": "HeadlessChrome", "version": "149" },
+        { "brand": "Chromium", "version": "149" },
+        { "brand": "Not)A;Brand", "version": "24" }
+      ]
+    },
+    "arrayBufferTransfer": true
+  },
+  "restartProbe": {
+    "probeId": "probe_4fjcdw45bopokwab74ffwbygud",
+    "firstProcessPid": 3104,
+    "secondProcessPid": 14648,
+    "fullProcessExitObserved": true,
+    "distinctProcessObserved": true,
+    "firstProcessPickerCalls": 1,
+    "freshProcessPickerCalls": 0,
+    "freshProcessReacquiredWithoutPicker": true,
+    "firstProcessPermissionQueries": 11,
+    "freshProcessPermissionQueries": 16,
+    "permissionRechecked": true,
+    "firstProcessWriteSha256": "sha256:5c5c67fe433ca2c8a9008e905d1f092098573f3b28257dcd7fbe26ac3e3b0e48",
+    "firstFileReadBackSha256": "sha256:5c5c67fe433ca2c8a9008e905d1f092098573f3b28257dcd7fbe26ac3e3b0e48",
+    "secondUniqueFileReadBackSha256": "sha256:dcacc1c325e73a67b38405997345f18e77077abf9c2181da8f535ad103d776ce",
+    "enumerationObservedBoth": true,
+    "ownedProbeCleanupVerified": true,
+    "browserErrors": [],
+    "evidenceSha256": "sha256:1c2dc7c5f8e016de4b42d11fe5617366ca1f8bd21ff89f44476e8bf37f214ce2"
+  },
+  "memoryGate": {
+    "command": "pnpm verify:release-b-backup",
+    "archiveBytes": 402653184,
+    "sourceBytes": 402653184,
+    "retainedBeforeRead": -3917,
+    "readBackBytes": 402810708,
+    "measuredPeak": 402806791,
+    "maximumAllowedPeak": 411041792,
+    "sourceDetachedBeforeRead": true,
+    "result": "pass"
+  },
+  "focusedGates": {
+    "schema": {
+      "files": 2,
+      "tests": 12,
+      "result": "pass"
+    },
+    "kernel": {
+      "files": 7,
+      "tests": 151,
+      "result": "pass",
+      "execution": "production-authority isolated from the remaining six files to avoid Vitest 3.2 worker RPC timeout"
+    },
+    "shell": {
+      "files": 10,
+      "tests": 72,
+      "result": "pass"
+    },
+    "workspaceTypecheck": "pass"
+  },
+  "limitations": [
+    "Certification is scoped to Chromium 149.0.7827.55 on Windows x64; every other runtime remains fail-closed.",
+    "The automated initial chooser seam returns a real Chromium OPFS FileSystemDirectoryHandle; native chooser UX is outside this restart gate.",
+    "The 384 MiB gate measures Node ArrayBuffer ownership at the production kernel boundary and does not claim whole-browser RSS certification.",
+    "Runtime admission cross-checks the exact UA patch, Windows Chromium UA-CH brands, and the transfer primitive; deliberate instrumentation that forges both UA surfaces is outside the local trusted-host threat model."
+  ]
+}

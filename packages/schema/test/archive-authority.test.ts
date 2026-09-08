@@ -124,6 +124,7 @@ const evidence = {
     bootstrapManifest: [],
     pendingJobs: [],
     lineageReservations: [],
+    backupRecords: [],
     generationEvents: [{
       schema: 1 as const,
       catalogGeneration: "1",

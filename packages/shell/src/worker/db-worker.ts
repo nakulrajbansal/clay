@@ -9,10 +9,16 @@ import {
 } from "@clay/kernel";
 import { ClayError } from "@clay/kernel/errors";
 import type {
+  ProductionBootInfo,
+  ProductionRestoredAuthority,
   ProductionStoreAuthority,
   ProductionStoreReader,
 } from "@clay/kernel/worker-authority";
 import { createStarterSeedBundle } from "../shells/seed";
+import { IndexedDbBackupTrustRecordStore } from "../app/backup-trust-store.browser";
+import { BackupTrustRuntime } from "./backup-trust-runtime";
+import { AutomaticBackupWorkerCoordinator } from "./automatic-backup";
+import { RestoreAsNewWorkerCoordinator } from "./restore-as-new";
 import { createSampleFillBundle } from "./samples";
 import { DB_WORKER_ROUTE_CENSUS } from "./mutation-route-census";
 
@@ -43,6 +49,9 @@ let authorityBoot: Promise<ProductionStoreAuthority> | null = null;
 let store: ProductionStoreReader | null = null;
 let persistent = false;
 let pending: PreviewHandle | null = null;
+let backupTrust: BackupTrustRuntime | null = null;
+let automaticBackup: AutomaticBackupWorkerCoordinator | null = null;
+let restoreAsNew: RestoreAsNewWorkerCoordinator<ProductionRestoredAuthority> | null = null;
 // Device-global model access (B1): set by the main thread from localStorage,
 // shared across every app, never persisted in an app DB.
 type ModelProviderId = "clay" | "openai" | "anthropic" | "codex";
@@ -73,6 +82,72 @@ function mustAuthority(): ProductionStoreAuthority {
   return authority;
 }
 
+function mustBackupTrust(): BackupTrustRuntime {
+  if (backupTrust) return backupTrust;
+  if (!globalThis.indexedDB)
+    throw new ClayError("E_CATALOG_UNAVAILABLE", "IndexedDB Backup Trust storage is unavailable");
+  backupTrust = new BackupTrustRuntime(
+    new IndexedDbBackupTrustRecordStore(globalThis.indexedDB),
+  );
+  return backupTrust;
+}
+
+function mustAutomaticBackup(): AutomaticBackupWorkerCoordinator {
+  automaticBackup ??= new AutomaticBackupWorkerCoordinator(
+    mustAuthority(), mustBackupTrust(),
+  );
+  return automaticBackup;
+}
+
+function mustRestoreAsNew(): RestoreAsNewWorkerCoordinator<ProductionRestoredAuthority> {
+  restoreAsNew ??= new RestoreAsNewWorkerCoordinator(
+    mustAuthority(), mustBackupTrust(),
+  );
+  return restoreAsNew;
+}
+
+function workerBootInfo(info: ProductionBootInfo): Omit<ProductionBootInfo, "adopted"> {
+  return {
+    persistent: info.persistent,
+    seeded: info.seeded,
+    shellId: info.shellId,
+    selectedAppInstanceId: info.selectedAppInstanceId,
+    catalogGeneration: info.catalogGeneration,
+    apps: info.apps.map(app => ({ ...app })),
+  };
+}
+
+function installRestoredAuthority(
+  restored: ProductionRestoredAuthority,
+): Omit<ProductionBootInfo, "adopted"> {
+  const previous = mustAuthority();
+  if (restored.authority === previous)
+    throw new ClayError("E_CATALOG_UNAVAILABLE", "restore-as-new did not create a fresh authority");
+  const nextStore = restored.authority.readStore();
+  const nextBoot = restored.authority.bootInfo();
+  authority = restored.authority;
+  authorityBoot = Promise.resolve(restored.authority);
+  store = nextStore;
+  pending = null;
+  automaticBackup = null;
+  restoreAsNew = null;
+  try { previous.close(); } catch { /* the fresh authority is already authoritative */ }
+  return workerBootInfo(nextBoot);
+}
+
+function transferredBytes(value: unknown, label: string): Uint8Array {
+  if (!(value instanceof ArrayBuffer) || value.byteLength === 0)
+    throw new ClayError("E_VALIDATION", `${label} bytes are malformed`);
+  return new Uint8Array(value);
+}
+
+function transferOwnedBytes(bytes: Uint8Array, label: string): ArrayBuffer {
+  if (!(bytes.buffer instanceof ArrayBuffer) || bytes.byteOffset !== 0
+      || bytes.byteLength !== bytes.buffer.byteLength)
+    throw new ClayError("E_INTERNAL", `${label} is not a whole owned buffer`);
+  return bytes.buffer;
+}
+
 function failClosedMutation(route: string): never {
   throw new ClayError("E_CATALOG_UNAVAILABLE",
     `production mutation '${route}' is unavailable until it is authority-routed`);
@@ -97,15 +172,7 @@ async function bootProductionAuthority(input: unknown): Promise<{
     store = authority.readStore();
     persistent = true;
   }
-  const info = authority.bootInfo();
-  return {
-    persistent: true,
-    seeded: info.seeded,
-    shellId: info.shellId,
-    selectedAppInstanceId: info.selectedAppInstanceId,
-    catalogGeneration: info.catalogGeneration,
-    apps: info.apps,
-  };
+  return workerBootInfo(authority.bootInfo());
 }
 
 function authorityRequestId(req: Request): string {
@@ -115,38 +182,65 @@ function authorityRequestId(req: Request): string {
   return req.requestId;
 }
 
+function publishAuthorityCommit(result: {
+  changed: boolean;
+  replayed: boolean;
+  evidence: unknown;
+}): void {
+  if (!result.changed || result.replayed) return;
+  (self as unknown as Worker).postMessage({
+    kind: "authority_commit",
+    evidence: structuredClone(result.evidence),
+  });
+}
+
 async function runAuthorityMutation(
   route: "seed" | "importTable" | "removeSamples" | "fillSamples"
+    | "restoreRow" | "undoBatch" | "makeLatest"
     | "setSetting" | "deleteSetting" | "compareAndSetSetting" | "commitLayout",
   payload: unknown,
   req: Request,
 ): Promise<unknown> {
   const target = mustAuthority();
   const requestId = authorityRequestId(req);
-  if (route === "seed") return (await target.executeMutation({
+  const execute = async (input: unknown): Promise<unknown> => {
+    const committed = await target.executeMutation(input);
+    publishAuthorityCommit(committed);
+    return committed.result;
+  };
+  if (route === "seed") return execute({
     requestId,
     route: "starter.seed",
     payload,
-  })).result;
-  if (route === "importTable") return (await target.executeMutation({
+  });
+  if (route === "importTable") return execute({
     requestId,
     route: "table.import",
     payload,
-  })).result;
-  if (route === "removeSamples") return (await target.executeMutation({
+  });
+  if (route === "removeSamples") return execute({
     requestId,
     route: "samples.remove",
     payload,
-  })).result;
-  if (route === "fillSamples") return (await target.executeMutation({
+  });
+  if (route === "fillSamples") return execute({
     requestId,
     route: "samples.fill",
     payload,
-  })).result;
+  });
   if (typeof payload !== "object" || payload === null || Array.isArray(payload))
     throw new ClayError("E_TARGET_AUTHORITY_INVALID", "worker mutation payload is invalid");
   const captured = payload as Record<string, unknown>;
-  if (route === "commitLayout") return (await target.executeMutation({
+  if (route === "restoreRow") return execute({
+    requestId, route: "recovery.restoreRow", payload: { table: captured.table, id: captured.id },
+  });
+  if (route === "undoBatch") return execute({
+    requestId, route: "recovery.undoBatch", payload: { id: captured.id },
+  });
+  if (route === "makeLatest") return execute({
+    requestId, route: "recovery.rewind", payload: { version: captured.version },
+  });
+  if (route === "commitLayout") return execute({
     requestId,
     route: "store.commit",
     payload: { plan: {
@@ -157,14 +251,14 @@ async function runAuthorityMutation(
       panels: captured.layout,
       diff: [],
     } },
-  })).result;
-  if (route === "setSetting") return (await target.executeMutation({
+  });
+  if (route === "setSetting") return execute({
     requestId, route: "setting.set", payload: { key: captured.key, value: captured.value },
-  })).result;
-  if (route === "deleteSetting") return (await target.executeMutation({
+  });
+  if (route === "deleteSetting") return execute({
     requestId, route: "setting.delete", payload: { key: captured.key },
-  })).result;
-  return (await target.executeMutation({
+  });
+  return execute({
     requestId,
     route: "setting.compareAndSet",
     payload: {
@@ -172,13 +266,13 @@ async function runAuthorityMutation(
       expectedRevision: captured.expectedRevision,
       value: captured.value,
     },
-  })).result;
+  });
 }
 
 function serveProductionStore(target: "live" | "shadow", port: MessagePort): void {
   const endpoint = target === "shadow"
     ? pending?.shadow ? new InProcessAsyncStore(pending.shadow) : null
-    : mustAuthority().asyncStore();
+    : mustAuthority().asyncStore(publishAuthorityCommit);
   if (!endpoint) throw new ClayError("E_CATALOG_UNAVAILABLE", "no shadow store is open");
   port.start?.();
   serveStore(endpoint, portFromMessagePort(port));
@@ -239,7 +333,7 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "panelsAt":
       return mustStore().livePanels(Number(p.version));
     case "makeLatest":
-      return failClosedMutation(req.op);
+      return runAuthorityMutation("makeLatest", p, req);
     case "registryTables":
       return [...mustStore().registrySnapshot().values()];
     case "storePort": {
@@ -294,8 +388,43 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       return failClosedMutation(req.op);
     case "operationBatches":
       return mustStore().operationBatches(Number(p.limit ?? 50));
+    case "recoveryCandidates": {
+      const candidates: Array<{
+        table: string; id: string; deleted: boolean; historyAt: string; attachmentCount: number;
+      }> = [];
+      for (const table of mustStore().registrySnapshot().values()) {
+        for (const id of mustStore().restorableRows(table.name)) {
+          const history = mustStore().rowHistory(table.name, id, 1)[0];
+          const row = mustStore().query({
+            from: table.name,
+            where: [{ field: "id", op: "eq", value: id }],
+            includeDeleted: true,
+            limit: 1,
+          })[0];
+          if (!history || !row) continue;
+          candidates.push({
+            table: table.name,
+            id,
+            deleted: row.deleted_at !== null && row.deleted_at !== undefined,
+            historyAt: history.at,
+            attachmentCount: table.columns
+              .filter(column => column.type === "attachment" && !column.inactive)
+              .reduce((total, column) => {
+                const value = history.values[column.name];
+                if (typeof value === "string") return total + 1;
+                if (Array.isArray(value))
+                  return total + value.filter(item => typeof item === "string").length;
+                return total;
+              }, 0),
+          });
+        }
+      }
+      candidates.sort((left, right) => right.historyAt.localeCompare(left.historyAt)
+        || left.table.localeCompare(right.table) || left.id.localeCompare(right.id));
+      return candidates.slice(0, 50);
+    }
     case "undoBatch":
-      return failClosedMutation(req.op);
+      return runAuthorityMutation("undoBatch", p, req);
     case "rowHistory":
       return mustStore().rowHistory(String(p.table), String(p.id));
     case "previewRelationConversion":
@@ -319,7 +448,7 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "sampleCount":
       return mustAuthority().sampleRowCount();
     case "restoreRow":
-      return failClosedMutation(req.op);
+      return runAuthorityMutation("restoreRow", p, req);
     case "restorableRows":
       return mustStore().restorableRows(String(p.table));
     case "suggestions":
@@ -332,9 +461,49 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       return failClosedMutation(req.op);
     case "reset":
       return failClosedMutation(req.op);
+    case "backupTrustStatus":
+      return mustBackupTrust().status();
+    case "beginBackupTrustEnrollment": {
+      const enrollment = mustBackupTrust().beginEnrollment();
+      const bytes = enrollment.bytes.slice().buffer;
+      return { ...enrollment, bytes };
+    }
+    case "confirmBackupTrustEnrollment":
+      return mustBackupTrust().confirmEnrollment(
+        String(p.enrollmentId), transferredBytes(p.bytes, "Recovery Kit"),
+      );
+    case "importRecoveryKit":
+      return mustBackupTrust().importRecoveryKit(
+        transferredBytes(p.bytes, "Recovery Kit"),
+      );
+    case "activateImportedBackupSeries":
+      return mustBackupTrust().activateImportedSeries(p as never);
+    case "backupSelection":
+      return mustAuthority().backupSelection();
+    case "prepareAutomaticBackup": {
+      const prepared = await mustAutomaticBackup().prepare(
+        p.target as never, p.reason as never,
+      );
+      return { ...prepared, bytes: transferOwnedBytes(prepared.bytes, "Backup archive") };
+    }
+    case "validateBackupStage":
+      return mustAutomaticBackup().validateStage(
+        transferredBytes(p.bytes, "Backup archive"), p.expected as never,
+      );
+    case "publishBackup":
+      return mustAutomaticBackup().publish(p.request as never);
+    case "backupRecords":
+      return mustAutomaticBackup().records();
+    case "validateRestoreArchive":
+      return mustRestoreAsNew().validate(
+        transferredBytes(p.bytes, "Restore archive"),
+        "transferred",
+      );
+    case "restoreAsNew":
+      return installRestoredAuthority(await mustRestoreAsNew().restore(p.grant));
     case "exportArchive": {
-      const exported = await mustAuthority().exportArchive();
-      return { ...exported, bytes: exported.bytes.slice().buffer };
+      const exported = await mustAutomaticBackup().prepareManualDownload();
+      return { ...exported, bytes: transferOwnedBytes(exported.bytes, "Portable archive") };
     }
     case "importArchive":
       return failClosedMutation(req.op);

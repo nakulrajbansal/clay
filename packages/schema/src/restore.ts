@@ -17,6 +17,7 @@ export const AuthenticatedFormat5RestoreGrantV1 = z.object({
   archiveFormat: z.literal(5),
   cryptographicallyAuthenticated: z.literal(true),
   authentication: BackupAuthenticationV1,
+  freshness: z.enum(["current", "unknown"]),
   archiveSha256: Sha256,
   archiveTarget: TargetEvidenceV1,
   preservedAppInstanceId: AppInstanceId,

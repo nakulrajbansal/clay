@@ -100,6 +100,25 @@ function validateRouteResult(
     if (result !== null) throw invalid("starter seed provenance result is invalid");
     return;
   }
+  if (route === "archive.restore.samples") {
+    const sourceDigest = typeof result === "object" && result !== null
+      ? Reflect.get(result, "sourceArchiveSha256") : null;
+    const sourceAuthority = typeof result === "object" && result !== null
+      ? Reflect.get(result, "sourceAuthorityIncarnationId") : null;
+    if (!exactObject(result, [
+      "rebound", "sourceArchiveSha256", "sourceAuthorityIncarnationId",
+    ])
+        || !Number.isSafeInteger(result.rebound) || Number(result.rebound) < 1
+        || Number(result.rebound) !== sampleProvenance.length
+        || typeof sourceDigest !== "string" || sourceDigest.length !== 71
+        || !sourceDigest.startsWith("sha256:")
+        || [...sourceDigest.slice(7)].some(character => !"0123456789abcdef".includes(character))
+        || typeof sourceAuthority !== "string" || sourceAuthority.length !== 31
+        || !sourceAuthority.startsWith("auth_")
+        || [...sourceAuthority.slice(5)].some(character => !"abcdefghijklmnopqrstuvwxyz234567".includes(character)))
+      throw invalid("restored sample provenance result is invalid");
+    return;
+  }
   const distinctTables = new Set<string>();
   for (let index = 0; index < sampleProvenance.length; index++)
     distinctTables.add(sampleProvenance[index]!.tableId);

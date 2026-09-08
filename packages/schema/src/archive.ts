@@ -8,6 +8,7 @@ import {
   CatalogRevisionReservationV1, ImmutableAppGenerationV1,
   ProductionRequestReceiptV1, TargetAuthorityHeaderV1, TargetEvidenceV1,
 } from "./catalog";
+import { BackupRecordV1 } from "./backup";
 
 const ArchiveCatalogDisplayName = z.string().min(1).max(40)
   .refine(value => value === value.trim(), "canonical display name required");
@@ -173,9 +174,13 @@ export const ArchivePendingJobV1 = z.object({
   jobId: z.string().regex(/^job_[a-z2-7]{26}$/),
   authorityIncarnationId: AuthorityIncarnationId,
   appInstanceId: AppInstanceId.nullable(),
+  generationId: GenerationId,
+  namespaceId: NamespaceId,
   kind: z.string().min(1).max(64),
   state: z.string().min(1).max(64),
   operationId: OperationId,
+  sourceArchiveSha256: Sha256,
+  sourceProvenanceId: z.string().regex(/^restoreval_[a-z2-7]{26}$/),
   createdAt: CanonicalInstant,
   updatedAt: CanonicalInstant,
 }).strict();
@@ -255,6 +260,8 @@ export const ArchiveAuthorityEvidenceV1 = z.object({
       .max(MAX_ARCHIVE_AUTHORITY_HISTORY_ENTRIES),
     generationEvents: z.array(CatalogGenerationEventV1)
       .max(MAX_ARCHIVE_AUTHORITY_HISTORY_ENTRIES),
+    backupRecords: z.array(BackupRecordV1)
+      .max(MAX_ARCHIVE_AUTHORITY_HISTORY_ENTRIES),
   }).strict(),
 }).strict().superRefine((value, context) => {
   const authorityEntries = value.targetAuthority.revisions.length
@@ -268,7 +275,8 @@ export const ArchiveAuthorityEvidenceV1 = z.object({
     + value.catalogAuthority.bootstrapManifest.length
     + value.catalogAuthority.pendingJobs.length
     + value.catalogAuthority.lineageReservations.length
-    + value.catalogAuthority.generationEvents.length;
+    + value.catalogAuthority.generationEvents.length
+    + value.catalogAuthority.backupRecords.length;
   if (authorityEntries > MAX_ARCHIVE_AUTHORITY_TOTAL_ENTRIES)
     context.addIssue({
       code: z.ZodIssueCode.custom,

@@ -1,12 +1,24 @@
 import { AppInstanceId, GenerationId, NamespaceId, OperationId } from "@clay/schema";
-import type {
-  TargetEvidenceV1 as TargetEvidence,
-  WriteFenceV1 as WriteFence,
+import type { ArchiveRestoreAsNewIdentityV1 as ArchiveRestoreIdentity } from "@clay/schema/archive";
+import {
+  TargetEvidenceV1,
+  type TargetEvidenceV1 as TargetEvidence,
+  type WriteFenceV1 as WriteFence,
 } from "@clay/schema/catalog";
+import type {
+  BackupAuthenticationV1 as BackupAuthentication,
+  BackupPublicationReceiptV1 as BackupPublicationReceipt,
+  BackupPublicationRequestV1 as BackupPublicationRequest,
+  BackupRecordV1 as BackupRecord,
+  BackupStageValidationV1 as BackupStageValidation,
+} from "@clay/schema/backup";
+import type { ArchiveSealMaterialV1 } from "./archive-authority";
 import type { AsyncStore, StoreMutationContext } from "./asyncstore";
 import { enumerateCanonicalStateV1 } from "./canonical-state";
 import {
+  browserDurableFileNames,
   browserDurableInventory,
+  deleteBrowserGenerationNamespace,
   openBrowserCatalogProbe,
   openBrowserProductionTarget,
   type DbDriver,
@@ -24,14 +36,17 @@ import {
 } from "./live-write-guard";
 import {
   armProductionMutationFailureForTest,
+  commitRestoredSampleReattestation,
   mintProductionAuthorityId,
   ProductionMutationCoordinator,
+  type ProductionBackupSelection,
   type ProductionMutationTestFailure,
   type ProductionMutationResult,
 } from "./production-mutation-coordinator";
 import { assertLiveSampleProvenance } from "./sample-provenance-proof";
-import { activeSampleRowCount } from "./production-samples";
+import { activeSampleRowCount, restoredSampleProvenanceCount } from "./production-samples";
 import { StateMerkleIndex } from "./state-merkle-index";
+import { sha256HexSync } from "./state-digest";
 import { ClayStore, exportStoreArchiveReadOnly } from "./store";
 import { TargetCommitCoordinator } from "./target-commit-coordinator";
 import { TargetAuthorityStore } from "./target-authority";
@@ -52,6 +67,29 @@ export type ProductionArchiveExport = Readonly<{
   filename: string;
   target: TargetEvidence;
   catalogGeneration: string;
+}>;
+
+export type ProductionAuthenticatedArchiveExport = Readonly<{
+  format: 5;
+  bytes: Uint8Array;
+  filename: string;
+  target: TargetEvidence;
+  catalogGeneration: string;
+  authentication: BackupAuthentication;
+}>;
+
+export type ProductionAuthenticatedRestoreInspection = Readonly<{
+  archiveSha256: string;
+  target: TargetEvidence;
+  authentication: BackupAuthentication;
+  displayName: string;
+  shellId: string;
+}>;
+
+export type ProductionRestoredAuthority = Readonly<{
+  authority: ProductionStoreAuthority;
+  target: TargetEvidence;
+  boot: ProductionBootInfo;
 }>;
 
 export type ProductionAuthorityInspection = {
@@ -234,6 +272,59 @@ function sameTarget(left: TargetEvidence, right: TargetEvidence): boolean {
     && left.stateSha256 === right.stateSha256;
 }
 
+const ARCHIVE_SEAL_KEYS = ["backupTrustKey", "keyId", "seriesId", "generation"] as const;
+const MAX_UINT64 = (1n << 64n) - 1n;
+
+function captureSealBytes(value: unknown, length: number, label: string): Uint8Array {
+  if (!(value instanceof Uint8Array)
+      || Object.getPrototypeOf(value) !== Uint8Array.prototype
+      || !(value.buffer instanceof ArrayBuffer)
+      || value.byteLength !== length)
+    throw new ClayError("E_VALIDATION", `${label} is malformed`);
+  const copy = Uint8Array.prototype.slice.call(value) as Uint8Array;
+  if (copy.every(byte => byte === 0)) {
+    copy.fill(0);
+    throw new ClayError("E_VALIDATION", `${label} must not be all zero`);
+  }
+  return copy;
+}
+
+function captureArchiveSealMaterial(raw: ArchiveSealMaterialV1): ArchiveSealMaterialV1 {
+  if (!raw || typeof raw !== "object" || Object.getPrototypeOf(raw) !== Object.prototype)
+    throw new ClayError("E_VALIDATION", "archive seal material is malformed");
+  const ownKeys = Reflect.ownKeys(raw);
+  if (ownKeys.length !== ARCHIVE_SEAL_KEYS.length
+      || ARCHIVE_SEAL_KEYS.some(key => !ownKeys.includes(key)))
+    throw new ClayError("E_VALIDATION", "archive seal material has unknown or missing fields");
+  const descriptors = Object.getOwnPropertyDescriptors(raw);
+  const values: Partial<Record<typeof ARCHIVE_SEAL_KEYS[number], unknown>> = {};
+  for (const key of ARCHIVE_SEAL_KEYS) {
+    const descriptor = descriptors[key];
+    if (!descriptor || !("value" in descriptor))
+      throw new ClayError("E_VALIDATION", "archive seal material cannot use accessors");
+    values[key] = descriptor.value;
+  }
+  const backupTrustKey = captureSealBytes(values.backupTrustKey, 32, "Backup Trust Key");
+  const keyId = captureSealBytes(values.keyId, 16, "Backup Trust Key ID");
+  const seriesId = captureSealBytes(values.seriesId, 16, "backup series ID");
+  if (keyId.every((byte, index) => byte === seriesId[index])) {
+    backupTrustKey.fill(0); keyId.fill(0); seriesId.fill(0);
+    throw new ClayError("E_VALIDATION", "backup key and series IDs must differ");
+  }
+  if (typeof values.generation !== "bigint"
+      || values.generation < 1n || values.generation > MAX_UINT64) {
+    backupTrustKey.fill(0); keyId.fill(0); seriesId.fill(0);
+    throw new ClayError("E_VALIDATION", "backup generation is outside uint64");
+  }
+  return { backupTrustKey, keyId, seriesId, generation: values.generation };
+}
+
+function sealBytesToHex(bytes: Uint8Array): string {
+  let value = "";
+  for (const byte of bytes) value += byte.toString(16).padStart(2, "0");
+  return value;
+}
+
 function acquireBootFence(
   session: LiveWriteSession,
   input: Pick<ExistingOpenInput, "releaseId" | "nowMs" | "leaseTtlMs">,
@@ -411,12 +502,90 @@ function bootInfoFromCatalog(
   };
 }
 
+function pendingNamespaceFileNames(namespaceId: string): Set<string> {
+  const files = physicalNamespaceEntry(namespaceId, namespaceId);
+  return new Set(
+    [files.userFile, files.systemFile].flatMap(file =>
+      ["", "-journal", "-wal", "-shm"].map(suffix => `${file}${suffix}`)),
+  );
+}
+
+/** Source-private pure planner exercised at every restore creation kill point. */
+export function planPendingRestoreReconciliation(input: Readonly<{
+  names: readonly string[];
+  active: readonly Readonly<{ storageKey: string; namespaceId: string }>[];
+  pendingNamespaceId: string;
+}>): Readonly<{ survivors: readonly string[] }> {
+  const names = [...input.names].sort((left, right) => left.localeCompare(right));
+  if (new Set(names).size !== names.length || !names.includes("/clay-device-catalog-v1.db"))
+    throw invalid("pending restore inventory is malformed");
+  const required = new Set<string>(["/clay-device-catalog-v1.db"]);
+  for (const item of input.active) {
+    const files = physicalNamespaceEntry(item.storageKey, item.namespaceId);
+    required.add(files.userFile);
+    required.add(files.systemFile);
+  }
+  const pending = pendingNamespaceFileNames(input.pendingNamespaceId);
+  if ([...required].some(name => !names.includes(name))
+      || names.some(name => !required.has(name) && !pending.has(name)))
+    throw invalid("durable inventory contains data unrelated to the pending restore");
+  return Object.freeze({
+    survivors: Object.freeze(names.filter(name => !pending.has(name))),
+  });
+}
+
+async function reconcilePendingBrowserRestore(): Promise<void> {
+  const names = await browserDurableFileNames();
+  if (!names.includes("/clay-device-catalog-v1.db")) return;
+  let probe = createLiveWriteGuard(await openBrowserCatalogProbe());
+  let job: ReturnType<DeviceCatalog["pendingRestoreJobs"]>[number] | null = null;
+  let survivors: readonly string[] | null = null;
+  try {
+    const catalog = DeviceCatalog.openForRestoreRecovery(probe.driver);
+    const jobs = catalog.pendingRestoreJobs();
+    if (jobs.length === 0) return;
+    if (jobs.length !== 1) throw invalid("multiple pending restore jobs are unsupported");
+    job = jobs[0]!;
+    const active = catalog.activeTargetStorageInventory();
+    if (active.some(item => item.namespaceId === job!.namespaceId
+        || item.target.appInstanceId === job!.appInstanceId))
+      throw invalid("pending restore destination is already published");
+    survivors = planPendingRestoreReconciliation({
+      names,
+      active,
+      pendingNamespaceId: job.namespaceId,
+    }).survivors;
+  } finally {
+    probe.driver.close();
+  }
+  if (!job || !survivors) return;
+
+  await deleteBrowserGenerationNamespace(job.namespaceId);
+  const afterDelete = await browserDurableFileNames();
+  if (JSON.stringify(afterDelete) !== JSON.stringify(survivors))
+    throw invalid("unpublished restore namespace cleanup failed read-back");
+
+  probe = createLiveWriteGuard(await openBrowserCatalogProbe());
+  try {
+    const catalog = DeviceCatalog.openForRestoreRecovery(probe.driver);
+    const current = catalog.pendingRestoreJobs();
+    if (current.length !== 1 || JSON.stringify(current[0]) !== JSON.stringify(job))
+      throw invalid("pending restore changed during boot reconciliation");
+    probe.authority.run(() => catalog.clearPendingRestoreJob(job!.jobId));
+    DeviceCatalog.openExisting(probe.driver);
+  } finally {
+    probe.driver.close();
+  }
+}
+
 export class ProductionStoreAuthority {
   readonly #driver: DbDriver;
   readonly #store: ClayStore;
   readonly #reader: ProductionStoreReader;
+  readonly #writeAuthority: LiveWriteSession["authority"];
   readonly #boot: ProductionBootInfo;
   readonly #coordinator: ProductionMutationCoordinator;
+  readonly #leaseTtlMs: number;
 
   private constructor(
     session: LiveWriteSession,
@@ -429,7 +598,9 @@ export class ProductionStoreAuthority {
     this.#driver = session.driver;
     this.#store = store;
     this.#reader = createStoreReader(store);
+    this.#writeAuthority = session.authority;
     this.#boot = boot;
+    this.#leaseTtlMs = leaseTtlMs;
     this.#coordinator = new ProductionMutationCoordinator(
       session.driver,
       session.authority,
@@ -445,6 +616,7 @@ export class ProductionStoreAuthority {
 
   static async bootBrowser(input: unknown): Promise<ProductionStoreAuthority> {
     const bootInput = captureBrowserBootInput(input);
+    await reconcilePendingBrowserRestore();
     const inventory = await browserDurableInventory();
     if (inventory.state !== "complete")
       throw invalid(`durable namespace inventory is ${inventory.reason}`);
@@ -868,6 +1040,258 @@ export class ProductionStoreAuthority {
     return this.#coordinator.mintRequestId();
   }
 
+  backupSelection(): Promise<ProductionBackupSelection> {
+    return this.#coordinator.backupSelection();
+  }
+
+  backupRecords(): Promise<BackupRecord[]> {
+    return this.#coordinator.backupRecords();
+  }
+
+  backupMetadata(): { fileLabel: string; shapeHead: number; shapeCurrent: number } {
+    const catalog = DeviceCatalog.openExisting(this.#driver).snapshot();
+    const entry = catalog.entries.find(candidate =>
+      candidate.appInstanceId === catalog.selectedAppInstanceId);
+    if (!entry) throw invalid("backup metadata has no selected app");
+    const shapeHead = this.#reader.headVersion();
+    const shapeCurrent = this.#reader.getSetting<number>("current_version") ?? shapeHead;
+    if (!Number.isSafeInteger(shapeHead) || shapeHead < 0
+        || !Number.isSafeInteger(shapeCurrent) || shapeCurrent < 0 || shapeCurrent > shapeHead)
+      throw invalid("backup shape metadata is invalid");
+    return { fileLabel: entry.displayName, shapeHead, shapeCurrent };
+  }
+
+  publishBackup(input: BackupPublicationRequest): Promise<BackupPublicationReceipt> {
+    return this.#coordinator.publishBackup(input);
+  }
+
+  async validateAuthenticatedArchiveStage(
+    bytesInput: Uint8Array,
+    expectedInput: TargetEvidence,
+    backupTrustKeyInput: Uint8Array,
+  ): Promise<BackupStageValidation> {
+    if (!(bytesInput instanceof Uint8Array)
+        || Object.getPrototypeOf(bytesInput) !== Uint8Array.prototype
+        || !(backupTrustKeyInput instanceof Uint8Array)
+        || Object.getPrototypeOf(backupTrustKeyInput) !== Uint8Array.prototype
+        || backupTrustKeyInput.byteLength !== 32)
+      throw invalid("authenticated backup stage input is malformed");
+    const bytes = bytesInput;
+    const key = backupTrustKeyInput.slice();
+    const expected = TargetEvidenceV1.parse(expectedInput);
+    try {
+      return await this.#coordinator.serializeRead(async () => {
+        const selected = DeviceCatalog.openExisting(this.#driver).selectedTargetStorage().target;
+        if (!sameTarget(selected, expected)) return {
+          schema: 1,
+          status: "invalid",
+          evidence: null,
+        };
+        const { validateAuthenticatedAuthorityArchiveStage } =
+          await import("./archive-authority");
+        return validateAuthenticatedAuthorityArchiveStage(bytes, expected, () => key);
+      });
+    } finally {
+      key.fill(0);
+    }
+  }
+
+  async inspectAuthenticatedRestoreArchive(
+    bytesInput: Uint8Array,
+    backupTrustKeyInput: Uint8Array,
+  ): Promise<ProductionAuthenticatedRestoreInspection> {
+    if (!(bytesInput instanceof Uint8Array)
+        || Object.getPrototypeOf(bytesInput) !== Uint8Array.prototype
+        || !(backupTrustKeyInput instanceof Uint8Array)
+        || Object.getPrototypeOf(backupTrustKeyInput) !== Uint8Array.prototype
+        || backupTrustKeyInput.byteLength !== 32)
+      throw invalid("authenticated restore inspection input is malformed");
+    const bytes = bytesInput;
+    const key = backupTrustKeyInput.slice();
+    try {
+      return await this.#coordinator.serializeRead(async () => {
+        const { importAuthenticatedAuthorityArchive } = await import("./archive-authority");
+        const imported = await importAuthenticatedAuthorityArchive(
+          bytes, () => key, undefined, "transferred",
+        );
+        try {
+          const header = imported.authority.authentication;
+          const source = imported.authority.evidence.catalogAuthority.entry;
+          return Object.freeze({
+            archiveSha256: `sha256:${sha256HexSync(bytes)}`,
+            target: Object.freeze({ ...imported.authority.evidence.target }),
+            authentication: Object.freeze({
+              schema: 1 as const,
+              kind: "cose_mac0_hmac_256_256" as const,
+              authenticationVersion: 1 as const,
+              keyId: sealBytesToHex(header.keyId),
+              seriesId: sealBytesToHex(header.seriesId),
+              generation: header.generation.toString(),
+            }),
+            displayName: source.displayName,
+            shellId: source.shellId,
+          });
+        } finally {
+          imported.store.close();
+        }
+      });
+    } finally {
+      key.fill(0);
+    }
+  }
+
+  async restoreAuthenticatedArchiveAsNew(
+    envelopeInput: Uint8Array,
+    backupTrustKeyInput: Uint8Array,
+    identity: ArchiveRestoreIdentity,
+    sourceProvenanceId: string,
+  ): Promise<ProductionRestoredAuthority> {
+    if (!(envelopeInput instanceof Uint8Array)
+        || Object.getPrototypeOf(envelopeInput) !== Uint8Array.prototype
+        || !(backupTrustKeyInput instanceof Uint8Array)
+        || Object.getPrototypeOf(backupTrustKeyInput) !== Uint8Array.prototype
+        || backupTrustKeyInput.byteLength !== 32
+        || !/^restoreval_[a-z2-7]{26}$/.test(sourceProvenanceId))
+      throw invalid("authenticated restore lifecycle input is malformed");
+    const envelope = envelopeInput;
+    const key = backupTrustKeyInput.slice();
+    const before = await this.backupSelection();
+    const sourceArchiveSha256 = `sha256:${sha256HexSync(envelope)}`;
+    const restoreJobId = mintProductionAuthorityId("job");
+    let restoredSession: LiveWriteSession | undefined;
+    let published = false;
+    let jobPrepared = false;
+    try {
+      const { verifyAuthenticatedArchiveV5Owned } = await import("./archive-authentication");
+      const verified = verifyAuthenticatedArchiveV5Owned(envelope, () => key);
+      const payload = verified.payload;
+      try {
+        const restored = await this.#coordinator.serializeRead(async () => {
+          const catalogBefore = DeviceCatalog.openExisting(this.#driver).snapshot();
+          const currentBefore = DeviceCatalog.openExisting(this.#driver).selectedTargetStorage().target;
+          if (catalogBefore.catalogGeneration !== before.selected.catalogGeneration
+              || catalogBefore.writeEpoch !== before.selected.writeEpoch
+              || catalogBefore.selectedAppInstanceId !== before.selected.selectedAppInstanceId
+              || !sameTarget(currentBefore, before.selected.target))
+            throw invalid("restore-as-new source selection changed before installation");
+          this.#writeAuthority.run(() => DeviceCatalog.openExisting(this.#driver).beginRestoreJob({
+            jobId: restoreJobId,
+            appInstanceId: identity.appInstanceId,
+            generationId: identity.generationId,
+            namespaceId: identity.namespaceId,
+            operationId: identity.operationId,
+            sourceArchiveSha256,
+            sourceProvenanceId,
+            expectedCatalogGeneration: before.selected.catalogGeneration,
+            expectedSourceTarget: before.selected.target,
+            fence: before.fence,
+            nowMs: Date.parse(identity.restoredAt),
+          }));
+          jobPrepared = true;
+          const { restoreAuthorityArchiveAsNew } = await import("./archive-authority");
+          return restoreAuthorityArchiveAsNew(
+            payload,
+            identity,
+            () => openBrowserProductionTarget(
+              physicalNamespaceEntry(identity.namespaceId, identity.namespaceId),
+            ),
+            {
+              wrapFreshDriver: physical => {
+                restoredSession = createLiveWriteGuard(physical);
+                return {
+                  driver: restoredSession.driver,
+                  runAuthorized: write => { restoredSession!.authority.run(write); },
+                };
+              },
+              afterAuthorityReadBack: context => {
+                const source = context.sourceAuthority.evidence.catalogAuthority.entry;
+                const catalog = DeviceCatalog.openForRestoreRecovery(context.driver);
+                const afterAdd = catalog.addAppTarget({
+                  expectedCatalogGeneration: before.selected.catalogGeneration,
+                  target: context.target,
+                  namespaceId: identity.namespaceId,
+                  storageKey: identity.namespaceId,
+                  displayName: source.displayName,
+                  shellId: source.shellId,
+                  operationId: identity.operationId,
+                  fence: before.fence,
+                  nowMs: Date.parse(identity.restoredAt),
+                  select: true,
+                  sourceArchiveSha256,
+                  sourceProvenanceId,
+                }, restoreJobId);
+                if (restoredSampleProvenanceCount(context.store) === 0) return context.target;
+                return commitRestoredSampleReattestation({
+                  driver: context.driver,
+                  store: context.store,
+                  fence: before.fence,
+                  expectedCatalogGeneration: afterAdd.catalogGeneration,
+                  expectedTarget: context.target,
+                  requestId: mintProductionAuthorityId("req"),
+                  nowMs: Date.parse(identity.restoredAt),
+                  sourceArchiveSha256,
+                  sourceAuthorityIncarnationId:
+                    context.sourceAuthority.evidence.catalogAuthority.authorityIncarnationId,
+                });
+              },
+            },
+          );
+        });
+        if (!restoredSession)
+          throw invalid("restore-as-new did not establish a guarded production target");
+        const catalog = DeviceCatalog.openExisting(restoredSession.driver).snapshot();
+        const storage = DeviceCatalog.openExisting(restoredSession.driver).selectedTargetStorage();
+        if (storage.storageKey !== identity.namespaceId
+            || !sameTarget(storage.target, restored.target)
+            || catalog.selectedAppInstanceId !== restored.target.appInstanceId)
+          throw invalid("restored production target failed catalog read-back");
+        published = true;
+        const boot = bootInfoFromCatalog(restored.store, catalog, false);
+        const replacement = new ProductionStoreAuthority(
+          restoredSession,
+          restored.store,
+          boot,
+          before.fence,
+          catalog.catalogGeneration,
+          this.#leaseTtlMs,
+        );
+        return Object.freeze({ authority: replacement, target: restored.target, boot });
+      } finally {
+        payload.fill(0);
+      }
+    } catch (error) {
+      if (!published && jobPrepared) {
+        try {
+          const catalog = DeviceCatalog.openExisting(this.#driver);
+          const destination = catalog.activeTargetStorageInventory().find(item =>
+            item.target.appInstanceId === identity.appInstanceId
+              && item.namespaceId === identity.namespaceId);
+          published = destination !== undefined;
+        } catch { /* a prepared job intentionally blocks the strict catalog view */ }
+      }
+      if (!published) {
+        try { restoredSession?.driver.close(); } catch { /* already closed */ }
+        await deleteBrowserGenerationNamespace(identity.namespaceId);
+        if (jobPrepared) {
+          try {
+            const names = await browserDurableFileNames();
+            const files = physicalNamespaceEntry(identity.namespaceId, identity.namespaceId);
+            const owned = [files.userFile, files.systemFile].flatMap(file =>
+              ["", "-journal", "-wal", "-shm"].map(suffix => `${file}${suffix}`));
+            if (!owned.some(name => names.includes(name))) {
+              const recoveryCatalog = DeviceCatalog.openForRestoreRecovery(this.#driver);
+              this.#writeAuthority.run(() => recoveryCatalog.clearPendingRestoreJob(restoreJobId));
+            }
+          } catch { /* boot reconciliation retains and completes the durable cleanup */ }
+        }
+      }
+      throw error;
+    } finally {
+      envelope.fill(0);
+      key.fill(0);
+    }
+  }
+
   async exportArchive(): Promise<ProductionArchiveExport> {
     return this.#coordinator.serializeRead(async () => {
       const readCurrent = () => {
@@ -913,6 +1337,44 @@ export class ProductionStoreAuthority {
     });
   }
 
+  async exportAuthenticatedArchive(
+    rawMaterial: ArchiveSealMaterialV1,
+  ): Promise<ProductionAuthenticatedArchiveExport> {
+    const material = captureArchiveSealMaterial(rawMaterial);
+    try {
+      const inner = await this.exportArchive();
+      const { CLAY_ARCHIVE_CONTENT_TYPE, sealAuthenticatedArchiveV5 } =
+        await import("./archive-authentication");
+      const bytes = sealAuthenticatedArchiveV5(inner.bytes, material.backupTrustKey, {
+        authenticationVersion: 1,
+        archiveFormat: 5,
+        contentType: CLAY_ARCHIVE_CONTENT_TYPE,
+        keyId: material.keyId,
+        seriesId: material.seriesId,
+        generation: material.generation,
+      });
+      return Object.freeze({
+        format: 5 as const,
+        bytes,
+        filename: inner.filename.replace(/\.clay\.zip$/, ".clay"),
+        target: inner.target,
+        catalogGeneration: inner.catalogGeneration,
+        authentication: Object.freeze({
+          schema: 1 as const,
+          kind: "cose_mac0_hmac_256_256" as const,
+          authenticationVersion: 1 as const,
+          keyId: sealBytesToHex(material.keyId),
+          seriesId: sealBytesToHex(material.seriesId),
+          generation: material.generation.toString(),
+        }),
+      });
+    } finally {
+      material.backupTrustKey.fill(0);
+      material.keyId.fill(0);
+      material.seriesId.fill(0);
+    }
+  }
+
   /** Package-private diagnostics used by worker-boundary certification tests. */
   inspectAuthority(): ProductionAuthorityInspection {
     const catalog = DeviceCatalog.openExisting(this.#driver);
@@ -925,7 +1387,7 @@ export class ProductionStoreAuthority {
     };
   }
 
-  asyncStore(): AsyncStore {
+  asyncStore(onMutation?: (result: ProductionMutationResult) => void): AsyncStore {
     const requestId = (context?: StoreMutationContext): string =>
       context?.requestId ?? this.#coordinator.mintRequestId();
     const adapter: AsyncStore = {
@@ -934,18 +1396,21 @@ export class ProductionStoreAuthority {
         const committed = await this.executeMutation({
           requestId: requestId(context), route: "store.insert", payload: { table, row },
         });
+        onMutation?.(committed);
         return committed.result as Awaited<ReturnType<AsyncStore["insert"]>>;
       },
       update: async (table, id, patch, context) => {
         const committed = await this.executeMutation({
           requestId: requestId(context), route: "store.update", payload: { table, id, patch },
         });
+        onMutation?.(committed);
         return committed.result as Awaited<ReturnType<AsyncStore["update"]>>;
       },
       softDelete: async (table, id, context) => {
-        await this.executeMutation({
+        const committed = await this.executeMutation({
           requestId: requestId(context), route: "store.softDelete", payload: { table, id },
         });
+        onMutation?.(committed);
       },
       registryTables: async () => [...this.#store.registrySnapshot().values()],
     };

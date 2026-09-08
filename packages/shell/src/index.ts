@@ -18,6 +18,7 @@ export {
   type ChromiumBackupEnvironment,
   type DirectoryHandleStore,
 } from "./app/backup-target.browser";
+export { IndexedDbBackupTrustRecordStore } from "./app/backup-trust-store.browser";
 export {
   STARTER_SHELLS, removeSampleRows, seedStarterShell,
   type StarterShell, type StarterShellId,

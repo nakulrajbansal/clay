@@ -37,6 +37,7 @@ const grant: AuthenticatedFormat5RestoreGrant = {
     seriesId: "20".repeat(16),
     generation: "9",
   },
+  freshness: "unknown",
   archiveSha256: sha("8"),
   archiveTarget: {
     appInstanceId: currentAppInstanceId,
@@ -57,10 +58,16 @@ function baseProps(): ComponentProps<typeof RecoveryCenter> {
     appName: "Field Ops",
     authoritativeAppInstanceId: currentAppInstanceId,
     opfsAvailable: true,
+    backupTrustStatus: { status: "not_enrolled" },
     backupTarget: null,
     lastVerifiedBackup: null,
     failures: [],
     history: [],
+    structuralHistory: [],
+    recentBatches: [],
+    recordCandidates: [],
+    recoveryFailures: [],
+    importedVerifierSeriesId: null,
     onClose: vi.fn(),
     onChooseFolder: vi.fn(async () => undefined),
   };
@@ -85,9 +92,24 @@ const button = (name: string): HTMLButtonElement => {
   return match;
 };
 
+const labelledFileInput = (labelText: string): HTMLInputElement => {
+  const label = [...document.querySelectorAll<HTMLLabelElement>("label")]
+    .find(candidate => candidate.textContent?.includes(labelText));
+  const input = label?.querySelector<HTMLInputElement>('input[type="file"]');
+  if (!input) throw new Error(`file input not found: ${labelText}`);
+  return input;
+};
+
+async function selectFile(input: HTMLInputElement, file: File): Promise<void> {
+  Object.defineProperty(input, "files", { configurable: true, value: [file] });
+  await act(async () => {
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    await Promise.resolve();
+  });
+}
+
 async function selectRestoreFile(fileName = "field-ops.clay"): Promise<void> {
-  const input = document.querySelector<HTMLInputElement>('input[type="file"]');
-  if (!input) throw new Error("restore file input not found");
+  const input = labelledFileInput("Choose a .clay backup");
   Object.defineProperty(input, "files", {
     configurable: true,
     value: [new File([new Uint8Array([1, 2, 3])], fileName, { type: "application/zip" })],
@@ -153,6 +175,10 @@ describe("Release B Recovery Center", () => {
 
     const text = document.body.textContent ?? "";
     expect(text).toContain("Backup folderClay backups");
+    expect(text).toContain(
+      "Field Ops is saved in this browser and has a verified backup in Clay backups.",
+    );
+    expect(text).not.toContain("private storage (OPFS) only");
     expect(text).toContain("Last verified backup9/5/2026");
     expect(text).toContain("Clay needs permission to use the backup folder again.");
     expect(text).toContain("The backup stopped before it finished.");
@@ -163,6 +189,104 @@ describe("Release B Recovery Center", () => {
     await act(async () => button("Choose backup folder").click());
     expect(retry).toHaveBeenCalledTimes(1);
     expect(choose).toHaveBeenCalledTimes(1);
+    await act(async () => root.unmount());
+  });
+
+  it("guides Recovery Kit download, exact test-import, and clean-device import", async () => {
+    const exportKit = vi.fn(async () => undefined);
+    const confirmKit = vi.fn(async (_file: File) => undefined);
+    const importKit = vi.fn(async (_file: File) => undefined);
+    const activateSeries = vi.fn(async (_seriesId: string) => undefined);
+    const props = {
+      ...baseProps(),
+      onExportRecoveryKit: exportKit,
+      onConfirmRecoveryKit: confirmKit,
+      onImportRecoveryKit: importKit,
+      onActivateImportedSeries: activateSeries,
+    };
+    const { root } = await mount(props);
+
+    expect(document.body.textContent).toContain("Recovery Kit");
+    expect(document.body.textContent).toContain("does not encrypt your records");
+    expect(button("Download Recovery Kit").disabled).toBe(false);
+    await act(async () => button("Download Recovery Kit").click());
+    expect(exportKit).toHaveBeenCalledTimes(1);
+
+    await act(async () => root.render(<RecoveryCenter {...props}
+      backupTrustStatus={{
+        status: "needs_test_import",
+        enrollmentId: id("enroll", "k"),
+      }} />));
+    expect(document.body.textContent).toContain("choose the exact file you downloaded");
+    const checked = new File(["kit"], "clay-recovery-kit.txt", { type: "text/plain" });
+    await selectFile(labelledFileInput("Check downloaded Recovery Kit"), checked);
+    expect(confirmKit).toHaveBeenCalledWith(checked);
+
+    const imported = new File(["existing"], "existing-recovery-kit.txt", {
+      type: "text/plain",
+    });
+    await selectFile(labelledFileInput("Import an existing Recovery Kit"), imported);
+    expect(importKit).toHaveBeenCalledWith(imported);
+    expect(button("Use imported series for future backups").disabled).toBe(true);
+    const importedSeriesId = "20".repeat(16);
+    await act(async () => root.render(<RecoveryCenter {...props}
+      importedVerifierSeriesId={importedSeriesId} />));
+    expect(button("Use imported series for future backups").disabled).toBe(false);
+    await act(async () => button("Use imported series for future backups").click());
+    expect(activateSeries).toHaveBeenCalledWith(importedSeriesId);
+    await act(async () => root.unmount());
+  });
+
+  it("surfaces record, attachment, batch, and structural recovery previews", async () => {
+    const restoreRecord = vi.fn(async () => true);
+    const undoBatch = vi.fn(async () => true);
+    const rewind = vi.fn(async () => true);
+    const candidate = {
+      table: "tasks",
+      id: "018f0f4d-7b4a-7abc-8def-0123456789ab",
+      deleted: true,
+      historyAt: "2026-09-07T12:00:00.000Z",
+      attachmentCount: 2,
+    };
+    const batch = {
+      id: "018f0f4d-7b4a-7abc-8def-0123456789ac",
+      at: "2026-09-07T12:01:00.000Z",
+      source: "user" as const,
+      summary: "Archive old tasks",
+      changed: 3,
+      created: [],
+      undone: false,
+    };
+    const { root } = await mount({
+      ...baseProps(),
+      recordCandidates: [candidate],
+      recentBatches: [batch],
+      structuralHistory: [
+        { version: 1, parent: 0, created_at: "2026-09-06T12:00:00.000Z", intent_text: "one", summary: "First" },
+        { version: 2, parent: 1, created_at: "2026-09-07T12:00:00.000Z", intent_text: "two", summary: "Second" },
+      ],
+      recoveryFailures: [{
+        id: "failure-1",
+        at: "2026-09-08T12:00:00.000Z",
+        action: "record",
+        code: "E_CONFLICT",
+      }],
+      onRestoreRecord: restoreRecord,
+      onUndoBatch: undoBatch,
+      onRewindStructure: rewind,
+    });
+
+    expect(document.body.textContent).toContain("Deleted tasks record");
+    expect(document.body.textContent).toContain("restores 2 attached files");
+    expect(document.body.textContent).toContain("Archive old tasks · 3 records");
+    expect(document.body.textContent).toContain("Version 1 · First");
+    expect(document.body.textContent).toContain("E_CONFLICT");
+    await act(async () => button("Restore deleted record").click());
+    await act(async () => button("Undo this batch").click());
+    await act(async () => button("Rewind here").click());
+    expect(restoreRecord).toHaveBeenCalledWith(candidate);
+    expect(undoBatch).toHaveBeenCalledWith(batch);
+    expect(rewind).toHaveBeenCalledWith(1);
     await act(async () => root.unmount());
   });
 
@@ -191,7 +315,7 @@ describe("Release B Recovery Center", () => {
   });
 
   it("enables only an exact authenticated format-5 new-app grant and passes that immutable grant", async () => {
-    const restore = vi.fn(async () => undefined);
+    const restore = vi.fn(async (_value: typeof grant) => undefined);
     const validate = vi.fn(async () => structuredClone(grant));
     const props = {
       ...baseProps(),
