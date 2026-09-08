@@ -140,6 +140,7 @@ export function RecordDetail(props: {
   onExport?: () => void;
   exportPending?: boolean;
   runWrite?: <T>(operation: () => Promise<T>) => Promise<T>;
+  onShare?: () => void;
   onConfirm?: (message: string) => Promise<boolean>;
 }): React.JSX.Element {
   const [row, setRow] = useState<QueryRow | null>(null);
@@ -353,6 +354,9 @@ export function RecordDetail(props: {
               aria-label="Preview Print / CSV for this record"
               disabled={props.exportPending || saving !== null}
               onClick={props.onExport}>Print / CSV</button> : null}
+            {props.onShare ? <button type="button"
+              aria-label="Create read-only share for this record"
+              onClick={props.onShare}>Share link</button> : null}
             <button onClick={() => void duplicate()}>Duplicate</button>
             <button className="danger" onClick={() => void archive()}>Archive</button>
           </div>

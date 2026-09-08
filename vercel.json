@@ -6,6 +6,8 @@
     { "source": "/auth/:path*", "destination": "/api" },
     { "source": "/me", "destination": "/api" },
     { "source": "/mutations/:path*", "destination": "/api" },
+    { "source": "/shares/:path*", "destination": "/api" },
+    { "source": "/share/:path*", "destination": "/index.html" },
     { "source": "/healthz", "destination": "/api" }
   ]
 }

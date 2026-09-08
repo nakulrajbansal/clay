@@ -11,7 +11,15 @@
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { getCookie, setCookie } from "hono/cookie";
-import { timingSafeEqual } from "node:crypto";
+import { timingSafeEqual, createHash } from "node:crypto";
+import {
+  SHARE_CREATE_BODY_BYTES_V1, SHARE_MAX_CIPHERTEXT_BYTES_V1,
+  SHARE_MAX_LIFETIME_MS_V1, ShareCreateRequestV1, ShareIdV1,
+  ShareRevokeRequestV1,
+} from "@clay/schema/share";
+import {
+  MemoryShareRelayStore, type ShareRelayStore,
+} from "./share-store";
 import {
   DEFAULT_MODEL, DEFAULT_OPENAI_MODEL, MutationClient, type S1Context,
 } from "@clay/mutation";
@@ -47,6 +55,10 @@ export type BackendOptions = {
   requireAllowedMutationOrigin?: boolean;
   mutationRate?: { max: number; windowMs: number };
   mutationConcurrency?: number;
+  /** F1 relay: ciphertext + bounded delivery metadata only. */
+  shares?: ShareRelayStore;
+  /** Injectable clock for expiry-boundary tests. */
+  now?: () => number;
 };
 
 export function makeDevAuth(): NonNullable<BackendOptions["auth"]> {
@@ -62,15 +74,17 @@ export function createApp(opts: BackendOptions): Hono {
   const origins = new Set(opts.allowedOrigins ?? []);
   const recentMutations: number[] = [];
   let activeMutations = 0;
+  const shares = opts.shares ?? new MemoryShareRelayStore();
+  const now = opts.now ?? Date.now;
   app.use("/*", cors({
     origin: (o) => origins.size === 0 ? (o ?? "*") : (o && origins.has(o) ? o : ""),
     credentials: true,
     allowMethods: ["POST", "GET", "OPTIONS"],
   }));
 
-  const readBody = async (c: Context): Promise<unknown> => {
+  const readBody = async (c: Context, cap = BODY_CAP): Promise<unknown> => {
     const len = Number(c.req.header("content-length") ?? "0");
-    if (Number.isFinite(len) && len > BODY_CAP)
+    if (Number.isFinite(len) && len > cap)
       throw new Response("body too large", { status: 413 });
     const stream = c.req.raw.body;
     if (!stream) throw new SyntaxError("empty body");
@@ -81,7 +95,7 @@ export function createApp(opts: BackendOptions): Hono {
       const { done, value } = await reader.read();
       if (done) break;
       total += value.byteLength;
-      if (total > BODY_CAP) {
+      if (total > cap) {
         await reader.cancel("body too large");
         throw new Response("body too large", { status: 413 });
       }
@@ -241,6 +255,113 @@ export function createApp(opts: BackendOptions): Hono {
       return c.body(null, 204);
     });
   }
+
+  // ---------- F1: bounded ciphertext-only read-only shares ----------
+  const noStore = (c: Context): void => c.header("Cache-Control", "no-store");
+  const jsonRequest = (c: Context): boolean =>
+    c.req.header("content-type")?.split(";", 1)[0]?.trim().toLowerCase() === "application/json";
+  const decodedBase64Url = (value: string): Buffer | null => {
+    try {
+      const bytes = Buffer.from(value, "base64url");
+      return bytes.toString("base64url") === value ? bytes : null;
+    } catch { return null; }
+  };
+  const revokeHash = (token: string): string | null => {
+    const bytes = decodedBase64Url(token);
+    return bytes ? createHash("sha256").update(bytes).digest("base64url") : null;
+  };
+
+  app.post("/shares", async (c) => {
+    noStore(c);
+    if (!jsonRequest(c))
+      return c.json({ schema: 1 as const, error: "bad_request" as const }, 415);
+    const ownerId = auth ? await sessionUser(c) : null;
+    if (auth && !ownerId)
+      return c.json({ schema: 1 as const, error: "unauthorized" as const }, 401);
+    let unknown: unknown;
+    try { unknown = await readBody(c, SHARE_CREATE_BODY_BYTES_V1); }
+    catch (error) {
+      if (error instanceof Response) return error;
+      return c.json({ schema: 1 as const, error: "bad_request" as const }, 400);
+    }
+    const parsed = ShareCreateRequestV1.safeParse(unknown);
+    if (!parsed.success)
+      return c.json({ schema: 1 as const, error: "bad_request" as const }, 400);
+    const current = now();
+    const expiration = Date.parse(parsed.data.expiresAt);
+    const ciphertext = decodedBase64Url(parsed.data.envelope.ciphertext);
+    const iv = decodedBase64Url(parsed.data.envelope.iv);
+    if (!Number.isFinite(expiration) || expiration <= current
+        || expiration - current > SHARE_MAX_LIFETIME_MS_V1
+        || !ciphertext || ciphertext.byteLength > SHARE_MAX_CIPHERTEXT_BYTES_V1
+        || !iv || iv.byteLength !== 12)
+      return c.json({ schema: 1 as const, error: "bad_request" as const }, 400);
+    const result = await shares.create({
+      shareId: parsed.data.shareId,
+      expiresAt: parsed.data.expiresAt,
+      createdAt: new Date(current).toISOString(),
+      ownerId,
+      revokeTokenHash: parsed.data.revokeTokenHash,
+      envelope: parsed.data.envelope,
+      ciphertextBytes: ciphertext.byteLength,
+    }, current);
+    if (result === "conflict")
+      return c.json({ schema: 1 as const, error: "conflict" as const }, 409);
+    if (result === "capacity")
+      return c.json({ schema: 1 as const, error: "capacity" as const }, 507);
+    return c.json({
+      schema: 1 as const,
+      shareId: parsed.data.shareId,
+      expiresAt: parsed.data.expiresAt,
+    }, 201);
+  });
+
+  app.get("/shares/:shareId", async (c) => {
+    noStore(c);
+    const parsedId = ShareIdV1.safeParse(c.req.param("shareId"));
+    if (!parsedId.success)
+      return c.json({ schema: 1 as const, error: "not_found" as const }, 404);
+    const lookup = await shares.lookup(parsedId.data, now());
+    if (lookup.state === "not_found")
+      return c.json({ schema: 1 as const, error: "not_found" as const }, 404);
+    if (lookup.state === "expired")
+      return c.json({ schema: 1 as const, error: "expired" as const }, 410);
+    if (lookup.state === "revoked")
+      return c.json({ schema: 1 as const, error: "revoked" as const }, 410);
+    return c.json({
+      schema: 1 as const,
+      shareId: lookup.record.shareId,
+      expiresAt: lookup.record.expiresAt,
+      envelope: lookup.record.envelope,
+    });
+  });
+
+  app.post("/shares/:shareId/revoke", async (c) => {
+    noStore(c);
+    const parsedId = ShareIdV1.safeParse(c.req.param("shareId"));
+    if (!parsedId.success)
+      return c.json({ schema: 1 as const, error: "not_found" as const }, 404);
+    if (!jsonRequest(c))
+      return c.json({ schema: 1 as const, error: "bad_request" as const }, 415);
+    let unknown: unknown;
+    try { unknown = await readBody(c); }
+    catch (error) {
+      if (error instanceof Response) return error;
+      return c.json({ schema: 1 as const, error: "bad_request" as const }, 400);
+    }
+    const parsed = ShareRevokeRequestV1.safeParse(unknown);
+    const candidateHash = parsed.success ? revokeHash(parsed.data.revokeToken) : null;
+    if (!parsed.success || !candidateHash)
+      return c.json({ schema: 1 as const, error: "bad_request" as const }, 400);
+    const result = await shares.revoke(parsedId.data, candidateHash, now());
+    if (result === "not_found")
+      return c.json({ schema: 1 as const, error: "not_found" as const }, 404);
+    if (result === "expired")
+      return c.json({ schema: 1 as const, error: "expired" as const }, 410);
+    if (result === "forbidden")
+      return c.json({ schema: 1 as const, error: "forbidden" as const }, 403);
+    return c.json({ schema: 1 as const, shareId: parsedId.data, revoked: true as const });
+  });
 
   /** Plan calls are metered; repairs are free (they're Clay's failure, not
    * the user's). Returns a Response to short-circuit, or null to proceed. */

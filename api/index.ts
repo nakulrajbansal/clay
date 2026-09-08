@@ -5,6 +5,7 @@ import { Hono } from "hono";
 import { handle } from "hono/vercel";
 import { createApp } from "../packages/backend/src/app";
 import { PgSessions, PostgresAuthStore } from "../packages/backend/src/pg-store";
+import { PostgresShareRelayStore } from "../packages/backend/src/share-pg-store";
 import { resolveProductionConfig } from "../packages/backend/src/model-config";
 
 export type ServerlessEnv = {
@@ -36,6 +37,7 @@ export async function buildServerlessApp(env: ServerlessEnv): Promise<Hono> {
   const app = createApp({
     model: config.model,
     allowedOrigins: [config.appOrigin],
+    shares: new PostgresShareRelayStore(store.db),
     auth: {
       store,
       sessions: new PgSessions(store.db),

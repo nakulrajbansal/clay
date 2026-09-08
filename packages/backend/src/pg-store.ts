@@ -4,6 +4,7 @@
 // doc 06 §1: a curious operator can't read what isn't retained).
 import pg from "pg";
 import type { AuthStore, SessionStore, Usage, User } from "./auth";
+import { SHARE_RELAY_SCHEMA_SQL } from "./share-pg-store";
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS users (
@@ -29,7 +30,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id),
   expires TIMESTAMPTZ NOT NULL
-);`;
+);
+${SHARE_RELAY_SCHEMA_SQL.trim()}`;
 
 const PERIOD_MS = 30 * 86_400_000;
 const rand = (): string =>

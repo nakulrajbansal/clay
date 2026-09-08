@@ -168,12 +168,13 @@ export function encodeProjectionPlaintextV1(value: ProjectionPlaintextV1): Uint8
 }
 
 export function decodeProjectionPlaintextV1(bytes: Uint8Array): ProjectionPlaintextV1 {
-  if (!(bytes instanceof Uint8Array) || bytes.byteLength > PROJECTION_LIMITS_V1.plaintextBytes)
+  const view = uint8View(bytes);
+  if (!view || view.byteLength > PROJECTION_LIMITS_V1.plaintextBytes)
     throw invalid("Projection bytes are missing or over 8 MiB");
   let text: string;
   let unknown: unknown;
   try {
-    text = utf8Decoder.decode(bytes);
+    text = utf8Decoder.decode(view);
     unknown = JSON.parse(text);
   } catch (error) { throw invalid("Projection is not valid UTF-8 JSON", error); }
   const parsed = ProjectionPlaintextSchema.safeParse(unknown);

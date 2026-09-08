@@ -1,0 +1,39 @@
+.share-dialog-backdrop { z-index: 145; }
+.share-dialog {
+  width: min(920px, calc(100vw - 28px)); max-height: min(900px, calc(100vh - 28px));
+  overflow: auto; background: var(--panel); color: var(--text); border: 1px solid var(--border);
+  border-radius: 18px; box-shadow: var(--shadow-lg); padding: 0;
+}
+.share-dialog-header { display: flex; justify-content: space-between; gap: 20px;
+  padding: 22px 24px 16px; border-bottom: 1px solid var(--border); }
+.share-dialog-header h2 { margin: 4px 0; }
+.share-dialog-header p { margin: 0; color: var(--muted); }
+.share-dialog-header > button { align-self: start; border: 0; background: transparent;
+  color: var(--muted); font-size: 24px; cursor: pointer; }
+.share-scope { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 18px 24px; }
+.share-scope fieldset { min-width: 0; display: flex; flex-direction: column; gap: 7px;
+  border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
+.share-scope label { display: flex; align-items: center; gap: 8px; }
+.share-scope small, .share-scope p { color: var(--muted); margin: 4px 0 0; }
+.share-expiry { grid-column: 1 / -1; justify-content: space-between; }
+.share-expiry select { min-width: 140px; }
+.share-preview { margin: 0 24px 18px; border: 1px solid var(--border); border-radius: 12px; padding: 14px; }
+.share-preview h3, .share-preview p { margin: 0 0 8px; }
+.share-preview p { color: var(--muted); }
+.share-preview-scroll { overflow: auto; max-height: 280px; }
+.share-preview table { width: 100%; border-collapse: collapse; }
+.share-preview th, .share-preview td { padding: 8px; text-align: left; border-bottom: 1px solid var(--border); }
+.share-error, .share-reapproval { margin: 0 24px 14px; padding: 10px 12px; border-radius: 10px; }
+.share-error { color: var(--danger); background: color-mix(in srgb, var(--danger) 9%, transparent); }
+.share-reapproval { color: var(--accent-text); background: var(--bg); }
+.share-created { margin: 0 24px 18px; padding: 14px; border: 1px solid var(--accent);
+  border-radius: 12px; display: flex; flex-wrap: wrap; gap: 9px; align-items: center; }
+.share-created h3 { width: 100%; margin: 0; }
+.share-created input { flex: 1 1 440px; min-width: 0; }
+.share-history { margin: 0 24px 18px; }
+.share-history article { display: flex; justify-content: space-between; align-items: center;
+  gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.share-dialog-actions { position: sticky; bottom: 0; display: flex; justify-content: flex-end;
+  gap: 10px; padding: 14px 24px; border-top: 1px solid var(--border); background: var(--panel); }
+@media (max-width: 680px) { .share-scope { grid-template-columns: 1fr; }
+  .share-expiry { grid-column: auto; } .share-dialog-actions { flex-wrap: wrap; } }

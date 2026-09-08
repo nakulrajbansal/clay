@@ -39,3 +39,5 @@ claude key.txt
 # harness output
 *.png
 uatdiag-plan.json
+
+.vercel

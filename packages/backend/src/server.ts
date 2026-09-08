@@ -12,6 +12,8 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { createApp, makeDevAuth, type BackendOptions } from "./app";
 import { MemoryAuthStore, Sessions } from "./auth";
 import { PgSessions, PostgresAuthStore } from "./pg-store";
+import { PostgresShareRelayStore } from "./share-pg-store";
+import { MemoryShareRelayStore } from "./share-store";
 import { resolveModelConfig, resolveProductionConfig } from "./model-config";
 
 const port = Number(process.env.PORT ?? "8787");
@@ -27,10 +29,12 @@ const appOrigin = productionConfig?.appOrigin
 async function main(): Promise<void> {
   const model = productionConfig?.model ?? resolveModelConfig(process.env);
   let auth: BackendOptions["auth"];
+  let shares: BackendOptions["shares"];
   const devLinks = !production && process.env.AUTH === "dev";
   if (dbUrl) {
     const store = PostgresAuthStore.connect(dbUrl);
     await store.ensureSchema();
+    shares = new PostgresShareRelayStore(store.db);
     auth = {
       store, sessions: new PgSessions(store.db),
       devLinks,
@@ -51,13 +55,14 @@ async function main(): Promise<void> {
           }
         : undefined,
     };
-  } else if (devLinks) {
-    auth = makeDevAuth();
+  } else {
+    shares = new MemoryShareRelayStore();
+    if (devLinks) auth = makeDevAuth();
   }
   void MemoryAuthStore;
 
   const app = createApp({
-    model, auth,
+    model, auth, shares,
     allowedOrigins: production ? [appOrigin] : undefined,
   });
   const staticDir = process.env.STATIC_DIR;

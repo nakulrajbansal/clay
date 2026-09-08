@@ -9,6 +9,17 @@ export type LocalProjectionScopeV1 = Readonly<{
     fieldId: ProjectionRequestV1["fieldIds"][number];
     label: string;
   }>[];
+  attachmentAuthorities: readonly LocalAttachmentAuthorityV1[];
+}>;
+
+export type LocalAttachmentAuthorityV1 = Readonly<{
+  tableName: string;
+  fieldName: string;
+  source: Readonly<{
+    tableId: SemanticSchemaTraceV1["tables"][number]["tableId"];
+    fieldId: SemanticSchemaTraceV1["fields"][number]["fieldId"];
+    recordId: string;
+  }>;
 }>;
 
 type Filter = NonNullable<Query["where"]>[number];
@@ -132,6 +143,7 @@ export function buildCurrentViewProjectionScopeV1(input: Readonly<{
       options: { includeRecordIds: false, redactedFieldIds: [] },
     },
     fieldChoices: resolved.fieldChoices,
+    attachmentAuthorities: [],
   };
 }
 
@@ -141,6 +153,17 @@ export function buildRecordProjectionScopeV1(input: Readonly<{
   recordId: string;
 }>): LocalProjectionScopeV1 {
   const resolved = identity(input.trace, input.table, input.table.columns);
+  const attachmentAuthorities = input.table.columns
+    .filter(column => column.type === "attachment" && !column.hidden && !column.inactive)
+    .map(column => ({
+      tableName: input.table.name,
+      fieldName: column.name,
+      source: {
+        tableId: resolved.tableId,
+        fieldId: stableField(input.trace, resolved.tableId, column.name).fieldId,
+        recordId: input.recordId,
+      },
+    }));
   return {
     request: {
       schema: 1,
@@ -152,5 +175,6 @@ export function buildRecordProjectionScopeV1(input: Readonly<{
       options: { includeRecordIds: false, redactedFieldIds: [] },
     },
     fieldChoices: resolved.fieldChoices,
+    attachmentAuthorities,
   };
 }

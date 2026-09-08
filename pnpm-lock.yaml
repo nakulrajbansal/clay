@@ -164,6 +164,9 @@ importers:
       '@clay/panel-runtime':
         specifier: workspace:*
         version: link:../panel-runtime
+      '@clay/schema':
+        specifier: workspace:*
+        version: link:../schema
       react:
         specifier: ^19.1.0
         version: 19.2.7

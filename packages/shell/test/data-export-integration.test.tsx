@@ -100,6 +100,23 @@ describe("Data view local projection integration", () => {
       .map(row => row.querySelector(".projection-cell-value")?.textContent);
     expect(previewRows).toEqual(["Zed", "Beta"]);
 
+    const closeExport = document.body.querySelector<HTMLButtonElement>(
+      'button[aria-label="Close export preview"]',
+    )!;
+    await act(async () => closeExport.click());
+    const share = document.body.querySelector<HTMLButtonElement>(
+      'button[aria-label="Create read-only share for current Data view"]',
+    )!;
+    expect(share).not.toBeNull();
+    await act(async () => share.click());
+    await waitFor(() => document.body.querySelector(".share-dialog tbody") !== null);
+    expect(projectExport).toHaveBeenCalledTimes(2);
+    expect(document.body.querySelectorAll(".share-dialog input[data-field-id]")).toHaveLength(1);
+    const sharedRows = [...document.body.querySelectorAll(".share-dialog tbody tr")]
+      .map(row => row.textContent?.trim());
+    expect(sharedRows).toEqual(["Zed", "Beta"]);
+    expect(document.body.textContent).not.toContain("Canonical hidden value");
+
     await act(async () => root.unmount());
     store.close();
   });

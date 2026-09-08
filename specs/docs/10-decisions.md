@@ -970,3 +970,33 @@ ADR-051 (2026-09-06) Model I/O lives in a per-intent trusted-shell planner bridg
   fallback, and reports that failure to its caller. Disposable shadow cleanup cannot
   reopen or mask a durable Keep or Discard. The remaining Keep/Discard protocol and
   complete-browser accounting remain unchanged.
+
+ADR-050 (2026-09-08) Read-only shares are immutable client-encrypted export snapshots
+  CONTEXT: external recipients need approved results without an account, while the
+  relay must never acquire local-database read authority, plaintext records, file
+  authority, decryption keys, or canonical-write authority. Field, predicate, and
+  attachment scope changes must not reuse stale approval.
+  DECISION: add closed F1 schemas on a separate `@clay/schema/share` entry. A
+  trusted projection request pins table, fields, record or view predicate, and
+  schema version by stable ID. Approval binds that request, an ordered mapping of
+  stable field IDs to projected outputs, and each separately selected attachment
+  to its stable file ID, source table/field/record IDs, byte size, and SHA-256
+  digest, plus the SHA-256 digest of the exact canonical preview. Attachment
+  inclusion is allowed only for an exact single-record projection. Creation
+  revalidates the current projection and the file's membership in that current
+  visible record attachment field before reading bytes. Any scope, membership,
+  metadata, or preview digest change requires approval again. The browser
+  verifies file bytes against the approved size and digest, builds the closed
+  payload, and encrypts it with AES-256-GCM; authenticated data binds the
+  opaque share ID and expiry. The viewer key exists only in the URL fragment.
+  The hosted service accepts only a bounded strict ciphertext envelope, expiry,
+  owner identity, and a hash of a separate revocation capability. Authenticated
+  owners may create at most 100 retained links or 64 MiB per 30-day lifetime;
+  Postgres serializes quota checks with a transaction-scoped per-owner advisory
+  lock. Public reads omit credentials, return no-store ciphertext, and cease at
+  expiry or revocation. Links are immutable snapshots; there is no live database
+  query or relay-to-kernel write path.
+  CONSEQUENCE: recipients get an account-free static view and explicitly approved
+  files, while tests can prove hidden fields, stale same-count previews, and
+  unapproved file bytes never cross the export boundary. Revocation prevents all
+  subsequent relay reads, and expired ciphertext is reclaimable.
