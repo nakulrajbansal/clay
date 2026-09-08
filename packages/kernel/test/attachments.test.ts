@@ -85,7 +85,7 @@ describe("local attachments and rich records", () => {
     } finally { store.close(); }
   });
 
-  it("soft-removes files and purges only old, unreferenced bytes", async () => {
+  it("retains files while history can restore them and purges after that history ages out", async () => {
     const { store, rowId } = await fileStore();
     try {
       const meta = await store.addAttachment({
@@ -97,6 +97,9 @@ describe("local attachments and rich records", () => {
       expect(store.attachmentStorage()).toMatchObject({ activeFiles: 0, deletedFiles: 1 });
       expect(store.purgeDeletedAttachments(new Date(), 30)).toMatchObject({ files: 0, bytes: 0 });
       const future = new Date(Date.now() + 31 * 86_400_000);
+      expect(store.purgeDeletedAttachments(future, 30)).toMatchObject({ files: 0, bytes: 0 });
+      store.rowHistoryCap = 1;
+      store.update("projects", rowId, { notes: "The file-removal history aged out." });
       expect(store.purgeDeletedAttachments(future, 30)).toMatchObject({ files: 1, bytes: 4 });
       await expect(store.readAttachment(meta.id)).rejects.toThrow(/not found/i);
     } finally { store.close(); }

@@ -168,6 +168,37 @@ type CapturedProductionMutation = CapturedCoreMutation | Readonly<{
   | { route: "recordUsage"; payload: Readonly<{ event: Readonly<JsonRecord> }> }
   | { route: "acceptSuggestion"; payload: Readonly<{ subject: string; kind: string }> }
   | { route: "dismissSuggestion"; payload: Readonly<{ subject: string; kind: string }> }
+  | { route: "intake.saveForm"; payload: Readonly<{ form: Readonly<JsonRecord> }> }
+  | { route: "intake.markPublished"; payload: Readonly<{ formId: string; publishedAt: string }> }
+  | { route: "intake.revokeForm"; payload: Readonly<{ formId: string; revokedAt: string }> }
+  | { route: "intake.markExpired"; payload: Readonly<{ formId: string; expiredAt: string }> }
+  | { route: "intake.stageSubmission"; payload: Readonly<{ submission: Readonly<JsonRecord> }> }
+  | { route: "intake.recordDeliveryFailure"; payload: Readonly<{ failure: Readonly<JsonRecord> }> }
+  | {
+    route: "intake.authorizeDeliveryDiscard";
+    payload: Readonly<{ formId: string; submissionId: string; authorizedAt: string }>;
+  }
+  | {
+    route: "intake.resolveDeliveryFailure";
+    payload: Readonly<{
+      formId: string; submissionId: string; resolution: "staged" | "discarded"; resolvedAt: string;
+    }>;
+  }
+  | { route: "intake.rejectSubmission"; payload: Readonly<{ submissionId: string }> }
+  | { route: "intake.simulateAutoAccept"; payload: Readonly<{ draft: Readonly<JsonRecord> }> }
+  | {
+    route: "intake.enableAutoAccept";
+    payload: Readonly<{ draft: Readonly<JsonRecord>; simulationFingerprint: string }>;
+  }
+  | { route: "intake.disableAutoAccept"; payload: Readonly<{ formId: string }> }
+  | { route: "intake.processAutoAccept"; payload: Readonly<{ formId: string }> }
+  | {
+    route: "intake.acceptSubmission";
+    payload: Readonly<{
+      submissionId: string; mode: "manual" | "auto"; approvedFileIds: readonly string[];
+    }>;
+  }
+  | { route: "intake.undoReceipt"; payload: Readonly<{ receiptId: string }> }
 )>;
 
 type CapturedOperationalMetricMutation = Readonly<{
@@ -336,6 +367,24 @@ const IMPORT_COMMIT_CAPTURE_POLICY: StrictJsonCapturePolicy = [
     throw new Error(messages[reason - 5] ?? "invalid JSON value");
   },
 ];
+const MAX_INTAKE_CAPTURE_BYTES = 12 * 1024 * 1024;
+const INTAKE_CAPTURE_POLICY: StrictJsonCapturePolicy = [
+  64, 500_000, 7_000_000, MAX_INTAKE_CAPTURE_BYTES, 10_000, 10_000, 128, true, true,
+  reason => {
+    if (reason < 5) throw unavailable(PRODUCTION_MUTATION_PREFIX + "intake payload exceeds limits");
+    const messages = [
+      "invalid JSON value",
+      "invalid JSON value",
+      "cyclic JSON value",
+      "invalid array",
+      "invalid array keys",
+      "invalid array item",
+      "invalid record",
+      "invalid record property",
+    ];
+    throw new Error(messages[reason - 5] ?? "invalid JSON value");
+  },
+];
 
 function consumeCaptureBytes(
   budget: CaptureBudget,
@@ -394,6 +443,13 @@ function captureJsonRecord(
   if (typeof captured !== "object" || captured === null || Array.isArray(captured))
     throw new Error("expected record");
   return captured;
+}
+
+function captureIntakeJsonRecord(input: unknown): Readonly<JsonRecord> {
+  const captured = captureStrictJson(
+    input, INTAKE_CAPTURE_POLICY, new WeakSet(), { nodes: 0, bytes: 0 }, 0,
+  ) as JsonValue;
+  return capturedJsonRecord(captured);
 }
 
 function captureImportCommitPayload(input: unknown): Readonly<JsonRecord> {
@@ -535,6 +591,12 @@ function captureMutation(input: unknown): CapturedProductionMutation {
         captured.bytes = captureBinary(fields.bytes, budget);
         return done(Object.freeze(captured));
       }
+      case "intake.stageSubmission": {
+        const fields = exactKeys(payload, ["submission"]);
+        return done(Object.freeze({
+          submission: captureIntakeJsonRecord(fields.submission),
+        }));
+      }
     }
 
     let fields: readonly string[];
@@ -562,6 +624,22 @@ function captureMutation(input: unknown): CapturedProductionMutation {
       case "recordUsage": fields = ["event"]; break;
       case "acceptSuggestion":
       case "dismissSuggestion": fields = ["subject", "kind"]; break;
+      case "intake.saveForm": fields = ["form"]; break;
+      case "intake.markPublished": fields = ["formId", "publishedAt"]; break;
+      case "intake.revokeForm": fields = ["formId", "revokedAt"]; break;
+      case "intake.markExpired": fields = ["formId", "expiredAt"]; break;
+      case "intake.recordDeliveryFailure": fields = ["failure"]; break;
+      case "intake.authorizeDeliveryDiscard":
+        fields = ["formId", "submissionId", "authorizedAt"]; break;
+      case "intake.resolveDeliveryFailure":
+        fields = ["formId", "submissionId", "resolution", "resolvedAt"]; break;
+      case "intake.rejectSubmission": fields = ["submissionId"]; break;
+      case "intake.simulateAutoAccept": fields = ["draft"]; break;
+      case "intake.enableAutoAccept": fields = ["draft", "simulationFingerprint"]; break;
+      case "intake.disableAutoAccept":
+      case "intake.processAutoAccept": fields = ["formId"]; break;
+      case "intake.acceptSubmission": fields = ["submissionId", "mode", "approvedFileIds"]; break;
+      case "intake.undoReceipt": fields = ["receiptId"]; break;
       default: throw new Error();
     }
     const captured = capturePayload(payload, fields);
@@ -612,6 +690,33 @@ function captureMutation(input: unknown): CapturedProductionMutation {
           "regroup_board", "make_workflow", "chart_metric",
         ].includes(captured.kind as string)) throw new Error();
         break;
+      case "intake.saveForm": capturedJsonRecord(captured.form); break;
+      case "intake.markPublished": strings("formId", "publishedAt"); break;
+      case "intake.revokeForm": strings("formId", "revokedAt"); break;
+      case "intake.markExpired": strings("formId", "expiredAt"); break;
+      case "intake.recordDeliveryFailure": capturedJsonRecord(captured.failure); break;
+      case "intake.authorizeDeliveryDiscard": strings("formId", "submissionId", "authorizedAt"); break;
+      case "intake.resolveDeliveryFailure":
+        strings("formId", "submissionId", "resolvedAt");
+        if (captured.resolution !== "staged" && captured.resolution !== "discarded")
+          throw new Error();
+        break;
+      case "intake.rejectSubmission": strings("submissionId"); break;
+      case "intake.simulateAutoAccept": capturedJsonRecord(captured.draft); break;
+      case "intake.enableAutoAccept":
+        strings("simulationFingerprint");
+        capturedJsonRecord(captured.draft);
+        break;
+      case "intake.disableAutoAccept":
+      case "intake.processAutoAccept": strings("formId"); break;
+      case "intake.acceptSubmission":
+        strings("submissionId");
+        if (captured.mode !== "manual" && captured.mode !== "auto") throw new Error();
+        if (!Array.isArray(captured.approvedFileIds)
+            || captured.approvedFileIds.some(value => typeof value !== "string"))
+          throw new Error();
+        break;
+      case "intake.undoReceipt": strings("receiptId"); break;
     }
     return done(captured);
   } catch (error) {
@@ -658,7 +763,11 @@ function captureOperationalMetricMutation(input: unknown): CapturedOperationalMe
 
 function assertCapturedMutationBytes(request: CapturedProductionMutation): void {
   const serialized = JSON.stringify(request);
-  const limit = request.route === "import.commit" ? MAX_IMPORT_COMMIT_BYTES : MAX_CAPTURE_BYTES;
+  const limit = request.route === "import.commit"
+    ? MAX_IMPORT_COMMIT_BYTES
+    : request.route.startsWith("intake.")
+      ? MAX_INTAKE_CAPTURE_BYTES
+      : MAX_CAPTURE_BYTES;
   if (UTF8_ENCODER.encode(serialized).byteLength > limit)
     throw invalid(PRODUCTION_MUTATION_PREFIX + "request exceeds its UTF-8 byte limit");
 }
@@ -763,6 +872,30 @@ const STORE_SET_SETTING: ClayStore["setSetting"] = ClayStore.prototype.setSettin
 const STORE_DELETE_SETTING: ClayStore["deleteSetting"] = ClayStore.prototype.deleteSetting;
 const STORE_SAMPLE_PROVENANCE: ClayStore["sampleRowProvenance"] =
   ClayStore.prototype.sampleRowProvenance;
+const STORE_SAVE_INTAKE_FORM: ClayStore["saveIntakeForm"] = ClayStore.prototype.saveIntakeForm;
+const STORE_MARK_INTAKE_FORM_PUBLISHED: ClayStore["markIntakeFormPublished"] =
+  ClayStore.prototype.markIntakeFormPublished;
+const STORE_REVOKE_INTAKE_FORM: ClayStore["revokeIntakeForm"] = ClayStore.prototype.revokeIntakeForm;
+const STORE_MARK_INTAKE_FORM_EXPIRED: ClayStore["markIntakeFormExpired"] =
+  ClayStore.prototype.markIntakeFormExpired;
+const STORE_STAGE_INTAKE: ClayStore["stageIntakeSubmission"] = ClayStore.prototype.stageIntakeSubmission;
+const STORE_RECORD_INTAKE_DELIVERY_FAILURE: ClayStore["recordIntakeDeliveryFailure"] =
+  ClayStore.prototype.recordIntakeDeliveryFailure;
+const STORE_AUTHORIZE_INTAKE_DELIVERY_DISCARD: ClayStore["authorizeIntakeDeliveryDiscard"] =
+  ClayStore.prototype.authorizeIntakeDeliveryDiscard;
+const STORE_RESOLVE_INTAKE_DELIVERY_FAILURE: ClayStore["resolveIntakeDeliveryFailure"] =
+  ClayStore.prototype.resolveIntakeDeliveryFailure;
+const STORE_REJECT_INTAKE: ClayStore["rejectIntakeSubmission"] = ClayStore.prototype.rejectIntakeSubmission;
+const STORE_SIMULATE_INTAKE_AUTO: ClayStore["simulateIntakeAutoAccept"] =
+  ClayStore.prototype.simulateIntakeAutoAccept;
+const STORE_ENABLE_INTAKE_AUTO: ClayStore["enableIntakeAutoAccept"] =
+  ClayStore.prototype.enableIntakeAutoAccept;
+const STORE_DISABLE_INTAKE_AUTO: ClayStore["disableIntakeAutoAccept"] =
+  ClayStore.prototype.disableIntakeAutoAccept;
+const STORE_PROCESS_INTAKE_AUTO: ClayStore["processIntakeAutoAccept"] =
+  ClayStore.prototype.processIntakeAutoAccept;
+const STORE_ACCEPT_INTAKE: ClayStore["acceptIntakeSubmission"] = ClayStore.prototype.acceptIntakeSubmission;
+const STORE_UNDO_INTAKE: ClayStore["undoIntakeReceipt"] = ClayStore.prototype.undoIntakeReceipt;
 
 function sampleProvenanceCoordinates(
   store: ClayStore,
@@ -981,6 +1114,73 @@ function executeCapturedMutation(
     case "dismissSuggestion":
       return capturedExecution(captureJsonValue(executeAutomationObserverAuthorityRoute(
         store, request.route, request.payload, executionInstant,
+      ), new WeakSet()));
+    case "intake.saveForm":
+      return capturedExecution(captureJsonValue(STORE_SAVE_INTAKE_FORM.call(
+        store,
+        request.payload.form as unknown as Parameters<ClayStore["saveIntakeForm"]>[0],
+      ), new WeakSet()));
+    case "intake.markPublished":
+      return capturedExecution(captureJsonValue(STORE_MARK_INTAKE_FORM_PUBLISHED.call(
+        store, request.payload.formId, request.payload.publishedAt,
+      ), new WeakSet()));
+    case "intake.revokeForm":
+      return capturedExecution(captureJsonValue(STORE_REVOKE_INTAKE_FORM.call(
+        store, request.payload.formId, request.payload.revokedAt,
+      ), new WeakSet()));
+    case "intake.markExpired":
+      return capturedExecution(captureJsonValue(STORE_MARK_INTAKE_FORM_EXPIRED.call(
+        store, request.payload.formId, request.payload.expiredAt,
+      ), new WeakSet()));
+    case "intake.stageSubmission":
+      return capturedExecution(captureJsonValue(STORE_STAGE_INTAKE.call(
+        store,
+        request.payload.submission as unknown as Parameters<ClayStore["stageIntakeSubmission"]>[0],
+      ), new WeakSet()));
+    case "intake.recordDeliveryFailure":
+      return capturedExecution(captureJsonValue(STORE_RECORD_INTAKE_DELIVERY_FAILURE.call(
+        store,
+        request.payload.failure as unknown as Parameters<ClayStore["recordIntakeDeliveryFailure"]>[0],
+      ), new WeakSet()));
+    case "intake.authorizeDeliveryDiscard":
+      return capturedExecution(captureJsonValue(STORE_AUTHORIZE_INTAKE_DELIVERY_DISCARD.call(
+        store, request.payload.formId, request.payload.submissionId, request.payload.authorizedAt,
+      ), new WeakSet()));
+    case "intake.resolveDeliveryFailure":
+      return capturedExecution(captureJsonValue(STORE_RESOLVE_INTAKE_DELIVERY_FAILURE.call(
+        store, request.payload.formId, request.payload.submissionId,
+        request.payload.resolution, request.payload.resolvedAt,
+      ), new WeakSet()));
+    case "intake.rejectSubmission":
+      return capturedExecution(captureJsonValue(STORE_REJECT_INTAKE.call(
+        store, request.payload.submissionId,
+      ), new WeakSet()));
+    case "intake.simulateAutoAccept":
+      return capturedExecution(captureJsonValue(STORE_SIMULATE_INTAKE_AUTO.call(
+        store,
+        request.payload.draft as unknown as Parameters<ClayStore["simulateIntakeAutoAccept"]>[0],
+      ), new WeakSet()));
+    case "intake.enableAutoAccept":
+      return capturedExecution(captureJsonValue(STORE_ENABLE_INTAKE_AUTO.call(store, {
+        draft: request.payload.draft as unknown as Parameters<ClayStore["enableIntakeAutoAccept"]>[0]["draft"],
+        simulationFingerprint: request.payload.simulationFingerprint,
+      }), new WeakSet()));
+    case "intake.disableAutoAccept":
+      STORE_DISABLE_INTAKE_AUTO.call(store, request.payload.formId);
+      return capturedExecution(null);
+    case "intake.processAutoAccept":
+      return capturedExecution(captureJsonValue(STORE_PROCESS_INTAKE_AUTO.call(
+        store, request.payload.formId,
+      ), new WeakSet()));
+    case "intake.acceptSubmission":
+      return capturedExecution(captureJsonValue(STORE_ACCEPT_INTAKE.call(store, {
+        submissionId: request.payload.submissionId,
+        mode: request.payload.mode,
+        approvedFileIds: [...request.payload.approvedFileIds],
+      }), new WeakSet()));
+    case "intake.undoReceipt":
+      return capturedExecution(captureJsonValue(STORE_UNDO_INTAKE.call(
+        store, request.payload.receiptId,
       ), new WeakSet()));
   }
 }

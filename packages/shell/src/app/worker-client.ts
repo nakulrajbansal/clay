@@ -4,7 +4,8 @@ import type {
   AutomationDefinition, AutomationDefinitionInput, AutomationRun, AutomationSimulation,
   BatchMutation, BatchReceipt, ClayNotification, CommitImportResult, DebugEvent, FieldProvenance,
   GlobalSearchResult,
-  HistoryEntry, ImportReceipt, LivePanel, PanelProvenance,
+  HistoryEntry, IntakeAcceptanceReceipt, IntakeAutoAcceptSimulation, IntakeDeliveryFailure,
+  IntakeInboxItem, ImportReceipt, LivePanel, PanelProvenance,
   PrivateMetricEvent, PrivateMetricsSummary, RegTable, RelationConversionPreview,
   RelationFieldSpec,
   RelationConversionRequest, RelationConversionResult, SemanticSchemaTraceV1, Suggestion,
@@ -17,6 +18,10 @@ import {
 } from "@clay/kernel/projection";
 import { ClayError } from "@clay/kernel/errors";
 import { extractAcornStaticStrings } from "@clay/kernel/shell-runtime";
+import type {
+  IntakeAutoAcceptDraftV1, IntakeAutoAcceptRuleV1,
+  IntakeSubmissionPlaintextV1, LocalIntakeFormV1,
+} from "@clay/schema/intake";
 import type { IntentOutcome } from "../worker/db-worker";
 import { fetchModelHealth } from "./model-health";
 import type {
@@ -1128,6 +1133,124 @@ export class WorkerClient {
     context: WorkerMutationContext,
   ): Promise<{ files: number; bytes: number }> {
     return this.mutationCall("purgeDeletedAttachments", {}, context);
+  }
+  listIntakeForms(): Promise<LocalIntakeFormV1[]> {
+    return this.ephemeralCall("listIntakeForms", {});
+  }
+  saveIntakeForm(
+    form: LocalIntakeFormV1,
+    context: WorkerMutationContext = createWorkerMutationContext(),
+  ): Promise<LocalIntakeFormV1> {
+    return this.mutationCall("saveIntakeForm", { form }, context);
+  }
+  markIntakeFormPublished(
+    formId: string,
+    publishedAt: string,
+    context: WorkerMutationContext = createWorkerMutationContext(),
+  ): Promise<LocalIntakeFormV1> {
+    return this.mutationCall("markIntakeFormPublished", { formId, publishedAt }, context);
+  }
+  revokeIntakeForm(
+    formId: string,
+    revokedAt: string,
+    context: WorkerMutationContext = createWorkerMutationContext(),
+  ): Promise<LocalIntakeFormV1> {
+    return this.mutationCall("revokeIntakeForm", { formId, revokedAt }, context);
+  }
+  markIntakeFormExpired(
+    formId: string,
+    expiredAt: string,
+    context: WorkerMutationContext = createWorkerMutationContext(),
+  ): Promise<LocalIntakeFormV1> {
+    return this.mutationCall("markIntakeFormExpired", { formId, expiredAt }, context);
+  }
+  intakeInbox(): Promise<IntakeInboxItem[]> {
+    return this.ephemeralCall("intakeInbox", {});
+  }
+  intakeReceipts(): Promise<IntakeAcceptanceReceipt[]> {
+    return this.ephemeralCall("intakeReceipts", {});
+  }
+  intakeDeliveryFailures(): Promise<IntakeDeliveryFailure[]> {
+    return this.ephemeralCall("intakeDeliveryFailures", {});
+  }
+  recordIntakeDeliveryFailure(
+    input: { formId: string; submissionId: string; envelopeSha256: string; failedAt: string },
+    context: WorkerMutationContext = createWorkerMutationContext(),
+  ): Promise<IntakeDeliveryFailure> {
+    return this.mutationCall("recordIntakeDeliveryFailure", { failure: input }, context);
+  }
+  authorizeIntakeDeliveryDiscard(
+    formId: string,
+    submissionId: string,
+    authorizedAt: string,
+    context: WorkerMutationContext = createWorkerMutationContext(),
+  ): Promise<IntakeDeliveryFailure> {
+    return this.mutationCall(
+      "authorizeIntakeDeliveryDiscard", { formId, submissionId, authorizedAt }, context,
+    );
+  }
+  resolveIntakeDeliveryFailure(
+    formId: string,
+    submissionId: string,
+    resolution: "staged" | "discarded",
+    resolvedAt: string,
+    context: WorkerMutationContext = createWorkerMutationContext(),
+  ): Promise<IntakeDeliveryFailure | null> {
+    return this.mutationCall("resolveIntakeDeliveryFailure", {
+      formId, submissionId, resolution, resolvedAt,
+    }, context);
+  }
+  stageIntakeSubmission(
+    submission: IntakeSubmissionPlaintextV1,
+    context: WorkerMutationContext = createWorkerMutationContext(),
+  ): Promise<IntakeInboxItem> {
+    return this.mutationCall("stageIntakeSubmission", { submission }, context);
+  }
+  rejectIntakeSubmission(
+    submissionId: string,
+    context: WorkerMutationContext = createWorkerMutationContext(),
+  ): Promise<IntakeInboxItem> {
+    return this.mutationCall("rejectIntakeSubmission", { submissionId }, context);
+  }
+  simulateIntakeAutoAccept(
+    draft: IntakeAutoAcceptDraftV1,
+    context: WorkerMutationContext = createWorkerMutationContext(),
+  ): Promise<IntakeAutoAcceptSimulation> {
+    return this.mutationCall("simulateIntakeAutoAccept", { draft }, context);
+  }
+  enableIntakeAutoAccept(
+    draft: IntakeAutoAcceptDraftV1,
+    simulationFingerprint: string,
+    context: WorkerMutationContext = createWorkerMutationContext(),
+  ): Promise<IntakeAutoAcceptRuleV1> {
+    return this.mutationCall("enableIntakeAutoAccept", { draft, simulationFingerprint }, context);
+  }
+  disableIntakeAutoAccept(
+    formId: string,
+    context: WorkerMutationContext = createWorkerMutationContext(),
+  ): Promise<null> {
+    return this.mutationCall("disableIntakeAutoAccept", { formId }, context);
+  }
+  processIntakeAutoAccept(
+    formId: string,
+    context: WorkerMutationContext = createWorkerMutationContext(),
+  ): Promise<IntakeAcceptanceReceipt[]> {
+    return this.mutationCall("processIntakeAutoAccept", { formId }, context);
+  }
+  acceptIntakeSubmission(
+    submissionId: string,
+    approvedFileIds: string[],
+    context: WorkerMutationContext = createWorkerMutationContext(),
+  ): Promise<IntakeAcceptanceReceipt> {
+    return this.mutationCall("acceptIntakeSubmission", {
+      submissionId, mode: "manual", approvedFileIds,
+    }, context);
+  }
+  undoIntakeReceipt(
+    receiptId: string,
+    context: WorkerMutationContext = createWorkerMutationContext(),
+  ): Promise<IntakeAcceptanceReceipt> {
+    return this.mutationCall("undoIntakeReceipt", { receiptId }, context);
   }
   listAutomations(): Promise<AutomationDefinition[]> {
     return this.ephemeralCall("listAutomations", {});

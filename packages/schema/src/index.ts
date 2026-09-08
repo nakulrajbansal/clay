@@ -381,3 +381,5 @@ export const BridgePush = z.discriminatedUnion("kind", [
              }),
              tokens: z.record(z.string()) }),       // design tokens (G21)
 ]);
+
+export * from "./intake";

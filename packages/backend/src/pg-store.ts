@@ -8,6 +8,7 @@ import type {
   AuthStore, MagicLinkLimits, MutationCallLimits, RepairCapabilityBinding,
   SessionStore, Usage, User,
 } from "./auth";
+import type { IntakeRelayPgPool } from "./intake-relay";
 import { SHARE_RELAY_SCHEMA_SQL } from "./share-pg-store";
 
 export const SCHEMA_SQL = `
@@ -91,6 +92,14 @@ export class PostgresAuthStore implements AuthStore {
 
   /** shared pool for PgSessions (one connection budget, doc 07 thinness) */
   get db(): Queryable { return this.pool; }
+
+  /** Transaction-capable view used by the bounded intake relay adapter. */
+  get transactionalDb(): IntakeRelayPgPool {
+    const candidate = this.pool as Queryable & Partial<IntakeRelayPgPool>;
+    if (typeof candidate.connect !== "function")
+      throw new Error("Postgres pool does not expose transactions");
+    return candidate as IntakeRelayPgPool;
+  }
 
   static connect(databaseUrl: string): PostgresAuthStore {
     return new PostgresAuthStore(new pg.Pool({ connectionString: databaseUrl }));

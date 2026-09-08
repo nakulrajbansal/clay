@@ -526,7 +526,13 @@ async function runAuthorityMutation(
     | "setPrivateMetricsEnabled" | "clearPrivateMetrics" | "recordFilter"
     | "acceptSuggestion" | "dismissSuggestion"
     | "setCheckpoint" | "makeLatest" | "revertPanel" | "renamePanel" | "removePanel"
-    | "addColumn" | "addRelationColumn" | "renameColumn",
+    | "addColumn" | "addRelationColumn" | "renameColumn"
+    | "saveIntakeForm" | "markIntakeFormPublished" | "revokeIntakeForm" | "markIntakeFormExpired"
+    | "stageIntakeSubmission" | "recordIntakeDeliveryFailure"
+    | "authorizeIntakeDeliveryDiscard" | "resolveIntakeDeliveryFailure"
+    | "rejectIntakeSubmission" | "simulateIntakeAutoAccept"
+    | "enableIntakeAutoAccept" | "disableIntakeAutoAccept" | "processIntakeAutoAccept"
+    | "acceptIntakeSubmission" | "undoIntakeReceipt",
   payload: unknown,
   req: Request,
 ): Promise<unknown> {
@@ -545,6 +551,28 @@ async function runAuthorityMutation(
     const record = payload as Record<string, unknown>;
     return (await mustImportCoordinator()).undoImport(String(record.id), requestId);
   }
+  const intakeRoutes = {
+    saveIntakeForm: "intake.saveForm",
+    markIntakeFormPublished: "intake.markPublished",
+    revokeIntakeForm: "intake.revokeForm",
+    markIntakeFormExpired: "intake.markExpired",
+    stageIntakeSubmission: "intake.stageSubmission",
+    recordIntakeDeliveryFailure: "intake.recordDeliveryFailure",
+    authorizeIntakeDeliveryDiscard: "intake.authorizeDeliveryDiscard",
+    resolveIntakeDeliveryFailure: "intake.resolveDeliveryFailure",
+    rejectIntakeSubmission: "intake.rejectSubmission",
+    simulateIntakeAutoAccept: "intake.simulateAutoAccept",
+    enableIntakeAutoAccept: "intake.enableAutoAccept",
+    disableIntakeAutoAccept: "intake.disableAutoAccept",
+    processIntakeAutoAccept: "intake.processAutoAccept",
+    acceptIntakeSubmission: "intake.acceptSubmission",
+    undoIntakeReceipt: "intake.undoReceipt",
+  } as const;
+  if (route in intakeRoutes) return (await target.executeMutation({
+    requestId,
+    route: intakeRoutes[route as keyof typeof intakeRoutes],
+    payload,
+  })).result;
   if (route === "seed") return (await target.executeMutation({
     requestId, route: "starter.seed", payload,
   })).result;
@@ -985,6 +1013,44 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       return mustStore().attachmentStorage();
     case "purgeDeletedAttachments":
       return runAuthorityMutation("purgeDeletedAttachments", p, req);
+    case "listIntakeForms":
+      return mustStore().listIntakeForms();
+    case "intakeInbox":
+      return mustStore().intakeInbox();
+    case "intakeDeliveryFailures":
+      return mustStore().intakeDeliveryFailures();
+    case "intakeReceipts":
+      return mustStore().intakeReceipts();
+    case "saveIntakeForm":
+      return runAuthorityMutation("saveIntakeForm", p, req);
+    case "markIntakeFormPublished":
+      return runAuthorityMutation("markIntakeFormPublished", p, req);
+    case "revokeIntakeForm":
+      return runAuthorityMutation("revokeIntakeForm", p, req);
+    case "markIntakeFormExpired":
+      return runAuthorityMutation("markIntakeFormExpired", p, req);
+    case "stageIntakeSubmission":
+      return runAuthorityMutation("stageIntakeSubmission", p, req);
+    case "recordIntakeDeliveryFailure":
+      return runAuthorityMutation("recordIntakeDeliveryFailure", p, req);
+    case "authorizeIntakeDeliveryDiscard":
+      return runAuthorityMutation("authorizeIntakeDeliveryDiscard", p, req);
+    case "resolveIntakeDeliveryFailure":
+      return runAuthorityMutation("resolveIntakeDeliveryFailure", p, req);
+    case "rejectIntakeSubmission":
+      return runAuthorityMutation("rejectIntakeSubmission", p, req);
+    case "simulateIntakeAutoAccept":
+      return runAuthorityMutation("simulateIntakeAutoAccept", p, req);
+    case "enableIntakeAutoAccept":
+      return runAuthorityMutation("enableIntakeAutoAccept", p, req);
+    case "disableIntakeAutoAccept":
+      return runAuthorityMutation("disableIntakeAutoAccept", p, req);
+    case "processIntakeAutoAccept":
+      return runAuthorityMutation("processIntakeAutoAccept", p, req);
+    case "acceptIntakeSubmission":
+      return runAuthorityMutation("acceptIntakeSubmission", p, req);
+    case "undoIntakeReceipt":
+      return runAuthorityMutation("undoIntakeReceipt", p, req);
     case "listAutomations":
       return mustStore().listAutomations();
     case "upsertAutomation":

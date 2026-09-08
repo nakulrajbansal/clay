@@ -52,6 +52,8 @@ const CommandPalette = lazy(() => import("./CommandPalette")
   .then(module => ({ default: module.CommandPalette })));
 const AutomationCenter = lazy(() => import("./AutomationCenter")
   .then(module => ({ default: module.AutomationCenter })));
+const IntakeCenter = lazy(() => import("./IntakeCenter")
+  .then(module => ({ default: module.IntakeCenter })));
 const HistoryView = lazy(() => import("./HistoryView").then(module => ({ default: module.HistoryView })));
 const PanelFrame = lazy(() => import("./PanelFrame").then(module => ({ default: module.PanelFrame })));
 const ShapeMapView = lazy(() => import("./ShapeMapView").then(module => ({ default: module.ShapeMapView })));
@@ -210,6 +212,7 @@ export function App(): React.JSX.Element {
   const [showData, setShowData] = useState(false);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [showAutomations, setShowAutomations] = useState(false);
+  const [showIntake, setShowIntake] = useState(false);
   const [notifications, setNotifications] = useState<ClayNotification[]>([]);
   const [dataTable, setDataTable] = useState<string | null>(null);
   const [dataRecord, setDataRecord] = useState<string | null>(null);
@@ -226,6 +229,7 @@ export function App(): React.JSX.Element {
     if (mode !== "work") return;
     setRailOpen(false);
     setShowAutomations(false);
+    setShowIntake(false);
     setShowData(false);
     setShowShapeMap(false);
     setShowPrivateMetrics(false);
@@ -1508,6 +1512,7 @@ export function App(): React.JSX.Element {
         onDelete={id => void deleteApp(id)}
         onOpenSearch={() => setShowCommandPalette(true)}
         onOpenAutomations={() => setShowAutomations(true)}
+        onOpenIntake={() => setShowIntake(true)}
         unreadNotifications={notifications.filter(notification => !notification.read).length}
         onOpenData={() => openData()}
         onOpenShapeMap={() => void openShapeMap()}
@@ -1620,6 +1625,27 @@ export function App(): React.JSX.Element {
               onError={message => pushToast(message, "danger")}
               onInfo={message => pushToast(message, "info")}
               onConfirm={askConfirm}
+            />
+          </Suspense>
+        </LazySurfaceBoundary>
+      ) : null}
+      {showIntake && workerRef.current && semanticTrace ? (
+        <LazySurfaceBoundary label="public intake" modal>
+          <Suspense fallback={<SurfaceFallback label="public intake" modal />}>
+            <IntakeCenter
+              worker={workerRef.current}
+              tables={registryTables}
+              semanticTrace={semanticTrace}
+              relayBaseUrl={getBackendUrl() ?? (location.hostname === "localhost"
+                || location.hostname === "127.0.0.1" || location.hostname === "[::1]"
+                ? "http://127.0.0.1:8787" : location.origin)}
+              publicBaseUrl={location.origin}
+              onClose={() => setShowIntake(false)}
+              onWrite={() => {
+                for (const table of registryTables) liveBridge?.notifyWrite(table.name);
+              }}
+              onError={message => pushToast(message, "danger")}
+              onInfo={message => pushToast(message, "info")}
             />
           </Suspense>
         </LazySurfaceBoundary>

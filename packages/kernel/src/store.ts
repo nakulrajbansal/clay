@@ -54,6 +54,21 @@ import {
   type TableId, type TableSemanticV1,
 } from "./semantic";
 import { sha256HexSync } from "./state-digest";
+import type {
+  IntakeAutoAcceptDraftV1,
+  IntakeSubmissionPlaintextV1,
+  LocalIntakeFormV1,
+} from "@clay/schema/intake";
+import {
+  autoAcceptFingerprint, encodeIntakeFileBytes, hydrateStoredIntakeSubmission,
+  intakeInboxItem, mintIntakeReceiptId,
+  parseAutoAcceptDraft, parseIntakeState, parseIntakeSubmission, parseLocalIntakeForm,
+  resolveIntakeForm, splitIntakeSubmissionForStorage,
+  submissionMatchesAutoRule, validateSubmissionForForm,
+  type IntakeAcceptanceReceipt, type IntakeAutoAcceptSimulation,
+  type IntakeDeliveryFailure, type IntakeDeliveryFailureStatus,
+  type IntakeInboxItem, type IntakeLocalStateV1,
+} from "./intake";
 
 type QueryT = import("@clay/schema").Query;
 
@@ -2326,6 +2341,27 @@ export class ClayStore {
         }
       }
     }
+    for (const history of this.#driver.select(
+      `SELECT "table", "before_json", "change_kind" FROM "row_history"`)) {
+      const table = this.reg.get(String(history.table));
+      if (!table) continue;
+      let before: Record<string, unknown>;
+      try {
+        const parsed = JSON.parse(String(history.before_json)) as unknown;
+        if (parsed === null && history.change_kind === "create") continue;
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error();
+        before = parsed as Record<string, unknown>;
+      } catch { return true; }
+      for (const column of table.columns.filter(candidate => candidate.type === "attachment")) {
+        const raw = before[column.name];
+        if (raw === null || raw === undefined) continue;
+        try {
+          const ids = JSON.parse(String(raw)) as unknown;
+          if (!Array.isArray(ids)) return true;
+          if (ids.includes(id)) return true;
+        } catch { return true; }
+      }
+    }
     return false;
   }
 
@@ -2348,15 +2384,20 @@ export class ClayStore {
       let ids: string[];
       try {
         const parsed = JSON.parse(raw) as unknown;
-        ids = Array.isArray(parsed) ? parsed.filter(id => typeof id === "string") : [];
-      } catch { ids = []; }
-      const existing = ids.filter(id => this.#driver.select(
-        `SELECT id FROM "__clay_attachments" WHERE id = ?`, [id])[0] !== undefined);
-      for (const id of existing)
+        if (!Array.isArray(parsed) || parsed.length > MAX_ATTACHMENTS_PER_FIELD
+            || !parsed.every(id => typeof id === "string" && /^file_[0-9a-f]{32}$/.test(id))
+            || new Set(parsed).size !== parsed.length)
+          throw new Error();
+        ids = parsed;
+      } catch {
+        throw new ClayError("E_CONFLICT", "attachment references are not recoverable");
+      }
+      for (const id of ids) {
+        if (this.#driver.select(
+          `SELECT id FROM "__clay_attachments" WHERE id = ?`, [id])[0] === undefined)
+          throw new ClayError("E_CONFLICT", `recoverable attachment '${id}' is missing`);
         this.#driver.exec(`UPDATE "__clay_attachments" SET deleted_at = NULL WHERE id = ?`, [id]);
-      if (existing.length !== ids.length)
-        this.#driver.exec(`UPDATE ${qid(tableName)} SET ${qid(column.name)} = ? WHERE id = ?`,
-          [JSON.stringify(existing), rowId]);
+      }
     }
     const now = nowIso();
     for (const id of previouslyReferenced)
@@ -2509,14 +2550,595 @@ export class ClayStore {
     });
   }
 
+  // ---------- Release F public intake: untrusted staging -> trusted receipt ----------
+  private intakeState(): IntakeLocalStateV1 {
+    return parseIntakeState(this.getSetting<unknown>("intake_v1"));
+  }
+
+  private writeIntakeState(state: IntakeLocalStateV1): void {
+    const live = state.submissions.filter(item =>
+      item.status === "pending" || item.status === "blocked");
+    const terminal = state.submissions.filter(item =>
+      item.status === "accepted" || item.status === "rejected")
+      .sort((left, right) => (right.terminalAt ?? "").localeCompare(left.terminalAt ?? "")
+        || left.submission.submissionId.localeCompare(right.submission.submissionId))
+      .slice(0, 200);
+    state.submissions = [...live, ...terminal];
+    const retainedSubmissionIds = new Set(terminal.map(item => item.submission.submissionId));
+    state.receipts = state.receipts
+      .filter(receipt => retainedSubmissionIds.has(receipt.submissionId))
+      .sort((left, right) => right.acceptedAt.localeCompare(left.acceptedAt))
+      .slice(0, 200);
+    const activeFailures = state.deliveryFailures.filter(item =>
+      item.status === "failed" || item.status === "discard_authorized");
+    const terminalFailures = state.deliveryFailures.filter(item =>
+      item.status === "staged" || item.status === "discarded")
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .slice(0, 200);
+    state.deliveryFailures = [...activeFailures, ...terminalFailures];
+    this.setSetting("intake_v1", parseIntakeState(state));
+  }
+
+  listIntakeForms(): LocalIntakeFormV1[] {
+    return this.intakeState().forms.map(form => parseLocalIntakeForm(form));
+  }
+
+  saveIntakeForm(input: LocalIntakeFormV1): LocalIntakeFormV1 {
+    const form = parseLocalIntakeForm(input);
+    resolveIntakeForm(form.publicForm, this.validationRegistrySnapshot(), this.currentVersion());
+    const state = this.intakeState();
+    const index = state.forms.findIndex(candidate =>
+      candidate.publicForm.formId === form.publicForm.formId);
+    if (index >= 0) {
+      const prior = state.forms[index]!;
+      if (JSON.stringify(prior) === JSON.stringify(form)) return parseLocalIntakeForm(prior);
+      if (form.publicForm.revision <= prior.publicForm.revision
+          || form.ownerPrivateKey !== prior.ownerPrivateKey || form.ownerToken !== prior.ownerToken)
+        throw new ClayError("E_CONFLICT", "intake form revision or owner authority is stale");
+      state.forms[index] = form;
+      state.rules = state.rules.filter(rule => rule.formId !== form.publicForm.formId);
+      state.simulations = state.simulations.filter(item => item.formId !== form.publicForm.formId);
+    } else {
+      if (state.forms.length >= 100)
+        throw new ClayError("E_LIMIT", "an app can keep at most 100 intake forms");
+      state.forms.push(form);
+    }
+    this.writeIntakeState(state);
+    return parseLocalIntakeForm(form);
+  }
+
+  markIntakeFormPublished(formId: string, publishedAt = nowIso()): LocalIntakeFormV1 {
+    const state = this.intakeState();
+    const form = state.forms.find(candidate => candidate.publicForm.formId === formId);
+    if (!form) throw new ClayError("E_VALIDATION", "unknown intake form");
+    if (form.revokedAt !== null) throw new ClayError("E_CONFLICT", "revoked intake form cannot be published");
+    const next = parseLocalIntakeForm({ ...form, publishedAt });
+    state.forms[state.forms.indexOf(form)] = next;
+    this.writeIntakeState(state);
+    return parseLocalIntakeForm(next);
+  }
+
+  revokeIntakeForm(formId: string, revokedAt = nowIso()): LocalIntakeFormV1 {
+    const state = this.intakeState();
+    const form = state.forms.find(candidate => candidate.publicForm.formId === formId);
+    if (!form) throw new ClayError("E_VALIDATION", "unknown intake form");
+    if (form.publishedAt === null) throw new ClayError("E_CONFLICT", "unpublished intake form cannot be revoked");
+    const next = parseLocalIntakeForm({ ...form, revokedAt, terminalReason: "revoked" });
+    state.forms[state.forms.indexOf(form)] = next;
+    state.rules = state.rules.filter(rule => rule.formId !== formId);
+    state.simulations = state.simulations.filter(item => item.formId !== formId);
+    this.writeIntakeState(state);
+    return parseLocalIntakeForm(next);
+  }
+
+  markIntakeFormExpired(formId: string, expiredAt = nowIso()): LocalIntakeFormV1 {
+    const state = this.intakeState();
+    const form = state.forms.find(candidate => candidate.publicForm.formId === formId);
+    if (!form) throw new ClayError("E_VALIDATION", "unknown intake form");
+    if (form.publishedAt === null)
+      throw new ClayError("E_CONFLICT", "unpublished intake form cannot expire");
+    if (form.revokedAt !== null) return parseLocalIntakeForm(form);
+    if (Date.parse(expiredAt) < Date.parse(form.publicForm.delivery.expiresAt))
+      throw new ClayError("E_CONFLICT", "intake form has not expired");
+    const next = parseLocalIntakeForm({ ...form, revokedAt: expiredAt, terminalReason: "expired" });
+    state.forms[state.forms.indexOf(form)] = next;
+    state.rules = state.rules.filter(rule => rule.formId !== formId);
+    state.simulations = state.simulations.filter(item => item.formId !== formId);
+    this.writeIntakeState(state);
+    return parseLocalIntakeForm(next);
+  }
+
+  intakeDeliveryFailures(): IntakeDeliveryFailure[] {
+    return this.intakeState().deliveryFailures
+      .filter(item => item.status === "failed" || item.status === "discard_authorized")
+      .map(item => ({ ...item }))
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }
+
+  recordIntakeDeliveryFailure(input: Readonly<{
+    formId: string;
+    submissionId: string;
+    envelopeSha256: string;
+    failedAt?: string;
+  }>): IntakeDeliveryFailure {
+    if (typeof input !== "object" || input === null || Array.isArray(input)
+        || !/^form_[a-z2-7]{26}$/.test(input.formId)
+        || !/^sub_[a-z2-7]{26}$/.test(input.submissionId)
+        || !/^[0-9a-f]{64}$/.test(input.envelopeSha256)
+        || (input.failedAt !== undefined && (!Number.isFinite(Date.parse(input.failedAt))
+          || new Date(input.failedAt).toISOString() !== input.failedAt)))
+      throw new ClayError("E_VALIDATION", "failed intake delivery evidence is invalid");
+    const state = this.intakeState();
+    if (!state.forms.some(form => form.publicForm.formId === input.formId))
+      throw new ClayError("E_VALIDATION", "failed intake delivery has no local form");
+    const at = input.failedAt ?? nowIso();
+    const existing = state.deliveryFailures.find(item =>
+      item.formId === input.formId && item.submissionId === input.submissionId);
+    if (existing) {
+      if (existing.envelopeSha256 !== input.envelopeSha256)
+        throw new ClayError("E_CONFLICT", "failed intake delivery identity changed");
+      if (existing.status === "failed") existing.updatedAt = at;
+      this.writeIntakeState(state);
+      return { ...existing };
+    }
+    if (state.deliveryFailures.length >= 500) {
+      state.deliveryFailures = state.deliveryFailures
+        .filter(item => item.status === "failed" || item.status === "discard_authorized");
+      if (state.deliveryFailures.length >= 500)
+        throw new ClayError("E_LIMIT", "failed intake delivery evidence is full");
+    }
+    const failure: IntakeDeliveryFailure = {
+      formId: input.formId,
+      submissionId: input.submissionId,
+      envelopeSha256: input.envelopeSha256,
+      status: "failed", failedAt: at, updatedAt: at,
+    };
+    state.deliveryFailures.push(failure);
+    this.writeIntakeState(state);
+    return { ...failure };
+  }
+
+  authorizeIntakeDeliveryDiscard(
+    formId: string,
+    submissionId: string,
+    authorizedAt = nowIso(),
+  ): IntakeDeliveryFailure {
+    if (!Number.isFinite(Date.parse(authorizedAt))
+        || new Date(authorizedAt).toISOString() !== authorizedAt)
+      throw new ClayError("E_VALIDATION", "discard authorization time is invalid");
+    const state = this.intakeState();
+    const failure = state.deliveryFailures.find(item =>
+      item.formId === formId && item.submissionId === submissionId);
+    if (!failure || failure.status !== "failed")
+      throw new ClayError("E_CONFLICT", "failed intake delivery is not awaiting owner action");
+    failure.status = "discard_authorized";
+    failure.updatedAt = authorizedAt;
+    this.writeIntakeState(state);
+    return { ...failure };
+  }
+
+  resolveIntakeDeliveryFailure(
+    formId: string,
+    submissionId: string,
+    resolution: Extract<IntakeDeliveryFailureStatus, "staged" | "discarded">,
+    resolvedAt = nowIso(),
+  ): IntakeDeliveryFailure | null {
+    if (resolution !== "staged" && resolution !== "discarded")
+      throw new ClayError("E_VALIDATION", "failed intake delivery resolution is invalid");
+    if (!Number.isFinite(Date.parse(resolvedAt))
+        || new Date(resolvedAt).toISOString() !== resolvedAt)
+      throw new ClayError("E_VALIDATION", "failed intake delivery resolution time is invalid");
+    const state = this.intakeState();
+    const failure = state.deliveryFailures.find(item =>
+      item.formId === formId && item.submissionId === submissionId);
+    if (!failure) return null;
+    if (resolution === "discarded" && failure.status !== "discard_authorized")
+      throw new ClayError("E_CONFLICT", "delivery discard was not durably authorized");
+    failure.status = resolution;
+    failure.updatedAt = resolvedAt;
+    this.writeIntakeState(state);
+    return { ...failure };
+  }
+
+  stageIntakeSubmission(input: IntakeSubmissionPlaintextV1): IntakeInboxItem {
+    const submission = parseIntakeSubmission(input);
+    const state = this.intakeState();
+    const form = state.forms.find(candidate => candidate.publicForm.formId === submission.formId);
+    if (!form || form.publishedAt === null || form.revokedAt !== null)
+      throw new ClayError("E_CONFLICT", "intake form is not published and active");
+    const resolved = resolveIntakeForm(
+      form.publicForm, this.validationRegistrySnapshot(), this.currentVersion(),
+    );
+    const validation = validateSubmissionForForm(form.publicForm, submission, resolved);
+    const storagePayload = splitIntakeSubmissionForStorage(submission, validation.files);
+    const existing = state.submissions.find(candidate =>
+      candidate.submission.submissionId === submission.submissionId);
+    if (existing) {
+      if (JSON.stringify(existing.submission) !== JSON.stringify(storagePayload.submission))
+        throw new ClayError("E_CONFLICT", "submission identity was reused with different content");
+      return intakeInboxItem(existing, form);
+    }
+    const pending = state.submissions.filter(candidate =>
+      candidate.submission.formId === submission.formId
+      && (candidate.status === "pending" || candidate.status === "blocked")).length;
+    if (pending >= 100) throw new ClayError("E_LIMIT", "local intake inbox is full for this form");
+    const liveCount = state.submissions.filter(candidate =>
+      candidate.status === "pending" || candidate.status === "blocked").length;
+    if (liveCount >= 300) throw new ClayError("E_LIMIT", "local intake inbox is full");
+    const localBytes = state.submissions.reduce((sum, candidate) => sum
+      + candidate.submission.files.reduce((fileSum, file) => fileSum
+        + (candidate.quarantinedFiles.some(bytes => bytes.uploadId === file.uploadId)
+          ? file.size : 0), 0), 0);
+    const incomingBytes = storagePayload.submission.files.reduce((sum, file) => sum
+      + (storagePayload.quarantinedFiles.some(bytes => bytes.uploadId === file.uploadId)
+        ? file.size : 0), 0);
+    if (!Number.isSafeInteger(localBytes + incomingBytes)
+        || localBytes + incomingBytes > 50 * 1024 * 1024)
+      throw new ClayError("E_LIMIT", "local intake quarantine is limited to 50 MB");
+    const stored = {
+      ...storagePayload,
+      stagedAt: nowIso(),
+      terminalAt: null,
+      status: validation.validationErrors.length > 0 ? "blocked" as const : "pending" as const,
+      validationErrors: validation.validationErrors,
+      files: validation.files,
+      receiptId: null,
+    };
+    state.submissions.push(stored);
+    this.writeIntakeState(state);
+    return intakeInboxItem(stored, form);
+  }
+
+  intakeInbox(): IntakeInboxItem[] {
+    const state = this.intakeState();
+    const forms = new Map(state.forms.map(form => [form.publicForm.formId, form]));
+    return state.submissions
+      .map(submission => {
+        const form = forms.get(submission.submission.formId);
+        if (!form) throw new ClayError("E_VALIDATION", "intake submission has no local form");
+        return intakeInboxItem(submission, form);
+      })
+      .sort((left, right) => right.stagedAt.localeCompare(left.stagedAt)
+        || left.submissionId.localeCompare(right.submissionId));
+  }
+
+  rejectIntakeSubmission(submissionId: string): IntakeInboxItem {
+    const state = this.intakeState();
+    const stored = state.submissions.find(item => item.submission.submissionId === submissionId);
+    if (!stored) throw new ClayError("E_VALIDATION", "unknown intake submission");
+    if (stored.status === "accepted")
+      throw new ClayError("E_CONFLICT", "accepted intake must be undone before rejection");
+    stored.status = "rejected";
+    stored.terminalAt = nowIso();
+    stored.quarantinedFiles = [];
+    stored.validationErrors = [];
+    for (const file of stored.files) {
+      if (file.status === "quarantined") {
+        file.status = "rejected";
+        file.reason = "submission rejected by owner";
+      }
+    }
+    this.writeIntakeState(state);
+    const form = state.forms.find(candidate => candidate.publicForm.formId === stored.submission.formId)!;
+    return intakeInboxItem(stored, form);
+  }
+
+  simulateIntakeAutoAccept(input: IntakeAutoAcceptDraftV1): IntakeAutoAcceptSimulation {
+    const draft = parseAutoAcceptDraft(input);
+    const state = this.intakeState();
+    const form = state.forms.find(candidate => candidate.publicForm.formId === draft.formId);
+    if (!form || form.revokedAt !== null || form.publishedAt === null)
+      throw new ClayError("E_CONFLICT", "intake form is not published and active");
+    if (form.publicForm.fileRequests.length > 0)
+      throw new ClayError("E_VALIDATION", "forms with file requests always require owner review");
+    if (draft.formRevision !== form.publicForm.revision
+        || draft.expectedSchemaVersion !== form.publicForm.target.expectedSchemaVersion)
+      throw new ClayError("E_CONFLICT", "auto-accept draft targets another form or schema revision");
+    resolveIntakeForm(form.publicForm, this.validationRegistrySnapshot(), this.currentVersion());
+    const allowed = new Set(form.publicForm.fields.map(field => field.fieldId));
+    if (draft.conditions.some(condition => !allowed.has(condition.fieldId)))
+      throw new ClayError("E_VALIDATION", "auto-accept can only inspect published scalar fields");
+    const pending = state.submissions.filter(item =>
+      item.submission.formId === draft.formId && item.status === "pending");
+    const simulation: IntakeAutoAcceptSimulation = {
+      formId: draft.formId,
+      fingerprint: autoAcceptFingerprint(form.publicForm, draft),
+      simulatedAt: nowIso(),
+      pendingCount: pending.length,
+      matchedSubmissionIds: pending
+        .filter(item => submissionMatchesAutoRule(item.submission, draft))
+        .map(item => item.submission.submissionId)
+        .sort(),
+    };
+    state.simulations = state.simulations.filter(item => item.formId !== draft.formId);
+    state.simulations.push(simulation);
+    this.writeIntakeState(state);
+    return { ...simulation, matchedSubmissionIds: [...simulation.matchedSubmissionIds] };
+  }
+
+  enableIntakeAutoAccept(input: {
+    draft: IntakeAutoAcceptDraftV1;
+    simulationFingerprint: string;
+  }): IntakeLocalStateV1["rules"][number] {
+    if (typeof input !== "object" || input === null || Array.isArray(input)
+        || Reflect.getPrototypeOf(input) !== Object.prototype
+        || Reflect.ownKeys(input).length !== 2
+        || typeof input.simulationFingerprint !== "string"
+        || !/^[0-9a-f]{64}$/.test(input.simulationFingerprint))
+      throw new ClayError("E_VALIDATION", "auto-accept enablement request is invalid");
+    const draft = parseAutoAcceptDraft(input.draft);
+    const state = this.intakeState();
+    const form = state.forms.find(candidate => candidate.publicForm.formId === draft.formId);
+    if (!form || form.revokedAt !== null || form.publishedAt === null)
+      throw new ClayError("E_CONFLICT", "intake form is not published and active");
+    if (form.publicForm.fileRequests.length > 0)
+      throw new ClayError("E_VALIDATION", "forms with file requests always require owner review");
+    if (draft.formRevision !== form.publicForm.revision
+        || draft.expectedSchemaVersion !== form.publicForm.target.expectedSchemaVersion)
+      throw new ClayError("E_CONFLICT", "auto-accept draft targets another form or schema revision");
+    resolveIntakeForm(form.publicForm, this.validationRegistrySnapshot(), this.currentVersion());
+    const fingerprint = autoAcceptFingerprint(form.publicForm, draft);
+    const simulation = state.simulations.find(candidate => candidate.formId === draft.formId);
+    if (!simulation || simulation.fingerprint !== fingerprint
+        || input.simulationFingerprint !== fingerprint)
+      throw new ClayError("E_CONFLICT", "run and review this exact auto-accept simulation first");
+    const enabledAt = nowIso();
+    const rule: IntakeLocalStateV1["rules"][number] = {
+      ...draft,
+      enabled: true,
+      simulationFingerprint: fingerprint,
+      simulatedAt: simulation.simulatedAt,
+      enabledAt,
+    };
+    state.rules = state.rules.filter(candidate => candidate.formId !== draft.formId);
+    state.rules.push(rule);
+    this.writeIntakeState(state);
+    return { ...rule, conditions: rule.conditions.map(condition => ({ ...condition })) };
+  }
+
+  disableIntakeAutoAccept(formId: string): void {
+    const state = this.intakeState();
+    if (!state.rules.some(rule => rule.formId === formId)) return;
+    state.rules = state.rules.filter(rule => rule.formId !== formId);
+    this.writeIntakeState(state);
+  }
+
+  processIntakeAutoAccept(formId: string): IntakeAcceptanceReceipt[] {
+    const state = this.intakeState();
+    const form = state.forms.find(candidate => candidate.publicForm.formId === formId);
+    const rule = state.rules.find(candidate => candidate.formId === formId);
+    if (!form || !rule || !rule.enabled)
+      throw new ClayError("E_CONFLICT", "automatic acceptance is not enabled for this form");
+    if (form.publicForm.fileRequests.length > 0)
+      throw new ClayError("E_VALIDATION", "forms with file requests always require owner review");
+    if (rule.formRevision !== form.publicForm.revision
+        || rule.expectedSchemaVersion !== form.publicForm.target.expectedSchemaVersion
+        || rule.simulationFingerprint !== autoAcceptFingerprint(form.publicForm, {
+          schema: rule.schema,
+          formId: rule.formId,
+          formRevision: rule.formRevision,
+          expectedSchemaVersion: rule.expectedSchemaVersion,
+          conditions: rule.conditions,
+        }))
+      throw new ClayError("E_CONFLICT", "auto-accept rule is stale");
+    resolveIntakeForm(form.publicForm, this.validationRegistrySnapshot(), this.currentVersion());
+    const matches = state.submissions.filter(item => item.submission.formId === formId
+      && item.status === "pending" && submissionMatchesAutoRule(item.submission, rule))
+      .map(item => item.submission.submissionId).sort();
+    return this.#driver.tx(() => matches.map(submissionId => this.acceptIntakeSubmission({
+      submissionId, mode: "auto", approvedFileIds: [],
+    })));
+  }
+
+  acceptIntakeSubmission(input: {
+    submissionId: string;
+    mode: "manual" | "auto";
+    approvedFileIds: string[];
+  }): IntakeAcceptanceReceipt {
+    if (typeof input !== "object" || input === null || Array.isArray(input)
+        || Reflect.getPrototypeOf(input) !== Object.prototype
+        || Reflect.ownKeys(input).length !== 3
+        || typeof input.submissionId !== "string"
+        || (input.mode !== "manual" && input.mode !== "auto")
+        || !Array.isArray(input.approvedFileIds)
+        || input.approvedFileIds.length > 15
+        || input.approvedFileIds.some(id => typeof id !== "string" || !/^upl_[a-z2-7]{26}$/.test(id))
+        || new Set(input.approvedFileIds).size !== input.approvedFileIds.length)
+      throw new ClayError("E_VALIDATION", "intake acceptance request is invalid");
+
+    const state = this.intakeState();
+    const stored = state.submissions.find(item => item.submission.submissionId === input.submissionId);
+    if (!stored) throw new ClayError("E_VALIDATION", "unknown intake submission");
+    if (stored.status !== "pending")
+      throw new ClayError("E_CONFLICT", "only a pending validated submission can be accepted");
+    const form = state.forms.find(candidate => candidate.publicForm.formId === stored.submission.formId);
+    if (!form || form.revokedAt !== null)
+      throw new ClayError("E_CONFLICT", "intake form is not active");
+    if (input.mode === "auto") {
+      const rule = state.rules.find(candidate => candidate.formId === form.publicForm.formId);
+      if (input.approvedFileIds.length !== 0 || form.publicForm.fileRequests.length !== 0
+          || !rule || !rule.enabled
+          || rule.formRevision !== form.publicForm.revision
+          || rule.expectedSchemaVersion !== form.publicForm.target.expectedSchemaVersion
+          || !submissionMatchesAutoRule(stored.submission, rule)
+          || rule.simulationFingerprint !== autoAcceptFingerprint(form.publicForm, {
+            schema: rule.schema,
+            formId: rule.formId,
+            formRevision: rule.formRevision,
+            expectedSchemaVersion: rule.expectedSchemaVersion,
+            conditions: rule.conditions,
+          }))
+        throw new ClayError("E_CONFLICT", "automatic acceptance is not enabled for this submission");
+    }
+    const resolved = resolveIntakeForm(
+      form.publicForm, this.validationRegistrySnapshot(), this.currentVersion(),
+    );
+    const hydrated = hydrateStoredIntakeSubmission(stored);
+    const validation = validateSubmissionForForm(form.publicForm, hydrated, resolved);
+    if (validation.validationErrors.length > 0)
+      throw new ClayError("E_VALIDATION", "quarantined files failed local validation",
+        validation.validationErrors);
+    const approved = new Set(input.approvedFileIds);
+    if ([...approved].some(id => !validation.fileBytes.has(id)))
+      throw new ClayError("E_VALIDATION", "only locally validated quarantined files can be approved");
+    for (const request of form.publicForm.fileRequests) {
+      if (request.required && !hydrated.files.some(file =>
+        file.requestId === request.requestId && approved.has(file.uploadId)))
+        throw new ClayError("E_VALIDATION", `review and approve a file for '${request.label}'`);
+    }
+
+    const selectedUploads = hydrated.files.filter(file => approved.has(file.uploadId));
+    const storage = this.attachmentStorage();
+    const selectedBytes = selectedUploads.reduce((sum, upload) => sum + upload.size, 0);
+    if (storage.activeBytes + selectedBytes > MAX_APP_ATTACHMENT_BYTES)
+      throw new ClayError("E_LIMIT", "this app is limited to 200 MB of active files");
+    if (storage.activeBytes + storage.deletedBytes + selectedBytes > MAX_RETAINED_ATTACHMENT_BYTES)
+      throw new ClayError("E_LIMIT", "this app is limited to 250 MB of retained files");
+
+    return this.#driver.tx(() => {
+      const batch = this.applyBatch({
+        source: "user",
+        summary: `Accepted ${form.publicForm.title} submission`,
+        mutations: [{ kind: "insert", table: resolved.table.name, row: validation.row }],
+      });
+      const rowId = batch.created[0]?.id;
+      if (!rowId) throw new ClayError("E_INTERNAL", "intake acceptance did not create its target record");
+      const acceptedAt = nowIso();
+      const attachmentByUpload = new Map<string, string>();
+      const grouped = new Map<string, string[]>();
+      for (const upload of selectedUploads) {
+        const request = form.publicForm.fileRequests.find(candidate =>
+          candidate.requestId === upload.requestId)!;
+        const column = resolved.fileFields.get(request.requestId)!;
+        const bytes = validation.fileBytes.get(upload.uploadId)!;
+        const identity = safeAttachmentIdentity(upload.name, upload.mime);
+        validateAttachmentSignature(bytes, identity.mime);
+        const id = `file_${uuidv7().replaceAll("-", "")}`;
+        this.#driver.exec(
+          `INSERT INTO "__clay_attachments"(
+             id, name, mime, size, sha256, bytes, created_at, deleted_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
+          [id, identity.name, identity.mime, bytes.byteLength, upload.sha256, bytes, acceptedAt]);
+        attachmentByUpload.set(upload.uploadId, id);
+        grouped.set(column.name, [...(grouped.get(column.name) ?? []), id]);
+      }
+      for (const [field, ids] of grouped) this.#driver.exec(
+        `UPDATE ${qid(resolved.table.name)} SET ${qid(field)} = ?, "updated_at" = ? WHERE "id" = ?`,
+        [JSON.stringify(ids), acceptedAt, rowId],
+      );
+      if (grouped.size > 0)
+        this.recordRowEvent(resolved.table.name, rowId, "updated", [...grouped.keys()]);
+      const finalRow = this.#driver.select(
+        `SELECT * FROM ${qid(resolved.table.name)} WHERE "id" = ?`, [rowId],
+      )[0];
+      if (!finalRow) throw new ClayError("E_INTERNAL", "accepted intake record disappeared");
+      this.#driver.exec(
+        `UPDATE "row_history" SET "after_json" = ?
+         WHERE "batch_id" = ? AND "row_id" = ? AND "change_kind" = 'create'`,
+        [JSON.stringify(finalRow), batch.id, rowId],
+      );
+      const receipt: IntakeAcceptanceReceipt = {
+        id: mintIntakeReceiptId(),
+        submissionId: stored.submission.submissionId,
+        formId: form.publicForm.formId,
+        mode: input.mode,
+        batchId: batch.id,
+        table: resolved.table.name,
+        rowId,
+        attachmentIds: [...attachmentByUpload.values()],
+        acceptedAt,
+        undoneAt: null,
+        undone: false,
+      };
+      for (const file of stored.files) {
+        const attachmentId = attachmentByUpload.get(file.uploadId);
+        if (attachmentId) {
+          file.status = "activated";
+          file.reason = null;
+          file.attachmentId = attachmentId;
+        } else if (file.status === "quarantined") {
+          file.status = "rejected";
+          file.reason = "file was not approved by the owner";
+        }
+      }
+      stored.status = "accepted";
+      stored.terminalAt = acceptedAt;
+      stored.receiptId = receipt.id;
+      stored.validationErrors = [];
+      stored.quarantinedFiles = [];
+      const selectedIds = new Set(selectedUploads.map(upload => upload.uploadId));
+      stored.submission.files = stored.submission.files.filter(file => selectedIds.has(file.uploadId));
+      state.receipts.push(receipt);
+      this.writeIntakeState(state);
+      return { ...receipt, attachmentIds: [...receipt.attachmentIds] };
+    });
+  }
+
+  intakeReceipts(): IntakeAcceptanceReceipt[] {
+    return this.intakeState().receipts.map(receipt => ({
+      ...receipt, attachmentIds: [...receipt.attachmentIds],
+    })).sort((left, right) => right.acceptedAt.localeCompare(left.acceptedAt));
+  }
+
+  undoIntakeReceipt(receiptId: string): IntakeAcceptanceReceipt {
+    const state = this.intakeState();
+    const receipt = state.receipts.find(candidate => candidate.id === receiptId);
+    if (!receipt) throw new ClayError("E_VALIDATION", "unknown intake receipt");
+    if (receipt.undone) throw new ClayError("E_CONFLICT", "intake receipt is already undone");
+    const stored = state.submissions.find(candidate =>
+      candidate.submission.submissionId === receipt.submissionId);
+    if (!stored || stored.receiptId !== receipt.id || stored.status !== "accepted")
+      throw new ClayError("E_CONFLICT", "intake receipt and inbox state do not agree");
+    return this.#driver.tx(() => {
+      const restoredQuarantine: Array<{ uploadId: string; bytes: string }> = [];
+      for (const file of stored.files) {
+        if (file.attachmentId === null || !receipt.attachmentIds.includes(file.attachmentId)) continue;
+        const row = this.#driver.select(
+          `SELECT bytes, size, sha256, mime FROM "__clay_attachments" WHERE "id" = ?`,
+          [file.attachmentId],
+        )[0];
+        if (!row || !(row.bytes instanceof Uint8Array)
+            || Number(row.size) !== file.size || String(row.sha256) !== file.sha256
+            || String(row.mime) !== file.mime)
+          throw new ClayError("E_CONFLICT", "accepted attachment is unavailable for intake undo");
+        validateAttachmentSignature(row.bytes, file.mime);
+        restoredQuarantine.push({ uploadId: file.uploadId, bytes: encodeIntakeFileBytes(row.bytes) });
+      }
+      this.undoBatch(receipt.batchId);
+      const undoneAt = nowIso();
+      for (const attachmentId of receipt.attachmentIds)
+        this.#driver.exec(
+          `UPDATE "__clay_attachments" SET "deleted_at" = ?
+           WHERE "id" = ? AND "deleted_at" IS NULL`, [undoneAt, attachmentId],
+        );
+      for (const file of stored.files) {
+        if (file.attachmentId !== null && receipt.attachmentIds.includes(file.attachmentId)) {
+          file.status = "quarantined";
+          file.reason = null;
+          file.attachmentId = null;
+        }
+      }
+      receipt.undone = true;
+      receipt.undoneAt = undoneAt;
+      stored.status = "pending";
+      stored.terminalAt = null;
+      stored.quarantinedFiles = restoredQuarantine;
+      stored.receiptId = null;
+      this.writeIntakeState(state);
+      return { ...receipt, attachmentIds: [...receipt.attachmentIds] };
+    });
+  }
+
   private async attachmentIntegrityIssues(manifest?: ClayManifest): Promise<string[]> {
     const issues: string[] = [];
     const rows = this.#driver.select(`SELECT * FROM "__clay_attachments"`);
+    const retained = new Set<string>();
     const active = new Set<string>();
     let activeBytes = 0;
     let retainedBytes = 0;
     for (const row of rows) {
       const id = String(row.id);
+      retained.add(id);
       const size = Number(row.size);
       retainedBytes += Number.isFinite(size) ? size : 0;
       try {
@@ -2535,26 +3157,55 @@ export class ClayStore {
         issues.push(`attachment timestamps are invalid for '${id}'`);
       if (row.deleted_at === null) { active.add(id); activeBytes += size; }
     }
-    const referenced = new Set<string>();
+    const activeReferenced = new Set<string>();
+    const recoverableReferenced = new Set<string>();
     for (const table of this.reg.values()) {
       for (const column of table.columns.filter(candidate =>
         candidate.type === "attachment")) {
         for (const row of this.#driver.select(
-          `SELECT ${qid(column.name)} AS value FROM ${qid(table.name)}
+          `SELECT ${qid(column.name)} AS value, "deleted_at" FROM ${qid(table.name)}
            WHERE ${qid(column.name)} IS NOT NULL`)) {
           try {
             const ids = JSON.parse(String(row.value)) as unknown;
             if (!Array.isArray(ids) || ids.length > MAX_ATTACHMENTS_PER_FIELD
-                || !ids.every(id => typeof id === "string")) throw new Error();
+                || !ids.every(id => typeof id === "string" && /^file_[0-9a-f]{32}$/.test(id))
+                || new Set(ids).size !== ids.length) throw new Error();
             for (const id of ids) {
-              referenced.add(id);
-              if (!active.has(id)) issues.push(`attachment field references missing file '${id}'`);
+              recoverableReferenced.add(id);
+              if (row.deleted_at === null) {
+                activeReferenced.add(id);
+                if (!active.has(id)) issues.push(`active attachment field references deleted file '${id}'`);
+              }
             }
           } catch { issues.push(`attachment field '${table.name}.${column.name}' is invalid`); }
         }
       }
     }
-    for (const id of active) if (!referenced.has(id)) issues.push(`active attachment '${id}' is orphaned`);
+    for (const history of this.#driver.select(
+      `SELECT "table", "before_json", "change_kind" FROM "row_history"`)) {
+      const table = this.reg.get(String(history.table));
+      if (!table) continue;
+      try {
+        const before = JSON.parse(String(history.before_json)) as unknown;
+        if (before === null && history.change_kind === "create") continue;
+        if (typeof before !== "object" || before === null || Array.isArray(before)) throw new Error();
+        for (const column of table.columns.filter(candidate => candidate.type === "attachment")) {
+          const raw = (before as Record<string, unknown>)[column.name];
+          if (raw === null || raw === undefined) continue;
+          const ids = JSON.parse(String(raw)) as unknown;
+          if (!Array.isArray(ids) || ids.length > MAX_ATTACHMENTS_PER_FIELD
+              || !ids.every(id => typeof id === "string" && /^file_[0-9a-f]{32}$/.test(id)))
+            throw new Error();
+          for (const id of ids) {
+            recoverableReferenced.add(id);
+          }
+        }
+      } catch { issues.push(`attachment history for '${String(history.table)}' is invalid`); }
+    }
+    for (const id of recoverableReferenced) if (!retained.has(id))
+      issues.push(`recoverable attachment references missing file '${id}'`);
+    for (const id of active) if (!activeReferenced.has(id))
+      issues.push(`active attachment '${id}' is orphaned`);
     if (activeBytes > MAX_APP_ATTACHMENT_BYTES)
       issues.push("active attachment bytes exceed the 200 MB app limit");
     if (retainedBytes > MAX_RETAINED_ATTACHMENT_BYTES)
@@ -3603,11 +4254,19 @@ export class ClayStore {
   softDelete(table: string, id: string): void {
     getTable(this.reg, table);
     this.mustExist(table, id);
+    const priorAttachments = this.rowAttachmentIds(table, id);
     this.#driver.tx(() => {
       this.writeRowHistory(table, id, "soft_delete");
+      const deletedAt = nowIso();
       this.#driver.exec(
         `UPDATE ${qid(table)} SET "deleted_at" = ?, "updated_at" = ? WHERE "id" = ?`,
-        [nowIso(), nowIso(), id]);
+        [deletedAt, deletedAt, id]);
+      for (const attachmentId of priorAttachments)
+        if (!this.attachmentActivelyReferenced(attachmentId))
+          this.#driver.exec(
+            `UPDATE "__clay_attachments" SET "deleted_at" = ? WHERE "id" = ?`,
+            [deletedAt, attachmentId],
+          );
       if (!this.batchContext) this.assertRelationIntegrity();
       this.finishBatchHistory(table, id);
       this.recordRowEvent(table, id, "deleted", ["deleted_at"]);
@@ -3980,10 +4639,11 @@ export class ClayStore {
       if (!openFresh) return { store: staging, manifest, invalidPanels };
       const fresh = await openFresh();
       const shape = staging.archiveCopyShape();
-      let installed: ClayStore | null = null;
+      const installedHolder: { store: ClayStore | null } = { store: null };
       copyDatabase(staging.#driver, fresh, shape, () => {
-        installed = ClayStore.fromDriver(
+        const installed = ClayStore.fromDriver(
           fresh, { requireSemanticRegistry: manifest.format >= 3 });
+        installedHolder.store = installed;
         const readBackIssues = installed.verifyIntegrity(
           manifest.format >= 3 ? manifest : undefined);
         try { installed.assertRelationIntegrity(); }
@@ -3995,8 +4655,20 @@ export class ClayStore {
           throw new ClayError("E_VALIDATION",
             `installed archive failed read-back: ${readBackIssues.join("; ")}`, readBackIssues);
       });
+      const installed = installedHolder.store;
+      if (!installed)
+        throw new ClayError("E_VALIDATION", "installed archive was not readable");
+      const attachmentReadBackIssues = await installed.attachmentIntegrityIssues(
+        manifest.format >= 4 ? manifest : undefined,
+      );
+      if (attachmentReadBackIssues.length > 0) {
+        installed.close();
+        throw new ClayError("E_VALIDATION",
+          `installed archive attachment read-back failed: ${attachmentReadBackIssues.join("; ")}`,
+          attachmentReadBackIssues);
+      }
       staging.close();
-      return { store: installed!, manifest, invalidPanels };
+      return { store: installed, manifest, invalidPanels };
     } catch (e) {
       staging.close();
       throw e;
