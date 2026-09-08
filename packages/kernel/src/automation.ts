@@ -5,6 +5,7 @@ import {
   findColumn, getTable, isVirtualColumn, type RegColumn, type Registry,
 } from "./registry";
 import { coerceValue } from "./rows";
+import type { AutomationTargetIdentityV1 } from "./automation-v2";
 
 export type AutomationCondition = NonNullable<Query["where"]>[number];
 export type AutomationValue =
@@ -37,6 +38,7 @@ export type AutomationDefinition = AutomationDefinitionInput & {
   id: string;
   createdAt: string;
   updatedAt: string;
+  runtime?: { mode: "local"; timeZone?: string; missedPolicy?: "skip" | "run_once_when_available" };
 };
 
 export type AutomationSimulation = {
@@ -57,6 +59,12 @@ export type AutomationRun = {
   batchId: string | null;
   errorCode: string | null;
   undone: boolean;
+  target: AutomationTargetIdentityV1 | null;
+  definitionRevision: number | null;
+  definitionDigest: string | null;
+  logicalTriggerKey: string;
+  triggerKind: AutomationTrigger["kind"] | null;
+  auditOnly: boolean;
 };
 
 export type ClayNotification = {

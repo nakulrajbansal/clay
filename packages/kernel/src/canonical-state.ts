@@ -28,7 +28,10 @@ const SYSTEM_INDEX_SQL = {
   idx_record_events_table_seq: "CREATE INDEX idx_record_events_table_seq ON record_events(table_name, seq)",
 } as const;
 const MERKLE_INDEX_SQL = "CREATE INDEX idx_state_digest_leaves_bucket ON state_digest_leaves(bucket, leaf_key)";
-const EXCLUDED_SYSTEM_TABLES = ["private_metric_state", "private_metric_daily"] as const;
+const EXCLUDED_SYSTEM_TABLES = [
+  "private_metric_state", "private_metric_daily", "automation_source_dispositions",
+  "automation_retry_handles", "automation_scheduler_state",
+] as const;
 const MERKLE_SYSTEM_TABLES = [
   "state_digest_leaves", "state_digest_buckets", "state_digest_root",
 ] as const;
@@ -436,7 +439,13 @@ function systemRowKey(table: string, row: SqlRow, registry: Registry): string {
     case "settings":
       return `system/settings/${textKey(row, "key")}`;
     case "automation_matches":
-      return `system/automation_matches/${textKey(row, "automation_id")}/${textKey(row, "row_id")}`;
+      return `system/automation_matches/${textKey(row, "automation_id")}`
+        + `/${textKey(row, "target_json")}/${integerKey(row, "definition_revision")}`
+        + `/${textKey(row, "definition_digest")}/${textKey(row, "row_id")}`;
+    case "automation_trigger_ledger":
+      return `system/automation_trigger_ledger/${textKey(row, "automation_id")}`
+        + `/${textKey(row, "target_json")}/${integerKey(row, "definition_revision")}`
+        + `/${textKey(row, "definition_digest")}/${textKey(row, "trigger_key")}`;
     case "record_events":
       return `system/record_events/${textKey(row, "id")}`;
     case "inactive_cells": {
