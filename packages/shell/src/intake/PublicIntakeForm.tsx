@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
-import { inspectIntakeFile } from "@clay/kernel";
 import {
   IntakeSubmissionPlaintextV1,
   type IntakeSubmissionValueV1,
   type IntakeUploadedFileV1,
+  type PublicFileRequestV1,
   type PublicIntakeLinkPayloadV1,
 } from "@clay/schema/intake";
 import { encodeBase64Url } from "./crypto";
@@ -13,6 +13,57 @@ import {
 } from "./client";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
+const MIME_EXTENSIONS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  "image/png": ["png"],
+  "image/jpeg": ["jpg", "jpeg"],
+  "text/plain": ["txt"],
+});
+const ACTIVE_MARKERS = [
+  "/javascript", "/js", "/launch", "/openaction", "/embeddedfile", "/richmedia",
+  "/xfa", "<script", "javascript:", "<iframe", "<!doctype html", "<?xml", "[autorun]",
+];
+
+function containsAscii(bytes: Uint8Array, marker: string): boolean {
+  const needle = [...marker].map(character => character.charCodeAt(0));
+  outer: for (let start = 0; start + needle.length <= bytes.length; start++) {
+    for (let index = 0; index < needle.length; index++) {
+      const raw = bytes[start + index]!;
+      const lower = raw >= 65 && raw <= 90 ? raw + 32 : raw;
+      if (lower !== needle[index]) continue outer;
+    }
+    return true;
+  }
+  return false;
+}
+
+function passiveSignature(bytes: Uint8Array, mime: string): boolean {
+  if (mime === "image/png")
+    return [137, 80, 78, 71, 13, 10, 26, 10].every((value, index) => bytes[index] === value);
+  if (mime === "image/jpeg")
+    return bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255;
+  if (mime === "text/plain") {
+    try { return !new TextDecoder("utf-8", { fatal: true }).decode(bytes).includes("\u0000"); }
+    catch { return false; }
+  }
+  return false;
+}
+
+function publicFileIssue(
+  name: string,
+  mime: string,
+  bytes: Uint8Array,
+  request: PublicFileRequestV1,
+): string | null {
+  if (mime === "application/pdf")
+    return "PDF uploads are not accepted without a complete passive-content scanner";
+  const extension = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "";
+  if (!(MIME_EXTENSIONS[mime] ?? []).includes(extension)) return "file name and type do not match";
+  if (bytes.byteLength > request.maxBytes) return "file exceeds this request's size limit";
+  if (!passiveSignature(bytes, mime)) return "file content does not match its passive type signature";
+  if (ACTIVE_MARKERS.some(marker => containsAscii(bytes, marker))) return "active file content is prohibited";
+  return null;
+}
 
 export function PublicIntakeForm({ payload, fetchImpl }: {
   payload: PublicIntakeLinkPayloadV1;
@@ -70,8 +121,8 @@ export function PublicIntakeForm({ payload, fetchImpl }: {
             sha256: await sha256HexBrowser(bytes),
             bytes: encodeBase64Url(bytes),
           };
-          const inspected = inspectIntakeFile(upload, request);
-          if (inspected.error) throw new Error(`${file.name}: ${inspected.error}`);
+          const issue = publicFileIssue(file.name, file.type, bytes, request);
+          if (issue) throw new Error(`${file.name}: ${issue}`);
           uploads.push(upload);
         }
       }
