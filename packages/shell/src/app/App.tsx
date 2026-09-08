@@ -11,6 +11,13 @@ import type {
   PrivateMetricEvent, PrivateMetricsSummary, RegTable, SemanticSchemaTraceV1, Suggestion,
 } from "@clay/kernel";
 import { WorkerClient } from "./worker-client";
+import { fetchModelHealth } from "./model-health";
+import {
+  HostedAuthFence, captureHostedAuthLanding, consumePersistedHostedAuthAttempt,
+  logoutHostedBearerSession, logoutHostedSession, redeemHostedAuthAttempt,
+  observeHostedAccountChanges, publishHostedAccountChange,
+  type HostedAuthAttempt,
+} from "./account-auth";
 import type { IntentOutcome, PreviewInfo } from "../worker/db-worker";
 import type { StarterShellId } from "../shells/seed";
 import { ConversationRail, pruneFeedAfterVersion, type FeedItem } from "./ConversationRail";
@@ -26,7 +33,8 @@ import {
 } from "./themes";
 import {
   getActiveModelAccess, getApiKey, getBackendUrl, getModelProvider,
-  getSessionToken, hasModelAccess, normalizeBackendUrl, setApiKey, setBackendUrl, setModelProvider,
+  getSessionToken, hasModelAccess, isAmbientSessionAllowed, normalizeBackendUrl,
+  setAmbientSessionAllowed, setApiKey, setBackendUrl, setModelProvider,
   setSessionToken, type ModelProviderId,
 } from "./settings";
 import { reorder, type Region } from "./layout";
@@ -82,24 +90,27 @@ async function wipeOpfsWithoutWorker(): Promise<void> {
 async function prepareWorkerModelAccess(
   access: ReturnType<typeof getActiveModelAccess>,
   claySession: string | null,
+  allowAmbientCredentials = false,
 ): Promise<ReturnType<typeof getActiveModelAccess> & {
-  session: string | null; providerToken?: string | null;
+  session: string | null; providerToken?: string | null; allowAmbientCredentials: boolean;
 }> {
   let providerToken: string | null = null;
   if (access.provider === "codex" && access.backendUrl) {
     try {
-      const response = await fetch(`${access.backendUrl.replace(/\/$/, "")}/healthz`);
-      const health = await response.json() as {
+      const response = await fetchModelHealth(`${access.backendUrl.replace(/\/$/, "")}/healthz`);
+      const health = response.value as {
         provider?: string; connector_token?: string;
       };
       if (response.ok && health.provider === "codex"
           && typeof health.connector_token === "string"
-          && health.connector_token.length >= 32) providerToken = health.connector_token;
+          && health.connector_token.length >= 32
+          && health.connector_token.length <= 1_024) providerToken = health.connector_token;
     } catch { /* the status surface reports an unreachable connector */ }
   }
   return {
     ...access,
     session: access.provider === "clay" ? claySession : null,
+    allowAmbientCredentials: access.provider === "clay" && allowAmbientCredentials,
     ...(access.provider === "codex" ? { providerToken } : {}),
   };
 }
@@ -149,7 +160,11 @@ function makeBridge(client: WorkerClient, target: "live" | "shadow",
 }
 
 export function App(): React.JSX.Element {
+  const [authFence] = useState(() => new HostedAuthFence());
+  const [authLanding, setAuthLanding] =
+    useState<ReturnType<typeof captureHostedAuthLanding>>(null);
   const workerRef = useRef<WorkerClient | null>(null);
+  const reloadScheduled = useRef(false);
   const appReadyAt = useRef(Date.now());
   const activationRecorded = useRef(false);
   const firstKeepAt = useRef<number | null>(null);
@@ -234,19 +249,21 @@ export function App(): React.JSX.Element {
     setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), action ? 7000 : 3500);
   }, []);
 
-  // Landing after a magic-link email click (backend redirects the browser
-  // to /?auth=ok|expired with the session cookie set): confirm or nudge,
-  // then clean the URL so a reload doesn't re-toast.
+  // Capture the no-cookie fragment handoff, then remove token/state from the
+  // visible URL before any asynchronous boot or model work.
   useEffect(() => {
     try {
       const u = new URL(window.location.href);
-      const flag = u.searchParams.get("auth");
-      if (!flag) return;
-      if (flag === "ok") pushToast("Signed in — welcome back", "success");
-      if (flag === "expired")
-        pushToast("That sign-in link expired — request a fresh one", "danger");
-      u.searchParams.delete("auth");
-      window.history.replaceState(null, "", u.toString());
+      const landing = captureHostedAuthLanding(u.toString());
+      const fragment = new URLSearchParams(u.hash.slice(1));
+      if (landing) setAuthLanding(landing);
+      else if (fragment.has("auth"))
+        pushToast("That sign-in link is invalid or expired — request a fresh one", "danger");
+      if (fragment.has("auth") || u.searchParams.has("auth")) {
+        u.hash = "";
+        u.searchParams.delete("auth");
+        window.history.replaceState(null, "", u.toString());
+      }
     } catch { /* non-browser context */ }
   }, [pushToast]);
 
@@ -397,30 +414,15 @@ export function App(): React.JSX.Element {
         const activeApp = boot.apps.find(app => app.id === boot.selectedAppInstanceId)!;
         setPersistent(boot.persistent);
 
-        // Device-global model access (B1): migrate any legacy per-app key up
-        // to localStorage once, then push it to the worker. Shared by every
-        // app — no re-entry on switch.
-        if (!getApiKey()) {
-          const legacy = await wc.getSetting<string>("byo_api_key");
-          if (legacy) {
-            setApiKey(legacy);
-            await wc.deleteSetting("byo_api_key");
-          }
-        } else {
-          await wc.deleteSetting("byo_api_key");
-        }
-        if (!getBackendUrl()) {
-          const legacyB = await wc.getSetting<string>("backend_url");
-          const legacyClay = await wc.getSetting<string>("clay_backend_url");
-          if (legacyB || legacyClay) setBackendUrl(legacyB ?? legacyClay!);
-        }
-        await wc.deleteSetting("backend_url");
-        await wc.deleteSetting("clay_backend_url");
+        // Device-global model access remains in trusted shell storage. Authority boot
+        // deletes legacy DB credential rows without reading or returning their values;
+        // installations that never migrated them require deliberate re-entry.
         const selectedProvider = getModelProvider();
         const access = getActiveModelAccess();
         setModelProviderState(selectedProvider);
-        await wc.setModelAccess(await prepareWorkerModelAccess(
+        await wc.setModelAccess(prepareWorkerModelAccess(
           access, selectedProvider === "clay" ? getSessionToken(access.backendUrl) : null,
+          isAmbientSessionAllowed(access.backendUrl),
         ));
         setHasKey(hasModelAccess());
 
@@ -463,7 +465,7 @@ export function App(): React.JSX.Element {
         setPhase("error");
       }
     })();
-    return (): void => worker.terminate();
+    return (): void => { void wc.shutdown().catch(() => undefined); };
   }, [pushToast, recordFault]);
 
   const pickShell = async (id: StarterShellId): Promise<void> => {
@@ -488,11 +490,15 @@ export function App(): React.JSX.Element {
     }
   };
 
-  // Reload after terminating the worker so the next one can re-acquire the
-  // OPFS pool without lock contention (a stuck cause on fast reloads).
+  // Reload only after graceful planner cancellation and preview discard. The
+  // WorkerClient owns a bounded hard-termination fallback for crash recovery.
   const reloadApp = (): void => {
-    try { workerRef.current?.terminate(); } catch { /* ignore */ }
-    setTimeout(() => window.location.reload(), 150);
+    if (reloadScheduled.current) return;
+    reloadScheduled.current = true;
+    const current = workerRef.current;
+    void (current ? current.shutdown() : Promise.resolve())
+      .catch(() => undefined)
+      .finally(() => window.location.reload());
   };
   const switchApp = (id: string): void => { setCurrentApp(id); reloadApp(); };
   const newApp = (): void => setPhase("onboarding");
@@ -819,35 +825,49 @@ export function App(): React.JSX.Element {
     closePreview();
   };
 
-  const applyModelAccess = async (): Promise<void> => {
+  const applyModelAccess = async (): Promise<boolean> => {
     const access = getActiveModelAccess();
-    await client().setModelAccess(await prepareWorkerModelAccess(
+    const applied = await client().setModelAccess(prepareWorkerModelAccess(
       access, access.provider === "clay" ? getSessionToken(access.backendUrl) : null,
+      isAmbientSessionAllowed(access.backendUrl),
     ));
-    setHasKey(hasModelAccess());
+    if (applied) setHasKey(hasModelAccess());
+    return applied;
+  };
+
+  const publishCurrentModelAccess = (): void => {
+    const access = getActiveModelAccess();
+    publishHostedAccountChange(access.backendUrl ?? window.location.origin,
+      hasModelAccess() ? "granted" : "revoked");
   };
 
   const selectModelProvider = async (provider: ModelProviderId): Promise<void> => {
+    authFence.invalidate();
     setModelProvider(provider);
     setModelProviderState(provider);
-    await applyModelAccess();
+    if (!await applyModelAccess()) return;
+    publishCurrentModelAccess();
     if (provider !== "clay") { setAccount(null); setMeter(null); }
     pushToast(`Model connection: ${provider === "codex" ? "Local Codex" : provider}`, "success");
   };
 
   const saveKey = async (key: string): Promise<void> => {
+    authFence.invalidate();
     setApiKey(key || null);
     setModelProvider("anthropic");
     setModelProviderState("anthropic");
-    await applyModelAccess();
+    if (!await applyModelAccess()) return;
+    publishCurrentModelAccess();
     pushToast("Anthropic key saved on this device — used by all your apps", "success");
   };
 
   const saveBackend = async (url: string): Promise<void> => {
     try {
       const normalized = url ? normalizeBackendUrl(url) : null;
+      authFence.invalidate();
       setBackendUrl(normalized);
-      await applyModelAccess();
+      if (!await applyModelAccess()) return;
+      publishCurrentModelAccess();
       pushToast(normalized ? "Model backend set for all apps" : "Model backend cleared", "success");
     } catch (error) {
       pushToast(error instanceof Error ? error.message : String(error), "danger");
@@ -860,6 +880,16 @@ export function App(): React.JSX.Element {
   const [meter, setMeter] = useState<{ used: number; quota: number | null } | null>(null);
   const [account, setAccount] = useState<{ email: string } | null>(null);
   const [accountN, setAccountN] = useState(0);   // bump to refetch
+  useEffect(() => observeHostedAccountChanges(() => {
+    authFence.invalidate();
+    const worker = workerRef.current;
+    if (!worker) return;
+    worker.revokeAccountSession();
+    setAccount(null); setMeter(null);
+    void applyModelAccess().then(applied => {
+      if (applied) setAccountN(value => value + 1);
+    });
+  }), [authFence]);
   useEffect(() => {
     if (phase !== "main") return;
     if (modelProvider !== "clay") { setMeter(null); setAccount(null); return; }
@@ -869,7 +899,7 @@ export function App(): React.JSX.Element {
       try {
         const token = getSessionToken(url);
         const res = await fetch(url.replace(/\/$/, "") + "/me", {
-          credentials: "include",
+          credentials: isAmbientSessionAllowed(url) ? "include" : "omit",
           headers: token ? { authorization: `Bearer ${token}` } : {},
         });
         if (!res.ok) { setMeter(null); setAccount(null); return; }
@@ -881,59 +911,102 @@ export function App(): React.JSX.Element {
     })();
   }, [phase, accountN, modelProvider]);
 
-  // Magic-link sign-in. Dev backends return the link directly (no email
-  // hop); production sends an email and we wait for the user to click.
+  // Magic-link sign-in. Email navigation returns a no-cookie fragment; both
+  // that landing and dev auto-redeem validate one persisted state before redemption.
+  const redeemHostedAuth = async (
+    attempt: HostedAuthAttempt, token: string,
+  ): Promise<void> => {
+    const stillCurrent = (): boolean => authFence.isCurrent(attempt, getActiveModelAccess());
+    const session = await redeemHostedAuthAttempt(
+      authFence, attempt, token, getActiveModelAccess,
+    );
+    if (!session) return;
+    const access = getActiveModelAccess();
+    const applied = await client().setModelAccess(prepareWorkerModelAccess(
+      access, session, false,
+    ));
+    if (!applied || !stillCurrent()) {
+      try { await logoutHostedBearerSession(attempt.backendUrl, session); }
+      catch { /* stale local authorization remains revoked */ }
+      return;
+    }
+    setAmbientSessionAllowed(false, attempt.backendUrl);
+    setSessionToken(session, attempt.backendUrl);
+    publishHostedAccountChange(attempt.backendUrl, "granted");
+    setAccountN(n => n + 1);
+    pushToast("Signed in — your reshapes now count against your plan", "success");
+  };
+
+  useEffect(() => {
+    if (phase !== "main" || !authLanding || !workerRef.current) return;
+    setAuthLanding(null);
+    const persisted = consumePersistedHostedAuthAttempt(
+      authLanding.state, getActiveModelAccess(),
+    );
+    if (!persisted) {
+      pushToast("That sign-in link no longer matches this backend", "danger");
+      return;
+    }
+    const attempt = authFence.resume(persisted);
+    void redeemHostedAuth(attempt, authLanding.token).catch(error => {
+      if (authFence.isCurrent(attempt, getActiveModelAccess()))
+        pushToast("Sign-in failed: " + (error as Error).message, "danger");
+    });
+  }, [phase, authLanding]);
+
   const signIn = async (email: string): Promise<void> => {
-    const url = getActiveModelAccess().backendUrl?.replace(/\/$/, "");
+    const initialAccess = getActiveModelAccess();
+    const url = initialAccess.provider === "clay" ? initialAccess.backendUrl : null;
     if (!url) { pushToast("Set the backend URL first", "danger"); return; }
+    const attempt = authFence.begin(url);
+    const stillCurrent = (): boolean => authFence.isCurrent(attempt, getActiveModelAccess());
     try {
-      const res = await fetch(url + "/auth/magic-link", {
-        method: "POST", credentials: "include",
+      const res = await fetch(attempt.backendUrl + "/auth/magic-link", {
+        method: "POST", credentials: "omit", signal: attempt.signal,
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, state: attempt.state }),
       });
+      if (!stillCurrent()) return;
       if (res.status === 204) {
-        pushToast("Check your email for the sign-in link, then come back here",
-          "success", { label: "I clicked it", run: () => setAccountN(n => n + 1) });
+        pushToast("Check your email for the sign-in link", "success");
         return;
       }
       const body = await res.json() as { link?: string; error?: string };
+      if (!stillCurrent()) return;
       if (!res.ok || !body.link) {
         pushToast(body.error ?? "Could not send the link", "danger");
         return;
       }
-      const cb = await fetch(url + body.link, { credentials: "include" });
-      const got = await cb.json() as { session?: string };
-      if (got.session) {
-        setSessionToken(got.session, url);
-        const access = getActiveModelAccess();
-        await client().setModelAccess(await prepareWorkerModelAccess(
-          access, access.provider === "clay" ? got.session : null,
-        ));
-        setAccountN(n => n + 1);
-        pushToast("Signed in — your reshapes now count against your plan", "success");
-      }
+      const callbackUrl = new URL(body.link, `${attempt.backendUrl}/`);
+      const token = callbackUrl.searchParams.get("token") ?? "";
+      const state = callbackUrl.searchParams.get("state") ?? "";
+      if (callbackUrl.origin !== new URL(attempt.backendUrl).origin
+          || [...callbackUrl.searchParams.keys()].length !== 2
+          || !/^[A-Za-z0-9_-]{32,256}$/.test(token) || state !== attempt.state)
+        throw new Error("Sign-in callback did not match the requested backend and state");
+      if (!consumePersistedHostedAuthAttempt(
+        attempt.state, getActiveModelAccess(),
+      )) return;
+      await redeemHostedAuth(attempt, token);
     } catch (e) {
+      if (!stillCurrent()) return;
       pushToast("Sign-in failed: " + (e as Error).message, "danger");
     }
   };
   const signOut = async (): Promise<void> => {
+    authFence.invalidate();
     const backend = getActiveModelAccess().backendUrl;
     const session = getSessionToken(backend);
-    if (backend && session) {
-      try {
-        await fetch(`${backend.replace(/\/$/, "")}/auth/logout`, {
-          method: "POST",
-          credentials: "include",
-          headers: { authorization: `Bearer ${session}` },
-        });
-      } catch { /* local state still clears when the backend is unreachable */ }
-    }
     setSessionToken(null);
-    const access = getActiveModelAccess();
-    await client().setModelAccess(await prepareWorkerModelAccess(access, null));
-    setAccount(null); setMeter(null);
+    setAmbientSessionAllowed(false, backend);
+    client().revokeAccountSession();
+    if (backend) publishHostedAccountChange(backend, "revoked");
+    setAccount(null); setMeter(null); setAccountN(n => n + 1);
     pushToast("Signed out on this device", "default");
+    if (backend) {
+      try { await logoutHostedSession(backend, session); }
+      catch { /* local revocation already completed */ }
+    }
   };
 
   const head = history.length > 0 ? history[history.length - 1]!.version : 0;

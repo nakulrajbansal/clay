@@ -12,6 +12,8 @@ import { buildServerlessApp } from "../../../api/index";
 import { FREE_QUOTA } from "../src/auth";
 
 const fakeClient = { rawPlan: async () => "{}", rawRepair: async () => "{}" };
+const AUTH_STATE = "a".repeat(64);
+const authBody = (email: string): string => JSON.stringify({ email, state: AUTH_STATE });
 
 /** In-memory emulation of the exact statements pg-store.ts uses. */
 function fakePool(): Queryable & { now: () => number; skew: number } {
@@ -119,7 +121,7 @@ describe("serverless statelessness (Vercel deploy path)", () => {
     const pool = fakePool();
     const a = instance(pool);
     const linkRes = await a.request("/auth/magic-link", { method: "POST",
-      body: JSON.stringify({ email: "vercel@example.com" }),
+      body: authBody("vercel@example.com"),
       headers: { "content-type": "application/json" } });
     const { link } = await linkRes.json() as { link: string };
 
@@ -137,7 +139,7 @@ describe("serverless statelessness (Vercel deploy path)", () => {
   it("tokens are single-use and rate-limited across instances", async () => {
     const pool = fakePool();
     const issue = () => instance(pool).request("/auth/magic-link", { method: "POST",
-      body: JSON.stringify({ email: "hot@example.com" }),
+      body: authBody("hot@example.com"),
       headers: { "content-type": "application/json" } });
     const { link } = await (await issue()).json() as { link: string };
     expect((await instance(pool).request(link)).status).toBe(200);
@@ -150,7 +152,7 @@ describe("serverless statelessness (Vercel deploy path)", () => {
     const pool = fakePool();
     const a = instance(pool);
     const { link } = await (await a.request("/auth/magic-link", { method: "POST",
-      body: JSON.stringify({ email: "meter@example.com" }),
+      body: authBody("meter@example.com"),
       headers: { "content-type": "application/json" } })).json() as { link: string };
     const { session } = await (await a.request(link)).json() as { session: string };
 
@@ -172,7 +174,7 @@ describe("serverless statelessness (Vercel deploy path)", () => {
     const pool = fakePool();
     const start = instance(pool);
     const { link } = await (await start.request("/auth/magic-link", { method: "POST",
-      body: JSON.stringify({ email: "atomic@example.com" }),
+      body: authBody("atomic@example.com"),
       headers: { "content-type": "application/json" } })).json() as { link: string };
     const { session } = await (await instance(pool).request(link)).json() as { session: string };
     const calls = await Promise.all(Array.from({ length: FREE_QUOTA + 8 }, () =>

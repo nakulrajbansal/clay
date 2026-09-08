@@ -93,7 +93,8 @@ async function loadWorker(target: unknown): Promise<WorkerScope> {
   vi.stubGlobal("self", scope);
   vi.resetModules();
   await import("../src/worker/db-worker");
-  await dispatch(scope, { id: 1, op: "boot", payload: {} });
+  expect(await dispatch(scope, { id: 1, op: "boot", payload: {} }))
+    .toMatchObject({ ok: true });
   return scope;
 }
 
@@ -203,6 +204,8 @@ describe("db-worker authority payload boundary", () => {
   it("lets a stale authority reject before worker coercion can invoke caller code", async () => {
     const stale = {
       readStore: () => ({}),
+      reconcileInterruptedPlannerAttempts: async () => 0,
+      close: () => {},
       bootInfo: () => ({
         seeded: false,
         shellId: null,
@@ -240,6 +243,8 @@ describe("db-worker authority payload boundary", () => {
     let received: unknown = Symbol("not called");
     const stale = {
       readStore: () => ({}),
+      reconcileInterruptedPlannerAttempts: async () => 0,
+      close: () => {},
       bootInfo: () => ({
         seeded: false,
         shellId: null,

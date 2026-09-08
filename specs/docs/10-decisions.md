@@ -897,7 +897,11 @@ ADR-049 (2026-09-04) Catalog schema 1 proceeds; raw SQLite-pair target digests a
   guarded driver and opaque write opener. Mirrored request receipts persist
   `prepared|invoked|committed|no_op|failed`; live mutation begins only after durable
   `invoked`, ambiguous invocation never re-enters, and no-op completes from a revalidated
-  shadow. Catalog-first boot adopts a declared multi-legacy manifest, replaces shell app
+  shadow. Poison is rechecked when every queued mutation or operational metric begins,
+  before receipts, reservations, or Store calls. Before every target census, trusted boot
+  deletes the shared legacy credential-key set without selecting values; unmigrated DB-only
+  credentials require deliberate re-entry. Catalog-first boot adopts a declared
+  multi-legacy manifest, replaces shell app
   caches from a detached catalog projection, and publishes app selection/metadata events.
   A real Chromium 149 OPFS worker gate has passed multi-namespace declaration, interruption
   after one atomic adoption, fresh-worker resume, and canonical switching, but remains a
@@ -905,3 +909,64 @@ ADR-049 (2026-09-04) Catalog schema 1 proceeds; raw SQLite-pair target digests a
   starter seeding are authority-routed. Remaining lifecycle, preview, automation, import,
   attachment, undo, restore, and archive routes remain fail-closed and therefore block
   protection publication and release certification.
+
+ADR-051 (2026-09-06) Model I/O lives in a per-intent trusted-shell planner bridge
+  CONTEXT: the DB worker must retain the complete MutationPipeline, validation,
+  shadow preview, pending command, Keep/Discard, and SQLite authority, but importing
+  MutationClient also pulled provider fetch code, credentials, and the prompt corpus
+  into its measured closure beyond the fixed worker budget. Moving validation or
+  preview authority out of the worker would weaken the existing safety boundary.
+  DECISION: each intent or panel repair transfers one fresh MessageChannel to the DB
+  worker. The worker mints a per-boot epoch, a monotonic per-intent generation, and an
+  opaque context identity; captures one immutable S1 snapshot; and requests attempt 0
+  plus at most one pipeline-authorized repair attempt 1. Every closed request,
+  response, cancellation, and finalization acknowledgement binds epoch, generation,
+  context, attempt where applicable, and sequence. Raw output and diagnostics are bounded. Provider response bodies are consumed as
+ streams with a 2 MiB success ceiling and a 64 KiB error ceiling; health responses
+ have a separate 16 KiB ceiling. Provider fetch plus body consumption has a hard
+ 180-second deadline, while each worker-side planner round and finalization wait has
+ an independent 180-second watchdog. Before publishing a preview, the worker requires a finalization
+  acknowledgement FIFO-ordered after earlier shell terminal traffic. Malformed,
+  duplicate, late, cancelled, out-of-order, wrong-attempt, or stale-boot traffic fails
+  closed. Any planner request or repair rejection after `beginAttempt` durably
+  finalizes that attempt as failed before propagating the original error. The trusted
+  shell lazily imports MutationClient and holds the
+  selected provider access only in ECMAScript-private memory. Model-access publication
+  uses descriptor-only exact capture plus separate preparation and publication generations.
+  Starting a replacement synchronously cancels older planners and closes planner admission;
+  only the latest resolved snapshot reopens admission. Late raw output becomes inert, and a
+  late preview is durably discarded before its caller is rejected. Intent text, planner
+  context, repair inputs, successful bodies, and diagnostics are rejected before model
+  invocation or worker publication when they semantically contain active credential
+  material. A monotone fixed-point scan checks every recursively escaped JSON view and
+  rejects fail-closed after 16 MiB of normalization work.
+  Credentials and health fetching never enter DB-worker messages or source. The shell
+  bridge receives only the existing
+  schema/panel/summary/intent context, never rows, and returns opaque raw text or a
+  bounded provider error. The DB worker alone decodes, validates, dry-runs, and creates
+  a preview; model output cannot Keep or mutate live state. Finalization uses a worker-
+  minted one-use nonce, and clarification is not durably recorded until that nonce is
+  acknowledged.
+  CONSEQUENCE: provider, hosted, BYO, and local Codex behavior remains available while
+  the DB-worker closure excludes model-client/prompt code. Boot keeps a candidate authority
+  unreachable until interrupted-attempt reconciliation succeeds and one transaction proves
+  its physical target matches the selected catalog target. Concurrent or duplicate boot
+  calls share that candidate; failure closes it and leaves no Store or mutation authority.
+  Graceful shutdown closes top-level admission synchronously, asks every Store client to
+  echo a one-use FIFO quiescence challenge only after its admitted responses settle,
+  closes Store admission, waits for all admitted responses, durably discards an open
+  preview, closes Store ports and production authority, and only then acknowledges.
+  Ambient cookies default denied and require an explicit per-origin verified grant; backend
+  switches preserve every other origin's decision. A magic-link request persists a random,
+  expiring, one-use state bound to Clay and the exact backend. An email click carries token
+  and state in a fragment without redemption or cookie creation; only a matching app landing
+  redeems with `credentials: "omit"` and publishes the returned bearer. Superseded callbacks
+  revoke only their returned bearer with cookies omitted. Every granted, revoked, provider,
+  key, or backend transition publishes an origin-bound storage generation; other tabs
+  synchronously cancel planners and revoke worker access before reloading device-global
+  access. Local sign-out clears bearer and origin grant, revokes worker access, publishes
+  revocation, and only then attempts bounded cookie-inclusive remote logout.
+  The client treats rejection or a 2.5-second timeout as failure, hard-terminates as a
+  fallback, and reports that failure to its caller. Disposable shadow cleanup cannot
+  reopen or mask a durable Keep or Discard. The remaining Keep/Discard protocol and
+  complete-browser accounting remain unchanged.

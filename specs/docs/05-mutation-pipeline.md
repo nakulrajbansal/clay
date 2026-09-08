@@ -3,15 +3,24 @@
 ## 1. Stages (authoritative)
 
 S0 intake: intent text (<= 500 chars), attempt row created.
-S1 context assembly (local): registry + panel manifest (ids, placements,
-   declared queries; code only for panels the intent names or that the
-   kernel heuristically flags as targets) + last 5 commit summaries +
-   intent. NEVER row data. Typical size < 6k tokens.
-S2 plan generation (model): structured output, MutationPlan schema below.
+S1 context assembly (DB worker, local): registry + panel manifest (ids,
+   placements, declared queries; code only for panels the intent names or that
+   the kernel heuristically flags as targets) + last 5 commit summaries +
+   intent. The worker captures one immutable snapshot. NEVER row data.
+   Typical size < 6k tokens.
+S2 plan generation (model): the worker requests attempt 0 over a fresh, bound
+   MessageChannel; trusted-shell MutationClient returns only bounded opaque raw
+   text (or a bounded provider error). Decode and Zod validation stay in the
+   worker pipeline.
 S3 static validation (local): doc 06 §5. Fail -> S2' repair (once).
 S4 shadow dry-run (local): backup -> migrate shadow -> boot panels bound to
    shadow -> smoke render 2s. Fail -> S2' repair (once, with error).
-S5 preview: proposed panels in place (dashed border) + diff card.
+S5 preview: after validation and dry-run, the DB worker requests generation
+   finalization. The shell acknowledgement is FIFO-ordered after all earlier
+   terminal traffic. Only a healthy finalized generation publishes proposed panels
+   in place (dashed border) plus the diff card.
+   A planner transport rejection after S0 durably records `failed` before the
+   original error propagates; it cannot leave a restart-visible pending attempt.
 S6 keep -> atomic commit (doc 04 §4-5) | discard -> cleanup, record.
 
 Repair budget: ONE model round total per attempt, whether triggered at S3 or
@@ -104,6 +113,13 @@ Slider is disabled during S4–S6. Commit is idempotent via attempt id;
 a crash between migrate and log-append is impossible (same transaction);
 a crash between commit and iframe swap self-heals on reload (manifest is
 derived from the log, not from live iframes).
+
+External planning has two independent bounded lifetimes. Provider fetch and streamed
+body consumption time out after 180 seconds, and the DB-worker planner bridge separately
+times out each plan/repair round and finalization acknowledgement after 180 seconds.
+Reload requests graceful cancellation and preview discard before terminating the worker.
+If a process disappears before that handshake, the next worker boot finalizes every
+persisted pending planner attempt through production authority before publishing boot state.
 
 ## 7. Panel runtime failure handling (post-commit)
 

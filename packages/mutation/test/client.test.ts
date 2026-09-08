@@ -1,10 +1,11 @@
 // MutationClient wire-format tests with a captured fetch: BYO request shape
 // (G1 structured outputs, G3 browser header), response handling, repair
 // escalation (G2), and the hosted path (doc 07).
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import apiSchema from "@clay/schema/mutation-plan-api.json";
 import {
-  DEFAULT_MODEL, MutationClient, REPAIR_MODEL, hydrateApiPlan, type S1Context,
+  DEFAULT_MODEL, MUTATION_RESPONSE_MAX_BYTES, MutationClient, REPAIR_MODEL,
+  hydrateApiPlan, type S1Context,
 } from "../src/index";
 
 const VALID_PLAN = JSON.stringify({
@@ -37,19 +38,27 @@ function openaiBody(text: string): string {
   });
 }
 
-type Captured = { url: string; headers: Record<string, string>; body: Record<string, unknown> };
+type Captured = {
+  url: string; headers: Record<string, string>; body: Record<string, unknown>;
+  credentials?: RequestCredentials;
+};
 
 function fakeFetch(status: number, responseText: string): {
-  fetchFn: (url: string, init: { method: string; headers: Record<string, string>; body: string }) =>
-    Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
+  fetchFn: (url: string, init: {
+    method: string; headers: Record<string, string>; body: string;
+    credentials?: RequestCredentials;
+  }) =>
+    Promise<Response>;
   calls: Captured[];
 } {
   const calls: Captured[] = [];
   return {
     calls,
     fetchFn: async (url, init) => {
-      calls.push({ url, headers: init.headers, body: JSON.parse(init.body) as Record<string, unknown> });
-      return { ok: status < 400, status, text: async () => responseText };
+      calls.push({ url, headers: init.headers,
+        body: JSON.parse(init.body) as Record<string, unknown>,
+        credentials: init.credentials });
+      return new Response(responseText, { status });
     },
   };
 }
@@ -238,6 +247,53 @@ describe("hydrateApiPlan: auto-widen board/timeline panels", () => {
 });
 
 describe("failure handling", () => {
+  it("aborts a stalled provider request at its hard deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      let observedSignal: AbortSignal | undefined;
+      const fetchFn = async (_url: string, init: { signal?: AbortSignal }): Promise<Response> =>
+        new Promise((_resolve, reject) => {
+          observedSignal = init.signal;
+          if (!observedSignal) { reject(new Error("missing request deadline")); return; }
+          observedSignal.addEventListener("abort", () => reject(observedSignal!.reason), { once: true });
+        });
+      const client = new MutationClient(
+        { mode: "hosted", endpoint: "http://127.0.0.1:8788" },
+        { fetchFn: fetchFn as never, requestTimeoutMs: 50 } as never,
+      );
+      const pending = client.requestPlan(ctx());
+      await Promise.resolve();
+      expect(observedSignal).toBeInstanceOf(AbortSignal);
+      await vi.advanceTimersByTimeAsync(51);
+      await expect(pending).resolves.toMatchObject({ ok: false, error: { code: "E_NET" } });
+      expect(observedSignal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels an oversized streamed provider response without returning raw bytes", async () => {
+    let cancelled = false;
+    let sent = false;
+    const fetchFn = async (): Promise<Response> => new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent) return;
+        sent = true;
+        controller.enqueue(new Uint8Array(MUTATION_RESPONSE_MAX_BYTES + 1));
+      },
+      cancel() { cancelled = true; },
+    }), { status: 200 });
+    const client = new MutationClient(
+      { mode: "hosted", endpoint: "http://127.0.0.1:8788" }, { fetchFn },
+    );
+
+    const result = await client.requestPlan(ctx());
+    expect(result).toMatchObject({ ok: false, error: { code: "E_MODEL" } });
+    if (result.ok) throw new Error("expected bounded response failure");
+    expect(result.error).not.toHaveProperty("raw");
+    expect(cancelled).toBe(true);
+  });
+
   it("non-JSON output -> E_PARSE", async () => {
     const { fetchFn } = fakeFetch(200, anthropicBody("sorry, no"));
     const client = new MutationClient({ mode: "byo", apiKey: "k" }, { fetchFn });
@@ -291,6 +347,20 @@ describe("repair round", () => {
 });
 
 describe("hosted mode (doc 07)", () => {
+  it("uses an explicit fail-closed ambient credential policy", async () => {
+    const omitted = fakeFetch(200, VALID_PLAN);
+    await new MutationClient(
+      { mode: "hosted", endpoint: "https://clay.example" }, { fetchFn: omitted.fetchFn },
+    ).requestPlan(ctx());
+    expect(omitted.calls[0]!.credentials).toBe("omit");
+
+    const included = fakeFetch(200, VALID_PLAN);
+    await new MutationClient({
+      mode: "hosted", endpoint: "https://clay.example", credentials: "include",
+    }, { fetchFn: included.fetchFn }).requestPlan(ctx());
+    expect(included.calls[0]!.credentials).toBe("include");
+  });
+
   it("posts the S1 context to /mutations/plan — never an assembled prompt", async () => {
     const { fetchFn, calls } = fakeFetch(200, VALID_PLAN);
     const client = new MutationClient(

@@ -466,6 +466,31 @@ describe("pipeline stages", () => {
     store.close();
   });
 
+  it("finalizes a durable attempt as failed when the first planner request rejects", async () => {
+    const { store } = await seedShellStore(tracker());
+    const planner: Planner = {
+      requestPlan: async () => { throw new ClayError("E_VALIDATION", "planner cancelled"); },
+      requestRepair: async () => { throw new Error("repair must not run"); },
+    };
+    await expect(pipelineFor(store, planner).run(INTENT)).rejects.toThrow("planner cancelled");
+    expect(store.attemptStats()).toEqual({ kept: 0, discarded: 0, failed: 1, clarify: 0 });
+    store.close();
+  });
+
+  it("finalizes a durable attempt as failed when the authorized repair rejects", async () => {
+    const { store } = await seedShellStore(tracker());
+    const planner: Planner = {
+      requestPlan: async () => ({
+        ok: false,
+        error: { code: "E_PARSE", message: "invalid JSON", raw: "{" },
+      }),
+      requestRepair: async () => { throw new ClayError("E_VALIDATION", "bridge poisoned"); },
+    };
+    await expect(pipelineFor(store, planner).run(INTENT)).rejects.toThrow("bridge poisoned");
+    expect(store.attemptStats()).toEqual({ kept: 0, discarded: 0, failed: 1, clarify: 0 });
+    store.close();
+  });
+
   it("S1 context carries shapes + intent, never rows (ADR-009)", async () => {
     const { store } = await seedShellStore(tracker());
     const ctx = pipelineFor(store, new ScriptedPlanner([])).buildContext(INTENT);

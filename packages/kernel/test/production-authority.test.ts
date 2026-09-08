@@ -6,6 +6,9 @@ import {
 import { enumerateCanonicalStateV1 } from "../src/canonical-state";
 import { DeviceCatalog } from "../src/device-catalog";
 import {
+  LEGACY_CREDENTIAL_SETTING_KEYS, removeLegacyCredentialSettingsForAuthorityBoot,
+} from "../src/credential-policy";
+import {
   ProductionStoreAuthority,
   armProductionAuthorityFailureForTest,
   planLegacyBootstrap,
@@ -206,6 +209,64 @@ describe("production Store authority", () => {
     }
   });
 
+  it("removes legacy credential rows before uncatalogued authority census", async () => {
+    const { driver, store } = await legacyStore();
+    for (const key of LEGACY_CREDENTIAL_SETTING_KEYS)
+      store.setSetting(key, `legacy-secret-${key}`);
+    const authority = ProductionStoreAuthority.adoptLegacy(driver, {
+      inventory: legacyInventory,
+      storageKey: "default", displayName: "My app",
+      appInstanceId: opaque("app", "a"), generationId: opaque("gen", "b"),
+      namespaceId: opaque("ns", "c"), adoptionOperationId: opaque("op", "d"),
+      releaseId: opaque("rel", "e"), nowMs: Date.now(), leaseTtlMs: 60_000,
+    });
+    try {
+      for (const key of LEGACY_CREDENTIAL_SETTING_KEYS)
+        expect(authority.readSetting(key)).toBeUndefined();
+    } finally {
+      authority.close();
+    }
+  });
+
+  it("rolls back and idempotently retries the credential-row upgrade", async () => {
+    const { driver, store } = await legacyStore();
+    store.setSetting("byo_api_key", "legacy-secret");
+    expect(() => driver.tx(() => {
+      removeLegacyCredentialSettingsForAuthorityBoot(driver);
+      throw new Error("injected boot failure");
+    })).toThrow("injected boot failure");
+    expect(store.getSetting("byo_api_key")).toBe("legacy-secret");
+    driver.tx(() => removeLegacyCredentialSettingsForAuthorityBoot(driver));
+    driver.tx(() => removeLegacyCredentialSettingsForAuthorityBoot(driver));
+    expect(store.getSetting("byo_api_key")).toBeUndefined();
+    store.close();
+  });
+
+  it("removes a legacy credential row before existing-target census", async () => {
+    const { driver } = await legacyStore();
+    const authority = ProductionStoreAuthority.adoptLegacy(driver, {
+      inventory: legacyInventory,
+      storageKey: "default", displayName: "My app",
+      appInstanceId: opaque("app", "a"), generationId: opaque("gen", "b"),
+      namespaceId: opaque("ns", "c"), adoptionOperationId: opaque("op", "d"),
+      releaseId: opaque("rel", "e"), nowMs: Date.now(), leaseTtlMs: 60_000,
+    });
+    let reopenedDriver: DbDriver;
+    try { reopenedDriver = await snapshotAuthorityDriver(driver); }
+    finally { authority.close(); }
+    reopenedDriver.exec(
+      "INSERT OR REPLACE INTO sys.settings(key,value_json) VALUES (?,?)",
+      ["clay_session", '"legacy-secret"'],
+    );
+    const reopened = ProductionStoreAuthority.openExisting(reopenedDriver, {
+      inventory: { ...legacyInventory, catalogPresent: true },
+      storageKey: "default", releaseId: opaque("rel", "f"),
+      nowMs: Date.now(), leaseTtlMs: 60_000,
+    });
+    try { expect(reopened.readSetting("clay_session")).toBeUndefined(); }
+    finally { reopened.close(); }
+  });
+
   it("does not expose the authority-owned live Store", async () => {
     const { driver } = await legacyStore();
     const authority = ProductionStoreAuthority.adoptLegacy(driver, {
@@ -284,6 +345,37 @@ describe("production Store authority", () => {
         { id: opaque("app", "a"), name: "My app", shellId: "tracker" },
       ]);
     } finally {
+      authority.close();
+    }
+  });
+
+  it("rejects boot projection when catalog selection no longer matches the opened target", async () => {
+    const driver = await cataloguedStore();
+    const authority = ProductionStoreAuthority.openExisting(driver, {
+      inventory: { ...legacyInventory, catalogPresent: true },
+      storageKey: "default",
+      releaseId: opaque("rel", "f"),
+      nowMs: 2_000,
+      leaseTtlMs: 5_000,
+    });
+    const original = DeviceCatalog.openExisting(driver).snapshot();
+    const selectedElsewhere = {
+      ...original.entries[0]!,
+      appInstanceId: opaque("app", "z"),
+      activeGenerationId: opaque("gen", "y"),
+    };
+    const snapshot = vi.spyOn(DeviceCatalog.prototype, "snapshot").mockReturnValue({
+      ...original,
+      selectedAppInstanceId: selectedElsewhere.appInstanceId,
+      catalogGeneration: "999",
+      entries: [original.entries[0]!, selectedElsewhere],
+    });
+    try {
+      expect(() => authority.bootInfo()).toThrowError(expect.objectContaining({
+        code: "E_CATALOG_UNAVAILABLE",
+      }));
+    } finally {
+      snapshot.mockRestore();
       authority.close();
     }
   });
@@ -1272,6 +1364,57 @@ describe("production Store authority", () => {
     }
   });
 
+  it("reconciles interrupted planner attempts through production authority after reopening", async () => {
+    const { driver } = await legacyStore();
+    const authority = ProductionStoreAuthority.adoptLegacy(driver, {
+      inventory: legacyInventory,
+      storageKey: "default", displayName: "My app",
+      appInstanceId: opaque("app", "a"), generationId: opaque("gen", "b"),
+      namespaceId: opaque("ns", "c"), adoptionOperationId: opaque("op", "d"),
+      releaseId: opaque("rel", "e"), nowMs: Date.now(), leaseTtlMs: 60_000,
+    });
+    await authority.plannerMutations().beginAttempt("interrupted reshape");
+    const reopenedDriver = await snapshotAuthorityDriver(driver);
+    authority.close();
+    const reopened = ProductionStoreAuthority.openExisting(reopenedDriver, {
+      inventory: { ...legacyInventory, catalogPresent: true },
+      storageKey: "default", releaseId: opaque("rel", "f"),
+      nowMs: Date.now(), leaseTtlMs: 60_000,
+    });
+    try {
+      await expect(reopened.reconcileInterruptedPlannerAttempts()).resolves.toBe(1);
+      expect(reopened.readStore().attemptStats().failed).toBe(1);
+      await expect(reopened.reconcileInterruptedPlannerAttempts()).resolves.toBe(0);
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("pins interrupted-attempt enumeration against Store prototype replacement", async () => {
+    const { driver } = await legacyStore();
+    const authority = ProductionStoreAuthority.adoptLegacy(driver, {
+      inventory: legacyInventory,
+      storageKey: "default", displayName: "My app",
+      appInstanceId: opaque("app", "a"), generationId: opaque("gen", "b"),
+      namespaceId: opaque("ns", "c"), adoptionOperationId: opaque("op", "d"),
+      releaseId: opaque("rel", "e"), nowMs: Date.now(), leaseTtlMs: 60_000,
+    });
+    const descriptor = Object.getOwnPropertyDescriptor(
+      ClayStore.prototype, "pendingPlannerAttempts",
+    )!;
+    try {
+      await authority.plannerMutations().beginAttempt("interrupted reshape");
+      Object.defineProperty(ClayStore.prototype, "pendingPlannerAttempts", {
+        ...descriptor, value: () => [],
+      });
+      await expect(authority.reconcileInterruptedPlannerAttempts()).resolves.toBe(1);
+      expect(authority.readStore().attemptStats().failed).toBe(1);
+    } finally {
+      Object.defineProperty(ClayStore.prototype, "pendingPlannerAttempts", descriptor);
+      authority.close();
+    }
+  });
+
   it("replays an exact-current legacy v1 raw receipt", async () => {
     const { driver } = await legacyStore();
     const authority = ProductionStoreAuthority.adoptLegacy(driver, {
@@ -1604,6 +1747,51 @@ describe("production Store authority", () => {
         payload: { key: "must_not_write", value: true },
       })).rejects.toThrow(/reopen.*recovery|authority.*poisoned/i);
       expect(authority.readSetting("must_not_write")).toBeUndefined();
+    } finally {
+      authority.close();
+    }
+  });
+
+  it("rejects a mutation queued before an earlier request poisons authority", async () => {
+    const { driver } = await legacyStore();
+    const authority = ProductionStoreAuthority.adoptLegacy(driver, {
+      inventory: legacyInventory,
+      storageKey: "default", displayName: "My app",
+      appInstanceId: opaque("app", "a"), generationId: opaque("gen", "b"),
+      namespaceId: opaque("ns", "c"), adoptionOperationId: opaque("op", "d"),
+      releaseId: opaque("rel", "e"), nowMs: Date.now(), leaseTtlMs: 60_000,
+    });
+    const firstId = opaque("req", "p");
+    const queuedId = opaque("req", "q");
+    const metricId = opaque("req", "r");
+    try {
+      armProductionAuthorityFailureForTest(authority, "crash_after_invocation");
+      const first = authority.executeMutation({
+        requestId: firstId, route: "setting.set",
+        payload: { key: "first_poisoned", value: true },
+      });
+      const queued = authority.executeMutation({
+        requestId: queuedId, route: "setting.set",
+        payload: { key: "queued_must_not_write", value: true },
+      });
+      const metric = authority.executeOperationalMetricMutation({
+        requestId: metricId, route: "recordPrivateMetric",
+        payload: { event: { type: "trust_surface_opened", surface: "history" } },
+      });
+      await expect(first).rejects.toThrow(/simulated.*crash/i);
+      await expect(queued).rejects.toThrow(/poisoned.*reopen|reopen.*poisoned/i);
+      await expect(metric).rejects.toThrow(/poisoned.*reopen|reopen.*poisoned/i);
+      expect(authority.readSetting("queued_must_not_write")).toBeUndefined();
+      expect(authority.readStore().privateMetricsSummary().trust.historyOpened).toBe(0);
+      expect(driver.select(
+        "SELECT request_id FROM sys.production_request_receipts WHERE request_id=?", [queuedId],
+      )).toEqual([]);
+      expect(driver.select(
+        "SELECT request_id FROM catalog.production_request_receipts WHERE request_id=?", [queuedId],
+      )).toEqual([]);
+      expect(driver.select(
+        "SELECT request_id FROM sys.production_request_receipts WHERE request_id=?", [metricId],
+      )).toEqual([]);
     } finally {
       authority.close();
     }

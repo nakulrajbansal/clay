@@ -1738,6 +1738,12 @@ export class ClayStore {
     return id;
   }
 
+  pendingPlannerAttempts(): ReadonlyArray<Readonly<{ id: string; intent: string }>> {
+    return this.#driver.select(
+      "SELECT id, intent_text FROM sys.attempts WHERE outcome = 'pending' ORDER BY at, id",
+    ).map(row => Object.freeze({ id: String(row.id), intent: String(row.intent_text) }));
+  }
+
   #assertPendingAttempt(id: string, expectedIntent?: string): void {
     const rows = this.#driver.select(
       "SELECT intent_text, outcome FROM sys.attempts WHERE id = ?",

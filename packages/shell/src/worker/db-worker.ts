@@ -8,11 +8,15 @@ import type {
   PreparedMutationCommand, PreparedMutationPreview,
 } from "@clay/kernel";
 import { portFromMessagePort, serveStore } from "@clay/kernel/worker-rpc";
+import type { StoreServerControl } from "@clay/kernel/worker-rpc";
 import { ClayError } from "@clay/kernel/errors";
 import type {
   ProductionStoreAuthority,
   ProductionStoreReader,
 } from "@clay/kernel/worker-authority";
+import type {
+  Planner, PlannerContext, PlannerResult,
+} from "@clay/kernel/planner-pipeline";
 import { createStarterSeedBundle } from "../shells/seed";
 import { createSampleFillBundle } from "./samples";
 import { DB_WORKER_ROUTE_CENSUS } from "./mutation-route-census";
@@ -41,6 +45,12 @@ type Request = {
 
 let authority: ProductionStoreAuthority | null = null;
 let authorityBoot: Promise<ProductionStoreAuthority> | null = null;
+type WorkerBootProjection = {
+  persistent: true; seeded: boolean; shellId: string | null;
+  selectedAppInstanceId: string; catalogGeneration: string;
+  apps: Array<{ id: string; name: string; shellId: string }>;
+};
+let bootResult: Promise<WorkerBootProjection> | null = null;
 let store: ProductionStoreReader | null = null;
 let persistent = false;
 type PendingPreview = {
@@ -53,13 +63,304 @@ type SettledDecision =
 let pending: PendingPreview | null = null;
 let settledDecision: SettledDecision | null = null;
 let pipelineRun: Promise<IntentOutcome> | null = null;
-// Device-global model access (B1): set by the main thread from localStorage,
-// shared across every app, never persisted in an app DB.
-type ModelProviderId = "clay" | "openai" | "anthropic" | "codex";
-let modelAccess: {
-  provider?: ModelProviderId; apiKey?: string; backendUrl?: string;
-  session?: string; providerToken?: string;
-} = {};
+let shuttingDown = false;
+let shutdownRun: Promise<null> | null = null;
+let activeOperations = 0;
+let storeAdmissionClosed = false;
+const idleWaiters = new Set<() => void>();
+const storePorts = new Set<MessagePort>();
+const storeServers = new Set<StoreServerControl>();
+
+function beginCountedOperation(closed: boolean): () => void {
+  if (closed)
+    throw new ClayError("E_CONFLICT", "worker shutdown is already in progress");
+  activeOperations++;
+  let finished = false;
+  return () => {
+    if (finished) return;
+    finished = true;
+    activeOperations--;
+    if (activeOperations === 0) {
+      for (const resolve of idleWaiters) resolve();
+      idleWaiters.clear();
+    }
+  };
+}
+
+function beginWorkerOperation(): () => void {
+  return beginCountedOperation(shuttingDown);
+}
+
+function beginStoreOperation(): () => void {
+  return beginCountedOperation(storeAdmissionClosed);
+}
+
+function waitForWorkerIdle(): Promise<void> {
+  if (activeOperations === 0) return Promise.resolve();
+  return new Promise(resolve => idleWaiters.add(resolve));
+}
+
+const PLANNER_RAW_CAP = 64 * 1024;
+const PLANNER_DIAGNOSTIC_CAP = 24;
+const PLANNER_DIAGNOSTIC_LENGTH = 512;
+const PLANNER_BRIDGE_TIMEOUT_MS = 180_000;
+const PLANNER_CONTEXT_CAP = 64 * 1024;
+
+function mintPlannerId(prefix: "boot" | "ctx" | "fin"): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(17));
+  const alphabet = "abcdefghijklmnopqrstuvwxyz234567";
+  let bits = 0;
+  let value = 0;
+  let encoded = "";
+  for (let index = 0; index < bytes.length && encoded.length < 26; index++) {
+    value = (value << 8) | bytes[index]!;
+    bits += 8;
+    while (bits >= 5 && encoded.length < 26) {
+      bits -= 5;
+      encoded += alphabet[(value >>> bits) & 31];
+      value &= (1 << bits) - 1;
+    }
+  }
+  return `${prefix}_${encoded}`;
+}
+
+const plannerBootEpoch = mintPlannerId("boot");
+let plannerGeneration = 0;
+
+function exactRecord(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const actual = Object.keys(value);
+  return actual.length === keys.length && actual.every(key => keys.includes(key));
+}
+
+function freezePlannerValue<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const nested of Object.values(value as Record<string, unknown>)) freezePlannerValue(nested);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+function capturePlannerContext(value: PlannerContext): PlannerContext {
+  const captured = freezePlannerValue(structuredClone(value));
+  if (JSON.stringify(captured).length > PLANNER_CONTEXT_CAP)
+    throw new ClayError("E_VALIDATION", "planner context exceeds the closed bridge limit");
+  return captured;
+}
+
+function boundedDiagnostics(values: string[]): string[] {
+  return values.slice(0, PLANNER_DIAGNOSTIC_CAP)
+    .map(value => String(value).slice(0, PLANNER_DIAGNOSTIC_LENGTH));
+}
+
+type PlannerBinding = {
+  epoch: string; generation: number; contextId: string;
+  attempt: 0 | 1; sequence: number;
+};
+
+type PendingPlannerRound = {
+  binding: PlannerBinding;
+  resolve: (result: PlannerResult) => void;
+  reject: (error: Error) => void;
+};
+
+type PlannerFinalizeBinding = Pick<PlannerBinding,
+  "epoch" | "generation" | "contextId" | "sequence"> & { nonce: string };
+type PendingPlannerFinalize = {
+  binding: PlannerFinalizeBinding;
+  resolve: () => void;
+  reject: (error: Error) => void;
+};
+
+function bridgePlanner(
+  port: MessagePort,
+  generation: number,
+  decodeRaw: (raw: string) => PlannerResult,
+): Readonly<{ planner: Planner; finalize: () => Promise<void> }> {
+  let context: PlannerContext | null = null;
+  let contextId: string | null = null;
+  let pendingRound: PendingPlannerRound | null = null;
+  let pendingFinalize: PendingPlannerFinalize | null = null;
+  let poison: Error | null = null;
+  let nextSequence = 0;
+  let watchdog: ReturnType<typeof setTimeout> | null = null;
+
+  const fail = (message: string): Error =>
+    new ClayError("E_VALIDATION", `planner bridge rejected: ${message}`);
+  const clearWatchdog = (): void => {
+    if (watchdog === null) return;
+    clearTimeout(watchdog);
+    watchdog = null;
+  };
+  const rejectBridge = (error: Error): void => {
+    clearWatchdog();
+    poison ??= error;
+    const waiting = pendingRound;
+    const finalizing = pendingFinalize;
+    pendingRound = null;
+    pendingFinalize = null;
+    waiting?.reject(error);
+    finalizing?.reject(error);
+  };
+  const armWatchdog = (phase: "round" | "finalization"): void => {
+    clearWatchdog();
+    watchdog = setTimeout(() => {
+      rejectBridge(fail(`${phase} timed out`));
+    }, PLANNER_BRIDGE_TIMEOUT_MS);
+  };
+
+  port.onmessage = event => {
+    const message = event.data;
+    if (pendingFinalize) {
+      const waiting = pendingFinalize;
+      const keys = ["v", "kind", "epoch", "generation", "contextId", "sequence", "nonce"] as const;
+      const binding = waiting.binding;
+      if (!exactRecord(message, keys) || message.v !== 1 || message.kind !== "planner.finalized"
+          || message.epoch !== binding.epoch || message.generation !== binding.generation
+          || message.contextId !== binding.contextId || message.sequence !== binding.sequence
+          || message.nonce !== binding.nonce) {
+        rejectBridge(fail("finalization binding does not match"));
+        return;
+      }
+      pendingFinalize = null;
+      clearWatchdog();
+      waiting.resolve();
+      return;
+    }
+    const waiting = pendingRound;
+    if (!waiting) { rejectBridge(fail("late or duplicate response")); return; }
+    const responseKeys = [
+      "v", "kind", "epoch", "generation", "contextId", "attempt", "sequence", "result",
+    ] as const;
+    const cancelKeys = [
+      "v", "kind", "epoch", "generation", "contextId", "attempt", "sequence",
+    ] as const;
+    const isCancel = exactRecord(message, cancelKeys) && message.kind === "planner.cancel";
+    if (!isCancel && !exactRecord(message, responseKeys)) {
+      rejectBridge(fail("message is not closed"));
+      return;
+    }
+    const binding = waiting.binding;
+    if (message.v !== 1
+        || (message.kind !== "planner.response" && message.kind !== "planner.cancel")
+        || message.epoch !== binding.epoch
+        || message.generation !== binding.generation
+        || message.contextId !== binding.contextId
+        || message.attempt !== binding.attempt
+        || message.sequence !== binding.sequence) {
+      rejectBridge(fail("message binding does not match the active round"));
+      return;
+    }
+    if (message.kind === "planner.cancel") {
+      rejectBridge(fail("round was cancelled"));
+      return;
+    }
+    const result = message.result;
+    if (!exactRecord(result, ["ok", "raw"]) || result.ok !== true
+        || typeof result.raw !== "string") {
+      if (!exactRecord(result, ["ok", "error"]) || result.ok !== false) {
+        rejectBridge(fail("terminal result is invalid"));
+        return;
+      }
+      const plannerError = result.error;
+      if (!exactRecord(plannerError, ["code", "message"])
+          || typeof plannerError.code !== "string"
+          || !["E_NET", "E_MODEL"].includes(plannerError.code)
+          || typeof plannerError.message !== "string"
+          || plannerError.message.length > PLANNER_DIAGNOSTIC_LENGTH) {
+        rejectBridge(fail("terminal result is invalid"));
+        return;
+      }
+      pendingRound = null;
+      clearWatchdog();
+      waiting.resolve({ ok: false, error: {
+        code: plannerError.code,
+        message: plannerError.message,
+      } });
+      return;
+    }
+    if (result.raw.length > PLANNER_RAW_CAP) {
+      rejectBridge(fail("raw model output exceeds the bridge limit"));
+      return;
+    }
+    try {
+      const decoded = decodeRaw(result.raw);
+      pendingRound = null;
+      clearWatchdog();
+      waiting.resolve(decoded);
+    } catch (error) {
+      rejectBridge(error instanceof Error ? error : fail("raw output could not be decoded"));
+    }
+  };
+  port.onmessageerror = () => rejectBridge(fail("message could not be cloned"));
+  port.start();
+
+  const request = (
+    suppliedContext: PlannerContext,
+    attempt: 0 | 1,
+    repair: null | { priorRaw: string; diagnostics: string[] },
+  ): Promise<PlannerResult> => {
+    if (poison) return Promise.reject(poison);
+    if (pendingRound) return Promise.reject(fail("a round is already pending"));
+    if (attempt === 0) {
+      if (context) return Promise.reject(fail("first attempt was already requested"));
+      context = capturePlannerContext(suppliedContext);
+      contextId = mintPlannerId("ctx");
+    } else if (!context || !contextId) {
+      return Promise.reject(fail("repair was not authorized by a first attempt"));
+    }
+    if (repair && repair.priorRaw.length > PLANNER_RAW_CAP)
+      return Promise.reject(fail("repair raw output exceeds the bridge limit"));
+    const sequence = nextSequence++;
+    const binding: PlannerBinding = {
+      epoch: plannerBootEpoch, generation, contextId: contextId!, attempt, sequence,
+    };
+    const promise = new Promise<PlannerResult>((resolve, reject) => {
+      pendingRound = { binding, resolve, reject };
+    });
+    armWatchdog("round");
+    try {
+      port.postMessage({
+        v: 1, kind: "planner.request", ...binding, context,
+        repair: repair ? {
+          priorRaw: repair.priorRaw,
+          diagnostics: boundedDiagnostics(repair.diagnostics),
+        } : null,
+      });
+    } catch (error) {
+      rejectBridge(error instanceof Error ? error : fail("request could not be posted"));
+    }
+    return promise;
+  };
+
+  const finalize = (): Promise<void> => {
+    if (poison) return Promise.reject(poison);
+    if (pendingRound || pendingFinalize || !contextId)
+      return Promise.reject(fail("generation cannot finalize"));
+    const binding: PlannerFinalizeBinding = {
+      epoch: plannerBootEpoch, generation, contextId, sequence: nextSequence,
+      nonce: mintPlannerId("fin"),
+    };
+    const promise = new Promise<void>((resolve, reject) => {
+      pendingFinalize = { binding, resolve, reject };
+    });
+    armWatchdog("finalization");
+    try {
+      port.postMessage({ v: 1, kind: "planner.finalize", ...binding });
+    } catch (error) {
+      rejectBridge(error instanceof Error ? error : fail("finalization could not be posted"));
+    }
+    return promise;
+  };
+  return Object.freeze({
+    planner: Object.freeze({
+      requestPlan: (suppliedContext: PlannerContext) => request(suppliedContext, 0, null),
+      requestRepair: (_suppliedContext: PlannerContext, priorRaw: string, failures: string[]) =>
+        request(context ?? _suppliedContext, 1, { priorRaw, diagnostics: failures }),
+    }),
+    finalize,
+  });
+}
 
 // A ring of recent pipeline traces the user can review/copy (the user
 // asked for logs of inputs -> processing -> outputs). Also mirrored to the
@@ -95,27 +396,43 @@ function enforceProductionMutationRoute(op: string): void {
   if (classification.enforcement === "unavailable") failClosedMutation(op);
 }
 
-async function bootProductionAuthority(input: unknown): Promise<{
-  persistent: true; seeded: boolean; shellId: string | null;
-  selectedAppInstanceId: string; catalogGeneration: string;
-  apps: Array<{ id: string; name: string; shellId: string }>;
-}> {
-  if (!authority) {
+async function bootProductionAuthority(input: unknown): Promise<WorkerBootProjection> {
+  if (bootResult) return bootResult;
+  const current = (async (): Promise<WorkerBootProjection> => {
     const { ProductionStoreAuthority } = await import("@clay/kernel/worker-authority");
-    authorityBoot ??= ProductionStoreAuthority.bootBrowser(input);
-    authority = await authorityBoot;
-    store = authority.readStore();
-    persistent = true;
+    const candidateBoot = authorityBoot ??= ProductionStoreAuthority.bootBrowser(input);
+    let candidate: ProductionStoreAuthority | null = null;
+    try {
+      candidate = await candidateBoot;
+      await candidate.reconcileInterruptedPlannerAttempts();
+      const candidateStore = candidate.readStore();
+      const info = candidate.bootInfo();
+      const projection = Object.freeze({
+        persistent: true as const,
+        seeded: info.seeded,
+        shellId: info.shellId,
+        selectedAppInstanceId: info.selectedAppInstanceId,
+        catalogGeneration: info.catalogGeneration,
+        apps: info.apps.map(app => Object.freeze({ ...app })),
+      });
+      authority = candidate;
+      store = candidateStore;
+      persistent = true;
+      return projection;
+    } catch (error) {
+      if (authorityBoot === candidateBoot) authorityBoot = null;
+      if (candidate && authority !== candidate) {
+        try { candidate.close(); } catch { /* candidate was never published */ }
+      }
+      throw error;
+    }
+  })();
+  bootResult = current;
+  try { return await current; }
+  catch (error) {
+    if (bootResult === current) bootResult = null;
+    throw error;
   }
-  const info = authority.bootInfo();
-  return {
-    persistent: true,
-    seeded: info.seeded,
-    shellId: info.shellId,
-    selectedAppInstanceId: info.selectedAppInstanceId,
-    catalogGeneration: info.catalogGeneration,
-    apps: info.apps,
-  };
 }
 
 function authorityRequestId(req: Request): string {
@@ -249,45 +566,65 @@ async function runAuthorityMutation(
   })).result;
 }
 
-async function executePipelineText(text: string): Promise<IntentOutcome> {
+async function executePipelineText(text: string, plannerPort: MessagePort): Promise<IntentOutcome> {
   if (pending)
     throw new ClayError("E_CONFLICT", "Finish the current preview before reshaping again");
   if (!text.trim() || text.length > 500)
     throw new ClayError("E_VALIDATION", "reshape intent must be 1–500 characters");
-  const apiKey = modelAccess.apiKey;
-  const endpoint = modelAccess.backendUrl;
-  if (!apiKey && !endpoint) {
-    return {
-      status: "failed",
-      stage: "plan",
-      reasons: ["No model connection. Add an API key or connect a backend in Settings."],
-      repaired: false,
-    };
-  }
+  if (!Number.isSafeInteger(plannerGeneration + 1))
+    throw new ClayError("E_INTERNAL", "planner generation exhausted");
+  const generation = ++plannerGeneration;
 
-  // The planner and prompt corpus stay outside the worker's boot closure.
-  // Vite emits this cold reshaping path as separate worker chunks.
-  const [{ MutationPipeline }, { MutationClient }] = await Promise.all([
-    import("@clay/kernel/planner-pipeline"),
-    import("@clay/mutation/client"),
-  ]);
-  const transport = apiKey
-    ? { mode: "byo" as const, apiKey }
-    : {
-      mode: "hosted" as const,
-      endpoint: (() => {
-        if (!endpoint) throw new ClayError("E_INTERNAL", "model endpoint disappeared");
-        return endpoint;
-      })(),
-      ...(modelAccess.session ? { session: modelAccess.session } : {}),
-    };
-  const client = new MutationClient(transport, { modelRepair: true });
+  // The DB worker retains pipeline, validation, shadow, and preview authority.
+  // Only opaque model I/O crosses this one-intent port.
+  const { MutationPipeline, decodePlannerRaw } =
+    await import("@clay/kernel/planner-pipeline");
   const events: DebugEvent[] = [];
+  const mutationAuthority = mustAuthority().plannerMutations();
+  let deferredClarifyAttempt: string | null = null;
+  const pipelineAuthority = Object.freeze({
+    beginAttempt: (intent: string) => mutationAuthority.beginAttempt(intent),
+    capturePlanningBase: () => mutationAuthority.capturePlanningBase(),
+    preparePreview: (input: Parameters<typeof mutationAuthority.preparePreview>[0]) =>
+      mutationAuthority.preparePreview(input),
+    assertPlanningBase: (base: Parameters<typeof mutationAuthority.assertPlanningBase>[0]) =>
+      mutationAuthority.assertPlanningBase(base),
+    finalizeAttempt: async (
+      attemptId: string, outcome: "clarify" | "failed", errorCode?: string,
+    ): Promise<void> => {
+      if (outcome === "clarify") {
+        if (deferredClarifyAttempt !== null)
+          throw new ClayError("E_INTERNAL", "clarification finalization was already deferred");
+        deferredClarifyAttempt = attemptId;
+        return;
+      }
+      await mutationAuthority.finalizeAttempt(attemptId, outcome, errorCode);
+    },
+    keep: (requestId: string, command: unknown) => mutationAuthority.keep(requestId, command),
+    discard: (requestId: string, command: unknown) => mutationAuthority.discard(requestId, command),
+  });
+  const bridge = bridgePlanner(plannerPort, generation, decodePlannerRaw);
   const result = await new MutationPipeline(
-    mustAuthority().plannerMutations(),
-    client,
+    pipelineAuthority,
+    bridge.planner,
     { onDebug: event => events.push(event) },
   ).run(text);
+  try {
+    await bridge.finalize();
+  } catch (error) {
+    if (result.status === "preview") {
+      try { result.preview.shadow.close(); } catch { /* disposable cleanup cannot mask failure */ }
+      await mutationAuthority.finalizeAttempt(result.attemptId, "failed", "E_VALIDATION");
+    } else if (result.status === "clarify" && deferredClarifyAttempt === result.attemptId) {
+      await mutationAuthority.finalizeAttempt(result.attemptId, "failed", "E_VALIDATION");
+    }
+    throw error;
+  }
+  if (result.status === "clarify") {
+    if (deferredClarifyAttempt !== result.attemptId)
+      throw new ClayError("E_INTERNAL", "clarification finalization binding is missing");
+    await mutationAuthority.finalizeAttempt(result.attemptId, "clarify");
+  }
   recordTrace({ at: new Date().toISOString(), intent: text, events });
 
   if (result.status === "clarify") {
@@ -328,14 +665,15 @@ async function executePipelineText(text: string): Promise<IntentOutcome> {
   };
 }
 
-async function runPipelineText(text: string): Promise<IntentOutcome> {
+async function runPipelineText(text: string, plannerPort: MessagePort): Promise<IntentOutcome> {
   if (pipelineRun)
     throw new ClayError("E_CONFLICT", "A reshape is already being prepared");
-  const current = executePipelineText(text);
+  const current = executePipelineText(text, plannerPort);
   pipelineRun = current;
   try {
     return await current;
   } finally {
+    plannerPort.close();
     if (pipelineRun === current) pipelineRun = null;
   }
 }
@@ -358,22 +696,23 @@ async function keepPendingPreview(req: Request): Promise<{ version: number }> {
   }
   const current = openPendingPreview("keeping");
   const requestId = authorityRequestId(req);
+  let version: number;
   try {
-    const version = await planner.keep(requestId, current.preview.command);
-    current.preview.shadow.close();
-    if (pending === current) pending = null;
-    settledDecision = {
-      kind: "keep", requestId, command: current.preview.command, version,
-    };
-    try {
-      if (typeof navigator !== "undefined" && navigator.storage?.persist)
-        persistent = await navigator.storage.persist();
-    } catch { /* persistence request is best-effort */ }
-    return { version };
+    version = await planner.keep(requestId, current.preview.command);
   } catch (error) {
     if (pending === current) current.decision = "open";
     throw error;
   }
+  if (pending === current) pending = null;
+  settledDecision = {
+    kind: "keep", requestId, command: current.preview.command, version,
+  };
+  try { current.preview.shadow.close(); } catch { /* committed state is already terminal */ }
+  try {
+    if (typeof navigator !== "undefined" && navigator.storage?.persist)
+      persistent = await navigator.storage.persist();
+  } catch { /* persistence request is best-effort */ }
+  return { version };
 }
 
 async function discardPendingPreview(req: Request): Promise<null> {
@@ -387,16 +726,16 @@ async function discardPendingPreview(req: Request): Promise<null> {
   const requestId = authorityRequestId(req);
   try {
     await planner.discard(requestId, current.preview.command);
-    settledDecision = {
-      kind: "discard", requestId, command: current.preview.command,
-    };
-    current.preview.shadow.close();
-    if (pending === current) pending = null;
-    return null;
   } catch (error) {
     if (pending === current) current.decision = "open";
     throw error;
   }
+  if (pending === current) pending = null;
+  settledDecision = {
+    kind: "discard", requestId, command: current.preview.command,
+  };
+  try { current.preview.shadow.close(); } catch { /* discarded state is already terminal */ }
+  return null;
 }
 
 function serveProductionStore(target: "live" | "shadow", port: MessagePort): void {
@@ -404,12 +743,42 @@ function serveProductionStore(target: "live" | "shadow", port: MessagePort): voi
     ? pending?.preview.shadow.asyncStore() ?? null
     : mustAuthority().asyncStore();
   if (!endpoint) throw new ClayError("E_CATALOG_UNAVAILABLE", "no shadow store is open");
+  storePorts.add(port);
   port.start?.();
-  serveStore(endpoint, portFromMessagePort(port));
+  storeServers.add(serveStore(endpoint, portFromMessagePort(port), beginStoreOperation));
+}
+
+function quiesceWorker(req: Request): Promise<null> {
+  if (shutdownRun) return shutdownRun;
+  shuttingDown = true;
+  shutdownRun = (async () => {
+    await Promise.all([...storeServers].map(server => server.quiesce()));
+    storeAdmissionClosed = true;
+    await waitForWorkerIdle();
+    for (const port of storePorts) {
+      try { port.close(); } catch { /* already closed */ }
+    }
+    storePorts.clear();
+    storeServers.clear();
+    let failure: unknown = null;
+    try {
+      if (pending) await discardPendingPreview(req);
+    } catch (error) { failure = error; }
+    try { authority?.close(); }
+    catch (error) { failure ??= error; }
+    authority = null;
+    store = null;
+    persistent = false;
+    if (failure) throw failure;
+    return null;
+  })();
+  return shutdownRun;
 }
 
 async function handle(req: Request, ports: readonly MessagePort[]): Promise<unknown> {
   enforceProductionMutationRoute(req.op);
+  if (shuttingDown && req.op !== "shutdown")
+    throw new ClayError("E_CONFLICT", "worker shutdown is already in progress");
   const payloadDescriptor = Reflect.getOwnPropertyDescriptor(req, "payload");
   const rawPayload = payloadDescriptor && "value" in payloadDescriptor
     ? payloadDescriptor.value : undefined;
@@ -419,21 +788,8 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       // appId/localStorage is presentation-only. Durable selection and any
       // legacy adoption are derived by trusted worker inventory + catalog.
       return bootProductionAuthority(p);
-    case "setModelAccess": {
-      const provider = p.provider;
-      if (provider !== "clay" && provider !== "openai"
-          && provider !== "anthropic" && provider !== "codex")
-        throw new Error("invalid model provider");
-      modelAccess = {
-        provider,
-        apiKey: p.apiKey ? String(p.apiKey) : undefined,
-        backendUrl: p.backendUrl ? String(p.backendUrl) : undefined,
-        session: provider === "clay" && p.session ? String(p.session) : undefined,
-        providerToken: provider === "codex" && p.providerToken
-          ? String(p.providerToken) : undefined,
-      };
-      return null;
-    }
+    case "shutdown":
+      return quiesceWorker(req);
     case "forkApp":
     case "deleteApp":
       return failClosedMutation(req.op);
@@ -477,16 +833,22 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       serveProductionStore(p.target === "shadow" ? "shadow" : "live", port);
       return null;
     }
-    case "intent":
-      return runPipelineText(String(p.text ?? ""));
+    case "intent": {
+      const port = ports[0];
+      if (!port || ports.length !== 1)
+        throw new ClayError("E_VALIDATION", "intent needs exactly one planner port");
+      return runPipelineText(String(p.text ?? ""), port);
+    }
     case "repairPanel": {
+      const port = ports[0];
+      if (!port || ports.length !== 1)
+        throw new ClayError("E_VALIDATION", "panel repair needs exactly one planner port");
       const panelId = String(p.panelId ?? "");
       const panel = mustStore().livePanels().find(candidate => candidate.panel_id === panelId);
       if (!panel) throw new ClayError("E_VALIDATION", `unknown panel '${panelId}'`);
-      const error = String(p.error ?? "").slice(0, 300);
       return runPipelineText(
-        `Repair panel "${panel.title}" (${panel.panel_id}) after this runtime error: ${error}`
-          .slice(0, 500),
+        `Repair panel "${panel.title}" (${panel.panel_id}) after a runtime error.`.slice(0, 500),
+        port,
       );
     }
     case "revertPanel":
@@ -595,39 +957,11 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
           quotaBytes = est.quota ?? null;
         }
       } catch { /* estimate unavailable */ }
-      let modelConnection = {
-        provider: "none", model: null as string | null,
-        configured: false, reachable: false, detail: "No model connection selected",
-      };
-      if (modelAccess.apiKey) {
-        modelConnection = { provider: "anthropic", model: null,
-          configured: true, reachable: true, detail: "API key stored on this device" };
-      } else if (modelAccess.backendUrl) {
-        try {
-          const healthUrl = `${modelAccess.backendUrl.replace(/\/$/, "")}/healthz`;
-          const response = await fetch(healthUrl, { signal: AbortSignal.timeout(2500) });
-          const health = await response.json() as {
-            model?: boolean; provider?: string; model_id?: string;
-            reachable?: boolean; detail?: string;
-          };
-          modelConnection = {
-            provider: health.provider ?? "hosted", model: health.model_id ?? null,
-            configured: health.model === true,
-            reachable: health.reachable ?? response.ok,
-            detail: health.detail ?? (health.model
-              ? "Connected" : "Backend reachable; model not configured"),
-          };
-        } catch {
-          modelConnection = { provider: "hosted", model: null,
-            configured: true, reachable: false, detail: "Backend is not reachable" };
-        }
-      }
       return {
         persistent, persisted, usageBytes, quotaBytes,
         attachments: mustStore().attachmentStorage(),
         versions: mustStore().headVersion(),
         stats: mustStore().attemptStats(),
-        modelConnection,
       };
     }
     case "requestPersist": {
@@ -653,7 +987,9 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
 self.onmessage = (ev: MessageEvent): void => {
   const req = ev.data as Request;
   void (async () => {
+    let finishOperation = (): void => {};
     try {
+      if (req.op !== "shutdown") finishOperation = beginWorkerOperation();
       const result = await handle(req, ev.ports);
       const transfer: Transferable[] = [];
       if (result && typeof result === "object" && "bytes" in result) {
@@ -671,6 +1007,8 @@ self.onmessage = (ev: MessageEvent): void => {
           message: e instanceof Error ? e.message : String(e),
         },
       });
+    } finally {
+      finishOperation();
     }
   })();
 };

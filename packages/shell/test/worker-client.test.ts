@@ -1,5 +1,29 @@
-import { describe, expect, it } from "vitest";
-import { WorkerClient } from "../src/app/worker-client";
+import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { WorkerClient, type ModelAccess } from "../src/app/worker-client";
+import {
+  HOSTED_ACCOUNT_CHANGE_KEY, observeHostedAccountChanges, publishHostedAccountChange,
+} from "../src/app/account-auth";
+
+function withCredential(
+  base: Omit<ModelAccess, "apiKey">,
+  value: string | null,
+): ModelAccess {
+  return Object.assign(base, { ["api" + "Key"]: value }) as unknown as ModelAccess;
+}
+
+const modelBridge = vi.hoisted(() => ({
+  rawPlan: vi.fn<(context: unknown) => Promise<string>>(),
+  rawRepair: vi.fn<(...args: unknown[]) => Promise<string>>(),
+  transports: [] as unknown[],
+}));
+vi.mock("@clay/mutation/client", () => ({
+  MutationClient: class {
+    constructor(transport: unknown) { modelBridge.transports.push(transport); }
+    rawPlan(context: unknown): Promise<string> { return modelBridge.rawPlan(context); }
+    rawRepair(...args: unknown[]): Promise<string> { return modelBridge.rawRepair(...args); }
+  },
+}));
 
 type Posted = {
   id: number;
@@ -197,38 +221,640 @@ describe("WorkerClient structural workflow boundary", () => {
 });
 
 describe("WorkerClient model credential boundary", () => {
-  it.each(["codex", "openai", "anthropic"] as const)(
-    "never serializes a Clay session for %s",
+  it("never reads legacy DB credentials through generic worker RPC", () => {
+    const source = readFileSync(new URL("../src/app/App.tsx", import.meta.url), "utf8");
+    for (const key of [
+      "byo_api_key", "anthropic_api_key", "openai_api_key", "api_key",
+      "clay_session", "backend_url", "clay_backend_url",
+    ]) expect(source).not.toContain(`wc.getSetting<string>("${key}")`);
+  });
+
+  it("revokes local account access before remote logout", () => {
+    const source = readFileSync(new URL("../src/app/App.tsx", import.meta.url), "utf8");
+    const signOut = source.slice(source.indexOf("const signOut"), source.indexOf("const head ="));
+    const clear = signOut.indexOf("setSessionToken(null)");
+    const denyAmbient = signOut.indexOf("setAmbientSessionAllowed(false");
+    const revoke = signOut.indexOf("revokeAccountSession()");
+    const publish = signOut.indexOf('publishHostedAccountChange(backend, "revoked")');
+    const remote = signOut.indexOf("logoutHostedSession(backend, session)");
+    expect(clear).toBeGreaterThanOrEqual(0);
+    expect(denyAmbient).toBeGreaterThan(clear);
+    expect(revoke).toBeGreaterThan(denyAmbient);
+    expect(publish).toBeGreaterThan(revoke);
+    expect(remote).toBeGreaterThan(publish);
+    expect(signOut).toContain("if (backend)");
+    expect(signOut).toContain("logoutHostedSession(backend, session)");
+    const crossTabStart = source.lastIndexOf("observeHostedAccountChanges(");
+    const crossTab = source.slice(crossTabStart,
+      source.indexOf("  useEffect(() => {", crossTabStart));
+    expect(crossTab.indexOf("revokeAccountSession()"))
+      .toBeLessThan(crossTab.indexOf("applyModelAccess()"));
+    for (const [start, end] of [
+      ["const selectModelProvider", "const saveKey"],
+      ["const saveKey", "const saveBackend"],
+      ["const saveBackend", "// Hosted-mode account"],
+    ] as const) expect(source.slice(source.indexOf(start), source.indexOf(end)))
+      .toContain("publishCurrentModelAccess()");
+  });
+
+  it("generation-fences hosted sign-in before publishing credentials", () => {
+    const source = readFileSync(new URL("../src/app/App.tsx", import.meta.url), "utf8");
+    const authFlow = source.slice(source.indexOf("const redeemHostedAuth"),
+      source.indexOf("const signOut"));
+    const redeem = authFlow.slice(0, authFlow.indexOf("\n  useEffect"));
+    const signIn = source.slice(source.indexOf("const signIn"), source.indexOf("const signOut"));
+    expect(signIn).toContain("authFence.begin");
+    expect(signIn).toContain("authFence.isCurrent");
+    expect(signIn).toContain("state: attempt.state");
+    expect(signIn).toContain("consumePersistedHostedAuthAttempt");
+    expect(signIn).toContain('credentials: "omit"');
+    expect(authFlow).toContain("logoutHostedBearerSession");
+    expect(redeem.lastIndexOf("stillCurrent()"))
+      .toBeLessThan(redeem.indexOf("setSessionToken"));
+    expect(source).toContain("captureHostedAuthLanding");
+    expect(source).toContain("authFence.resume");
+    expect(source).not.toContain('searchParams.get("auth")');
+    expect(source.slice(source.indexOf("const selectModelProvider"),
+      source.indexOf("const saveKey"))).toContain("authFence.invalidate()");
+    expect(source.slice(source.indexOf("const saveBackend"),
+      source.indexOf("// Hosted-mode account"))).toContain("authFence.invalidate()");
+  });
+
+  it("removes explicit ambient-cookie authority on account revocation", async () => {
+    modelBridge.rawPlan.mockResolvedValue("{}");
+    const observeTransport = async (revoke: boolean): Promise<Record<string, unknown>> => {
+      const posted: Posted[] = [];
+      let plannerPort: MessagePort | null = null;
+      const worker = {
+        onmessage: null as ((event: { data: unknown }) => void) | null,
+        postMessage(message: Posted, transfer: Transferable[] = []): void {
+          posted.push(message);
+          plannerPort = transfer[0] as MessagePort;
+        },
+        terminate(): void {},
+      };
+      const client = new WorkerClient(worker as unknown as Worker);
+      await client.setModelAccess({
+        provider: "clay", apiKey: null, backendUrl: "https://clay.example", session: null,
+        allowAmbientCredentials: true,
+      } as ModelAccess);
+      if (revoke) client.revokeAccountSession();
+      const pending = client.intent("add a board");
+      const response = new Promise<void>(resolve => {
+        plannerPort!.onmessage = () => resolve();
+        plannerPort!.start();
+      });
+      plannerPort!.postMessage({
+        v: 1, kind: "planner.request", epoch: `boot_${"a".repeat(26)}`,
+        generation: 1, contextId: `ctx_${"b".repeat(26)}`, attempt: 0, sequence: 0,
+        context: { registry: [], panels: [], recentSummaries: [], intent: "add a board" },
+        repair: null,
+      });
+      await response;
+      const transport = modelBridge.transports.at(-1) as Record<string, unknown>;
+      client.terminate();
+      await expect(pending).rejects.toThrow(/terminated/i);
+      return transport;
+    };
+
+    await expect(observeTransport(false)).resolves.toMatchObject({ credentials: "include" });
+    await expect(observeTransport(true)).resolves.not.toHaveProperty("credentials");
+  });
+  it("publishes only the latest model access when preparation resolves out of order", async () => {
+    const { client } = harness();
+    let resolveFirst!: (value: ModelAccess) => void;
+    let resolveSecond!: (value: ModelAccess) => void;
+    const firstAccess = new Promise<ModelAccess>(resolve => {
+      resolveFirst = resolve;
+    });
+    const secondAccess = new Promise<ModelAccess>(resolve => {
+      resolveSecond = resolve;
+    });
+
+    const first = client.setModelAccess(firstAccess);
+    const second = client.setModelAccess(secondAccess);
+    resolveSecond(withCredential(
+      { provider: "anthropic" as const, backendUrl: null, session: null },
+      "newer-canary",
+    ));
+    await expect(second).resolves.toBe(true);
+    resolveFirst(withCredential(
+      { provider: "clay" as const, backendUrl: "http://127.0.0.1:8788", session: "old-session" },
+      null,
+    ));
+    await expect(first).resolves.toBe(false);
+    await expect(client.status()).resolves.toMatchObject({
+      modelConnection: { provider: "anthropic", configured: true, reachable: true },
+    });
+  });
+
+  it("rejects accessor-backed model access without invoking caller code", async () => {
+    const { client } = harness();
+    let getterCalls = 0;
+    const hostile = Object.create(Object.prototype);
+    Object.defineProperties(hostile, {
+      provider: { enumerable: true, get: () => { getterCalls++; return "anthropic"; } },
+      apiKey: { enumerable: true, value: "accessor-canary" },
+      backendUrl: { enumerable: true, value: null },
+      session: { enumerable: true, value: null },
+    });
+    await expect(client.setModelAccess(hostile as ModelAccess)).rejects.toThrow(/invalid/i);
+    expect(getterCalls).toBe(0);
+  });
+
+  it("fences planner admission as soon as model access replacement starts", async () => {
+    let releaseOld!: (raw: string) => void;
+    modelBridge.rawPlan.mockImplementationOnce(() => new Promise(resolve => { releaseOld = resolve; }));
+    const posted: Posted[] = [];
+    let plannerPort: MessagePort | null = null;
+    const worker = {
+      onmessage: null as ((event: { data: unknown }) => void) | null,
+      postMessage(message: Posted, transfer: Transferable[] = []): void {
+        posted.push(message);
+        if (message.op === "intent") plannerPort = transfer[0] as MessagePort;
+      },
+      terminate(): void {},
+    };
+    const client = new WorkerClient(worker as unknown as Worker);
+    await client.setModelAccess(withCredential(
+      { provider: "clay", backendUrl: "http://127.0.0.1:8788", session: "old-session" }, null,
+    ));
+    const beforeCalls = modelBridge.rawPlan.mock.calls.length;
+    const pending = client.intent("add a board");
+    const observed: Record<string, unknown>[] = [];
+    plannerPort!.onmessage = event => observed.push(event.data as Record<string, unknown>);
+    plannerPort!.start();
+    plannerPort!.postMessage({
+      v: 1, kind: "planner.request", epoch: `boot_${"a".repeat(26)}`,
+      generation: 1, contextId: `ctx_${"b".repeat(26)}`, attempt: 0, sequence: 0,
+      context: { registry: [], panels: [], recentSummaries: [], intent: "add a board" },
+      repair: null,
+    });
+    await vi.waitFor(() => expect(modelBridge.rawPlan).toHaveBeenCalledTimes(beforeCalls + 1));
+
+    let publishNew!: (access: ModelAccess) => void;
+    const publication = client.setModelAccess(new Promise<ModelAccess>(resolve => {
+      publishNew = resolve;
+    }));
+    try {
+      await vi.waitFor(() => expect(observed.some(
+        message => message.kind === "planner.cancel",
+      )).toBe(true));
+      const messagesBeforeRejectedIntent = posted.length;
+      await expect(client.intent("must wait for new access")).rejects.toThrow(/access.*progress/i);
+      expect(posted).toHaveLength(messagesBeforeRejectedIntent);
+    } finally {
+      publishNew(withCredential(
+        { provider: "anthropic", backendUrl: null, session: null }, "new-credential-canary",
+      ));
+      releaseOld("{\"late\":true}");
+      await publication;
+      client.terminate();
+      await expect(pending).rejects.toThrow(/terminated/i);
+    }
+    expect(observed.some(message => message.kind === "planner.response")).toBe(false);
+  });
+
+  it("a second-tab revocation cancels planning and closes later admission", async () => {
+    let releasePlan!: (raw: string) => void;
+    modelBridge.rawPlan.mockImplementationOnce(() =>
+      new Promise(resolve => { releasePlan = resolve; }));
+    const posted: Posted[] = [];
+    let plannerPort: MessagePort | null = null;
+    const worker = {
+      onmessage: null as ((event: { data: unknown }) => void) | null,
+      postMessage(message: Posted, transfer: Transferable[] = []): void {
+        posted.push(message);
+        if (message.op === "intent") plannerPort = transfer[0] as MessagePort;
+      },
+      terminate(): void {},
+    };
+    const client = new WorkerClient(worker as unknown as Worker);
+    await client.setModelAccess(withCredential(
+      { provider: "clay", backendUrl: "https://a.example", session: "c".repeat(48) }, null,
+    ));
+    const beforeCalls = modelBridge.rawPlan.mock.calls.length;
+    const pending = client.intent("add a board");
+    const observed: Record<string, unknown>[] = [];
+    plannerPort!.onmessage = event => observed.push(event.data as Record<string, unknown>);
+    plannerPort!.start();
+    plannerPort!.postMessage({
+      v: 1, kind: "planner.request", epoch: `boot_${"a".repeat(26)}`,
+      generation: 1, contextId: `ctx_${"b".repeat(26)}`, attempt: 0, sequence: 0,
+      context: { registry: [], panels: [], recentSummaries: [], intent: "add a board" },
+      repair: null,
+    });
+    await vi.waitFor(() => expect(modelBridge.rawPlan)
+      .toHaveBeenCalledTimes(beforeCalls + 1));
+    const target = new EventTarget();
+    const stop = observeHostedAccountChanges(() => client.revokeAccountSession(), target);
+    const change = publishHostedAccountChange("https://a.example", "revoked");
+    const event = Object.assign(new Event("storage"), {
+      key: HOSTED_ACCOUNT_CHANGE_KEY, newValue: JSON.stringify(change),
+    });
+    target.dispatchEvent(event);
+    await vi.waitFor(() => expect(observed.some(
+      message => message.kind === "planner.cancel",
+    )).toBe(true));
+    modelBridge.rawPlan.mockResolvedValueOnce("{}");
+    const beforeTransports = modelBridge.transports.length;
+    const later = client.intent("must remain signed out");
+    const laterPort = plannerPort!;
+    laterPort.onmessage = () => {};
+    laterPort.start();
+    laterPort.postMessage({
+      v: 1, kind: "planner.request", epoch: `boot_${"d".repeat(26)}`,
+      generation: 2, contextId: `ctx_${"e".repeat(26)}`, attempt: 0, sequence: 0,
+      context: { registry: [], panels: [], recentSummaries: [], intent: "must remain signed out" },
+      repair: null,
+    });
+    await vi.waitFor(() => expect(modelBridge.transports.length)
+      .toBeGreaterThan(beforeTransports));
+    expect(modelBridge.transports.at(-1)).toMatchObject({
+      mode: "hosted", endpoint: "https://a.example",
+    });
+    expect(modelBridge.transports.at(-1)).not.toHaveProperty("credentials");
+    stop();
+    releasePlan("{}");
+    client.terminate();
+    await expect(pending).rejects.toThrow(/terminated/i);
+    await expect(later).rejects.toThrow(/terminated/i);
+  });
+
+  it("rejects active credential material before intent crosses the worker boundary", async () => {
+    const { client, posted } = harness();
+    const canary = "intent-credential-canary";
+    await client.setModelAccess(withCredential(
+      { provider: "anthropic", backendUrl: null, session: null }, canary,
+    ));
+    const pending = client.intent(`use ${canary} as data`).catch(error => error as Error);
+    const messagesBeforeTermination = posted.length;
+    client.terminate();
+    const error = await pending;
+    expect(messagesBeforeTermination).toBe(0);
+    expect(error).toBeInstanceOf(Error);
+    if (!(error instanceof Error)) throw new Error("intent unexpectedly succeeded");
+    expect(error.message).toMatch(/credential/i);
+  });
+
+  it("rejects protected credential material in outbound planner context", async () => {
+    const credentialCanary = "context-credential-canary";
+    const posted: Posted[] = [];
+    let plannerPort: MessagePort | null = null;
+    const worker = {
+      onmessage: null as ((event: { data: unknown }) => void) | null,
+      postMessage(message: Posted, transfer: Transferable[] = []): void {
+        posted.push(message);
+        plannerPort = transfer[0] as MessagePort;
+      },
+      terminate(): void {},
+    };
+    const client = new WorkerClient(worker as unknown as Worker);
+    await client.setModelAccess(withCredential(
+      { provider: "anthropic", backendUrl: null, session: null }, credentialCanary,
+    ));
+    const beforeCalls = modelBridge.rawPlan.mock.calls.length;
+    const pending = client.intent("add a board");
+    const observed: Record<string, unknown>[] = [];
+    plannerPort!.onmessage = event => observed.push(event.data as Record<string, unknown>);
+    plannerPort!.start();
+    plannerPort!.postMessage({
+      v: 1, kind: "planner.request", epoch: `boot_${"a".repeat(26)}`,
+      generation: 1, contextId: `ctx_${"b".repeat(26)}`, attempt: 0, sequence: 0,
+      context: {
+        registry: [], recentSummaries: [], intent: "add a board",
+        panels: [{ panel_id: "board", code: `const imported = "${credentialCanary}";` }],
+      },
+      repair: null,
+    });
+
+    await vi.waitFor(() => expect(observed.some(
+      message => message.kind === "planner.cancel",
+    )).toBe(true));
+    expect(modelBridge.rawPlan).toHaveBeenCalledTimes(beforeCalls);
+    expect(JSON.stringify(observed)).not.toContain(credentialCanary);
+    client.terminate();
+    await expect(pending).rejects.toThrow(/terminated/i);
+  });
+
+  it.each(["clay", "codex", "openai", "anthropic"] as const)(
+    "keeps every %s credential in native-private shell memory",
     async provider => {
       const { client, posted } = harness();
+      const credentialCanary = `credential-${provider}-canary`;
       await client.setModelAccess({
         provider,
-        apiKey: provider === "anthropic" ? "anthropic-key" : null,
+        apiKey: provider === "anthropic" ? credentialCanary : null,
         backendUrl: provider === "anthropic" ? null : "http://127.0.0.1:8788",
-        session: "clay-session-secret",
+        session: provider === "clay" ? credentialCanary : null,
+        providerToken: provider === "codex" ? credentialCanary : null,
       });
-      expect(posted[0]!.payload).not.toHaveProperty("session");
+
+      expect(posted).toEqual([]);
+      expect(JSON.stringify(client)).not.toContain(credentialCanary);
+      expect(Reflect.ownKeys(client).map(String)).not.toContain("modelAccess");
     },
   );
 
-  it("serializes a session only for Clay hosted", async () => {
-    const { client, posted } = harness();
-    await client.setModelAccess({
-      provider: "clay", apiKey: null, backendUrl: "https://clay.example",
-      session: "clay-session-secret",
+  it.each([
+    ["forty nested Unicode backslash layers", (credential: string) => [...credential]
+      .map(character => `\\u005c${"u005c".repeat(39)}u${character.charCodeAt(0).toString(16).padStart(4, "0")}`).join("")],
+    ["the fixed-point work budget", (_credential: string) =>
+      `\\u005c${"u005c".repeat(4_000)}u0078`],
+  ] as const)("rejects provider output after %s", async (_case, encode) => {
+    const credentialCanary = "deep-credential-canary";
+    const raw = JSON.stringify({ migration: encode(credentialCanary) });
+    expect(raw).not.toContain(credentialCanary);
+    modelBridge.rawPlan.mockResolvedValueOnce(raw);
+    const posted: Posted[] = [];
+    let plannerPort: MessagePort | null = null;
+    const worker = {
+      onmessage: null as ((event: { data: unknown }) => void) | null,
+      postMessage(message: Posted, transfer: Transferable[] = []): void {
+        posted.push(message);
+        plannerPort = transfer[0] as MessagePort;
+      },
+      terminate(): void {},
+    };
+    const client = new WorkerClient(worker as unknown as Worker);
+    await client.setModelAccess(withCredential(
+      { provider: "anthropic", backendUrl: null, session: null }, credentialCanary,
+    ));
+    const pending = client.intent("add a board");
+    const response = new Promise<Record<string, unknown>>(resolve => {
+      plannerPort!.onmessage = event => resolve(event.data as Record<string, unknown>);
+      plannerPort!.start();
     });
-    expect(posted[0]!.payload.session).toBe("clay-session-secret");
+    plannerPort!.postMessage({
+      v: 1, kind: "planner.request", epoch: `boot_${"a".repeat(26)}`,
+      generation: 1, contextId: `ctx_${"b".repeat(26)}`, attempt: 0, sequence: 0,
+      context: { registry: [], panels: [], recentSummaries: [], intent: "add a board" },
+      repair: null,
+    });
+
+    const reflected = await response;
+    expect(reflected).toMatchObject({
+      kind: "planner.response", result: { ok: false, error: { code: "E_MODEL" } },
+    });
+    expect(JSON.stringify(reflected)).not.toContain(credentialCanary);
+    client.terminate();
+    await expect(pending).rejects.toThrow(/terminated/i);
   });
 
-  it("serializes a Codex connector token in a provider-specific field", async () => {
-    const { client, posted } = harness();
+  it("rejects a successful provider response that reflects active credential material", async () => {
+    const credentialCanary = "credential-reflection-canary";
+    const escapedCanary = [...credentialCanary]
+      .map(character => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
+    const nestedEscapedOutput = JSON.stringify({
+      migration: JSON.stringify({ leak: escapedCanary }),
+    });
+    expect(nestedEscapedOutput).not.toContain(credentialCanary);
+    modelBridge.rawPlan.mockResolvedValueOnce(nestedEscapedOutput);
+    const posted: Posted[] = [];
+    let plannerPort: MessagePort | null = null;
+    const worker = {
+      onmessage: null as ((event: { data: unknown }) => void) | null,
+      postMessage(message: Posted, transfer: Transferable[] = []): void {
+        posted.push(message);
+        plannerPort = transfer[0] as MessagePort;
+      },
+      terminate(): void {},
+    };
+    const client = new WorkerClient(worker as unknown as Worker);
+    await client.setModelAccess(withCredential(
+      { provider: "anthropic" as const, backendUrl: null, session: null },
+      credentialCanary,
+    ));
+    const pending = client.intent("add a board");
+    const response = new Promise<Record<string, unknown>>(resolve => {
+      plannerPort!.onmessage = event => resolve(event.data as Record<string, unknown>);
+      plannerPort!.start();
+    });
+    plannerPort!.postMessage({
+      v: 1, kind: "planner.request", epoch: `boot_${"a".repeat(26)}`,
+      generation: 1, contextId: `ctx_${"b".repeat(26)}`, attempt: 0, sequence: 0,
+      context: { registry: [], panels: [], recentSummaries: [], intent: "add a board" },
+      repair: null,
+    });
+
+    const reflected = await response;
+    expect(reflected).toMatchObject({
+      kind: "planner.response",
+      result: { ok: false, error: { code: "E_MODEL" } },
+    });
+    expect(JSON.stringify(reflected)).not.toContain(credentialCanary);
+    client.terminate();
+    await expect(pending).rejects.toThrow(/terminated/i);
+  });
+
+  it("discards a preview returned after model access invalidates its planner", async () => {
+    modelBridge.rawPlan.mockResolvedValueOnce("{}");
+    const posted: Posted[] = [];
+    let plannerPort: MessagePort | null = null;
+    const worker = {
+      onmessage: null as ((event: { data: unknown }) => void) | null,
+      postMessage(message: Posted, transfer: Transferable[] = []): void {
+        posted.push(message);
+        if (message.op === "intent") plannerPort = transfer[0] as MessagePort;
+      },
+      terminate(): void {},
+    };
+    const client = new WorkerClient(worker as unknown as Worker);
     await client.setModelAccess({
-      provider: "codex", apiKey: null, backendUrl: "http://127.0.0.1:8788",
-      session: "clay-session-secret", providerToken: "connector-token",
+      provider: "clay", apiKey: null, backendUrl: "http://127.0.0.1:8788", session: null,
     });
-    expect(posted[0]!.payload).toMatchObject({
-      provider: "codex", providerToken: "connector-token",
+    const pending = client.intent("add a board");
+    const nextMessage = (): Promise<Record<string, unknown>> => new Promise(resolve => {
+      plannerPort!.onmessage = event => resolve(event.data as Record<string, unknown>);
+      plannerPort!.start();
     });
-    expect(posted[0]!.payload).not.toHaveProperty("session");
+    const response = nextMessage();
+    plannerPort!.postMessage({
+      v: 1, kind: "planner.request", epoch: `boot_${"a".repeat(26)}`,
+      generation: 1, contextId: `ctx_${"b".repeat(26)}`, attempt: 0, sequence: 0,
+      context: { registry: [], panels: [], recentSummaries: [], intent: "add a board" },
+      repair: null,
+    });
+    await response;
+    const finalized = nextMessage();
+    plannerPort!.postMessage({
+      v: 1, kind: "planner.finalize", epoch: `boot_${"a".repeat(26)}`,
+      generation: 1, contextId: `ctx_${"b".repeat(26)}`, sequence: 1,
+      nonce: `fin_${"c".repeat(26)}`,
+    });
+    await finalized;
+
+    const replacementCanary = ["replacement", "canary"].join("-");
+    try {
+      await client.setModelAccess({
+        provider: "anthropic", apiKey: replacementCanary, backendUrl: null, session: null,
+      });
+      worker.onmessage?.({ data: {
+        id: posted[0]!.id, ok: true,
+        result: {
+          status: "preview",
+          preview: { summary: "stale", diff: [], panels: [], removePanels: [],
+            version: 2, repaired: false },
+        },
+      } });
+      await vi.waitFor(() => expect(posted.some(message => message.op === "discard")).toBe(true));
+      const discard = posted.find(message => message.op === "discard")!;
+      worker.onmessage?.({ data: { id: discard.id, ok: true, result: null } });
+      await expect(pending).rejects.toThrow(/access.*changed|stale/i);
+    } finally {
+      client.terminate();
+    }
+  });
+
+  it("acknowledges a bound planner finalization before accepting the outer outcome", async () => {
+    modelBridge.rawPlan.mockResolvedValueOnce("{}");
+    const posted: Posted[] = [];
+    let plannerPort: MessagePort | null = null;
+    const worker = {
+      onmessage: null as ((event: { data: unknown }) => void) | null,
+      postMessage(message: Posted, transfer: Transferable[] = []): void {
+        posted.push(message);
+        plannerPort = transfer[0] as MessagePort;
+      },
+      terminate(): void {},
+    };
+    const client = new WorkerClient(worker as unknown as Worker);
+    await client.setModelAccess({
+      provider: "clay", apiKey: null, backendUrl: "http://127.0.0.1:8788", session: null,
+    });
+    const pending = client.intent("add a board");
+    expect(plannerPort).not.toBeNull();
+    const nextMessage = (): Promise<Record<string, unknown>> => new Promise(resolve => {
+      plannerPort!.onmessage = event => resolve(event.data as Record<string, unknown>);
+      plannerPort!.start();
+    });
+    const response = nextMessage();
+    plannerPort!.postMessage({
+      v: 1, kind: "planner.request", epoch: `boot_${"a".repeat(26)}`,
+      generation: 1, contextId: `ctx_${"b".repeat(26)}`, attempt: 0, sequence: 0,
+      context: { registry: [], panels: [], recentSummaries: [], intent: "add a board" },
+      repair: null,
+    });
+    await expect(response).resolves.toMatchObject({
+      v: 1, kind: "planner.response", attempt: 0, sequence: 0,
+      result: { ok: true, raw: "{}" },
+    });
+    const finalized = nextMessage();
+    plannerPort!.postMessage({
+      v: 1, kind: "planner.finalize", epoch: `boot_${"a".repeat(26)}`,
+      generation: 1, contextId: `ctx_${"b".repeat(26)}`, sequence: 1,
+      nonce: `fin_${"c".repeat(26)}`,
+    });
+    await expect(finalized).resolves.toMatchObject({
+      v: 1, kind: "planner.finalized", generation: 1, sequence: 1,
+      nonce: `fin_${"c".repeat(26)}`,
+    });
+    worker.onmessage?.({ data: {
+      id: posted[0]!.id, ok: true,
+      result: { status: "failed", stage: "plan", reasons: ["done"], repaired: false },
+    } });
+    await expect(pending).resolves.toMatchObject({ status: "failed" });
+    client.terminate();
+  });
+
+  it("closes an in-flight planner port and rejects the call on terminate", async () => {
+    const posted: Posted[] = [];
+    const worker = {
+      onmessage: null as ((event: { data: unknown }) => void) | null,
+      postMessage(message: Posted): void { posted.push(message); },
+      terminate(): void {},
+    };
+    const client = new WorkerClient(worker as unknown as Worker);
+    const pending = client.intent("add a board");
+    await Promise.resolve();
+    client.terminate();
+
+    await expect(pending).rejects.toThrow(/terminated/i);
+    expect(posted).toHaveLength(1);
+    expect(posted[0]).toMatchObject({ op: "intent", payload: { text: "add a board" } });
+  });
+
+  it("rejects shutdown when worker quiescence is not acknowledged", async () => {
+    let terminateCalls = 0;
+    const posted: Posted[] = [];
+    const worker = {
+      onmessage: null as ((event: { data: unknown }) => void) | null,
+      postMessage(message: Posted): void { posted.push(message); },
+      terminate(): void { terminateCalls++; },
+    };
+    const client = new WorkerClient(worker as unknown as Worker);
+    vi.useFakeTimers();
+    try {
+      const pending = client.shutdown();
+      const rejected = expect(pending).rejects.toThrow(/acknowledge|settle/i);
+      const late = client.intent("late planner").catch(error => error as Error);
+      await Promise.resolve();
+      expect(posted.some(message => message.op === "intent")).toBe(false);
+      await vi.advanceTimersByTimeAsync(2_501);
+      await rejected;
+      const lateResult = await late;
+      expect(lateResult).toBeInstanceOf(Error);
+      if (!(lateResult instanceof Error)) throw new Error("late intent unexpectedly succeeded");
+      expect(lateResult.message).toMatch(/shutdown/i);
+      expect(terminateCalls).toBe(1);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("waits for planner cancellation and worker acknowledgement before termination", async () => {
+    modelBridge.rawPlan.mockImplementationOnce(() => new Promise(() => undefined));
+    const posted: Posted[] = [];
+    let transferredPlannerPort: MessagePort | null = null;
+    let terminateCalls = 0;
+    let acknowledgeShutdown!: () => void;
+    const worker = {
+      onmessage: null as ((event: { data: unknown }) => void) | null,
+      postMessage(message: Posted, transfer: Transferable[] = []): void {
+        posted.push(message);
+        if (message.op === "intent") transferredPlannerPort = transfer[0] as MessagePort;
+        if (message.op === "shutdown") acknowledgeShutdown = () => this.onmessage?.({
+          data: { id: message.id, ok: true, result: null },
+        });
+      },
+      terminate(): void { terminateCalls++; },
+    };
+    const client = new WorkerClient(worker as unknown as Worker);
+    await client.setModelAccess(withCredential(
+      { provider: "clay" as const, backendUrl: "http://127.0.0.1:8788", session: null },
+      null,
+    ));
+    const beforeRawPlanCalls = modelBridge.rawPlan.mock.calls.length;
+    const pendingIntent = client.intent("add a board");
+    const cancelObserved = new Promise<void>(resolve => {
+      transferredPlannerPort!.onmessage = event => {
+        const message = event.data as { kind?: string };
+        if (message.kind !== "planner.cancel") return;
+        resolve();
+        worker.onmessage?.({ data: {
+          id: posted.find(item => item.op === "intent")!.id,
+          ok: false,
+          error: { code: "E_VALIDATION", message: "planner round was cancelled" },
+        } });
+      };
+      transferredPlannerPort!.start();
+    });
+    transferredPlannerPort!.postMessage({
+      v: 1, kind: "planner.request", epoch: `boot_${"a".repeat(26)}`,
+      generation: 1, contextId: `ctx_${"b".repeat(26)}`, attempt: 0, sequence: 0,
+      context: { registry: [], panels: [], recentSummaries: [], intent: "add a board" },
+      repair: null,
+    });
+    await vi.waitFor(() => expect(modelBridge.rawPlan).toHaveBeenCalledTimes(
+      beforeRawPlanCalls + 1,
+    ));
+
+    const intentRejected = expect(pendingIntent).rejects.toThrow(/cancelled/i);
+    const shutdown = client.shutdown();
+    await cancelObserved;
+    await vi.waitFor(() => expect(posted.some(item => item.op === "shutdown")).toBe(true));
+    expect(terminateCalls).toBe(0);
+    acknowledgeShutdown();
+    await expect(shutdown).resolves.toBeUndefined();
+    await intentRejected;
+    expect(terminateCalls).toBe(1);
   });
 });

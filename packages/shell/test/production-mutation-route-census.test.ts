@@ -159,7 +159,14 @@ describe("production mutation route census", () => {
     expect(worker).toContain('await import("@clay/kernel/worker-authority")');
     expect(worker).toContain("import type {");
     expect(worker).toContain("let store: ProductionStoreReader | null = null");
-    expect(worker).toContain("store = authority.readStore()");
+    const reconcile = worker.indexOf("await candidate.reconcileInterruptedPlannerAttempts()");
+    const captureStore = worker.indexOf("const candidateStore = candidate.readStore()");
+    const publishAuthority = worker.indexOf("authority = candidate");
+    const publishStore = worker.indexOf("store = candidateStore");
+    expect(reconcile).toBeGreaterThanOrEqual(0);
+    expect(captureStore).toBeGreaterThan(reconcile);
+    expect(publishAuthority).toBeGreaterThan(captureStore);
+    expect(publishStore).toBeGreaterThan(publishAuthority);
     expect(worker).toContain("return bootProductionAuthority(p)");
     expect(authority).toContain("static async bootBrowser(input");
     expect(authority).toContain("captureBrowserBootInput(input)");
@@ -284,7 +291,7 @@ describe("production mutation route census", () => {
       .toBeLessThan(discardHelper.indexOf("current.preview.shadow.close()"));
   });
 
-  it("keeps the UI protocol while removing raw preview and live Store capabilities", () => {
+  it("keeps the UI protocol while excluding model I/O from DB-worker authority", () => {
     const worker = source("packages/shell/src/worker/db-worker.ts");
     expect(worker).not.toContain("PreviewHandle");
     expect(worker).not.toContain("InProcessAsyncStore");
@@ -292,7 +299,10 @@ describe("production mutation route census", () => {
     expect(worker).toContain("PreparedMutationPreview");
     expect(worker).toContain("plannerMutations()");
     expect(worker).toContain('import("@clay/kernel/planner-pipeline")');
-    expect(worker).toContain('import("@clay/mutation/client")');
+    expect(worker).not.toContain("@clay/mutation/client");
+    expect(worker).not.toMatch(/\bmodelAccess\b/);
+    expect(worker).not.toMatch(/\b(?:apiKey|backendUrl|providerToken)\b/);
+    expect(worker).not.toContain("fetch(");
     expect(worker).toContain("summary: result.preview.plan.summary");
     expect(worker).toContain("return { version }");
     expect(worker).toContain("return null");
@@ -405,7 +415,11 @@ describe("production mutation route census", () => {
       .toEqual(Object.keys(STORE_RPC_ROUTE_CENSUS).sort());
     expect([...quotedSwitchCases(bridge)].filter(name => name.startsWith("db.")).sort())
       .toEqual(Object.keys(BRIDGE_WRITE_ROUTE_CENSUS).sort());
-    expect(rpc).toContain("serveStore(store: AsyncStore");
+    expect(rpc).toMatch(
+      /serveStore\(\s*store: AsyncStore,\s*port: MessagePortLike,\s*beginOperation:/,
+    );
+    expect(source("packages/shell/src/worker/db-worker.ts"))
+      .toContain("serveStore(endpoint, portFromMessagePort(port), beginStoreOperation)");
     expect(rpc).not.toContain("new InProcessAsyncStore(store)");
     expect(caseBody(source("packages/shell/src/worker/db-worker.ts"), "storePort"))
       .toContain("serveProductionStore(");

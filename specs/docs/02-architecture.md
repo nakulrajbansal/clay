@@ -48,9 +48,17 @@ trusted side.
 ## 3. Threading and ownership
 
 The DB Worker exclusively owns SQLite (OPFS sync access handles require a
-worker; exclusivity avoids lock contention). All DB access is async message
-RPC: {id, op, payload} -> {id, ok, result | error}. The Kernel exposes typed
-async wrappers; the Shell and Bridge never speak to the worker directly.
+worker; exclusivity avoids lock contention). Ordinary DB access is async message
+RPC: {id, op, payload} -> {id, ok, result | error}. Intent and panel-repair calls
+add one transferred, per-call MessageChannel. The worker's closed planner protocol
+binds every request, response, cancellation, and finalization acknowledgement to a
+worker-minted boot epoch, monotonic intent generation, immutable context id, attempt
+(0 or one authorized repair at 1), and sequence. Worker-side waits for a model round
+or finalization acknowledgement fail after 180 seconds. The trusted shell lazily runs MutationClient on that port with
+ECMAScript-private provider access; no credential or model fetch enters the DB
+worker. Remote response bodies are streamed under fixed byte ceilings and provider
+calls have their own 180-second deadline. The Kernel exposes typed async wrappers; panels never speak to either
+worker protocol directly.
 
 Panel iframes never touch the worker. Their db calls route:
 iframe -> Bridge (main) -> Kernel -> DB Worker -> back. Watch subscriptions
@@ -107,18 +115,22 @@ attach the live catalog.
 
 ```
 User types intent
- -> ConversationRail -> MutationClient.assembleContext()
-      reads: schema registry, panel manifest, last 5 summaries   [local]
- -> POST plan request (hosted proxy | direct Anthropic)          [remote]
- <- MutationPlan JSON (or clarifying_question -> render, stop)
- -> Kernel.Validator.check(plan)                                 [local]
-      fail -> repair round (once) -> fail -> amber card, stop
+ -> ConversationRail -> WorkerClient opens one planner MessageChannel
+ -> DB Worker: MutationPipeline captures immutable S1 context              [local]
+      reads: schema registry, panel manifest, last 5 summaries; NEVER rows
+ -> trusted Shell lazily loads MutationClient and sends plan request       [remote]
+      provider access remains native-private; only S1 shapes + intent leave
+ <- opaque bounded raw output returns on the bound per-intent port
+ -> DB Worker: decode + Zod + Kernel.Validator.check(plan)                 [local]
+      fail -> worker-authorized repair attempt 1 (once) -> fail -> amber card
  -> Kernel.dryRun(plan):
       DB Worker: BACKUP user.db -> shadow.db
       MigrationEngine.apply(plan.migration, shadow)
       PreviewHost boots panel iframes against shadow binding
       smoke render; runtime error -> repair round (once)
- -> PreviewHost shows proposed panels + diff card
+ -> DB Worker requests generation finalization on the planner port
+      shell acknowledgement is FIFO-ordered after all earlier terminal traffic
+ -> PreviewHost publishes proposed panels + diff card only after finalization
  User: Keep
  -> Kernel.commit(plan):  [single transaction]
       MigrationEngine.apply(migration, user.db)

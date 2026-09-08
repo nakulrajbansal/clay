@@ -53,12 +53,42 @@ export type StoreResponse = {
   error?: { code: string; message: string };
 };
 
+type StoreQuiesce = { v: 1; kind: "store.quiesce"; nonce: string };
+type StoreQuiesced = { v: 1; kind: "store.quiesced"; nonce: string };
+export type StoreServerControl = Readonly<{ quiesce(): Promise<void> }>;
+
+function controlFrame(raw: unknown, kind: StoreQuiesce["kind"] | StoreQuiesced["kind"]): string | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const record = raw as Record<string, unknown>;
+  if (Reflect.ownKeys(record).some(key => typeof key !== "string")
+      || Object.keys(record).sort().join(",") !== "kind,nonce,v"
+      || record.v !== 1 || record.kind !== kind
+      || typeof record.nonce !== "string" || !/^stq_[a-z2-7]{26}$/.test(record.nonce)) return null;
+  return record.nonce;
+}
+
 /** Worker-side: bind an authority-backed async Store to a port. */
-export function serveStore(store: AsyncStore, port: MessagePortLike): void {
+export function serveStore(
+  store: AsyncStore,
+  port: MessagePortLike,
+  beginOperation: (() => () => void) | null = null,
+): StoreServerControl {
+  let pendingQuiescence: { nonce: string; resolve: () => void; reject: (error: Error) => void } | null = null;
   port.onMessage((raw) => {
+    const quiesced = controlFrame(raw, "store.quiesced");
+    if (quiesced !== null) {
+      if (pendingQuiescence?.nonce === quiesced) {
+        const pending = pendingQuiescence;
+        pendingQuiescence = null;
+        pending.resolve();
+      }
+      return;
+    }
     const req = raw as StoreRequest;
     void (async () => {
+      let finishOperation = (): void => {};
       try {
+        finishOperation = beginOperation?.() ?? finishOperation;
         const p = req.payload as {
           q: QueryT; table: string; id: string;
           row: Record<string, unknown>; patch: Record<string, unknown>;
@@ -82,8 +112,26 @@ export function serveStore(store: AsyncStore, port: MessagePortLike): void {
           ? { code: e.code, message: e.message }
           : { code: "E_INTERNAL", message: String(e) };
         port.send({ id: req.id, ok: false, error: err } satisfies StoreResponse);
+      } finally {
+        finishOperation();
       }
     })();
+  });
+  return Object.freeze({
+    quiesce(): Promise<void> {
+      if (pendingQuiescence) return Promise.reject(new ClayError(
+        "E_CONFLICT", "Store RPC quiescence is already pending",
+      ));
+      const nonce = mintStoreRequestId().replace(/^req_/, "stq_");
+      return new Promise<void>((resolve, reject) => {
+        pendingQuiescence = { nonce, resolve, reject };
+        try { port.send({ v: 1, kind: "store.quiesce", nonce } satisfies StoreQuiesce); }
+        catch (error) {
+          pendingQuiescence = null;
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      });
+    },
   });
 }
 
@@ -112,6 +160,9 @@ function mintStoreRequestId(): string {
 
 /** Main-thread side: an AsyncStore that proxies over a port. */
 export class StoreRpcClient implements AsyncStore {
+  #accepting = true;
+  #pendingQuiescenceNonce: string | null = null;
+  #quiescenceAcknowledged = false;
   private nextId = 1;
   private readonly pending = new Map<number, {
     resolve: (v: unknown) => void; reject: (e: unknown) => void;
@@ -119,6 +170,14 @@ export class StoreRpcClient implements AsyncStore {
 
   constructor(private readonly port: MessagePortLike) {
     port.onMessage((raw) => {
+      const nonce = controlFrame(raw, "store.quiesce");
+      if (nonce !== null) {
+        this.#accepting = false;
+        if (!this.#quiescenceAcknowledged && this.#pendingQuiescenceNonce === null)
+          this.#pendingQuiescenceNonce = nonce;
+        this.#acknowledgeQuiescenceIfDrained();
+        return;
+      }
       const res = raw as StoreResponse;
       const p = this.pending.get(res.id);
       if (!p) return;
@@ -127,7 +186,16 @@ export class StoreRpcClient implements AsyncStore {
       else p.reject(new ClayError(
         (res.error?.code ?? "E_INTERNAL") as ClayError["code"],
         res.error?.message ?? "store rpc failed"));
+      this.#acknowledgeQuiescenceIfDrained();
     });
+  }
+
+  #acknowledgeQuiescenceIfDrained(): void {
+    if (this.pending.size !== 0 || this.#pendingQuiescenceNonce === null) return;
+    const nonce = this.#pendingQuiescenceNonce;
+    this.#pendingQuiescenceNonce = null;
+    this.#quiescenceAcknowledged = true;
+    this.port.send({ v: 1, kind: "store.quiesced", nonce } satisfies StoreQuiesced);
   }
 
   private call<T>(
@@ -135,6 +203,8 @@ export class StoreRpcClient implements AsyncStore {
     payload: unknown,
     context?: StoreMutationContext,
   ): Promise<T> {
+    if (!this.#accepting)
+      return Promise.reject(new ClayError("E_CONFLICT", "Store RPC is quiescing"));
     const requestId = context?.requestId ?? mintStoreRequestId();
     if (!/^req_[a-z2-7]{26}$/.test(requestId))
       return Promise.reject(new ClayError("E_VALIDATION", "StoreRpc request identity is invalid"));

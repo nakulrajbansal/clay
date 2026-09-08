@@ -5,6 +5,8 @@ import { FREE_QUOTA } from "../src/auth";
 
 const fakeClient = { rawPlan: async () => "{}", rawRepair: async () => "{}" };
 const CTX = { context: { intent: "x", registry: [], panels: [] } };
+const AUTH_STATE = "a".repeat(64);
+const authBody = (email: string): string => JSON.stringify({ email, state: AUTH_STATE });
 
 function appWithAuth() {
   const auth = makeDevAuth();
@@ -14,7 +16,7 @@ function appWithAuth() {
 
 async function signIn(app: ReturnType<typeof createApp>, email: string): Promise<string> {
   const linkRes = await app.request("/auth/magic-link", {
-    method: "POST", body: JSON.stringify({ email }),
+    method: "POST", body: authBody(email),
     headers: { "content-type": "application/json" } });
   const { link } = await linkRes.json() as { link: string };
   const cb = await app.request(link);
@@ -39,34 +41,51 @@ describe("magic-link auth (Phase 1.2)", () => {
     expect((await app.request("/auth/magic-link", { method: "POST",
       body: JSON.stringify({ email: "nope" }),
       headers: { "content-type": "application/json" } })).status).toBe(400);
-    expect((await app.request("/auth/callback?token=bogus")).status).toBe(401);
+    expect((await app.request("/auth/magic-link", { method: "POST",
+      body: JSON.stringify({ email: "valid@example.com", state: "short" }),
+      headers: { "content-type": "application/json" } })).status).toBe(400);
+    const invalidNav = await app.request("/auth/callback?token=bogus&state=short",
+      { headers: { accept: "text/html" } });
+    expect(invalidNav.headers.get("location")).toBe("/#auth=invalid");
+    expect(invalidNav.headers.get("set-cookie")).toBeNull();
+    expect((await app.request(`/auth/callback?token=bogus&state=${AUTH_STATE}`)).status).toBe(401);
     for (let i = 0; i < 3; i++) await signIn(app, "hot@example.com");
     const fourth = await app.request("/auth/magic-link", { method: "POST",
-      body: JSON.stringify({ email: "hot@example.com" }),
+      body: authBody("hot@example.com"),
       headers: { "content-type": "application/json" } });
     expect(fourth.status).toBe(429);
   });
 
-  it("a browser email click redirects into the app with the cookie set", async () => {
+  it("hands an email click back to the app without redeeming or setting a cookie", async () => {
     const { app } = appWithAuth();
+    const state = AUTH_STATE;
     const linkRes = await app.request("/auth/magic-link", { method: "POST",
-      body: JSON.stringify({ email: "click@example.com" }),
+      body: JSON.stringify({ email: "click@example.com", state }),
       headers: { "content-type": "application/json" } });
     const { link } = await linkRes.json() as { link: string };
+    expect(new URL(link, "https://clay.example").searchParams.get("state")).toBe(state);
     const nav = await app.request(link, { headers: { accept: "text/html,application/xhtml+xml" } });
     expect(nav.status).toBe(302);
-    expect(nav.headers.get("location")).toBe("/?auth=ok");
-    expect(nav.headers.get("set-cookie")).toContain("clay_session=");
-    const expired = await app.request("/auth/callback?token=bogus",
-      { headers: { accept: "text/html" } });
-    expect(expired.status).toBe(302);
-    expect(expired.headers.get("location")).toBe("/?auth=expired");
+    const location = nav.headers.get("location")!;
+    expect(location).toContain("/#auth=complete&");
+    expect(location).toContain(`&state=${state}`);
+    expect(nav.headers.get("set-cookie")).toBeNull();
+
+    const fragment = new URL(location, "https://clay.example").hash.slice(1);
+    const handoff = new URLSearchParams(fragment);
+    expect(handoff.get("token")).toMatch(/^[a-f0-9]{48}$/);
+    const redeemed = await app.request(
+      `/auth/callback?token=${handoff.get("token")}&state=${handoff.get("state")}`,
+      { headers: { accept: "application/json" } },
+    );
+    expect(redeemed.status).toBe(200);
+    expect((await redeemed.json() as { session?: string }).session).toBeTruthy();
   });
 
   it("marks session cookies Secure on HTTPS and logout revokes bearer and cookie", async () => {
     const { app } = appWithAuth();
     const linkRes = await app.request("/auth/magic-link", { method: "POST",
-      body: JSON.stringify({ email: "secure@example.com" }),
+      body: authBody("secure@example.com"),
       headers: { "content-type": "application/json" } });
     const { link } = await linkRes.json() as { link: string };
     const callback = await app.request(`https://clay.example${link}`);
@@ -99,7 +118,7 @@ describe("magic-link auth (Phase 1.2)", () => {
   it("magic-link tokens are single-use", async () => {
     const { app } = appWithAuth();
     const linkRes = await app.request("/auth/magic-link", { method: "POST",
-      body: JSON.stringify({ email: "once@example.com" }),
+      body: authBody("once@example.com"),
       headers: { "content-type": "application/json" } });
     const { link } = await linkRes.json() as { link: string };
     expect((await app.request(link)).status).toBe(200);

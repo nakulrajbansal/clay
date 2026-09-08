@@ -1125,7 +1125,11 @@ export class ProductionMutationCoordinator {
     // Capture before queueing: caller-owned accessors and arrays are never retained.
     const captured = captureMutation(input);
     assertCapturedMutationBytes(captured);
-    const run = this.#tail.then(() => this.#executeCaptured(captured));
+    const run = this.#tail.then(() => {
+      if (this.#poisoned)
+        throw invalid("production authority is poisoned; reopen for reservation recovery");
+      return this.#executeCaptured(captured);
+    });
     this.#tail = run.then(() => undefined, () => undefined);
     return run;
   }
@@ -1134,7 +1138,11 @@ export class ProductionMutationCoordinator {
     if (this.#poisoned)
       return Promise.reject(invalid("production authority is poisoned; reopen for reservation recovery"));
     const captured = captureOperationalMetricMutation(input);
-    const run = this.#tail.then(() => this.#executeOperationalCaptured(captured));
+    const run = this.#tail.then(() => {
+      if (this.#poisoned)
+        throw invalid("production authority is poisoned; reopen for reservation recovery");
+      return this.#executeOperationalCaptured(captured);
+    });
     this.#tail = run.then(() => undefined, () => undefined);
     return run;
   }

@@ -2,9 +2,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   CODEX_BACKEND_URL, getActiveModelAccess, getBackendUrl, getModelProvider, getSessionToken,
-  hasModelAccess,
+  hasModelAccess, isAmbientSessionAllowed,
   normalizeBackendUrl, setApiKey, setBackendUrl, setModelProvider,
-  setSessionToken,
+  setAmbientSessionAllowed, setSessionToken,
 } from "../src/app/settings";
 
 describe("model provider settings", () => {
@@ -69,5 +69,42 @@ describe("model provider settings", () => {
     localStorage.setItem("clay_session", "legacy-unbound-token");
     expect(getSessionToken()).toBeNull();
     expect(localStorage.getItem("clay_session")).toBeNull();
+  });
+
+  it("migrates valid v1 ambient grants and rejects malformed records", () => {
+    setBackendUrl("https://a.example/clay");
+    localStorage.setItem("clay_ambient_session_v1", JSON.stringify({
+      v: 1, backendOrigin: "https://a.example", allowed: true,
+    }));
+    expect(isAmbientSessionAllowed()).toBe(true);
+    expect(isAmbientSessionAllowed("https://b.example/clay")).toBe(false);
+
+    localStorage.setItem("clay_ambient_session_v1", JSON.stringify({
+      v: 2, origins: { "https://a.example": false },
+    }));
+    expect(isAmbientSessionAllowed()).toBe(false);
+    localStorage.setItem("clay_ambient_session_v1", "not-json");
+    expect(isAmbientSessionAllowed()).toBe(false);
+  });
+
+  it("keeps ambient-cookie grants origin-bound across backend switches", () => {
+    setBackendUrl("https://a.example/clay");
+    expect(isAmbientSessionAllowed()).toBe(false);
+    setAmbientSessionAllowed(true);
+    expect(isAmbientSessionAllowed()).toBe(true);
+    expect(isAmbientSessionAllowed("https://a.example/other")).toBe(true);
+
+    setBackendUrl("https://b.example/clay");
+    expect(isAmbientSessionAllowed()).toBe(false);
+    setAmbientSessionAllowed(true);
+    expect(isAmbientSessionAllowed()).toBe(true);
+
+    setBackendUrl("https://a.example/clay");
+    expect(isAmbientSessionAllowed()).toBe(true);
+    setAmbientSessionAllowed(false);
+    setBackendUrl("https://b.example/clay");
+    setBackendUrl("https://a.example/clay");
+    expect(isAmbientSessionAllowed()).toBe(false);
+    expect(isAmbientSessionAllowed("https://b.example/clay")).toBe(true);
   });
 });

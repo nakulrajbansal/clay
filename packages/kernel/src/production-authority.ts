@@ -5,6 +5,7 @@ import type {
 } from "@clay/schema/catalog";
 import type { AsyncStore, StoreMutationContext } from "./asyncstore";
 import { enumerateCanonicalStateV1 } from "./canonical-state";
+import { removeLegacyCredentialSettingsForAuthorityBoot } from "./credential-policy";
 import {
   browserDurableInventory,
   openBrowserCatalogProbe,
@@ -185,6 +186,8 @@ const PINNED_READS = Object.freeze({
   simulateAutomation: ClayStore.prototype.simulateAutomation,
   suggestions: ClayStore.prototype.suggestions,
 });
+const STORE_PENDING_PLANNER_ATTEMPTS: ClayStore["pendingPlannerAttempts"] =
+  ClayStore.prototype.pendingPlannerAttempts;
 
 function createStoreReader(store: ClayStore): ProductionStoreReader {
   const reader: ProductionStoreReader = {
@@ -412,6 +415,7 @@ export class ProductionStoreAuthority {
   readonly #store: ClayStore;
   readonly #reader: ProductionStoreReader;
   readonly #boot: ProductionBootInfo;
+  readonly #connectionAuthority: LiveWriteSession["authority"];
   readonly #coordinator: ProductionMutationCoordinator;
   readonly #plannerMutations: PlannerMutationAuthority;
 
@@ -427,6 +431,7 @@ export class ProductionStoreAuthority {
     this.#store = store;
     this.#reader = createStoreReader(store);
     this.#boot = boot;
+    this.#connectionAuthority = session.authority;
     this.#coordinator = new ProductionMutationCoordinator(
       session.driver,
       session.authority,
@@ -666,6 +671,7 @@ export class ProductionStoreAuthority {
         if (!manifest || JSON.stringify(manifest) !== JSON.stringify(input.entry))
           throw invalid("manifest adoption entry changed before target initialization");
         const store = ClayStore.fromDriver(session.driver);
+        removeLegacyCredentialSettingsForAuthorityBoot(session.driver);
         if (store.getSetting<number>("current_version") === undefined)
           store.setSetting("current_version", store.headVersion());
         const registry = store.validationRegistrySnapshot();
@@ -760,6 +766,7 @@ export class ProductionStoreAuthority {
         // caller's complete inventory decision.
         const catalog = DeviceCatalog.initializeFresh(session.driver);
         store = ClayStore.fromDriver(session.driver);
+        removeLegacyCredentialSettingsForAuthorityBoot(session.driver);
         if (store.getSetting<number>("current_version") === undefined)
           store.setSetting("current_version", store.headVersion());
         const registry = store.validationRegistrySnapshot();
@@ -828,6 +835,7 @@ export class ProductionStoreAuthority {
             || !sameTarget(currentSelected.target, selected.target))
           throw invalid("catalog selection changed while the target was opening");
         store = ClayStore.fromDriver(session.driver);
+        removeLegacyCredentialSettingsForAuthorityBoot(session.driver);
         const target = TargetAuthorityStore.open(session.driver).evidence();
         if (!sameTarget(target, selected.target))
           throw invalid("catalog and target authority disagree");
@@ -877,9 +885,27 @@ export class ProductionStoreAuthority {
   }
 
   bootInfo(): ProductionBootInfo {
+    const current = this.#connectionAuthority.run(() => {
+      const catalog = DeviceCatalog.openExisting(this.#driver).snapshot();
+      const selected = catalog.entries.find(entry =>
+        entry.appInstanceId === catalog.selectedAppInstanceId);
+      if (!selected) throw invalid("catalog-selected app is unavailable");
+      const selectedTarget: TargetEvidence = {
+        appInstanceId: selected.appInstanceId,
+        activeGenerationId: selected.activeGenerationId,
+        lineageEpoch: selected.currentLineageEpoch,
+        protectionRevision: selected.currentProtectionRevision,
+        digestSchema: selected.digestSchema,
+        stateSha256: selected.stateSha256,
+      };
+      const openedTarget = TargetAuthorityStore.open(this.#driver).evidence();
+      if (!sameTarget(selectedTarget, openedTarget))
+        throw invalid("catalog selection no longer matches the opened target");
+      return bootInfoFromCatalog(this.#store, catalog, this.#boot.adopted);
+    });
     return {
-      ...this.#boot,
-      apps: this.#boot.apps.map(app => ({ ...app })),
+      ...current,
+      apps: current.apps.map(app => ({ ...app })),
     };
   }
 
@@ -912,6 +938,16 @@ export class ProductionStoreAuthority {
 
   executeMutation(input: unknown): Promise<ProductionMutationResult> {
     return this.#coordinator.execute(input);
+  }
+
+  async reconcileInterruptedPlannerAttempts(): Promise<number> {
+    const attempts = STORE_PENDING_PLANNER_ATTEMPTS.call(this.#store);
+    for (const attempt of attempts) await this.#coordinator.execute({
+      requestId: this.#coordinator.mintRequestId(),
+      route: "planner.finalize",
+      payload: { attemptId: attempt.id, outcome: "failed", errorCode: "E_VALIDATION" },
+    });
+    return attempts.length;
   }
 
   /** Fixed device-local telemetry path; never a canonical production request. */

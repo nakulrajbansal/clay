@@ -185,32 +185,39 @@ export function createApp(opts: BackendOptions): Hono {
   };
 
   if (auth) {
+    const authState = /^[0-9a-f]{64}$/;
     app.post("/auth/magic-link", async (c) => {
-      let body: { email?: string } | null = null;
-      try { body = (await readBody(c)) as { email?: string }; }
+      let body: { email?: string; state?: string } | null = null;
+      try { body = (await readBody(c)) as { email?: string; state?: string }; }
       catch (e) { if (e instanceof Response) return e; return c.json({ error: "bad JSON" }, 400); }
       const email = body?.email?.trim().toLowerCase();
+      const state = body?.state ?? "";
       if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
         return c.json({ error: "a real email address is required" }, 400);
+      if (!authState.test(state)) return c.json({ error: "invalid authentication state" }, 400);
       const token = await auth.sessions.issueLink(await auth.store.upsertUser(email));
       if (!token) return c.json({ error: "too many links — try again in an hour" }, 429);
-      const link = `/auth/callback?token=${token}`;
+      const link = `/auth/callback?token=${encodeURIComponent(token)}&state=${state}`;
       if (auth.devLinks) return c.json({ link });         // dev/tests: no email hop
       await auth.sendEmail?.(email, link);
       return c.body(null, 204);
     });
 
     app.get("/auth/callback", async (c) => {
-      // an email click is a browser navigation (Accept: text/html): land
-      // in the app itself, cookie set — never a raw JSON page. Fetch
-      // callers (dev auto-redeem, tests) keep the JSON + bearer echo.
+      // An email click receives a fragment handoff without redeeming. Only a
+      // state-validated app fetch redeems the token and receives the bearer.
       const wantsHtml = c.req.header("accept")?.includes("text/html") ?? false;
-      const sid = await auth.sessions.redeem(c.req.query("token") ?? "");
-      if (!sid) return wantsHtml
-        ? c.redirect("/?auth=expired", 302)
-        : c.json({ error: "link expired — request a fresh one" }, 401);
+      const token = c.req.query("token") ?? "";
+      const state = c.req.query("state") ?? "";
+      if (!authState.test(state)) return wantsHtml
+        ? c.redirect("/#auth=invalid", 302)
+        : c.json({ error: "invalid authentication state" }, 400);
+      if (wantsHtml) return c.redirect(
+        `/#auth=complete&token=${encodeURIComponent(token)}&state=${state}`, 302,
+      );
+      const sid = await auth.sessions.redeem(token);
+      if (!sid) return c.json({ error: "link expired — request a fresh one" }, 401);
       writeSessionCookie(c, sid, 30 * 86400);
-      if (wantsHtml) return c.redirect("/?auth=ok", 302);
       // bearer echo: lets a cross-origin client store the session itself
       return c.json({ ok: true, session: sid });
     });

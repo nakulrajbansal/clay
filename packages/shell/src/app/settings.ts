@@ -6,10 +6,13 @@
 const KEY = "clay_api_key";
 const BACKEND = "clay_backend_url";
 const SESSION = "clay_session";
+const AMBIENT_SESSION = "clay_ambient_session_v1";
 const PROVIDER = "clay_model_provider";
 
 export type ModelProviderId = "clay" | "openai" | "anthropic" | "codex";
 type SessionRecord = { v: 1; backendOrigin: string; token: string };
+type AmbientSessionRecordV1 = { v: 1; backendOrigin: string; allowed: boolean };
+type AmbientSessionRecord = { v: 2; origins: Record<string, true> };
 export const CODEX_BACKEND_URL = "http://127.0.0.1:8788";
 const isLoopbackHostname = (hostname: string): boolean =>
   hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
@@ -55,7 +58,9 @@ export function setBackendUrl(v: string | null): void {
   const next = v && v.trim() ? normalizeBackendUrl(v) : null;
   const previousOrigin = backendOrigin(read(BACKEND));
   const nextOrigin = backendOrigin(next);
-  if (previousOrigin !== nextOrigin) write(SESSION, null);
+  if (previousOrigin !== nextOrigin) {
+    write(SESSION, null);
+  }
   write(BACKEND, next);
 }
 export function normalizeBackendUrl(value: string): string {
@@ -92,6 +97,48 @@ export function setSessionToken(
   const origin = backendOrigin(backendUrl);
   if (!origin) { write(SESSION, null); return; }
   write(SESSION, JSON.stringify({ v: 1, backendOrigin: origin, token } satisfies SessionRecord));
+}
+
+function ambientSessionOrigins(): Record<string, true> | null {
+  const raw = read(AMBIENT_SESSION);
+  if (!raw) return Object.create(null) as Record<string, true>;
+  try {
+    const record = JSON.parse(raw) as AmbientSessionRecord | AmbientSessionRecordV1;
+    if (!record || typeof record !== "object" || Array.isArray(record)) return null;
+    if (record.v === 1) {
+      const origin = backendOrigin(record.backendOrigin);
+      if (origin !== record.backendOrigin || typeof record.allowed !== "boolean") return null;
+      return record.allowed ? { [origin]: true } : Object.create(null) as Record<string, true>;
+    }
+    if (record.v !== 2 || !record.origins || typeof record.origins !== "object"
+        || Array.isArray(record.origins)) return null;
+    const entries = Object.entries(record.origins);
+    if (entries.length > 64 || entries.some(([origin, allowed]) =>
+      backendOrigin(origin) !== origin || allowed !== true)) return null;
+    return Object.fromEntries(entries) as Record<string, true>;
+  } catch { return null; }
+}
+
+export function isAmbientSessionAllowed(
+  backendUrl: string | null = getBackendUrl(),
+): boolean {
+  const origin = backendOrigin(backendUrl);
+  if (!origin) return false;
+  const origins = ambientSessionOrigins();
+  return origins !== null && origins[origin] === true;
+}
+
+export function setAmbientSessionAllowed(
+  allowed: boolean,
+  backendUrl: string | null = getBackendUrl(),
+): void {
+  const origin = backendOrigin(backendUrl);
+  if (!origin) return;
+  const origins = ambientSessionOrigins() ?? Object.create(null) as Record<string, true>;
+  delete origins[origin];
+  if (allowed) origins[origin] = true;
+  const bounded = Object.fromEntries(Object.entries(origins).slice(-64)) as Record<string, true>;
+  write(AMBIENT_SESSION, JSON.stringify({ v: 2, origins: bounded } satisfies AmbientSessionRecord));
 }
 export function getModelProvider(): ModelProviderId {
   const stored = read(PROVIDER);

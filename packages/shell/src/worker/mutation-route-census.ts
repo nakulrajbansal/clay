@@ -12,6 +12,7 @@ export type MutationRouteEnforcement =
   | "ephemeral"
   | "shadow"
   | "boot"
+  | "lifecycle-control"
   | "authority"
   | "planner-authority"
   | "authority-store-port"
@@ -29,7 +30,7 @@ const route = (
 
 export const DB_WORKER_ROUTE_CENSUS = Object.freeze({
   boot: route("boot", "lifecycle"),
-  setModelAccess: route("ephemeral", "none"),
+  shutdown: route("lifecycle-control", "lifecycle"),
   forkApp: route("unavailable", "lifecycle"),
   deleteApp: route("unavailable", "lifecycle"),
   seed: route("authority", "live"),

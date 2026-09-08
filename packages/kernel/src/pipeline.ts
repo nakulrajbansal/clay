@@ -55,6 +55,74 @@ export type Planner = {
   requestRepair(ctx: PlannerContext, priorPlanRaw: string, failures: string[]): Promise<PlannerResult>;
 };
 
+function clipPlannerDisplay(value: unknown, max: number): unknown {
+  return typeof value === "string" && value.length > max
+    ? `${value.slice(0, max - 1)}…` : value;
+}
+
+function hydratePlannerWire(input: unknown): unknown {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const plan = { ...(input as Record<string, unknown>) };
+  if (typeof plan.migration === "string") {
+    const value = plan.migration.trim();
+    plan.migration = value === "" || value === "null" ? null : JSON.parse(value);
+  }
+  if (Array.isArray(plan.panels)) {
+    plan.panels = plan.panels.map(value => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+      const panel = { ...(value as Record<string, unknown>) };
+      if (Array.isArray(panel.declared_queries)) {
+        panel.declared_queries = panel.declared_queries.map(query =>
+          typeof query === "string" ? JSON.parse(query) : query);
+      }
+      if (typeof panel.code === "string"
+          && /\b(Board|Timeline)\b/.test(panel.code)
+          && panel.placement && typeof panel.placement === "object"
+          && !Array.isArray(panel.placement)) {
+        const placement = panel.placement as Record<string, unknown>;
+        if (placement.w === undefined) panel.placement = { ...placement, w: 4 };
+      }
+      return panel;
+    });
+  }
+  plan.summary = clipPlannerDisplay(plan.summary, 200);
+  if (Array.isArray(plan.assumptions)) {
+    plan.assumptions = plan.assumptions.slice(0, 5)
+      .map(assumption => clipPlannerDisplay(assumption, 150));
+  }
+  if (Array.isArray(plan.user_facing_diff)) {
+    plan.user_facing_diff = plan.user_facing_diff.map(value =>
+      value && typeof value === "object" && !Array.isArray(value)
+        ? { ...(value as Record<string, unknown>),
+          detail: clipPlannerDisplay((value as { detail?: unknown }).detail, 120) }
+        : value);
+  }
+  return plan;
+}
+
+/** Decode opaque model bytes inside the trusted pipeline closure. */
+export function decodePlannerRaw(raw: string): PlannerResult {
+  let hydrated: unknown;
+  try {
+    hydrated = hydratePlannerWire(JSON.parse(raw));
+  } catch (error) {
+    return { ok: false, error: {
+      code: "E_PARSE", message: `model output is not parseable: ${String(error)}`, raw,
+    } };
+  }
+  const parsed = MutationPlanSchema.safeParse(hydrated);
+  if (!parsed.success) {
+    const issues = parsed.error.issues.map(issue =>
+      `${issue.path.length > 0 ? issue.path.join(".") : "(root)"}: ${issue.message}`);
+    return { ok: false, error: {
+      code: "E_SCHEMA",
+      message: `plan fails validation: ${issues.slice(0, 3).join("; ")}`,
+      issues, raw,
+    } };
+  }
+  return { ok: true, plan: parsed.data, raw };
+}
+
 /** Structured trace of one attempt through the pipeline (for logs/review). */
 export type DebugEvent =
   | { stage: "intake"; intent: string; registryTables: string[]; panelCount: number }
@@ -154,9 +222,18 @@ export class MutationPipeline {
       debug({ stage: "outcome", status: `failed@${stage}`, repaired: repairUsed });
       return { status: "failed", stage, reasons, attemptId, repaired: repairUsed };
     };
+    const callPlanner = async (operation: () => Promise<PlannerResult>): Promise<PlannerResult> => {
+      try { return await operation(); }
+      catch (error) {
+        await this.authority.finalizeAttempt(attemptId, "failed",
+          error instanceof ClayError ? error.code : "E_MODEL");
+        debug({ stage: "outcome", status: "failed@plan", repaired: repairUsed });
+        throw error;
+      }
+    };
 
     // S2
-    let result = await this.planner.requestPlan(ctx);
+    let result = await callPlanner(() => this.planner.requestPlan(ctx));
     debug({ stage: "plan", ok: result.ok,
       raw: result.ok ? result.raw : (result.error.raw ?? null),
       error: result.ok ? undefined : result.error.message });
@@ -171,7 +248,7 @@ export class MutationPipeline {
         if (recoverable && !repairUsed) {
           repairUsed = true;
           debug({ stage: "repair", trigger: "schema", reasons });
-          result = await this.planner.requestRepair(ctx, raw!, reasons);
+          result = await callPlanner(() => this.planner.requestRepair(ctx, raw!, reasons));
           debug({ stage: "plan", ok: result.ok,
             raw: result.ok ? result.raw : (result.error.raw ?? null),
             error: result.ok ? undefined : result.error.message });
@@ -179,6 +256,8 @@ export class MutationPipeline {
         }
         return await fail("plan", reasons, code);
       }
+
+      const priorRaw = result.raw;
 
       try {
         result = { ...result, plan: capturePlannerPlanData(result.plan) };
@@ -190,7 +269,7 @@ export class MutationPipeline {
             error instanceof ClayError ? error.code : "E_VALIDATION");
         repairUsed = true;
         debug({ stage: "repair", trigger: "validate", reasons: [reason] });
-        result = await this.planner.requestRepair(ctx, result.raw, [reason]);
+        result = await callPlanner(() => this.planner.requestRepair(ctx, priorRaw, [reason]));
         debug({ stage: "plan", ok: result.ok,
           raw: result.ok ? result.raw : (result.error.raw ?? null),
           error: result.ok ? undefined : result.error.message });
@@ -283,7 +362,8 @@ export class MutationPipeline {
         const migrationIssues = issues.filter(i => i.panel === undefined);
         const repairIssues = migrationIssues.length > 0 ? migrationIssues : issues;
         debug({ stage: "repair", trigger: "validate", reasons: issueStrings(repairIssues) });
-        result = await this.planner.requestRepair(ctx, result.raw, issueStrings(repairIssues));
+        result = await callPlanner(() =>
+          this.planner.requestRepair(ctx, priorRaw, issueStrings(repairIssues)));
         debug({ stage: "plan", ok: result.ok,
           raw: result.ok ? result.raw : (result.error.raw ?? null),
           error: result.ok ? undefined : result.error.message });
@@ -329,7 +409,7 @@ export class MutationPipeline {
         if (repairUsed) return await fail("dry_run", [reason], "E_DRY_RUN");
         repairUsed = true;
         debug({ stage: "repair", trigger: "dry_run", reasons: [reason] });
-        result = await this.planner.requestRepair(ctx, result.raw, [reason]);
+        result = await callPlanner(() => this.planner.requestRepair(ctx, priorRaw, [reason]));
         debug({ stage: "plan", ok: result.ok,
           raw: result.ok ? result.raw : (result.error.raw ?? null),
           error: result.ok ? undefined : result.error.message });

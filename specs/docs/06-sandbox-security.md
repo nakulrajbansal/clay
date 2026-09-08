@@ -101,7 +101,12 @@ scripts on the app surface (landing page only, cookieless).
 P1 Records never leave the device (verifiable: DevTools network tab during
    full use; the app functions offline after load).
 P2 Hosted mutations transmit schema shapes + intent text only.
-P3 BYO key is stored locally and sent only to api.anthropic.com.
+P3 BYO key is stored locally, retained only in trusted-shell native-private
+   memory while selected, and sent only to api.anthropic.com; it is never
+   serialized to the DB worker, planner messages, traces, or an app database.
+   Asynchronous provider setup is generation-fenced. Successful model output that
+   contains any active credential is rejected before crossing the planner port.
+   Provider and health bodies are consumed under fixed byte ceilings and hard deadlines.
 P4 Export produces a complete, portable archive; deleting the OPFS directory
    removes all local data.
 P5 Private activity metrics accept only a closed enum/boolean vocabulary;
@@ -116,5 +121,10 @@ P9 Metric recording is best-effort after product actions and cannot alter a
    reshape, Keep, Discard, rewind, restore, import, or export outcome.
 P10 Copying a fixed content-free summary requires an explicit user action;
     Clay performs no automatic metric upload and creates no stable metric id.
+P11 Planner traffic is per-intent, closed, bounded, and bound to a worker boot
+    epoch, monotonic generation, immutable context, attempt, and sequence. Before
+    preview publication, the worker requires a finalization acknowledgement ordered
+    after earlier terminal traffic. Stale, duplicate, cancelled, malformed, or
+    extra-field messages cannot publish a preview, mutate live data, or invoke Keep.
 Each commitment maps to an automated test (doc 08 §5) so the marketing page
 is backed by CI, not adjectives.
