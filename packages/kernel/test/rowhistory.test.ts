@@ -74,6 +74,33 @@ describe("row_history (G6)", () => {
     store.close();
   });
 
+  it("advances every reverted record generation and the source watermark on batch undo", async () => {
+    const store = await seededStore();
+    const targetIds = store.query({ from: "projects" }).slice(0, 2).map(row => String(row.id));
+    const before = store.dailyHomeRecordRevisions();
+    const receipt = store.applyBatch({
+      source: "user",
+      summary: "Two record edits",
+      mutations: targetIds.map((id, index) => ({
+        kind: "update" as const,
+        table: "projects",
+        id,
+        patch: { owner: `Changed ${index}` },
+      })),
+    });
+    const changed = store.dailyHomeRecordRevisions();
+    const changedById = new Map(changed.entries.map(entry => [entry.rowId, entry.revision]));
+
+    store.undoBatch(receipt.id);
+    const undone = store.dailyHomeRecordRevisions();
+    const undoneById = new Map(undone.entries.map(entry => [entry.rowId, entry.revision]));
+
+    expect(changed.watermark).toBe(before.watermark + targetIds.length);
+    expect(undone.watermark).toBe(changed.watermark + targetIds.length);
+    for (const id of targetIds) expect(undoneById.get(id)).toBeGreaterThan(changedById.get(id)!);
+    store.close();
+  });
+
   it("no history -> E_VALIDATION; reserved table name rejected by V5", async () => {
     const store = await seededStore();
     const id = String(store.query({ from: "projects" })[0]!.id);

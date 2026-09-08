@@ -149,6 +149,8 @@ export function captureBrowserBootInput(value: unknown): ProductionBrowserBootIn
 
 type ProductionStoreReaderMethod =
   | "attachmentStorage" | "attachmentsForRecord" | "attemptStats" | "automationRuns"
+  | "dailyHomeNotificationWatermark" | "dailyHomeRecordRevisions"
+  | "dailyHomeUnreadNotifications"
   | "fieldProvenance" | "getSetting" | "globalSearch" | "headVersion" | "history"
   | "listAutomations" | "listNotifications" | "listIntakeForms" | "intakeInbox"
   | "intakeDeliveryFailures" | "intakeReceipts" | "livePanels" | "operationBatches"
@@ -166,6 +168,9 @@ const PINNED_READS = Object.freeze({
   attachmentsForRecord: ClayStore.prototype.attachmentsForRecord,
   attemptStats: ClayStore.prototype.attemptStats,
   automationRuns: ClayStore.prototype.automationRuns,
+  dailyHomeNotificationWatermark: ClayStore.prototype.dailyHomeNotificationWatermark,
+  dailyHomeRecordRevisions: ClayStore.prototype.dailyHomeRecordRevisions,
+  dailyHomeUnreadNotifications: ClayStore.prototype.dailyHomeUnreadNotifications,
   fieldProvenance: ClayStore.prototype.fieldProvenance,
   getSetting: ClayStore.prototype.getSetting,
   globalSearch: ClayStore.prototype.globalSearch,
@@ -206,6 +211,9 @@ function createStoreReader(
     attachmentsForRecord: PINNED_READS.attachmentsForRecord.bind(store),
     attemptStats: PINNED_READS.attemptStats.bind(store),
     automationRuns: PINNED_READS.automationRuns.bind(store),
+    dailyHomeNotificationWatermark: PINNED_READS.dailyHomeNotificationWatermark.bind(store),
+    dailyHomeRecordRevisions: PINNED_READS.dailyHomeRecordRevisions.bind(store),
+    dailyHomeUnreadNotifications: PINNED_READS.dailyHomeUnreadNotifications.bind(store),
     fieldProvenance: PINNED_READS.fieldProvenance.bind(store),
     getSetting: PINNED_READS.getSetting.bind(store),
     globalSearch: PINNED_READS.globalSearch.bind(store),

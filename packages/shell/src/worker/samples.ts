@@ -180,7 +180,8 @@ export function fillSampleRows(store: ClayStore): { added: number; tables: numbe
     seed = (seed * 1664525 + 1013904223) % 4294967296;
     return seed / 4294967296;
   };
-  const marker = store.getSetting<Record<string, string[]>>("sample_rows") ?? {};
+  const stored = store.getSetting<{ format: 1; tables: Record<string, string[]> }>("sample_rows");
+  const marker = stored?.format === 1 && stored.tables ? stored.tables : {};
   let added = 0; let tableCount = 0;
   for (const table of store.registrySnapshot().values()) {
     // History must reflect real moves, never invented ones: skip audit
@@ -206,12 +207,13 @@ export function fillSampleRows(store: ClayStore): { added: number; tables: numbe
     }
     if (ids.length > 0) { marker[table.name] = ids; tableCount++; }
   }
-  store.setSetting("sample_rows", marker);
+  store.setSetting("sample_rows", { format: 1, tables: marker });
   return { added, tables: tableCount };
 }
 
 /** How many tracked sample rows currently exist (drives the Clear button). */
 export function sampleRowCount(store: Pick<ClayStore, "getSetting">): number {
-  const marker = store.getSetting<Record<string, string[]>>("sample_rows") ?? {};
-  return Object.values(marker).reduce((s, ids) => s + ids.length, 0);
+  const marker = store.getSetting<{ format: 1; tables: Record<string, string[]> }>("sample_rows");
+  if (!marker || marker.format !== 1 || !marker.tables) return 0;
+  return Object.values(marker.tables).reduce((s, ids) => s + ids.length, 0);
 }

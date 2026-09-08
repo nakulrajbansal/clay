@@ -4,6 +4,11 @@
 // rollback applies inverses; roll-forward (pre-truncation) re-applies
 // forward ops; truncation is the only destructive-ish operation (ADR-007).
 import { ClayError } from "./errors";
+import {
+  DAILY_TIME_ZONE_SETTING,
+  localCalendarContext,
+  resolveLocalDateTime,
+} from "./daily-calendar";
 import { LEGACY_CREDENTIAL_SETTING_KEYS } from "./credential-policy";
 import { userIndexAuthorities } from "./index-authority";
 import {
@@ -3621,12 +3626,16 @@ export class ClayStore {
           continue;
         }
         if (trigger.kind === "schedule") {
-          const minutes = now.getHours() * 60 + now.getMinutes();
-          const [hour, minute] = trigger.localTime.split(":").map(Number);
-          if (minutes < hour! * 60 + minute!) continue;
-          if (trigger.cadence === "weekly" && now.getDay() !== trigger.weekday) continue;
-          const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-          const key = `schedule:${day}`;
+          const timeZone = this.getSetting<unknown>(DAILY_TIME_ZONE_SETTING);
+          if (typeof timeZone !== "string") continue;
+          const calendar = localCalendarContext(now.toISOString(), timeZone);
+          const scheduled = resolveLocalDateTime(
+            `${calendar.localDate}T${trigger.localTime}`, timeZone,
+          ).instant;
+          if (now.toISOString() < scheduled) continue;
+          const weekday = new Date(`${calendar.localDate}T00:00:00.000Z`).getUTCDay();
+          if (trigger.cadence === "weekly" && weekday !== trigger.weekday) continue;
+          const key = `schedule:${calendar.localDate}:${timeZone}`;
           if (this.automationTriggerSucceeded(definition.id, key)) continue;
           consumeMatch();
           const run = this.executeAutomation(definition, [], key, now);
@@ -3668,6 +3677,51 @@ export class ClayStore {
     return { ...this.automationRunFromRow(original!), undone: true };
   }
 
+  dailyHomeRecordRevisions(): Readonly<{
+    watermark: number;
+    truncated: boolean;
+    entries: readonly Readonly<{ table: string; rowId: string; revision: number }>[];
+  }> {
+    const limit = 100_000;
+    const rows = this.#driver.select(
+      `SELECT table_name, row_id, MAX(seq) AS revision
+       FROM sys.record_events
+       GROUP BY table_name, row_id
+       ORDER BY table_name ASC, row_id ASC
+       LIMIT ?`, [limit + 1]);
+    const watermark = Number(this.#driver.select(
+      `SELECT COALESCE(MAX(seq), 0) AS revision FROM sys.record_events`,
+    )[0]?.revision ?? 0);
+    if (!Number.isSafeInteger(watermark) || watermark < 0)
+      throw new ClayError("E_INTERNAL", "record-event watermark is invalid");
+    const entries = rows.slice(0, limit).map(row => {
+      const revision = Number(row.revision);
+      if (!Number.isSafeInteger(revision) || revision < 1)
+        throw new ClayError("E_INTERNAL", "record-event revision is invalid");
+      return Object.freeze({
+        table: String(row.table_name), rowId: String(row.row_id), revision,
+      });
+    });
+    return Object.freeze({
+      watermark,
+      truncated: rows.length > limit,
+      entries: Object.freeze(entries),
+    });
+  }
+
+  dailyHomeNotificationWatermark(): string {
+    const row = this.#driver.select(
+      `SELECT COUNT(*) AS count,
+              COALESCE(MAX(COALESCE(dismissed_at, read_at, at)), '') AS changed_at,
+              COALESCE(MAX(id), '') AS max_id
+       FROM sys.notifications`,
+    )[0];
+    const count = Number(row?.count ?? 0);
+    if (!Number.isSafeInteger(count) || count < 0)
+      throw new ClayError("E_INTERNAL", "notification watermark is invalid");
+    return `notifications:${String(row?.changed_at ?? "")}:${String(row?.max_id ?? "")}:${count}`;
+  }
+
   listNotifications(limit = 100): ClayNotification[] {
     const bounded = Math.max(1, Math.min(500, Math.trunc(limit)));
     return this.#driver.select(
@@ -3679,6 +3733,28 @@ export class ClayStore {
       recordId: row.row_id === null ? null : String(row.row_id),
       read: row.read_at !== null,
     }));
+  }
+
+  dailyHomeUnreadNotifications(limit = 500): Readonly<{
+    notifications: readonly ClayNotification[];
+    truncated: boolean;
+  }> {
+    const bounded = Math.max(1, Math.min(500, Math.trunc(limit)));
+    const rows = this.#driver.select(
+      `SELECT * FROM sys.notifications
+       WHERE dismissed_at IS NULL AND read_at IS NULL
+       ORDER BY at DESC, id DESC LIMIT ?`, [bounded + 1]);
+    const notifications = rows.slice(0, bounded).map(row => ({
+      id: String(row.id), at: String(row.at), automationId: String(row.automation_id),
+      runId: String(row.run_id), title: String(row.title), body: String(row.body),
+      table: row.table_name === null ? null : String(row.table_name),
+      recordId: row.row_id === null ? null : String(row.row_id),
+      read: false,
+    }));
+    return Object.freeze({
+      notifications: Object.freeze(notifications),
+      truncated: rows.length > bounded,
+    });
   }
 
   markNotificationRead(id: string): void {
@@ -4088,15 +4164,24 @@ export class ClayStore {
           this.#driver.exec(
             `UPDATE ${qid(table)} SET "deleted_at" = ?, "updated_at" = ? WHERE "id" = ?`,
             [at, at, rowId]);
+          this.recordRowEvent(table, rowId, "deleted", ["deleted_at"]);
           continue;
         }
         const before = JSON.parse(String(entry.before_json)) as Record<string, SqlValue>;
+        const after = JSON.parse(String(entry.after_json)) as Record<string, SqlValue>;
         const columns = Object.keys(before).filter(column => column !== "id");
+        const changedFields = [...new Set([...Object.keys(before), ...Object.keys(after)])]
+          .filter(column => !["id", "created_at", "updated_at"].includes(column)
+            && (before[column] ?? null) !== (after[column] ?? null));
+        const eventKind = before.deleted_at !== null && after.deleted_at === null
+          ? "deleted" : before.deleted_at === null && after.deleted_at !== null
+            ? "restored" : "updated";
         const priorAttachments = this.rowAttachmentIds(table, rowId);
         this.#driver.exec(
           `UPDATE ${qid(table)} SET ${columns.map(column => `${qid(column)} = ?`).join(", ")}
            WHERE "id" = ?`, [...columns.map(column => before[column] ?? null), rowId]);
         this.reconcileRowAttachments(table, rowId, priorAttachments);
+        this.recordRowEvent(table, rowId, eventKind, changedFields);
       }
       this.assertRelationIntegrity();
       this.#driver.exec(`UPDATE sys.operation_batches SET undone_at = ? WHERE id = ?`,

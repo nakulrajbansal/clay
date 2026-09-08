@@ -2,7 +2,8 @@
 import type {
   AttachmentFile, AttachmentMetadata, AttachmentStorageSummary,
   AutomationDefinition, AutomationDefinitionInput, AutomationRun, AutomationSimulation,
-  BatchMutation, BatchReceipt, ClayNotification, CommitImportResult, DebugEvent, FieldProvenance,
+  BatchMutation, BatchReceipt, ClayNotification, CommitImportResult, DailyHomeSnapshot,
+  DebugEvent, FieldProvenance,
   GlobalSearchResult,
   HistoryEntry, IntakeAcceptanceReceipt, IntakeAutoAcceptSimulation, IntakeDeliveryFailure,
   IntakeInboxItem, ImportReceipt, LivePanel, PanelProvenance,
@@ -590,8 +591,29 @@ export class WorkerClient {
     op: string,
     payload?: Record<string, unknown>,
     transfer?: Transferable[],
+  ): Promise<T>;
+  private call<T>(
+    op: string,
+    payload?: Record<string, unknown>,
+    transfer?: Transferable[],
+  ): Promise<T>;
+  private call<T>(
+    requestIdOrOp: string,
+    opOrPayload?: string | Record<string, unknown>,
+    payloadOrTransfer?: Record<string, unknown> | Transferable[],
+    transfer?: Transferable[],
   ): Promise<T> {
-    return this.beginCall<T>(requestId, op, payload, transfer).promise;
+    if (typeof opOrPayload === "string") {
+      return this.beginCall<T>(
+        requestIdOrOp, opOrPayload, payloadOrTransfer as Record<string, unknown> | undefined, transfer,
+      ).promise;
+    }
+    return this.beginCall<T>(
+      mintWorkerRequestId(),
+      requestIdOrOp,
+      opOrPayload,
+      payloadOrTransfer as Transferable[] | undefined,
+    ).promise;
   }
 
   private callProjection(
@@ -1277,6 +1299,36 @@ export class WorkerClient {
   }
   undoAutomationRun(id: string, context: WorkerMutationContext): Promise<AutomationRun> {
     return this.mutationCall("undoAutomationRun", { id }, context);
+  }
+  private dailyHomeRuntimeTimeZone(): string {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  }
+  dailyHome(): Promise<DailyHomeSnapshot> {
+    return this.call("dailyHome", { timeZone: this.dailyHomeRuntimeTimeZone() });
+  }
+  resolveDailyHomeDate(value: string): Promise<string> {
+    return this.call("dailyHomeResolveDate", {
+      value, timeZone: this.dailyHomeRuntimeTimeZone(),
+    });
+  }
+  compareAndSetDailySource<T>(
+    expectedRevision: number, value: T,
+  ): Promise<{ ok: boolean; current: unknown }> {
+    return this.call("dailyHomeSourceCompareAndSet", { expectedRevision, value });
+  }
+  compareAndSetDailyNavigation<T>(
+    expectedRevision: number, value: T,
+  ): Promise<{ ok: boolean; current: unknown }> {
+    return this.call("dailyHomeNavigationCompareAndSet", { expectedRevision, value });
+  }
+  initializeDailyHomeTimeZone(timeZone: string): Promise<string> {
+    return this.call("dailyHomeInitializeTimeZone", { timeZone });
+  }
+  quickCapture(table: string, row: Record<string, unknown>, tableId: string): Promise<BatchReceipt> {
+    return this.call("dailyHomeQuickCapture", { table, row, tableId });
+  }
+  undoQuickCapture(batchId: string): Promise<BatchReceipt> {
+    return this.call("dailyHomeUndoCapture", { batchId });
   }
   notifications(limit = 100): Promise<ClayNotification[]> {
     return this.ephemeralCall("notifications", { limit });

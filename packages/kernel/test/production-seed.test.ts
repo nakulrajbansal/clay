@@ -90,7 +90,7 @@ describe("production starter seed authority", () => {
       }];
       await expect(Promise.resolve().then(() => authority.executeMutation({
         requestId: opaque("req", "7"), route: "starter.seed", payload: bundle,
-      }))).rejects.toThrow(/2,000,000 UTF-8 bytes/i);
+      }))).rejects.toThrow(/UTF-8 byte limit|2,000,000 UTF-8 bytes/i);
       expect(authority.inspectAuthority().targetReservations).toHaveLength(0);
       expect(authority.inspectAuthority().catalogReservations).toHaveLength(0);
     } finally {
