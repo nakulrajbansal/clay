@@ -46,6 +46,9 @@ const ShareDialog = lazy(() => import("../share/ShareDialog").then(module => ({
 const RelationConversionDialog = lazy(() => import("./RelationConversionDialog").then(module => ({
   default: module.RelationConversionDialog,
 })));
+const ImportWizard = lazy(() => import("./ImportWizard").then(module => ({
+  default: module.ImportWizard,
+})));
 
 type EditingCell = { rowId: string; col: string; draft: string };
 type ActiveFilter = NonNullable<Query["where"]>[number];
@@ -97,10 +100,10 @@ const isDerived = (type: string): boolean =>
 export function DataView(props: {
   worker: WorkerClient;
   store: AsyncStore;
+  appInstanceId?: string | null;
   initialTable?: string | null;
   initialRecordId?: string | null;
   onWrite: (table: string) => void;
-  onImport: (file: File) => void;
   onClose: () => void;
   returnFocusRef?: RefObject<HTMLElement | null>;
   onError: (msg: string) => void;
@@ -144,6 +147,7 @@ export function DataView(props: {
   const [viewName, setViewName] = useState("");
   const [detailStack, setDetailStack] = useState<{ table: string; id: string }[]>([]);
   const [showRelationDialog, setShowRelationDialog] = useState(false);
+  const [showImportWizard, setShowImportWizard] = useState(false);
   const [exportScope, setExportScope] = useState<LocalProjectionScopeV1 | null>(null);
   const [shareScope, setShareScope] = useState<ShareProjectionScopeV1 | null>(null);
   const exportButtonRef = useRef<HTMLButtonElement>(null);
@@ -305,7 +309,7 @@ export function DataView(props: {
   // then closes the data workspace.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== "Escape" || showRelationDialog) return;
+      if (e.key !== "Escape" || showRelationDialog || showImportWizard) return;
       if (detailStack.length > 0) {
         setDetailStack(stack => stack.slice(0, -1)); return;
       }
@@ -314,7 +318,7 @@ export function DataView(props: {
     };
     window.addEventListener("keydown", onKey);
     return (): void => window.removeEventListener("keydown", onKey);
-  }, [detailStack.length, editing, props.onClose, showRelationDialog]);
+  }, [detailStack.length, editing, props.onClose, showImportWizard, showRelationDialog]);
 
   const pick = async (name: string): Promise<void> => {
     setSelected(name);
@@ -557,7 +561,9 @@ export function DataView(props: {
   const undoLastBatch = async (): Promise<void> => {
     if (!lastBatch || lastBatch.undone) return;
     try {
-      const undone = await worker.undoBatch(lastBatch.id, worker.createMutationContext());
+      const undone = lastBatch.source === "import"
+        ? await worker.undoImport(lastBatch.id, worker.createMutationContext())
+        : await worker.undoBatch(lastBatch.id, worker.createMutationContext());
       setLastBatch(undone);
       if (selected) { await reload(selected); props.onWrite(selected); }
       props.onInfo(`Undid “${undone.summary}”.`);
@@ -709,12 +715,10 @@ export function DataView(props: {
               Clear samples ({samples})
             </button>
           ) : null}
-          <label className="dataview-import file-label" title="Add a CSV, TSV, or JSON data file as a new table">
-            ⬆ Import file
-            <input className="visually-hidden-file" type="file" aria-label="Import CSV, TSV, or JSON data file"
-              accept=".csv,.tsv,.txt,.json"
-              onChange={e => { const f = e.target.files?.[0]; if (f) props.onImport(f); e.target.value = ""; }} />
-          </label>
+          {table && props.appInstanceId ? (
+            <button className="dataview-import" title={`Import CSV or pasted cells into “${table.name}”`}
+              onClick={() => setShowImportWizard(true)}>⇧ Import data</button>
+          ) : null}
           {table ? <button ref={exportButtonRef} className="dataview-import"
             type="button" aria-label="Preview Print / CSV for current Data view"
             disabled={pendingWrites > 0} aria-busy={pendingWrites > 0}
@@ -1156,13 +1160,9 @@ export function DataView(props: {
       ) : (
         <div className="dataview-empty">
           <p>No data yet.</p>
-          <p className="dataview-empty-sub">Import a CSV, TSV, or JSON data file, or describe an app and Clay creates the tables for you.</p>
-          <label className="empty-upload file-label">
-            ⬆ Upload a CSV, TSV, or JSON data file
-            <input className="visually-hidden-file" type="file"
-              aria-label="Upload a CSV, TSV, or JSON data file" accept=".csv,.tsv,.txt,.json"
-              onChange={e => { const f = e.target.files?.[0]; if (f) props.onImport(f); e.target.value = ""; }} />
-          </label>
+          <p className="dataview-empty-sub">
+            Describe the records you need and Clay will propose the tables for review.
+          </p>
         </div>
       )}
       {exportScope ? <Suspense fallback={null}><ExportDialog
@@ -1182,6 +1182,22 @@ export function DataView(props: {
           returnFocusRef={shareScope.request.kind === "current_view" ? shareButtonRef : undefined}
           onClose={() => setShareScope(null)}
         /></Suspense> : null}
+      {showImportWizard && selected && props.appInstanceId ? (
+        <Suspense fallback={<div className="import-dialog-loading" role="status">Opening import…</div>}>
+          <ImportWizard
+            appInstanceId={props.appInstanceId}
+            targetTable={selected}
+            worker={worker}
+            onClose={() => setShowImportWizard(false)}
+            onCommitted={changedTable => {
+              void reload(changedTable);
+              props.onWrite(changedTable);
+              props.onInfo("Import receipt saved. Undo remains available in this review.");
+            }}
+            onError={props.onError}
+          />
+        </Suspense>
+      ) : null}
       {detail && detailTable ? (
         <Suspense fallback={<div className="record-detail-loading" role="status">Loading record…</div>}>
         <RecordDetail

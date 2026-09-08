@@ -1,7 +1,10 @@
 // First run (G9/US-01): the empty-slate "Blank canvas" is featured first —
 // the moat, front and center (nothing → describe → it becomes an app) —
 // then the ready-made templates. Seeding is local and instant.
-import { STARTER_SHELLS, type StarterShellId } from "../shells/seed";
+import {
+  STARTER_SHELL_OPTIONS,
+  type StarterShellOptionId,
+} from "../shells/starter-shell-options";
 
 // Quiet abstract marks per template. They read as product wayfinding, not emoji decoration.
 const SHELL_ICONS: Record<string, string> = {
@@ -11,12 +14,12 @@ const SHELL_ICONS: Record<string, string> = {
 };
 
 export function Onboarding(props: {
-  onPick: (id: StarterShellId) => void;
+  onPick: (id: StarterShellOptionId) => void;
   busy: boolean;
   onCancel?: () => void;
 }): React.JSX.Element {
-  const blank = STARTER_SHELLS.find(s => s.id === "blank")!;
-  const templates = STARTER_SHELLS.filter(s => s.id !== "blank");
+  const blank = STARTER_SHELL_OPTIONS.find(shell => shell.id === "blank")!;
+  const templates = STARTER_SHELL_OPTIONS.filter(shell => shell.id !== "blank");
   return (
     <div className="onboarding">
       <h1>{props.onCancel ? "New app" : "Clay"}</h1>

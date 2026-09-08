@@ -4,6 +4,7 @@ import {
   armProductionAuthorityFailureForTest,
   ProductionStoreAuthority,
 } from "../src/production-authority";
+import { prepareExistingTableImport } from "../src/import-journey";
 import { captureTableImport, executeCapturedTableImport } from "../src/production-import";
 
 const opaque = (prefix: string, char: string): string => `${prefix}_${char.repeat(26)}`;
@@ -280,6 +281,111 @@ describe("production table import authority", () => {
       expect(store.validationRegistrySnapshot().get("expenses")?.inactive).toBe(true);
     } finally {
       store.close();
+    }
+  });
+});
+
+describe("Release C production import authority", () => {
+  it("C-FR-023/C-FR-025 routes an opaque prepared import and undo through authoritative replay", async () => {
+    const driver = await openMemoryDriver();
+    driver.exec("ATTACH DATABASE ':memory:' AS catalog");
+    const namespaceId = opaque("ns", "z");
+    const authority = ProductionStoreAuthority.initializeFresh(driver, {
+      inventory: { state: "complete", catalogPresent: false, namespaces: [] },
+      storageKey: namespaceId,
+      displayName: "Import authority test",
+      shellId: "blank",
+      appInstanceId: opaque("app", "z"),
+      generationId: opaque("gen", "z"),
+      namespaceId,
+      adoptionOperationId: opaque("op", "z"),
+      releaseId: opaque("rel", "z"),
+      nowMs: Date.now(),
+      leaseTtlMs: 60_000,
+    });
+    try {
+      await authority.executeMutation({
+        requestId: opaque("req", "s"),
+        route: "starter.seed",
+        payload: {
+          schema: 1,
+          shellId: "contacts",
+          shellName: "Contacts",
+          tables: [{
+            name: "contacts",
+            columns: [
+              { name: "email", type: "text", required: true },
+              { name: "name", type: "text", required: true },
+            ],
+            sampleRows: [
+              { email: "a@example.com", name: "Old" },
+              { email: "same@example.com", name: "Same" },
+            ],
+          }],
+          panels: [],
+        },
+      });
+      const reader = authority.readStore();
+      const prepared = prepareExistingTableImport({
+        appInstanceId: opaque("app", "z"),
+        sessionId: opaque("import", "j"),
+        sourceKind: "csv",
+        sourceDigest: `sha256:${"a".repeat(64)}`,
+        baseVersion: reader.headVersion(),
+        sourceRows: [
+          ["Email", "Name"],
+          ["a@example.com", "Alice"],
+          ["new@example.com", "New"],
+          ["same@example.com", "Same"],
+        ],
+        header: { mode: "header", sourceRow: 1 },
+        target: reader.registrySnapshot().get("contacts")!,
+        existingRows: reader.query({ from: "contacts" }),
+        mode: { kind: "upsert", matchField: "email" },
+        mappings: [
+          { sourceColumn: 1, targetField: "email" },
+          { sourceColumn: 2, targetField: "name" },
+        ],
+      });
+      const commitRequest = {
+        requestId: opaque("req", "c"),
+        route: "import.commit",
+        payload: {
+          ...prepared.envelope,
+          receiptId: "018f0000-0000-7000-8000-000000000020",
+          summary: "Import contacts",
+        },
+      };
+
+      const committed = await authority.executeMutation(commitRequest);
+      expect(committed).toMatchObject({
+        changed: true,
+        replayed: false,
+        result: {
+          kind: "receipt", source: "import", changed: 2,
+          sourceTotals: { createRows: 1, updateRows: 1, skipRows: 1, blockedRows: 0 },
+          mutationTotals: { changedCount: 2 },
+        },
+      });
+      await expect(authority.executeMutation(structuredClone(commitRequest)))
+        .resolves.toMatchObject({ replayed: true, result: committed.result });
+      expect(reader.query({ from: "contacts" })).toHaveLength(3);
+
+      const undone = await authority.executeMutation({
+        requestId: opaque("req", "u"),
+        route: "import.undo",
+        payload: { receiptId: "018f0000-0000-7000-8000-000000000020" },
+      });
+      expect(undone).toMatchObject({
+        changed: true,
+        result: { kind: "receipt", undone: true, undo: { state: "undone" } },
+      });
+      expect(reader.query({ from: "contacts" })).toMatchObject([
+        { email: "a@example.com", name: "Old" },
+        { email: "same@example.com", name: "Same" },
+      ]);
+    } finally {
+      authority.close();
     }
   });
 });

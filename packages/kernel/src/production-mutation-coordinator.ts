@@ -116,6 +116,8 @@ type CapturedProductionMutation = CapturedCoreMutation | Readonly<{
   }
   | { route: "store.softDelete"; payload: Readonly<{ table: string; id: string }> }
   | { route: "store.commit"; payload: Readonly<{ plan: Readonly<JsonRecord> }> }
+  | { route: "import.commit"; payload: Readonly<JsonRecord> }
+  | { route: "import.undo"; payload: Readonly<{ receiptId: string }> }
   | { route: "planner.begin"; payload: Readonly<{ intent: string }> }
   | { route: "planner.finalize"; payload: PlannerAttemptFinalization }
   | { route: "planner.discard"; payload: PreparedMutationCommand }
@@ -316,6 +318,24 @@ const PRODUCTION_CAPTURE_POLICY: StrictJsonCapturePolicy = [
     throw new Error(messages[reason - 5] ?? "invalid JSON value");
   },
 ];
+const MAX_IMPORT_COMMIT_BYTES = 36 * 1024 * 1024;
+const IMPORT_COMMIT_CAPTURE_POLICY: StrictJsonCapturePolicy = [
+  64, 500_000, 1_000_000, MAX_IMPORT_COMMIT_BYTES, 10_000, 10_000, 128, true, true,
+  reason => {
+    if (reason < 5) throw unavailable(PRODUCTION_MUTATION_PREFIX + "import payload exceeds limits");
+    const messages = [
+      "invalid JSON value",
+      "invalid JSON value",
+      "cyclic JSON value",
+      "invalid array",
+      "invalid array keys",
+      "invalid array item",
+      "invalid record",
+      "invalid record property",
+    ];
+    throw new Error(messages[reason - 5] ?? "invalid JSON value");
+  },
+];
 
 function consumeCaptureBytes(
   budget: CaptureBudget,
@@ -374,6 +394,23 @@ function captureJsonRecord(
   if (typeof captured !== "object" || captured === null || Array.isArray(captured))
     throw new Error("expected record");
   return captured;
+}
+
+function captureImportCommitPayload(input: unknown): Readonly<JsonRecord> {
+  const fields = [
+    "appInstanceId", "sessionId", "previewId", "previewDigest", "sourceKind",
+    "sourceDigest", "baseVersion", "target", "dispositions", "mutations",
+    "sourceTotals", "mutationTotals", "warningTotals", "receiptId", "summary",
+  ] as const;
+  const payload = exactKeys(input, fields);
+  const captured = captureStrictJson(
+    payload,
+    IMPORT_COMMIT_CAPTURE_POLICY,
+    new WeakSet(),
+    { nodes: 0, bytes: 0 },
+    0,
+  ) as JsonValue;
+  return capturedJsonRecord(captured);
 }
 
 function capturedJsonRecord(input: JsonValue | undefined): Readonly<JsonRecord> {
@@ -468,6 +505,7 @@ function captureMutation(input: unknown): CapturedProductionMutation {
       case "planner.discard":
       case "planner.keep": return done(capturePreparedMutationCommand(payload));
       case "table.import": return done(captureTableImport(payload));
+      case "import.commit": return done(captureImportCommitPayload(payload));
       case "samples.remove": return done(captureSampleRemoval(payload));
       case "samples.fill": return done(captureSampleFill(payload));
       case "starter.seed": return done(captureStarterSeedBundle(payload));
@@ -506,6 +544,7 @@ function captureMutation(input: unknown): CapturedProductionMutation {
       case "store.softDelete":
       case "row.restore": fields = ["table", "id"]; break;
       case "store.commit": fields = ["plan"]; break;
+      case "import.undo": fields = ["receiptId"]; break;
       case "attachment.remove": fields = ["table", "rowId", "field", "id"]; break;
       case "attachment.purge":
       case "runDueAutomations": fields = []; break;
@@ -537,6 +576,7 @@ function captureMutation(input: unknown): CapturedProductionMutation {
       case "store.softDelete":
       case "row.restore": strings("table", "id"); break;
       case "store.commit": capturedJsonRecord(captured.plan); break;
+      case "import.undo": strings("receiptId"); break;
       case "attachment.remove": strings("table", "rowId", "field", "id"); break;
       case "batch.apply": {
         if (captured.source !== "user" && captured.source !== "automation") throw new Error();
@@ -618,8 +658,9 @@ function captureOperationalMetricMutation(input: unknown): CapturedOperationalMe
 
 function assertCapturedMutationBytes(request: CapturedProductionMutation): void {
   const serialized = JSON.stringify(request);
-  if (UTF8_ENCODER.encode(serialized).byteLength > MAX_CAPTURE_BYTES)
-    throw invalid(PRODUCTION_MUTATION_PREFIX + "request exceeds 2,000,000 UTF-8 bytes");
+  const limit = request.route === "import.commit" ? MAX_IMPORT_COMMIT_BYTES : MAX_CAPTURE_BYTES;
+  if (UTF8_ENCODER.encode(serialized).byteLength > limit)
+    throw invalid(PRODUCTION_MUTATION_PREFIX + "request exceeds its UTF-8 byte limit");
 }
 
 type FixedOperationalMutation = CapturedOperationalMetricMutation;
@@ -704,6 +745,8 @@ const STORE_INSERT: ClayStore["insert"] = ClayStore.prototype.insert;
 const STORE_UPDATE: ClayStore["update"] = ClayStore.prototype.update;
 const STORE_SOFT_DELETE: ClayStore["softDelete"] = ClayStore.prototype.softDelete;
 const STORE_COMMIT: ClayStore["commit"] = ClayStore.prototype.commit;
+const STORE_COMMIT_IMPORT: ClayStore["commitImport"] = ClayStore.prototype.commitImport;
+const STORE_UNDO_IMPORT: ClayStore["undoImport"] = ClayStore.prototype.undoImport;
 const STORE_REMOVE_ATTACHMENT: ClayStore["removeAttachment"] = ClayStore.prototype.removeAttachment;
 const STORE_PURGE_ATTACHMENTS: ClayStore["purgeDeletedAttachments"] =
   ClayStore.prototype.purgeDeletedAttachments;
@@ -776,6 +819,16 @@ function executeCapturedMutation(
         store,
         request.payload.plan as unknown as Parameters<ClayStore["commit"]>[0],
       ));
+    case "import.commit":
+      return capturedExecution(captureJsonValue(STORE_COMMIT_IMPORT.call(
+        store,
+        request.payload as unknown as Parameters<ClayStore["commitImport"]>[0],
+      ), new WeakSet()));
+    case "import.undo":
+      return capturedExecution(captureJsonValue(STORE_UNDO_IMPORT.call(
+        store,
+        request.payload.receiptId,
+      ), new WeakSet()));
     case "planner.begin":
       return capturedExecution(STORE_BEGIN_ATTEMPT.call(store, request.payload.intent));
     case "planner.finalize":

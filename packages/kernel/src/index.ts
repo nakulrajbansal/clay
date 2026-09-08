@@ -30,6 +30,19 @@ export { compileQuery, runQuery, type CompiledQuery, type QueryByteBudget, type 
   type QueryValue, type RecordLink } from "./query";
 export { coerceValue, nowIso, uuidv7, validateInsert, validatePatch } from "./rows";
 export {
+  importValueFingerprint, inferImportColumns, prepareExistingTableImport,
+  type CommitExistingImportInput, type CommitImportResult,
+  type ExistingTableImportPreview, type ImportIssue, type ImportNoChangeResult,
+  type ImportReceipt, type ImportWarningCode, type ImportWarningTotals,
+  type InferredImportColumn, type PreparedExistingImportMutation,
+  type PreparedExistingTableImport, type PrepareExistingTableImportInput,
+  type TrustedExistingImportEnvelope,
+} from "./import-journey";
+export type {
+  ExistingTableImportMapping, ExistingTableImportMode,
+} from "./import-staging-contracts";
+export { recommendHeaderCandidate } from "./import-analysis";
+export {
   applyForwardOps, applyInverseOps, deriveInverse, validateMigrationPlan,
   type ForwardOpT, type InverseOpT, type MigrationPlanT,
 } from "./migrate";

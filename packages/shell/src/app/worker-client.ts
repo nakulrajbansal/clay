@@ -2,9 +2,9 @@
 import type {
   AttachmentFile, AttachmentMetadata, AttachmentStorageSummary,
   AutomationDefinition, AutomationDefinitionInput, AutomationRun, AutomationSimulation,
-  BatchMutation, BatchReceipt, ClayNotification, DebugEvent, FieldProvenance,
+  BatchMutation, BatchReceipt, ClayNotification, CommitImportResult, DebugEvent, FieldProvenance,
   GlobalSearchResult,
-  HistoryEntry, LivePanel, PanelProvenance,
+  HistoryEntry, ImportReceipt, LivePanel, PanelProvenance,
   PrivateMetricEvent, PrivateMetricsSummary, RegTable, RelationConversionPreview,
   RelationFieldSpec,
   RelationConversionRequest, RelationConversionResult, SemanticSchemaTraceV1, Suggestion,
@@ -19,6 +19,14 @@ import { ClayError } from "@clay/kernel/errors";
 import { extractAcornStaticStrings } from "@clay/kernel/shell-runtime";
 import type { IntentOutcome } from "../worker/db-worker";
 import { fetchModelHealth } from "./model-health";
+import type {
+  ImportHeaderChoice, ImportParserChunk, ImportSourceDescriptor,
+} from "@clay/kernel/import-staging-contracts";
+import type {
+  ConfigureImportInput,
+  ImportCoordinatorPreview,
+  ImportStructure,
+} from "../worker/release-c/import-session-coordinator";
 
 export type TraceEntry = { at: string; intent: string; events: DebugEvent[] };
 
@@ -1069,13 +1077,6 @@ export class WorkerClient {
   seed(shellId: string, context: WorkerMutationContext): Promise<null> {
     return this.mutationCall("seed", { shellId }, context);
   }
-  importTable(
-    payload: { table: string; columns: unknown[]; rows: unknown[] },
-    context: WorkerMutationContext,
-  ):
-    Promise<{ table: string; imported: number; columns: number }> {
-    return this.mutationCall("importTable", payload, context);
-  }
   panels(): Promise<LivePanel[]> { return this.ephemeralCall("panels"); }
   panelProvenance(): Promise<PanelProvenance[]> { return this.ephemeralCall("panelProvenance"); }
   semanticTrace(): Promise<SemanticSchemaTraceV1> { return this.ephemeralCall("semanticTrace"); }
@@ -1175,6 +1176,40 @@ export class WorkerClient {
   }
   undoBatch(id: string, context: WorkerMutationContext): Promise<BatchReceipt> {
     return this.mutationCall("undoBatch", { id }, context);
+  }
+  beginImport(
+    descriptor: ImportSourceDescriptor,
+    targetTable: string,
+    sheetId?: string,
+  ): Promise<ImportStructure> {
+    return this.ephemeralCall("beginImport", {
+      descriptor, targetTable, ...(sheetId === undefined ? {} : { sheetId }),
+    });
+  }
+  stageImportChunk(appInstanceId: string, chunk: ImportParserChunk): Promise<ImportStructure> {
+    return this.ephemeralCall("stageImportChunk", { appInstanceId, chunk });
+  }
+  importStructure(sessionId: string, header?: ImportHeaderChoice): Promise<ImportStructure> {
+    return this.ephemeralCall("importStructure", {
+      sessionId, ...(header === undefined ? {} : { header }),
+    });
+  }
+  configureImport(input: ConfigureImportInput): Promise<null> {
+    return this.ephemeralCall("configureImport", input as unknown as Record<string, unknown>);
+  }
+  previewImport(sessionId: string): Promise<ImportCoordinatorPreview> {
+    return this.ephemeralCall("previewImport", { sessionId });
+  }
+  commitImport(input: {
+    sessionId: string; previewId: string; previewDigest: string; idempotencyKey: string;
+  }, context: WorkerMutationContext = createWorkerMutationContext()): Promise<CommitImportResult> {
+    return this.mutationCall("commitImport", input, context);
+  }
+  cancelImport(sessionId: string): Promise<{ disposed: true }> {
+    return this.ephemeralCall("cancelImport", { sessionId });
+  }
+  undoImport(id: string, context: WorkerMutationContext = createWorkerMutationContext()): Promise<ImportReceipt> {
+    return this.mutationCall("undoImport", { id }, context);
   }
   rowHistory(table: string, id: string):
     Promise<{ at: string; values: Record<string, unknown> }[]> {

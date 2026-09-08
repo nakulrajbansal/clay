@@ -60,7 +60,7 @@ describe("Data export pending-write barrier", () => {
     const root = createRoot(host);
     await act(async () => root.render(<DataView
       worker={worker} store={delayed} initialTable="tasks"
-      onImport={() => undefined} onWrite={() => undefined} onClose={() => undefined}
+      onWrite={() => undefined} onClose={() => undefined}
       onError={message => { throw new Error(message); }} onInfo={() => undefined}
     />));
     await waitFor(() => document.body.textContent?.includes("Before") ?? false);

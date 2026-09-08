@@ -39,7 +39,6 @@ import {
   setSessionToken, type ModelProviderId,
 } from "./settings";
 import { reorder, type Region } from "./layout";
-import { parseImportFile } from "./importData";
 import { buildTrustReceipt } from "./change-contract";
 import { useLensController } from "./useLensController";
 import { LazySurfaceBoundary } from "./LazySurfaceBoundary";
@@ -376,36 +375,6 @@ export function App(): React.JSX.Element {
     const appId = currentId ?? currentAppId() ?? "default";
     saveThemeId(appId, id);
     setThemeId(id);
-  };
-
-  // Bring-your-own-data: parse/capture in the trusted shell, then let the
-  // authority stage the import and atomically publish schema, rows, and panel.
-  const importFile = async (file: File): Promise<void> => {
-    setBusy(true);
-    try {
-      const parsed = parseImportFile(await file.text(), file.name);
-      if (parsed.columns.length === 0 || parsed.rows.length === 0)
-        throw new Error("No rows found — check the file has a header row and data.");
-      const res = await client().importTable(
-        { table: parsed.table, columns: parsed.columns, rows: parsed.rows },
-        mutationContext(),
-      );
-      await refreshPanels();
-      setDataTable(res.table);   // if the Data editor is open, jump to the new table
-      setFeed(f => [...f, { kind: "info", text: `Imported ${res.imported} row${res.imported === 1 ? "" : "s"} into “${res.table}”.` }]);
-      setBusy(false);
-      void refreshSuggestions();
-      if (hasKey) {
-        void runIntent(`Build the most insightful dashboard for my “${res.table}” data `
-          + `(${res.columns} columns): a few key metric cards, one or two charts, and — if there's a `
-          + `status/category column — a board grouped by it. Keep the existing table too.`);
-      } else {
-        setFeed(f => [...f, { kind: "info", text: "Add a model key in settings, then ask me to build a dashboard." }]);
-      }
-    } catch (e) {
-      setBusy(false);
-      pushToast("Import failed: " + (e as Error).message, "danger");
-    }
   };
 
   // boot
@@ -1595,15 +1564,8 @@ export function App(): React.JSX.Element {
             </> : <>
             <div className="empty-canvas-spark">✦</div>
             <h2>What do you want to build?</h2>
-            <p>Describe it in plain words, or <strong>upload a CSV, TSV, or JSON data file</strong> and
-              Clay builds a dashboard around your data. Every change is reversible.</p>
-            <label className="empty-upload file-label">
-              ⬆ Upload a CSV, TSV, or JSON data file
-              <input type="file" accept=".csv,.tsv,.txt,.json" style={{ display: "none" }}
-                disabled={busy}
-                onChange={e => { const f = e.target.files?.[0]; if (f) void importFile(f); e.target.value = ""; }} />
-            </label>
-            <div className="empty-canvas-or">or describe it</div>
+            <p>Describe it in plain words. Every proposed change is reviewed before it is applied,
+              and every kept change remains reversible.</p>
             <div className="empty-canvas-chips">
               {[
                 "Build a habit tracker with a daily check-off and a streak count",
@@ -1684,10 +1646,10 @@ export function App(): React.JSX.Element {
         <DataView
           worker={workerRef.current}
           store={dataStoreRef.current}
+          appInstanceId={currentId}
           initialTable={dataTable}
           initialRecordId={dataRecord}
           returnFocusRef={surfaceReturnFocus}
-          onImport={file => void importFile(file)}
           onWrite={table => liveBridge?.notifyWrite(table)}
           onClose={closeData}
           onError={msg => pushToast(msg, "danger")}

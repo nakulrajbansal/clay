@@ -38,6 +38,15 @@ import {
   type AutomationRun, type AutomationSimulation, type AutomationValue, type ClayNotification,
 } from "./automation";
 import {
+  importValueFingerprint,
+  type CommitExistingImportInput,
+  type CommitImportResult,
+  type ImportReceipt,
+  type PreparedExistingImportMutation,
+} from "./import-journey";
+import type { MutationTotals, SourceDispositionTotals } from "./import-contracts";
+import { ImportWarningTotalsSchema } from "./import-staging-contracts";
+import {
   createFieldId, createRelationshipId, createTableId, isTableId, semanticRegistryIssues,
   type FieldId, type FieldSemanticV1, type PreparedSemanticAssignmentsV1,
   type SemanticIdentityEventV1, type SemanticOperationBounds, type SemanticOrigin,
@@ -194,7 +203,7 @@ export type BatchMutation =
   | { kind: "insert"; table: string; row: Record<string, unknown> }
   | { kind: "soft_delete"; table: string; id: string }
   | { kind: "restore"; table: string; id: string };
-export type BatchSource = "user" | "automation";
+export type BatchSource = "user" | "automation" | "import";
 export type BatchReceipt = {
   id: string;
   at: string;
@@ -513,6 +522,69 @@ function rawArchiveSchemaIssues(driver: DbDriver, format: number): string[] {
 }
 
 type FieldRename = { table: string; from: string; to: string };
+
+const IMPORT_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const IMPORT_SHA256 = /^sha256:[0-9a-f]{64}$/;
+const INVALID_IMPORT_TOTALS = "import totals are invalid";
+const UNBALANCED_IMPORT_TOTALS = "import totals do not balance";
+const STALE_IMPORT_TARGET = "an import target changed after preview";
+
+function boundedImportCount(value: unknown): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 5_000)
+    throw new ClayError("E_VALIDATION", INVALID_IMPORT_TOTALS);
+  return value;
+}
+
+function exactImportRecord(value: unknown, keys: readonly string[]): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw new ClayError("E_VALIDATION", INVALID_IMPORT_TOTALS);
+  const record = value as Record<string, unknown>;
+  const actual = Object.keys(record);
+  if (actual.length !== keys.length || actual.some(key => !keys.includes(key)))
+    throw new ClayError("E_VALIDATION", INVALID_IMPORT_TOTALS);
+  return record;
+}
+
+function validatedSourceTotals(value: unknown): SourceDispositionTotals {
+  const keys = ["sourceRows", "createRows", "updateRows", "skipRows", "blockedRows", "skipReasons"] as const;
+  const record = exactImportRecord(value, keys);
+  const reasonKeys = ["above_header", "blank_row", "user_skipped", "duplicate_combined",
+    "duplicate_skipped", "no_change", "unmapped_row"] as const;
+  const reasons = exactImportRecord(record.skipReasons, reasonKeys);
+  const skipReasons = Object.fromEntries(
+    reasonKeys.map(key => [key, boundedImportCount(reasons[key])]),
+  ) as SourceDispositionTotals["skipReasons"];
+  const result: SourceDispositionTotals = {
+    sourceRows: boundedImportCount(record.sourceRows),
+    createRows: boundedImportCount(record.createRows),
+    updateRows: boundedImportCount(record.updateRows),
+    skipRows: boundedImportCount(record.skipRows),
+    blockedRows: boundedImportCount(record.blockedRows),
+    skipReasons,
+  };
+  if (result.sourceRows !== result.createRows + result.updateRows
+      + result.skipRows + result.blockedRows
+      || Object.values(result.skipReasons).reduce((sum, count) => sum + count, 0)
+        !== result.skipRows)
+    throw new ClayError("E_VALIDATION", UNBALANCED_IMPORT_TOTALS);
+  return result;
+}
+
+function validatedMutationTotals(value: unknown): MutationTotals {
+  const keys = ["primaryTargetCreates", "primaryTargetUpdates",
+    "auxiliaryRelatedCreates", "changedCount"] as const;
+  const record = exactImportRecord(value, keys);
+  const result: MutationTotals = {
+    primaryTargetCreates: boundedImportCount(record.primaryTargetCreates),
+    primaryTargetUpdates: boundedImportCount(record.primaryTargetUpdates),
+    auxiliaryRelatedCreates: boundedImportCount(record.auxiliaryRelatedCreates),
+    changedCount: boundedImportCount(record.changedCount),
+  };
+  if (result.changedCount !== result.primaryTargetCreates
+      + result.primaryTargetUpdates + result.auxiliaryRelatedCreates)
+    throw new ClayError("E_VALIDATION", UNBALANCED_IMPORT_TOTALS);
+  return result;
+}
 
 type CapturedAttachmentWriter = (
   input: AttachmentInput,
@@ -2117,15 +2189,17 @@ export class ClayStore {
          id, at, table_name, row_id, kind, changed_fields_json, origin, row_json)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [uuidv7(), nowIso(), table, id, kind, JSON.stringify([...new Set(changedFields)].sort()),
-       this.batchContext?.source === "automation" ? "automation" : "user",
+       this.batchContext?.source === "automation" ? "automation"
+         : this.batchContext?.source === "import" ? "import" : "user",
        JSON.stringify(snapshot)]);
   }
 
-  insert(table: string, row: Record<string, unknown>): QueryRow {
+  #insertWithId(table: string, row: Record<string, unknown>, id: string): QueryRow {
     const t = getTable(this.reg, table);
     this.validateRelationReferences(t, row);
     const { cols, vals } = validateInsert(t, row);
-    const id = uuidv7();
+    if (!IMPORT_UUID.test(id))
+      throw new ClayError("E_VALIDATION", "prepared row identity is invalid");
     const now = nowIso();
     const allCols = ["id", "created_at", "updated_at", ...cols];
     const allVals: SqlValue[] = [id, now, now, ...vals];
@@ -2152,6 +2226,10 @@ export class ClayStore {
     }
     this.#observer.record({ kind: "insert", subject: table });
     return this.rowById(table, id);
+  }
+
+  insert(table: string, row: Record<string, unknown>): QueryRow {
+    return this.#driver.tx(() => this.#insertWithId(table, row, uuidv7()));
   }
 
   // ---------- Observer (doc 02 §1) ----------
@@ -2799,7 +2877,7 @@ export class ClayStore {
           let cursor = Number(stored.last_event_seq);
           const eligible = new Map<number, QueryRow>();
           for (const event of events) {
-            if (event.origin !== "user"
+            if ((event.origin !== "user" && event.origin !== "import")
                 || (trigger.kind === "record_created" && event.kind !== "created")
                 || (trigger.kind === "record_updated" && event.kind !== "updated")) continue;
             let snapshot: QueryRow | null = null;
@@ -2821,7 +2899,7 @@ export class ClayStore {
           }
           for (const event of events) {
             const sequence = Number(event.seq);
-            if (event.origin !== "user"
+            if ((event.origin !== "user" && event.origin !== "import")
                 || (trigger.kind === "record_created" && event.kind !== "created")
                 || (trigger.kind === "record_updated" && event.kind !== "updated")) {
               cursor = sequence;
@@ -3047,6 +3125,209 @@ export class ClayStore {
         validatePatch(table, mutation.patch);
       }
     }
+  }
+
+  #importReceiptKey(id: string): string {
+    return `operation_receipt_import_v1:${id}`;
+  }
+
+  importReceipt(id: string): ImportReceipt | null {
+    if (!IMPORT_UUID.test(id))
+      throw new ClayError("E_VALIDATION", "import receipt identity is invalid");
+    return this.getSetting<ImportReceipt>(this.#importReceiptKey(id)) ?? null;
+  }
+
+  #activeImportRow(table: string, id: string): QueryRow {
+    const row = runQuery(this.#driver, this.reg, {
+      from: table, where: [{ field: "id", op: "eq", value: id }],
+    })[0];
+    if (!row) throw new ClayError("E_CONFLICT", STALE_IMPORT_TARGET);
+    return row;
+  }
+
+  #validatePreparedImportMutation(
+    input: CommitExistingImportInput,
+    mutation: PreparedExistingImportMutation,
+    referencedRows: Set<number>,
+  ): void {
+    if (!/^mutation_[a-z2-7]{26}$/.test(mutation.mutationId)
+        || mutation.role !== "primary_target" || mutation.table !== input.target.table
+        || !IMPORT_UUID.test(mutation.rowId)
+        || mutation.originSourceRows.length < 1)
+      throw new ClayError("E_VALIDATION", "prepared import mutation is invalid");
+    for (const sourceRow of mutation.originSourceRows) {
+      if (referencedRows.has(sourceRow))
+        throw new ClayError("E_VALIDATION", "a source row maps to more than one primary mutation");
+      const disposition = input.dispositions.find(candidate => candidate.sourceRow === sourceRow);
+      if (!disposition || disposition.kind !== mutation.kind)
+        throw new ClayError("E_VALIDATION", "prepared mutation does not match its source disposition");
+      referencedRows.add(sourceRow);
+    }
+    const table = getTable(this.reg, mutation.table);
+    if (mutation.kind === "create") {
+      if (!mutation.row || mutation.patch !== undefined || mutation.beforeDigest !== undefined
+          || importValueFingerprint(mutation.row) !== mutation.payloadDigest)
+        throw new ClayError("E_VALIDATION", "prepared create payload is invalid");
+      this.validateRelationReferences(table, mutation.row);
+      validateInsert(table, mutation.row);
+      if (this.#driver.select(`SELECT "id" FROM ${qid(mutation.table)} WHERE "id" = ?`,
+        [mutation.rowId]).length > 0)
+        throw new ClayError("E_CONFLICT", "a prepared import row identity already exists");
+      return;
+    }
+    if (!mutation.patch || mutation.row !== undefined || !mutation.beforeDigest
+        || importValueFingerprint(mutation.patch) !== mutation.payloadDigest)
+      throw new ClayError("E_VALIDATION", "prepared update payload is invalid");
+    this.validateRelationReferences(table, mutation.patch, mutation.rowId);
+    validatePatch(table, mutation.patch);
+    const current = this.#activeImportRow(mutation.table, mutation.rowId);
+    if (importValueFingerprint(current) !== mutation.beforeDigest)
+      throw new ClayError("E_CONFLICT", STALE_IMPORT_TARGET);
+  }
+
+  commitImport(input: CommitExistingImportInput): CommitImportResult {
+    const existing = this.importReceipt(input.receiptId);
+    if (existing) {
+      if (existing.previewDigest !== input.previewDigest)
+        throw new ClayError("E_CONFLICT", "an import receipt identity was reused");
+      return existing;
+    }
+    if (!/^import_[a-z2-7]{26}$/.test(input.sessionId)
+        || !/^preview_[a-z2-7]{26}$/.test(input.previewId)
+        || !IMPORT_SHA256.test(input.previewDigest)
+        || !IMPORT_SHA256.test(input.sourceDigest)
+        || (input.sourceKind !== "csv" && input.sourceKind !== "paste" && input.sourceKind !== "xlsx")
+        || !input.summary.trim() || input.summary.length > 200)
+      throw new ClayError("E_VALIDATION", "import commit envelope is invalid");
+    if (input.baseVersion !== this.headVersion() || this.currentVersion() !== this.headVersion())
+      throw new ClayError("E_CONFLICT", "the app shape changed after import preview");
+    const table = getTable(this.reg, input.target.table);
+    if ((table.semantic?.label ?? table.name) !== input.target.label)
+      throw new ClayError("E_CONFLICT", "the import target changed after preview");
+    const sourceTotals = validatedSourceTotals(input.sourceTotals);
+    const mutationTotals = validatedMutationTotals(input.mutationTotals);
+    const warnings = ImportWarningTotalsSchema.safeParse(input.warningTotals);
+    if (!warnings.success)
+      throw new ClayError("E_VALIDATION", "import warning totals are invalid");
+    const warningTotals = warnings.data;
+    if (sourceTotals.blockedRows !== 0 || sourceTotals.sourceRows !== input.dispositions.length
+        || mutationTotals.changedCount !== input.mutations.length
+        || input.mutations.length > 5_000
+        || this.rowHistoryCap < input.mutations.length)
+      throw new ClayError("E_VALIDATION", "the import preview is not committable or exceeds limits");
+    const dispositionRows = new Set(input.dispositions.map(item => item.sourceRow));
+    if (dispositionRows.size !== input.dispositions.length)
+      throw new ClayError("E_VALIDATION", "import source dispositions are not unique");
+    const mutationIds = new Set<string>();
+    const mutationRows = new Set<string>();
+    const referencedRows = new Set<number>();
+    for (const mutation of input.mutations) {
+      if (mutationIds.has(mutation.mutationId)
+          || mutationRows.has(`${mutation.table}\u0000${mutation.rowId}`))
+        throw new ClayError("E_VALIDATION", "prepared import mutations are not unique");
+      mutationIds.add(mutation.mutationId);
+      mutationRows.add(`${mutation.table}\u0000${mutation.rowId}`);
+      this.#validatePreparedImportMutation(input, mutation, referencedRows);
+    }
+    const expectedDispositionRows = input.dispositions.filter(item =>
+      item.kind === "create" || item.kind === "update").map(item => item.sourceRow);
+    if (expectedDispositionRows.some(sourceRow => !referencedRows.has(sourceRow)))
+      throw new ClayError("E_VALIDATION", "an import source mutation is missing");
+    if (input.mutations.length === 0) {
+      return {
+        kind: "no_change",
+        durable: false,
+        previewDigest: input.previewDigest,
+        sourceTotals,
+        mutationTotals,
+        warningTotals,
+      };
+    }
+
+    const id = input.receiptId;
+    const at = nowIso();
+    const created = input.mutations.filter(mutation => mutation.kind === "create")
+      .map(mutation => ({ table: mutation.table, id: mutation.rowId,
+        role: "primary_target" as const }));
+    const previous = this.batchContext;
+    try {
+      return this.#driver.tx(() => {
+        if (input.baseVersion !== this.headVersion())
+          throw new ClayError("E_CONFLICT", "the app shape changed after import preview");
+        for (const mutation of input.mutations) {
+          if (mutation.kind !== "update") continue;
+          const current = this.#activeImportRow(mutation.table, mutation.rowId);
+          if (importValueFingerprint(current) !== mutation.beforeDigest)
+            throw new ClayError("E_CONFLICT", STALE_IMPORT_TARGET);
+        }
+        this.batchContext = { id, source: "import", pending: new Map() };
+        try {
+          for (const mutation of input.mutations) {
+            if (mutation.kind === "create")
+              this.#insertWithId(mutation.table, mutation.row!, mutation.rowId);
+            else this.update(mutation.table, mutation.rowId, mutation.patch!);
+          }
+          this.assertRelationIntegrity();
+          if (this.batchContext.pending.size !== 0)
+            throw new ClayError("E_INTERNAL", "import history was not finalized");
+          const changed = Number(this.#driver.select(
+            `SELECT COUNT(*) AS count FROM "row_history" WHERE "batch_id" = ?`, [id],
+          )[0]?.count ?? 0);
+          if (changed !== mutationTotals.changedCount)
+            throw new ClayError("E_CONFLICT", "import preview no longer matches actual history");
+          const historyRows = new Set(this.#driver.select(
+            `SELECT "table", "row_id" FROM "row_history" WHERE "batch_id" = ?`, [id],
+          ).map(row => `${String(row.table)}\u0000${String(row.row_id)}`));
+          if (historyRows.size !== input.mutations.length
+              || input.mutations.some(mutation =>
+                !historyRows.has(`${mutation.table}\u0000${mutation.rowId}`)))
+            throw new ClayError("E_CONFLICT", "import history does not match the prepared mutations");
+          this.#driver.exec(
+            `INSERT INTO sys.operation_batches(
+               id, at, source, summary, changed_count, created_json, undone_at)
+             VALUES (?, ?, 'import', ?, ?, ?, NULL)`,
+            [id, at, input.summary.trim(), changed,
+             JSON.stringify(created.map(item => ({ table: item.table, id: item.id })))]);
+          const receipt: ImportReceipt = {
+            kind: "receipt", durable: true, id, at, source: "import",
+            summary: input.summary.trim(), changed, created, undone: false,
+            previewDigest: input.previewDigest, sourceKind: input.sourceKind,
+            target: { ...input.target }, baseVersion: input.baseVersion,
+            sourceTotals, mutationTotals, warningTotals,
+            undo: { state: "available" },
+          };
+          this.setSetting(this.#importReceiptKey(id), receipt);
+          const readBack = this.importReceipt(id);
+          if (!readBack || JSON.stringify(readBack) !== JSON.stringify(receipt))
+            throw new ClayError("E_INTERNAL", "import receipt failed authoritative read-back");
+          return readBack;
+        } finally { this.batchContext = previous; }
+      });
+    } catch (error) {
+      this.batchContext = previous;
+      throw error;
+    }
+  }
+
+  undoImport(id: string): ImportReceipt {
+    const receipt = this.importReceipt(id);
+    if (!receipt) throw new ClayError("E_VALIDATION", "unknown import receipt");
+    if (receipt.undone) throw new ClayError("E_CONFLICT", "import is already undone");
+    return this.#driver.tx(() => {
+      const batch = this.undoBatch(id);
+      const undone: ImportReceipt = {
+        ...receipt,
+        changed: batch.changed,
+        created: receipt.created.map(item => ({ ...item })),
+        undone: true,
+        undo: { state: "undone" },
+      };
+      this.setSetting(this.#importReceiptKey(id), undone);
+      const readBack = this.importReceipt(id);
+      if (!readBack || JSON.stringify(readBack) !== JSON.stringify(undone))
+        throw new ClayError("E_INTERNAL", "import undo receipt failed authoritative read-back");
+      return readBack;
+    });
   }
 
   applyBatch(input: {

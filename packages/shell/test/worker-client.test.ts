@@ -10,6 +10,7 @@ import {
   type ProjectionArtifactV1,
   type ProjectionRequestV1,
 } from "@clay/kernel/projection";
+import { IMPORT_ACQUISITION_LIMITS, type ImportSourceDescriptor } from "@clay/kernel/import-staging-contracts";
 
 function withCredential(
   base: Omit<ModelAccess, "apiKey">,
@@ -37,6 +38,10 @@ type Posted = {
   op: string;
   payload: Record<string, unknown>;
 };
+
+function opaque(prefix: string, fill: string): string {
+  return `${prefix}_${fill.repeat(26)}`;
+}
 
 const fixture = (name: string): Uint8Array => new Uint8Array(readFileSync(resolve(
   process.cwd(), "../kernel/test/fixtures", name,
@@ -357,6 +362,52 @@ describe("WorkerClient local export boundary", () => {
       error: { code: "E_CANCELLED", message: "projection stopped" },
     } });
     await expect(pending).rejects.toMatchObject({ code: "E_CANCELLED" });
+  });
+});
+
+describe("WorkerClient Release C import boundary", () => {
+  it("uses bounded staged commands and sends only opaque preview authority at commit", async () => {
+    const { client, posted } = harness();
+    const sessionId = opaque("import", "a");
+    const descriptor: ImportSourceDescriptor = {
+      version: 1,
+      sessionId,
+      appInstanceId: opaque("app", "b"),
+      kind: "csv",
+      sourceDigest: `sha256:${"c".repeat(64)}`,
+      sheets: [{ sheetId: "source", label: "Delimited text", visibility: "visible",
+        range: { rows: 2, columns: 1 } }],
+      limits: IMPORT_ACQUISITION_LIMITS,
+    };
+    const chunk = {
+      sessionId, cursor: 0, startRow: 1, rows: [["Name"], ["Alice"]],
+      nextCursor: null, serializedBytes: 128,
+    };
+    await client.beginImport(descriptor, "contacts");
+    await client.stageImportChunk(descriptor.appInstanceId, chunk);
+    await client.importStructure(sessionId);
+    await client.configureImport({
+      sessionId, header: { mode: "header", sourceRow: 1 }, mode: { kind: "append" },
+      mappings: [{ sourceColumn: 1, targetField: "name" }],
+    });
+    await client.previewImport(sessionId);
+    await client.commitImport({
+      sessionId, previewId: opaque("preview", "d"),
+      previewDigest: `sha256:${"e".repeat(64)}`, idempotencyKey: opaque("req", "f"),
+    });
+    await client.cancelImport(sessionId);
+    await client.undoImport("018f0000-0000-7000-8000-000000000001");
+
+    expect(posted.map(message => message.op)).toEqual([
+      "beginImport", "stageImportChunk", "importStructure", "configureImport",
+      "previewImport", "commitImport", "cancelImport", "undoImport",
+    ]);
+    expect(posted[5]?.payload).toEqual({
+      sessionId, previewId: opaque("preview", "d"),
+      previewDigest: `sha256:${"e".repeat(64)}`, idempotencyKey: opaque("req", "f"),
+    });
+    expect(posted[5]?.requestId).toMatch(/^req_[a-z2-7]{26}$/);
+    expect(JSON.stringify(posted[5]?.payload)).not.toContain("Alice");
   });
 });
 
