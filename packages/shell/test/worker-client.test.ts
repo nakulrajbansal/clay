@@ -59,17 +59,32 @@ describe("WorkerClient boot boundary", () => {
 });
 
 describe("WorkerClient files and automation boundaries", () => {
+  it("exposes replayable durable request handles for every automation write", async () => {
+    const { client, posted } = harness();
+    const first = client.deleteAutomation("auto_00000000000000000000000000000000");
+    expect(first.requestId).toMatch(/^req_[a-z2-7]{26}$/);
+    await first;
+    await client.deleteAutomation("auto_00000000000000000000000000000000", first.requestId);
+    expect(posted).toMatchObject([
+      { op: "deleteAutomation", requestId: first.requestId },
+      { op: "deleteAutomation", requestId: first.requestId },
+    ]);
+  });
+
   it("transfers file bytes and exposes only bounded workflow commands", async () => {
     const { client, posted, transfers } = harness();
     const bytes = new ArrayBuffer(8);
     await client.addAttachment({ table: "projects", rowId: "row", field: "files",
       name: "receipt.pdf", mime: "application/pdf", bytes });
     await client.listAutomations();
+    await client.automationRuntimeOverview(25);
     await client.runAutomations();
     await client.undoAutomationRun("run");
     expect(posted.map(message => message.op)).toEqual([
-      "addAttachment", "listAutomations", "runAutomations", "undoAutomationRun",
+      "addAttachment", "listAutomations", "automationRuntimeOverview",
+      "runAutomations", "undoAutomationRun",
     ]);
+    expect(posted[2]?.payload).toEqual({ limit: 25 });
     expect(transfers[0]).toEqual([bytes]);
     expect(posted[0]?.payload).toMatchObject({
       table: "projects", field: "files", name: "receipt.pdf",

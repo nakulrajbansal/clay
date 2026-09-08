@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
-  ClayStore, deriveInverse, openMemoryDriver,
-  type DbDriver, type ForwardOpT,
+  ClayStore, deriveInverse, openMemoryDriver, validateAutomationDefinition,
+  type AutomationDefinitionInput, type AutomationDefinitionV2, type AutomationDraftInputV2,
+  type DbDriver, type ForwardOpT, type StableFieldRef, type StableTableRef,
 } from "../src/index";
 import {
   ProductionStoreAuthority,
   armProductionAuthorityFailureForTest,
 } from "../src/production-authority";
+import { executeAutomationObserverAuthorityRoute } from
+  "../src/production-automation-observer-routes";
 
 const opaque = (prefix: string, char: string): string => `${prefix}_${char.repeat(26)}`;
 const legacyInventory = {
@@ -20,9 +23,13 @@ const legacyInventory = {
   }],
 };
 
-async function automationAuthority(dealCount = 1): Promise<{
+async function automationAuthority(
+  dealCount = 1,
+  prepare?: (store: ClayStore) => void,
+): Promise<{
   authority: ProductionStoreAuthority;
   driver: DbDriver;
+  store: ClayStore;
 }> {
   const driver = await openMemoryDriver();
   driver.exec("ATTACH DATABASE ':memory:' AS catalog");
@@ -48,8 +55,10 @@ async function automationAuthority(dealCount = 1): Promise<{
   });
   for (let index = 0; index < dealCount; index++)
     store.insert("deals", { name: `Deal ${index}`, status: "open", onboarded: false });
+  prepare?.(store);
   return {
     driver,
+    store,
     authority: ProductionStoreAuthority.adoptLegacy(driver, {
       inventory: legacyInventory,
       storageKey: "default",
@@ -65,7 +74,284 @@ async function automationAuthority(dealCount = 1): Promise<{
   };
 }
 
+function authorityAutomationDraft(
+  authority: ProductionStoreAuthority,
+  input: AutomationDefinitionInput,
+): AutomationDraftInputV2 {
+  const reader = authority.readStore();
+  const normalized = validateAutomationDefinition(reader.registrySnapshot(), input);
+  const trace = reader.semanticSchemaTrace();
+  const tableRef = (name: string): StableTableRef => {
+    const table = trace.tables.find(candidate => candidate.name === name
+      && candidate.state === "visible");
+    if (!table) throw new Error(`missing authority-test table '${name}'`);
+    return { tableId: table.tableId, lastKnownName: table.name };
+  };
+  const fieldRef = (tableName: string, fieldName: string): StableFieldRef => {
+    const table = tableRef(tableName);
+    const field = trace.fields.find(candidate => candidate.tableId === table.tableId
+      && candidate.fieldName === fieldName && candidate.state === "visible");
+    if (!field) throw new Error(`missing authority-test field '${tableName}.${fieldName}'`);
+    return { tableId: table.tableId, fieldId: field.fieldId, lastKnownName: field.fieldName };
+  };
+  const sourceTable = normalized.trigger.kind === "schedule" ? null : normalized.trigger.table;
+  const conditions = normalized.trigger.kind === "schedule" ? []
+    : normalized.trigger.conditions
+      .filter(condition => !["id", "created_at", "updated_at", "deleted_at"]
+        .includes(condition.field))
+      .map(condition => ({
+        ...condition,
+        field: fieldRef(normalized.trigger.kind === "schedule"
+          ? "" : normalized.trigger.table, condition.field),
+      }));
+  let trigger: AutomationDraftInputV2["trigger"];
+  switch (normalized.trigger.kind) {
+    case "record_created":
+    case "record_updated":
+    case "record_matches":
+    case "manual":
+      trigger = {
+        kind: normalized.trigger.kind,
+        table: tableRef(normalized.trigger.table),
+        conditions,
+      };
+      break;
+    case "date_due":
+      trigger = {
+        kind: "date_due",
+        table: tableRef(normalized.trigger.table),
+        dateField: fieldRef(normalized.trigger.table, normalized.trigger.dateField),
+        daysBefore: normalized.trigger.daysBefore,
+        conditions,
+      };
+      break;
+    case "schedule":
+      trigger = {
+        kind: "schedule",
+        cadence: normalized.trigger.cadence,
+        localTime: normalized.trigger.localTime,
+        ...(normalized.trigger.cadence === "weekly"
+          ? { weekday: normalized.trigger.weekday } : {}),
+      };
+  }
+  const stableValues = (
+    targetTable: string,
+    source: string | null,
+    entries: Extract<AutomationDefinitionInput["actions"][number],
+      { kind: "set_fields" | "create_record" | "create_related" }>["values"],
+  ) => Object.entries(entries).map(([fieldName, value]) => ({
+    field: fieldRef(targetTable, fieldName),
+    value: value.source === "literal" ? value
+      : { source: "field" as const, field: fieldRef(source ?? "", value.field).fieldId },
+  }));
+  const actions: AutomationDraftInputV2["actions"] = normalized.actions.map(action => {
+    switch (action.kind) {
+      case "set_fields":
+        if (!sourceTable) throw new Error("authority-test schedule cannot set source fields");
+        return { kind: "set_fields", values: stableValues(sourceTable, sourceTable, action.values) };
+      case "create_record":
+        return {
+          kind: "create_record", table: tableRef(action.table),
+          values: stableValues(action.table, sourceTable, action.values),
+        };
+      case "create_related":
+        return {
+          kind: "create_related", table: tableRef(action.table),
+          relationField: fieldRef(action.table, action.relationField),
+          values: stableValues(action.table, sourceTable, action.values),
+        };
+      case "notify":
+        return action;
+    }
+  });
+  return {
+    v: 2,
+    ...(normalized.id === undefined ? {} : { id: normalized.id }),
+    name: normalized.name,
+    trigger,
+    actions,
+    runtime: { mode: "local", ...(trigger.kind === "schedule" ? { timeZone: "UTC" } : {}) },
+  };
+}
+
+async function saveAuthorityAutomation(
+  authority: ProductionStoreAuthority,
+  input: AutomationDefinitionInput,
+): Promise<AutomationDefinitionV2> {
+  const saved = (await authority.executeMutation({
+    requestId: authority.createRequestId(),
+    route: "saveAutomationDraft",
+    payload: { input: authorityAutomationDraft(authority, input), expectedRevision: null },
+  })).result as AutomationDefinitionV2;
+  if (!input.enabled) return saved;
+  const simulation = await authority.simulateAutomation({
+    id: saved.id,
+    expectedRevision: saved.definitionRevision,
+    purpose: "enable",
+  });
+  return (await authority.executeMutation({
+    requestId: authority.createRequestId(),
+    route: "enableAutomation",
+    payload: { id: saved.id, expectedRevision: saved.definitionRevision, simulation },
+  })).result as AutomationDefinitionV2;
+}
+
+async function authorityRunNowRequest(
+  authority: ProductionStoreAuthority,
+  rule: AutomationDefinitionV2,
+  requestId: string = authority.createRequestId(),
+): Promise<{
+  requestId: string;
+  route: "runAutomationNow";
+  payload: {
+    id: string;
+    expectedRevision: number;
+    simulation: Awaited<ReturnType<ProductionStoreAuthority["simulateAutomation"]>>;
+  };
+}> {
+  const simulation = await authority.simulateAutomation({
+    id: rule.id,
+    expectedRevision: rule.definitionRevision,
+    purpose: "run_now",
+  });
+  return {
+    requestId,
+    route: "runAutomationNow",
+    payload: { id: rule.id, expectedRevision: rule.definitionRevision, simulation },
+  };
+}
+
 describe("production automation and operational authority", () => {
+  it("serializes stable-ID save, target-bound simulation, and exact-proof enable through durable authority handles", async () => {
+    const { authority } = await automationAuthority();
+    try {
+      const trace = authority.readStore().semanticSchemaTrace();
+      const deals = trace.tables.find(table => table.name === "deals")!;
+      const status = trace.fields.find(field => field.tableId === deals.tableId
+        && field.fieldName === "status")!;
+      const onboarded = trace.fields.find(field => field.tableId === deals.tableId
+        && field.fieldName === "onboarded")!;
+      const savedMutation = await authority.executeMutation({
+        requestId: opaque("req", "z"),
+        route: "saveAutomationDraft",
+        payload: { input: {
+          v: 2,
+          name: "Onboard won deals",
+          trigger: {
+            kind: "record_matches",
+            table: { tableId: deals.tableId, lastKnownName: "presentation only" },
+            conditions: [{
+              field: { tableId: deals.tableId, fieldId: status.fieldId,
+                lastKnownName: "presentation only" },
+              op: "eq",
+              value: "open",
+            }],
+          },
+          actions: [{
+            kind: "set_fields",
+            values: [{
+              field: { tableId: deals.tableId, fieldId: onboarded.fieldId,
+                lastKnownName: "presentation only" },
+              value: { source: "literal", value: true },
+            }],
+          }],
+          runtime: { mode: "local" },
+        }, expectedRevision: null },
+      });
+      expect(savedMutation).toMatchObject({
+        requestId: opaque("req", "z"),
+        changed: true,
+        replayed: false,
+        result: { v: 2, state: "draft", enabled: false, definitionRevision: 1 },
+      });
+      const saved = savedMutation.result as { id: string; definitionRevision: number };
+      const beforeSimulation = authority.inspectAuthority();
+
+      const simulation = await authority.simulateAutomation({
+        id: saved.id,
+        expectedRevision: saved.definitionRevision,
+        purpose: "enable",
+      });
+
+      expect(authority.inspectAuthority()).toEqual(beforeSimulation);
+      expect(simulation).toMatchObject({
+        v: 1,
+        automationId: saved.id,
+        definitionRevision: 1,
+        target: {
+          v: 1,
+          appInstanceId: beforeSimulation.target.appInstanceId,
+          activeGenerationId: beforeSimulation.target.activeGenerationId,
+          lineageEpoch: beforeSimulation.target.lineageEpoch,
+          stateRevision: beforeSimulation.target.protectionRevision,
+          stateDigest: beforeSimulation.target.stateSha256,
+        },
+        runtime: { mode: "local", requiresAppOpen: true },
+      });
+      const enableRequest = {
+        requestId: opaque("req", "y"),
+        route: "enableAutomation",
+        payload: {
+          id: saved.id,
+          expectedRevision: saved.definitionRevision,
+          simulation,
+        },
+      } as const;
+      const enabled = await authority.executeMutation(enableRequest);
+      expect(enabled).toMatchObject({
+        changed: true,
+        replayed: false,
+        result: { v: 2, state: "enabled", enabled: true,
+          enableProof: { simulationId: simulation.id } },
+      });
+      await expect(authority.executeMutation(enableRequest))
+        .resolves.toEqual({ ...enabled, replayed: true });
+      expect(authority.readStore().listAutomations()).toEqual([enabled.result]);
+    } finally {
+      authority.close();
+    }
+  });
+
+  it("authority-routes an in-place legacy repair at revision zero and keeps it disabled", async () => {
+    const legacyInput: AutomationDefinitionInput = {
+      name: "Legacy review",
+      enabled: false,
+      trigger: { kind: "record_matches", table: "deals",
+        conditions: [{ field: "status", op: "eq", value: "open" }] },
+      actions: [{ kind: "notify", title: "Review", body: "Review this deal." }],
+    };
+    let legacyId = "";
+    const { authority } = await automationAuthority(1, store => {
+      legacyId = store.upsertAutomation(legacyInput).id;
+    });
+    try {
+      const request = {
+        requestId: authority.createRequestId(),
+        route: "saveAutomationDraft",
+        payload: {
+          input: authorityAutomationDraft(authority, { ...legacyInput, id: legacyId }),
+          expectedRevision: 0,
+        },
+      } as const;
+      const repaired = await authority.executeMutation(request);
+      expect(repaired).toMatchObject({
+        changed: true,
+        replayed: false,
+        result: {
+          v: 2, id: legacyId, definitionRevision: 1,
+          state: "draft", enabled: false, needsRepair: false, enableProof: null,
+        },
+      });
+      expect(authority.readStore().listAutomations()).toMatchObject([
+        { v: 2, id: legacyId, state: "draft", enabled: false },
+      ]);
+      await expect(authority.executeMutation(request))
+        .resolves.toEqual({ ...repaired, replayed: true });
+    } finally {
+      authority.close();
+    }
+  });
+
   it("authority-routes automation definition upsert with replayable receipts", async () => {
     const { authority } = await automationAuthority();
     const request = {
@@ -130,45 +416,47 @@ describe("production automation and operational authority", () => {
   it("runs a manual automation through authority with atomic effects, run receipt, and notification", async () => {
     const { authority } = await automationAuthority();
     try {
-      const created = await authority.executeMutation({
-        requestId: opaque("req", "d"),
-        route: "upsertAutomation",
-        payload: { input: {
-          name: "Onboard and notify",
-          enabled: false,
-          trigger: { kind: "manual", table: "deals", conditions: [] },
-          actions: [
-            { kind: "set_fields", values: {
-              onboarded: { source: "literal", value: true },
-            } },
-            { kind: "notify", title: "Onboarded", body: "The deal was onboarded." },
-          ],
-        } },
+      const rule = await saveAuthorityAutomation(authority, {
+        name: "Onboard and notify",
+        enabled: false,
+        trigger: { kind: "manual", table: "deals", conditions: [] },
+        actions: [
+          { kind: "set_fields", values: {
+            onboarded: { source: "literal", value: true },
+          } },
+          { kind: "notify", title: "Onboarded", body: "The deal was onboarded." },
+        ],
       });
-      const automationId = (created.result as { id: string }).id;
-      const request = {
-        requestId: opaque("req", "f"),
-        route: "runAutomationNow",
-        payload: { id: automationId },
-      } as const;
+      const automationId = rule.id;
+      const request = await authorityRunNowRequest(authority, rule, opaque("req", "f"));
 
       const executed = await authority.executeMutation(request);
       expect(executed).toMatchObject({
         changed: true,
         replayed: false,
-        result: { automationId, status: "success", matchedRecords: 1, changed: 1 },
+        result: {
+          kind: "committed",
+          automationId,
+          receipt: { status: "success", matchedRecords: 1, changed: 1 },
+        },
       });
+      const result = executed.result as {
+        kind: "committed";
+        receipt: { id: string };
+      };
       expect(authority.query({ from: "deals" })[0]).toMatchObject({ onboarded: true });
-      expect(authority.readStore().automationRuns(automationId)).toEqual([executed.result]);
+      expect(authority.readStore().automationRuns(
+        request.payload.simulation.target, automationId)).toEqual([result.receipt]);
       expect(authority.readStore().listNotifications()).toMatchObject([{
         automationId,
-        runId: (executed.result as { id: string }).id,
+        runId: result.receipt.id,
         title: "Onboarded",
         read: false,
       }]);
       await expect(authority.executeMutation(request))
         .resolves.toEqual({ ...executed, replayed: true });
-      expect(authority.readStore().automationRuns(automationId)).toHaveLength(1);
+      expect(authority.readStore().automationRuns(
+        request.payload.simulation.target, automationId)).toHaveLength(1);
       expect(authority.readStore().listNotifications()).toHaveLength(1);
     } finally {
       authority.close();
@@ -178,20 +466,25 @@ describe("production automation and operational authority", () => {
   it("runs due automations through one authority request and replays the exact run list", async () => {
     const { authority } = await automationAuthority();
     try {
-      const created = await authority.executeMutation({
-        requestId: opaque("req", "g"),
-        route: "upsertAutomation",
-        payload: { input: {
-          name: "Onboard open deals",
-          enabled: true,
-          trigger: { kind: "record_matches", table: "deals",
-            conditions: [{ field: "status", op: "eq", value: "open" }] },
-          actions: [{ kind: "set_fields", values: {
-            onboarded: { source: "literal", value: true },
-          } }],
+      const rule = await saveAuthorityAutomation(authority, {
+        name: "Onboard open deals",
+        enabled: true,
+        trigger: { kind: "record_matches", table: "deals",
+          conditions: [{ field: "status", op: "eq", value: "open" }] },
+        actions: [{ kind: "set_fields", values: {
+          onboarded: { source: "literal", value: true },
+        } }],
+      });
+      const automationId = rule.id;
+      const inserted = await authority.executeMutation({
+        requestId: authority.createRequestId(),
+        route: "store.insert",
+        payload: { table: "deals", row: {
+          name: "Future match", status: "open", onboarded: false,
         } },
       });
-      const automationId = (created.result as { id: string }).id;
+      const insertedId = (inserted.result as { id: string }).id;
+      const runTarget = authority.currentAutomationTarget();
       const request = {
         requestId: opaque("req", "h"),
         route: "runDueAutomations",
@@ -203,10 +496,12 @@ describe("production automation and operational authority", () => {
         changed: true,
         result: [{ automationId, status: "success", changed: 1 }],
       });
-      expect(authority.query({ from: "deals" })[0]).toMatchObject({ onboarded: true });
+      expect(authority.query({
+        from: "deals", where: [{ field: "id", op: "eq", value: insertedId }],
+      })[0]).toMatchObject({ onboarded: true });
       await expect(authority.executeMutation(request))
         .resolves.toEqual({ ...executed, replayed: true });
-      expect(authority.readStore().automationRuns(automationId)).toHaveLength(1);
+      expect(authority.readStore().automationRuns(runTarget, automationId)).toHaveLength(1);
     } finally {
       authority.close();
     }
@@ -215,22 +510,18 @@ describe("production automation and operational authority", () => {
   it("keeps simulation read-only and execution at the exact 100-record bound", async () => {
     const { authority } = await automationAuthority(100);
     try {
-      const created = await authority.executeMutation({
-        requestId: opaque("req", "i"),
-        route: "upsertAutomation",
-        payload: { input: {
-          name: "Onboard exactly one hundred",
-          enabled: true,
-          trigger: { kind: "manual", table: "deals", conditions: [] },
-          actions: [{ kind: "set_fields", values: {
-            onboarded: { source: "literal", value: true },
-          } }],
-        } },
+      const rule = await saveAuthorityAutomation(authority, {
+        name: "Onboard exactly one hundred",
+        enabled: false,
+        trigger: { kind: "manual", table: "deals", conditions: [] },
+        actions: [{ kind: "set_fields", values: {
+          onboarded: { source: "literal", value: true },
+        } }],
       });
-      const automationId = (created.result as { id: string }).id;
       const beforeSimulation = authority.inspectAuthority();
+      const request = await authorityRunNowRequest(authority, rule, opaque("req", "j"));
 
-      expect(authority.readStore().simulateAutomation(automationId)).toMatchObject({
+      expect(request.payload.simulation).toMatchObject({
         matchedRecords: 100,
         plannedMutations: 100,
       });
@@ -239,14 +530,13 @@ describe("production automation and operational authority", () => {
         { field: "onboarded", op: "eq", value: true },
       ], limit: 500 })).toEqual([]);
 
-      const executed = await authority.executeMutation({
-        requestId: opaque("req", "j"),
-        route: "runAutomationNow",
-        payload: { id: automationId },
-      });
+      const executed = await authority.executeMutation(request);
       expect(executed).toMatchObject({
         changed: true,
-        result: { status: "success", matchedRecords: 100, changed: 100 },
+        result: {
+          kind: "committed",
+          receipt: { status: "success", matchedRecords: 100, changed: 100 },
+        },
       });
       expect(authority.query({ from: "deals", where: [
         { field: "onboarded", op: "eq", value: true },
@@ -257,39 +547,44 @@ describe("production automation and operational authority", () => {
   });
 
   it("fails closed above 100 records before effects, runs, notifications, or receipts", async () => {
-    const { authority, driver } = await automationAuthority(101);
+    const { authority, driver } = await automationAuthority(100);
     try {
-      const created = await authority.executeMutation({
-        requestId: opaque("req", "k"),
-        route: "upsertAutomation",
-        payload: { input: {
-          name: "Reject one hundred and one",
-          enabled: true,
-          trigger: { kind: "manual", table: "deals", conditions: [] },
-          actions: [
-            { kind: "set_fields", values: {
-              onboarded: { source: "literal", value: true },
-            } },
-            { kind: "notify", title: "Onboarded", body: "The deal was onboarded." },
-          ],
+      const rule = await saveAuthorityAutomation(authority, {
+        name: "Reject one hundred and one",
+        enabled: false,
+        trigger: { kind: "manual", table: "deals", conditions: [] },
+        actions: [
+          { kind: "set_fields", values: {
+            onboarded: { source: "literal", value: true },
+          } },
+          { kind: "notify", title: "Onboarded", body: "The deal was onboarded." },
+        ],
+      });
+      const automationId = rule.id;
+      const requestId = opaque("req", "l");
+      const request = await authorityRunNowRequest(authority, rule, requestId);
+      await authority.executeMutation({
+        requestId: authority.createRequestId(),
+        route: "store.insert",
+        payload: { table: "deals", row: {
+          name: "Overflow", status: "open", onboarded: false,
         } },
       });
-      const automationId = (created.result as { id: string }).id;
       const before = authority.inspectAuthority();
-      const requestId = opaque("req", "l");
 
-      expect(() => authority.readStore().simulateAutomation(automationId)).toThrow(/100|limit/i);
-      await expect(authority.executeMutation({
-        requestId,
-        route: "runAutomationNow",
-        payload: { id: automationId },
+      await expect(authority.simulateAutomation({
+        id: rule.id,
+        expectedRevision: rule.definitionRevision,
+        purpose: "run_now",
       })).rejects.toThrow(/100|limit/i);
+      await expect(authority.executeMutation(request)).rejects.toThrow(/100|limit|stale|changed/i);
 
       expect(authority.inspectAuthority()).toEqual(before);
       expect(authority.query({ from: "deals", where: [
         { field: "onboarded", op: "eq", value: true },
       ], limit: 500 })).toEqual([]);
-      expect(authority.readStore().automationRuns(automationId)).toEqual([]);
+      expect(authority.readStore().automationRuns(
+        request.payload.simulation.target, automationId)).toEqual([]);
       expect(authority.readStore().listNotifications()).toEqual([]);
       expect(driver.select(
         "SELECT state FROM sys.production_request_receipts WHERE request_id = ?", [requestId],
@@ -303,33 +598,45 @@ describe("production automation and operational authority", () => {
   });
 
   it("fails closed when one run-due request cumulatively exceeds 100 records", async () => {
-    const { authority, driver } = await automationAuthority(51);
+    const { authority, driver } = await automationAuthority(51, store => {
+      for (const deal of store.query({ from: "deals", limit: 100 }))
+        store.update("deals", String(deal.id), { status: "won" });
+    });
     try {
-      await authority.executeMutation({
-        requestId: opaque("req", "m"),
-        route: "upsertAutomation",
-        payload: { input: {
-          name: "First bounded rule",
-          enabled: true,
-          trigger: { kind: "record_matches", table: "deals",
-            conditions: [{ field: "status", op: "eq", value: "open" }] },
-          actions: [{ kind: "set_fields", values: {
-            onboarded: { source: "literal", value: true },
-          } }],
-        } },
+      await saveAuthorityAutomation(authority, {
+        name: "First bounded rule",
+        enabled: true,
+        trigger: { kind: "record_matches", table: "deals",
+          conditions: [{ field: "status", op: "eq", value: "open" }] },
+        actions: [{ kind: "set_fields", values: {
+          onboarded: { source: "literal", value: true },
+        } }],
       });
-      await authority.executeMutation({
-        requestId: opaque("req", "n"),
-        route: "upsertAutomation",
-        payload: { input: {
-          name: "Second bounded rule",
-          enabled: true,
-          trigger: { kind: "record_matches", table: "deals",
-            conditions: [{ field: "status", op: "eq", value: "open" }] },
-          actions: [{ kind: "notify", title: "Changed", body: "Must remain absent." }],
-        } },
+      await saveAuthorityAutomation(authority, {
+        name: "Second bounded rule",
+        enabled: true,
+        trigger: { kind: "record_matches", table: "deals",
+          conditions: [{ field: "status", op: "eq", value: "open" }] },
+        actions: [{ kind: "notify", title: "Changed", body: "Must remain absent." }],
+      });
+      const transition = await saveAuthorityAutomation(authority, {
+        name: "Open all deals",
+        enabled: false,
+        trigger: { kind: "manual", table: "deals", conditions: [] },
+        actions: [{ kind: "set_fields", values: {
+          status: { source: "literal", value: "open" },
+        } }],
+      });
+      const transitioned = await authority.executeMutation(
+        await authorityRunNowRequest(authority, transition),
+      );
+      expect(transitioned.result).toMatchObject({
+        kind: "committed",
+        receipt: { status: "success", matchedRecords: 51, changed: 51 },
       });
       const before = authority.inspectAuthority();
+      const runTarget = authority.currentAutomationTarget();
+      const runsBefore = authority.readStore().automationRuns(runTarget);
       const requestId = opaque("req", "o");
 
       await expect(authority.executeMutation({
@@ -340,7 +647,7 @@ describe("production automation and operational authority", () => {
       expect(authority.query({ from: "deals", where: [
         { field: "onboarded", op: "eq", value: true },
       ], limit: 500 })).toEqual([]);
-      expect(authority.readStore().automationRuns()).toEqual([]);
+      expect(authority.readStore().automationRuns(runTarget)).toEqual(runsBefore);
       expect(authority.readStore().listNotifications()).toEqual([]);
       expect(driver.select(
         "SELECT state FROM sys.production_request_receipts WHERE request_id = ?", [requestId],
@@ -356,37 +663,32 @@ describe("production automation and operational authority", () => {
   it("rejects a stale automation fence before effects, runs, notifications, or receipts", async () => {
     const { authority, driver } = await automationAuthority();
     try {
-      const created = await authority.executeMutation({
-        requestId: opaque("req", "k"),
-        route: "upsertAutomation",
-        payload: { input: {
-          name: "Stale fence rule",
-          enabled: false,
-          trigger: { kind: "manual", table: "deals", conditions: [] },
-          actions: [
-            { kind: "set_fields", values: {
-              onboarded: { source: "literal", value: true },
-            } },
-            { kind: "notify", title: "Changed", body: "Must remain absent." },
-          ],
-        } },
+      const rule = await saveAuthorityAutomation(authority, {
+        name: "Stale fence rule",
+        enabled: false,
+        trigger: { kind: "manual", table: "deals", conditions: [] },
+        actions: [
+          { kind: "set_fields", values: {
+            onboarded: { source: "literal", value: true },
+          } },
+          { kind: "notify", title: "Changed", body: "Must remain absent." },
+        ],
       });
-      const automationId = (created.result as { id: string }).id;
+      const automationId = rule.id;
       const targetBeforeTakeover = authority.inspectAuthority().target;
       const reservationsBeforeTakeover = authority.inspectAuthority().targetReservations;
-      armProductionAuthorityFailureForTest(authority, "stale_fence");
       const requestId = opaque("req", "l");
+      const request = await authorityRunNowRequest(authority, rule, requestId);
+      armProductionAuthorityFailureForTest(authority, "stale_fence");
 
-      await expect(authority.executeMutation({
-        requestId,
-        route: "runAutomationNow",
-        payload: { id: automationId },
-      })).rejects.toMatchObject({ code: "E_STALE_WRITE_EPOCH" });
+      await expect(authority.executeMutation(request))
+        .rejects.toMatchObject({ code: "E_STALE_WRITE_EPOCH" });
 
       expect(authority.inspectAuthority().target).toEqual(targetBeforeTakeover);
       expect(authority.inspectAuthority().targetReservations).toEqual(reservationsBeforeTakeover);
       expect(authority.query({ from: "deals" })[0]).toMatchObject({ onboarded: false });
-      expect(authority.readStore().automationRuns(automationId)).toEqual([]);
+      expect(authority.readStore().automationRuns(
+        request.payload.simulation.target, automationId)).toEqual([]);
       expect(authority.readStore().listNotifications()).toEqual([]);
       expect(driver.select(
         "SELECT state FROM sys.production_request_receipts WHERE request_id = ?", [requestId],
@@ -434,28 +736,23 @@ describe("production automation and operational authority", () => {
   it("undoes an automation run through authority with effects and notification dismissal atomic", async () => {
     const { authority } = await automationAuthority();
     try {
-      const created = await authority.executeMutation({
-        requestId: opaque("req", "n"),
-        route: "upsertAutomation",
-        payload: { input: {
-          name: "Temporary onboarding",
-          enabled: false,
-          trigger: { kind: "manual", table: "deals", conditions: [] },
-          actions: [
-            { kind: "set_fields", values: {
-              onboarded: { source: "literal", value: true },
-            } },
-            { kind: "notify", title: "Temporary", body: "Temporary notice." },
-          ],
-        } },
+      const rule = await saveAuthorityAutomation(authority, {
+        name: "Temporary onboarding",
+        enabled: false,
+        trigger: { kind: "manual", table: "deals", conditions: [] },
+        actions: [
+          { kind: "set_fields", values: {
+            onboarded: { source: "literal", value: true },
+          } },
+          { kind: "notify", title: "Temporary", body: "Temporary notice." },
+        ],
       });
-      const automationId = (created.result as { id: string }).id;
-      const executed = await authority.executeMutation({
-        requestId: opaque("req", "o"),
-        route: "runAutomationNow",
-        payload: { id: automationId },
-      });
-      const runId = (executed.result as { id: string }).id;
+      const automationId = rule.id;
+      const runRequest = await authorityRunNowRequest(authority, rule, opaque("req", "o"));
+      const executed = await authority.executeMutation(runRequest);
+      const execution = executed.result as { kind: "committed"; receipt: { id: string } };
+      expect(execution.kind).toBe("committed");
+      const runId = execution.receipt.id;
       const request = {
         requestId: opaque("req", "p"),
         route: "undoAutomationRun",
@@ -468,7 +765,8 @@ describe("production automation and operational authority", () => {
         result: { id: runId, automationId, undone: true },
       });
       expect(authority.query({ from: "deals" })[0]).toMatchObject({ onboarded: false });
-      expect(authority.readStore().automationRuns(automationId)[0]).toMatchObject({ undone: true });
+      expect(authority.readStore().automationRuns(
+        runRequest.payload.simulation.target, automationId)[0]).toMatchObject({ undone: true });
       expect(authority.readStore().listNotifications()).toEqual([]);
       await expect(authority.executeMutation(request))
         .resolves.toEqual({ ...undone, replayed: true });
@@ -480,22 +778,14 @@ describe("production automation and operational authority", () => {
   it("marks a notification read through authority and mirrors a replayable canonical no-op", async () => {
     const { authority, driver } = await automationAuthority();
     try {
-      const created = await authority.executeMutation({
-        requestId: opaque("req", "q"),
-        route: "upsertAutomation",
-        payload: { input: {
-          name: "Notify manually",
-          enabled: false,
-          trigger: { kind: "manual", table: "deals", conditions: [] },
-          actions: [{ kind: "notify", title: "Review", body: "Review this deal." }],
-        } },
+      const rule = await saveAuthorityAutomation(authority, {
+        name: "Notify manually",
+        enabled: false,
+        trigger: { kind: "manual", table: "deals", conditions: [] },
+        actions: [{ kind: "notify", title: "Review", body: "Review this deal." }],
       });
-      const automationId = (created.result as { id: string }).id;
-      await authority.executeMutation({
-        requestId: opaque("req", "r"),
-        route: "runAutomationNow",
-        payload: { id: automationId },
-      });
+      const runRequest = await authorityRunNowRequest(authority, rule, opaque("req", "r"));
+      await authority.executeMutation(runRequest);
       const notificationId = authority.readStore().listNotifications()[0]!.id;
       const request = {
         requestId: opaque("req", "s"),
@@ -775,28 +1065,25 @@ describe("production automation and operational authority", () => {
   it("rolls back automation effects, notifications, and run receipts after live execution", async () => {
     const { authority, driver } = await automationAuthority();
     try {
-      const created = await authority.executeMutation({
-        requestId: opaque("req", "b"), route: "upsertAutomation",
-        payload: { input: {
-          name: "Atomic run", enabled: false,
-          trigger: { kind: "manual", table: "deals", conditions: [] },
-          actions: [
-            { kind: "set_fields", values: {
-              onboarded: { source: "literal", value: true },
-            } },
-            { kind: "notify", title: "Changed", body: "Changed atomically." },
-          ],
-        } },
+      const rule = await saveAuthorityAutomation(authority, {
+        name: "Atomic run", enabled: false,
+        trigger: { kind: "manual", table: "deals", conditions: [] },
+        actions: [
+          { kind: "set_fields", values: {
+            onboarded: { source: "literal", value: true },
+          } },
+          { kind: "notify", title: "Changed", body: "Changed atomically." },
+        ],
       });
-      const automationId = (created.result as { id: string }).id;
+      const automationId = rule.id;
       const requestId = opaque("req", "c");
+      const request = await authorityRunNowRequest(authority, rule, requestId);
       armProductionAuthorityFailureForTest(authority, "after_live_mutation");
 
-      await expect(authority.executeMutation({
-        requestId, route: "runAutomationNow", payload: { id: automationId },
-      })).rejects.toThrow(/after live/i);
+      await expect(authority.executeMutation(request)).rejects.toThrow(/after live/i);
       expect(authority.query({ from: "deals" })[0]).toMatchObject({ onboarded: false });
-      expect(authority.readStore().automationRuns(automationId)).toEqual([]);
+      expect(authority.readStore().automationRuns(
+        request.payload.simulation.target, automationId)).toEqual([]);
       expect(authority.readStore().listNotifications()).toEqual([]);
       expect(driver.select(
         "SELECT state FROM sys.production_request_receipts WHERE request_id = ?", [requestId],
@@ -883,6 +1170,38 @@ describe("production automation and operational authority", () => {
       expect(driver.select(
         "SELECT state FROM sys.production_request_receipts WHERE request_id = ?", [requestId],
       )).toEqual([]);
+    } finally {
+      authority.close();
+    }
+  });
+
+  it("keeps production automation mutation routes closed without a release-bound transaction capability", async () => {
+    const { authority, store } = await automationAuthority();
+    try {
+      const target = authority.inspectAuthority().target;
+      expect(() => executeAutomationObserverAuthorityRoute(
+        store,
+        "runDueAutomations",
+        {},
+        new Date().toISOString(),
+        {
+          v: 1,
+          appInstanceId: target.appInstanceId,
+          activeGenerationId: target.activeGenerationId,
+          lineageEpoch: target.lineageEpoch,
+          stateRevision: target.protectionRevision,
+          stateDigest: target.stateSha256,
+        },
+        { kind: "unavailable", releaseCertificate: false },
+      )).toThrow(/transaction.*uncertified|release.*certificate|unavailable/i);
+      expect(authority.readStore().automationRuns({
+        v: 1,
+        appInstanceId: target.appInstanceId,
+        activeGenerationId: target.activeGenerationId,
+        lineageEpoch: target.lineageEpoch,
+        stateRevision: target.protectionRevision,
+        stateDigest: target.stateSha256,
+      })).toEqual([]);
     } finally {
       authority.close();
     }

@@ -1,5 +1,6 @@
 import {
   claimPhysicalDriverAuthority,
+  inheritAutomationPhysicalTransactionCapability,
   isReadOnlyStatement,
   isThenable,
   type DbDriver,
@@ -93,6 +94,7 @@ export function createLiveWriteGuard(inner: DbDriver): LiveWriteSession {
     snapshot: controller.snapshot.bind(controller),
     exportDatabases: controller.exportDatabases.bind(controller),
   });
+  inheritAutomationPhysicalTransactionCapability(inner, driver);
   const authority: LiveWriteAuthority = Object.freeze({
     run: controller.runAuthorized.bind(controller),
   });

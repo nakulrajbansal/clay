@@ -182,7 +182,8 @@ describe("production mutation route census", () => {
   it("authority-routes automation, notification, observer, and operational metrics", () => {
     const worker = source("packages/shell/src/worker/db-worker.ts");
     const workerRoutes = [
-      "upsertAutomation", "deleteAutomation", "runAutomations", "runAutomationNow",
+      "upsertAutomation", "saveAutomationDraft", "saveAutomationRecipeDraft",
+      "enableAutomation", "pauseAutomation", "deleteAutomation", "runAutomations", "runAutomationNow",
       "undoAutomationRun", "markNotificationRead", "recordPrivateMetric",
       "setPrivateMetricsEnabled", "clearPrivateMetrics", "recordFilter",
       "acceptSuggestion", "dismissSuggestion",
@@ -195,13 +196,17 @@ describe("production mutation route census", () => {
     }
     expect(DB_WORKER_ROUTE_CENSUS.simulateAutomation)
       .toEqual({ enforcement: "read", mutates: "none" });
-    expect(caseBody(worker, "simulateAutomation")).toContain("mustStore().simulateAutomation(");
+    expect(caseBody(worker, "simulateAutomation")).toContain("mustAuthority().simulateAutomation(");
     expect(worker).toContain("target.executeOperationalMetricMutation(");
     expect(worker).toContain('route: "runDueAutomations"');
     expect(worker).toContain('route: "recordUsage"');
     expect(worker).not.toContain("mustStore().recordPrivateMetric(");
     expect(CLAY_STORE_WRITER_CENSUS).toMatchObject({
       upsertAutomation: "authority",
+      saveAutomationDraft: "authority",
+      saveAutomationRecipeDraft: "authority",
+      enableAutomation: "authority",
+      pauseAutomation: "authority",
       deleteAutomation: "authority",
       runAutomationNow: "authority",
       runDueAutomations: "authority",

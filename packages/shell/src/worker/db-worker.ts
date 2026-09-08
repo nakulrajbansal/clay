@@ -118,7 +118,8 @@ function authorityRequestId(req: Request): string {
 async function runAuthorityMutation(
   route:
     | "seed" | "setSetting" | "deleteSetting" | "compareAndSetSetting" | "commitLayout"
-    | "upsertAutomation" | "deleteAutomation" | "runAutomations" | "runAutomationNow"
+    | "upsertAutomation" | "saveAutomationDraft" | "saveAutomationRecipeDraft"
+    | "enableAutomation" | "pauseAutomation" | "deleteAutomation" | "runAutomations" | "runAutomationNow"
     | "undoAutomationRun" | "markNotificationRead" | "recordPrivateMetric"
     | "setPrivateMetricsEnabled" | "clearPrivateMetrics" | "recordFilter"
     | "acceptSuggestion" | "dismissSuggestion",
@@ -172,6 +173,29 @@ async function runAuthorityMutation(
   })).result;
   if (route === "upsertAutomation") return (await target.executeMutation({
     requestId, route, payload: { input: payload.input },
+  })).result;
+  if (route === "saveAutomationDraft") return (await target.executeMutation({
+    requestId,
+    route,
+    payload: { input: payload.input, expectedRevision: payload.expectedRevision ?? null },
+  })).result;
+  if (route === "saveAutomationRecipeDraft") return (await target.executeMutation({
+    requestId, route, payload: { request: payload.request },
+  })).result;
+  if (route === "enableAutomation" || route === "runAutomationNow")
+    return (await target.executeMutation({
+      requestId,
+      route,
+      payload: {
+        id: payload.id,
+        expectedRevision: payload.expectedRevision,
+        simulation: payload.simulation,
+      },
+    })).result;
+  if (route === "pauseAutomation") return (await target.executeMutation({
+    requestId,
+    route,
+    payload: { id: payload.id, expectedRevision: payload.expectedRevision },
   })).result;
   if (route === "setPrivateMetricsEnabled") return (await target.executeOperationalMetricMutation({
     requestId, route, payload: { enabled: payload.enabled },
@@ -280,20 +304,40 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       return mustStore().attachmentStorage();
     case "purgeDeletedAttachments":
       return failClosedMutation(req.op);
+    case "automationRecipes":
+      return mustStore().automationRecipes();
+    case "automationRuntimeStatus":
+      return mustStore().automationRuntimeStatus(mustAuthority().currentAutomationTarget());
+    case "automationRuntimeOverview":
+      return mustStore().automationRuntimeOverview(
+        mustAuthority().currentAutomationTarget(), Number(p.limit ?? 100));
     case "listAutomations":
-      return mustStore().listAutomations();
+      return mustStore().listAutomations(mustAuthority().currentAutomationTarget());
     case "upsertAutomation":
       return runAuthorityMutation("upsertAutomation", p, req);
+    case "saveAutomationDraft":
+      return runAuthorityMutation("saveAutomationDraft", p, req);
+    case "saveAutomationRecipeDraft":
+      return runAuthorityMutation("saveAutomationRecipeDraft", p, req);
+    case "enableAutomation":
+      return runAuthorityMutation("enableAutomation", p, req);
+    case "pauseAutomation":
+      return runAuthorityMutation("pauseAutomation", p, req);
     case "deleteAutomation":
       return runAuthorityMutation("deleteAutomation", p, req);
     case "simulateAutomation":
-      return mustStore().simulateAutomation(String(p.id));
+      return mustAuthority().simulateAutomation({
+        id: p.id,
+        expectedRevision: p.expectedRevision,
+        purpose: p.purpose,
+      });
     case "runAutomations":
       return runAuthorityMutation("runAutomations", p, req);
     case "runAutomationNow":
       return runAuthorityMutation("runAutomationNow", p, req);
     case "automationRuns":
       return mustStore().automationRuns(
+        mustAuthority().currentAutomationTarget(),
         p.automationId === null || p.automationId === undefined ? undefined : String(p.automationId),
         Number(p.limit ?? 100));
     case "undoAutomationRun":

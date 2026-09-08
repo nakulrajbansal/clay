@@ -6,7 +6,10 @@ import {
   type WriteFenceV1 as WriteFence,
 } from "@clay/schema/catalog";
 import { enumerateCanonicalStateV1 } from "./canonical-state";
-import { isThenable, type DbDriver } from "./db";
+import {
+  automationPhysicalTransactionCapability, isThenable,
+  type AutomationPhysicalTransactionCapability, type DbDriver,
+} from "./db";
 import { DeviceCatalog } from "./device-catalog";
 import { ClayError } from "./errors";
 import type { LiveWriteAuthority } from "./live-write-guard";
@@ -27,6 +30,11 @@ import {
   type CapturedStarterSeedBundle,
 } from "./production-seed";
 import { sha256HexSync } from "./state-digest";
+import {
+  validateAutomationSimulationProof, validateAutomationTargetIdentity,
+  type AutomationSimulationProofV1, type AutomationSimulationRequestV1,
+  type AutomationTargetIdentityV1,
+} from "./automation-v2";
 import { stateLeafHashV1 } from "./state-merkle";
 import type { StateMerkleChange } from "./state-merkle-index";
 import { ClayStore } from "./store";
@@ -53,8 +61,21 @@ type CapturedProductionMutation = Readonly<{
     payload: Readonly<{ key: string; expectedRevision: number; value: JsonValue }>;
   }
   | { route: "upsertAutomation"; payload: Readonly<{ input: Readonly<JsonRecord> }> }
+  | {
+    route: "saveAutomationDraft";
+    payload: Readonly<{ input: Readonly<JsonRecord>; expectedRevision: number | null }>;
+  }
+  | { route: "saveAutomationRecipeDraft"; payload: Readonly<{ request: Readonly<JsonRecord> }> }
+  | {
+    route: "enableAutomation" | "runAutomationNow";
+    payload: Readonly<{
+      id: string;
+      expectedRevision: number;
+      simulation: Readonly<JsonRecord>;
+    }>;
+  }
+  | { route: "pauseAutomation"; payload: Readonly<{ id: string; expectedRevision: number }> }
   | { route: "deleteAutomation"; payload: Readonly<{ id: string }> }
-  | { route: "runAutomationNow"; payload: Readonly<{ id: string }> }
   | { route: "runDueAutomations"; payload: Readonly<JsonRecord> }
   | { route: "undoAutomationRun"; payload: Readonly<{ id: string }> }
   | { route: "markNotificationRead"; payload: Readonly<{ id: string }> }
@@ -62,6 +83,12 @@ type CapturedProductionMutation = Readonly<{
   | { route: "acceptSuggestion"; payload: Readonly<{ subject: string; kind: string }> }
   | { route: "dismissSuggestion"; payload: Readonly<{ subject: string; kind: string }> }
 )>;
+
+type CapturedAutomationSimulation = Readonly<{
+  id: string;
+  expectedRevision: number;
+  purpose: "enable" | "run_now" | "proposal_review";
+}>;
 
 type CapturedOperationalMetricMutation = Readonly<{
   requestId: string;
@@ -106,6 +133,17 @@ function copyTarget(input: TargetEvidence): TargetEvidence {
     digestSchema: input.digestSchema,
     stateSha256: input.stateSha256,
   }));
+}
+
+function automationTarget(input: TargetEvidence): AutomationTargetIdentityV1 {
+  return validateAutomationTargetIdentity({
+    v: 1,
+    appInstanceId: input.appInstanceId,
+    activeGenerationId: input.activeGenerationId,
+    lineageEpoch: input.lineageEpoch,
+    stateRevision: input.protectionRevision,
+    stateDigest: input.stateSha256,
+  });
 }
 
 function assertSettingKeyAvailable(key: string): void {
@@ -397,8 +435,44 @@ function captureMutation(input: unknown): CapturedProductionMutation {
           input: capturedJsonRecord(p.input),
         }) });
       }
+      case "saveAutomationDraft": {
+        const p = exactDataFields(capturedPayload, ["input", "expectedRevision"]);
+        if (p.expectedRevision !== null && (!Number.isSafeInteger(p.expectedRevision)
+            || Number(p.expectedRevision) < 0)) throw new Error();
+        return Object.freeze({ requestId, route, payload: Object.freeze({
+          input: capturedJsonRecord(p.input),
+          expectedRevision: p.expectedRevision === null ? null : Number(p.expectedRevision),
+        }) });
+      }
+      case "saveAutomationRecipeDraft": {
+        const p = exactDataFields(capturedPayload, ["request"]);
+        return Object.freeze({ requestId, route, payload: Object.freeze({
+          request: capturedJsonRecord(p.request),
+        }) });
+      }
+      case "enableAutomation":
+      case "runAutomationNow": {
+        const p = exactDataFields(capturedPayload, ["id", "expectedRevision", "simulation"]);
+        if (typeof p.id !== "string" || !Number.isSafeInteger(p.expectedRevision)
+            || Number(p.expectedRevision) < 1) throw new Error();
+        const simulation = capturedJsonRecord(p.simulation);
+        try { validateAutomationSimulationProof(simulation); }
+        catch { throw new Error(); }
+        return Object.freeze({ requestId, route, payload: Object.freeze({
+          id: p.id,
+          expectedRevision: Number(p.expectedRevision),
+          simulation,
+        }) });
+      }
+      case "pauseAutomation": {
+        const p = exactDataFields(capturedPayload, ["id", "expectedRevision"]);
+        if (typeof p.id !== "string" || !Number.isSafeInteger(p.expectedRevision)
+            || Number(p.expectedRevision) < 1) throw new Error();
+        return Object.freeze({ requestId, route, payload: Object.freeze({
+          id: p.id, expectedRevision: Number(p.expectedRevision),
+        }) });
+      }
       case "deleteAutomation":
-      case "runAutomationNow":
       case "undoAutomationRun":
       case "markNotificationRead": {
         const p = exactDataFields(capturedPayload, ["id"]);
@@ -432,6 +506,25 @@ function captureMutation(input: unknown): CapturedProductionMutation {
   } catch (error) {
     if (error instanceof ClayError) throw error;
     throw invalid("production mutation request is invalid");
+  }
+}
+
+function captureAutomationSimulation(input: unknown): CapturedAutomationSimulation {
+  try {
+    const captured = captureJsonRecord(input);
+    const fields = exactDataFields(captured, ["id", "expectedRevision", "purpose"]);
+    if (typeof fields.id !== "string" || !Number.isSafeInteger(fields.expectedRevision)
+        || Number(fields.expectedRevision) < 1
+        || (fields.purpose !== "enable" && fields.purpose !== "run_now"
+          && fields.purpose !== "proposal_review")) throw new Error();
+    return Object.freeze({
+      id: fields.id,
+      expectedRevision: Number(fields.expectedRevision),
+      purpose: fields.purpose,
+    });
+  } catch (error) {
+    if (error instanceof ClayError) throw error;
+    throw invalid("production automation simulation request is invalid");
   }
 }
 
@@ -584,6 +677,8 @@ function executeCapturedMutation(
   store: ClayStore,
   request: CapturedProductionMutation,
   executionInstant: string | null,
+  expectedTarget: TargetEvidence,
+  transactionCapability: AutomationPhysicalTransactionCapability,
 ): JsonValue {
   switch (request.route) {
     case "store.insert":
@@ -628,6 +723,10 @@ function executeCapturedMutation(
       return captureJsonValue({ ok: true, current: request.payload.value }, new WeakSet());
     }
     case "upsertAutomation":
+    case "saveAutomationDraft":
+    case "saveAutomationRecipeDraft":
+    case "enableAutomation":
+    case "pauseAutomation":
     case "deleteAutomation":
     case "runAutomationNow":
     case "runDueAutomations":
@@ -637,7 +736,8 @@ function executeCapturedMutation(
     case "acceptSuggestion":
     case "dismissSuggestion":
       return captureJsonValue(executeAutomationObserverAuthorityRoute(
-        store, request.route, request.payload, executionInstant,
+        store, request.route, request.payload, executionInstant, automationTarget(expectedTarget),
+        transactionCapability,
       ), new WeakSet());
   }
 }
@@ -831,6 +931,15 @@ export class ProductionMutationCoordinator {
     return run;
   }
 
+  simulateAutomation(input: unknown): Promise<AutomationSimulationProofV1> {
+    if (this.#poisoned)
+      return Promise.reject(invalid("production authority is poisoned; reopen for reservation recovery"));
+    const captured = captureAutomationSimulation(input);
+    const run = this.#tail.then(() => this.#simulateAutomationCaptured(captured));
+    this.#tail = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
   executeOperationalMetric(input: unknown): Promise<ProductionMutationResult> {
     if (this.#poisoned)
       return Promise.reject(invalid("production authority is poisoned; reopen for reservation recovery"));
@@ -888,6 +997,30 @@ export class ProductionMutationCoordinator {
     }
   }
 
+  #simulateAutomationCaptured(
+    request: CapturedAutomationSimulation,
+  ): AutomationSimulationProofV1 {
+    const expected = copyTarget(this.#target);
+    const catalog = DeviceCatalog.openExisting(this.#driver);
+    if (catalog.snapshot().catalogGeneration !== this.#catalogGeneration
+        || !sameTarget(catalog.selectedTargetStorage().target, expected)
+        || !sameTarget(TargetAuthorityStore.open(this.#driver).evidence(), expected))
+      throw new ClayError("E_GENERATION_NOT_SELECTED", "production automation target is stale");
+    const canonical = enumerateCanonicalStateV1(
+      this.#driver, this.#store.validationRegistrySnapshot(),
+    );
+    if (canonical.stateSha256 !== expected.stateSha256)
+      throw invalid("production automation simulation prestate is not canonical");
+    const clock = trustedInstant(this.#clock);
+    const storeRequest: AutomationSimulationRequestV1 = {
+      id: request.id,
+      target: automationTarget(expected),
+      expectedRevision: request.expectedRevision,
+      purpose: request.purpose,
+    };
+    return this.#store.simulateAutomation(storeRequest, new Date(clock.milliseconds));
+  }
+
   async #executeCaptured(request: CapturedProductionMutation): Promise<ProductionMutationResult> {
     const outcome = this.#durableReceiptReplay(request);
     if (outcome) return outcome;
@@ -896,6 +1029,10 @@ export class ProductionMutationCoordinator {
     this.#supersedeFenceForTest();
     this.#ensureWriteFence();
     const executionInstant = request.route === "starter.seed"
+        || request.route === "saveAutomationDraft"
+        || request.route === "saveAutomationRecipeDraft"
+        || request.route === "enableAutomation"
+        || request.route === "pauseAutomation"
         || request.route === "runAutomationNow"
         || request.route === "runDueAutomations"
       ? trustedInstant(this.#clock).instant : null;
@@ -924,7 +1061,10 @@ export class ProductionMutationCoordinator {
       );
       if (shadowBefore.stateSha256 !== liveBefore.stateSha256)
         throw invalid("production mutation snapshot is not canonical");
-      const preparedResult = executeCapturedMutation(shadow, request, executionInstant);
+      const preparedResult = executeCapturedMutation(
+        shadow, request, executionInstant, expected,
+        automationPhysicalTransactionCapability(this.#driver),
+      );
       if (isThenable(preparedResult)) throw invalid("production mutation must be synchronous");
       shadowResult = copyResult(preparedResult);
       const shadowAfter = enumerateCanonicalStateV1(
@@ -1392,7 +1532,10 @@ export class ProductionMutationCoordinator {
         );
         if (before.stateSha256 !== expected.stateSha256)
           throw invalid("production mutation prestate changed before commit");
-        result = executeCapturedMutation(this.#store, request, executionInstant);
+        result = executeCapturedMutation(
+          this.#store, request, executionInstant, expected,
+          automationPhysicalTransactionCapability(this.#driver),
+        );
         if (isThenable(result)) throw invalid("production mutation must be synchronous");
         if (TEST_FAILURE.get(this) === "after_live_mutation") {
           TEST_FAILURE.delete(this);

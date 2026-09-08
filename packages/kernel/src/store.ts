@@ -36,6 +36,21 @@ import {
   type AutomationRun, type AutomationSimulation, type AutomationValue, type ClayNotification,
 } from "./automation";
 import {
+  automationDefinitionDigest, automationRecipeCatalog, automationSha256,
+  compileAutomationRecipeDraft, plannedEffectsFor, resolveAutomationDraftV2,
+  stableAutomationJson, validateAutomationEnableProof, validateAutomationSimulationProof,
+  validateAutomationTargetIdentity,
+  type AutomationDefinitionAny, type AutomationDefinitionV2, type AutomationDraftInputV2,
+  type AutomationEnableRequestV1, type AutomationExecutionResultV1,
+  type AutomationLegacyDefinitionV1, type AutomationPauseRequestV1,
+  type AutomationRecipeCardV1,
+  type AutomationRecipeDraftRequestV1, type AutomationRuleRuntimeStateV1,
+  type AutomationRunNowRequestV1, type AutomationRunRuntimeStateV1,
+  type AutomationRuntimeOverviewV1, type AutomationRuntimeStatusV1,
+  type AutomationSimulationProofV1, type AutomationSimulationRequestV1,
+  type AutomationTargetIdentityV1,
+} from "./automation-v2";
+import {
   createFieldId, createRelationshipId, createTableId, semanticRegistryIssues,
   type FieldId, type FieldSemanticV1, type PreparedSemanticAssignmentsV1,
   type SemanticIdentityEventV1, type SemanticOperationBounds, type SemanticOrigin,
@@ -130,6 +145,68 @@ const qid = (name: string): string => {
     throw new ClayError("E_VALIDATION", `unsafe SQL identifier '${name}'`);
   return `"${name}"`;
 };
+
+type AutomationClock = Readonly<{
+  year: number; month: number; day: number; weekday: number; hour: number; minute: number;
+}>;
+
+function automationClock(now: Date, timeZone?: string): AutomationClock {
+  if (!timeZone) return {
+    year: now.getFullYear(), month: now.getMonth() + 1, day: now.getDate(),
+    weekday: now.getDay(), hour: now.getHours(), minute: now.getMinutes(),
+  };
+  const formatter = new Intl.DateTimeFormat("en-US-u-ca-iso8601-nu-latn", {
+    timeZone,
+    calendar: "iso8601",
+    numberingSystem: "latn",
+    year: "numeric", month: "2-digit", day: "2-digit", weekday: "short",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  });
+  const parts = Object.fromEntries(formatter.formatToParts(now)
+    .filter(part => part.type !== "literal").map(part => [part.type, part.value]));
+  const weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(parts.weekday ?? "");
+  const clock = {
+    year: Number(parts.year), month: Number(parts.month), day: Number(parts.day),
+    weekday, hour: Number(parts.hour), minute: Number(parts.minute),
+  };
+  if (weekday < 0 || Object.entries(clock).some(([key, value]) => key !== "weekday"
+      && !Number.isInteger(value)))
+    throw new ClayError("E_VALIDATION", "automation timezone clock could not be resolved");
+  return clock;
+}
+
+function sameAutomationTarget(
+  left: AutomationTargetIdentityV1 | null,
+  right: AutomationTargetIdentityV1 | null,
+): boolean {
+  return left !== null && right !== null
+    && left.appInstanceId === right.appInstanceId
+    && left.activeGenerationId === right.activeGenerationId
+    && left.lineageEpoch === right.lineageEpoch
+    && left.stateRevision === right.stateRevision
+    && left.stateDigest === right.stateDigest;
+}
+
+function sameAutomationLineage(
+  left: AutomationTargetIdentityV1 | null,
+  right: AutomationTargetIdentityV1 | null,
+): boolean {
+  return left !== null && right !== null
+    && left.appInstanceId === right.appInstanceId
+    && left.activeGenerationId === right.activeGenerationId
+    && left.lineageEpoch === right.lineageEpoch;
+}
+
+function automationTargetJson(target: AutomationTargetIdentityV1): string {
+  return stableAutomationJson(validateAutomationTargetIdentity(target));
+}
+
+function automationTargetFromJson(value: unknown): AutomationTargetIdentityV1 | null {
+  if (typeof value !== "string") return null;
+  try {
+    return validateAutomationTargetIdentity(JSON.parse(value) as AutomationTargetIdentityV1);
+  } catch { return null; }
+}
 
 /** Parse a stored diff_json into user-facing {kind, detail} lines, tolerantly. */
 function parseDiff(json: string): { kind: string; detail: string }[] {
@@ -533,10 +610,44 @@ export class ClayStore {
     options: { requireSemanticRegistry?: boolean } = {},
   ): ClayStore {
     createSystemTables(driver);
-    const eventColumns = new Set(driver.select(`PRAGMA sys.table_info("record_events")`)
-      .map(row => String(row.name)));
-    if (!eventColumns.has("row_json"))
-      driver.exec(`ALTER TABLE sys.record_events ADD COLUMN row_json TEXT`);
+    const ensureSystemColumns = (table: string, declarations: readonly string[]): void => {
+      const existing = new Set(driver.select(`PRAGMA sys.table_info("${table}")`)
+        .map(row => String(row.name)));
+      for (const declaration of declarations) {
+        const name = declaration.split(/\s+/, 1)[0]!;
+        if (!existing.has(name)) driver.exec(`ALTER TABLE sys."${table}" ADD COLUMN ${declaration}`);
+      }
+    };
+    ensureSystemColumns("record_events", [
+      "row_json TEXT", "table_id TEXT", "schema_revision INTEGER", "snapshot_digest TEXT",
+      "changed_field_ids_json TEXT",
+    ]);
+    ensureSystemColumns("automations", [
+      "authority_target_json TEXT", "authority_definition_revision INTEGER",
+      "authority_definition_digest TEXT", "cursor_target_json TEXT",
+      "cursor_definition_revision INTEGER", "cursor_definition_digest TEXT",
+      "last_schedule_period TEXT", "schedule_target_json TEXT",
+      "schedule_definition_revision INTEGER", "schedule_definition_digest TEXT",
+      "legacy_definition_json TEXT", "storage_version INTEGER NOT NULL DEFAULT 2",
+    ]);
+    ensureSystemColumns("automation_runs", [
+      "target_json TEXT", "definition_revision INTEGER", "definition_digest TEXT",
+      "trigger_kind TEXT",
+    ]);
+    ensureSystemColumns("automation_matches", [
+      "target_json TEXT", "definition_revision INTEGER", "definition_digest TEXT",
+      "snapshot_digest TEXT", "run_id TEXT", "baseline INTEGER NOT NULL DEFAULT 0",
+    ]);
+    ensureSystemColumns("automation_trigger_ledger", [
+      "disposition TEXT NOT NULL DEFAULT 'success'",
+    ]);
+    ensureSystemColumns("operation_batches", [
+      "automation_target_json TEXT", "automation_definition_revision INTEGER",
+      "automation_definition_digest TEXT", "automation_run_id TEXT",
+    ]);
+    ensureSystemColumns("notifications", [
+      "target_json TEXT", "definition_revision INTEGER", "definition_digest TEXT",
+    ]);
     // G6: row-level undo lives in user.db so it travels with exports.
     driver.exec(`CREATE TABLE IF NOT EXISTS "row_history"(
       "id" TEXT PRIMARY KEY, "table" TEXT NOT NULL, "row_id" TEXT NOT NULL,
@@ -1890,13 +2001,41 @@ export class ClayStore {
     changedFields: string[],
   ): void {
     const snapshot = this.rowById(table, id);
+    const registered = getTable(this.reg, table);
+    if (!registered.semantic)
+      throw new ClayError("E_VALIDATION", "record event table semantic identity is missing");
+    const fields = registered.columns
+      .filter(column => !column.inactive && column.semantic)
+      .map(column => ({ fieldId: column.semantic!.fieldId, value: snapshot?.[column.name] ?? null }))
+      .sort((left, right) => left.fieldId.localeCompare(right.fieldId));
+    const core = {
+      v: 1 as const,
+      tableId: registered.semantic.tableId,
+      tableNameAtEvent: table,
+      rowId: id,
+      schemaRevision: this.currentVersion(),
+      kernel: snapshot === null ? null : {
+        id: snapshot.id ?? id,
+        created_at: snapshot.created_at ?? null,
+        updated_at: snapshot.updated_at ?? null,
+        deleted_at: snapshot.deleted_at ?? null,
+      },
+      fields,
+    };
+    const snapshotDigest = automationSha256(core);
+    const changedFieldIds = [...new Set(changedFields.map(name => {
+      const column = findColumn(registered, name);
+      return column?.semantic?.fieldId ?? `kernel:${name}`;
+    }))].sort();
     this.#driver.exec(
       `INSERT INTO sys.record_events(
-         id, at, table_name, row_id, kind, changed_fields_json, origin, row_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+         id, at, table_name, row_id, kind, changed_fields_json, origin, row_json,
+         table_id, schema_revision, snapshot_digest, changed_field_ids_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [uuidv7(), nowIso(), table, id, kind, JSON.stringify([...new Set(changedFields)].sort()),
        this.batchContext?.source === "automation" ? "automation" : "user",
-       JSON.stringify(snapshot)]);
+       JSON.stringify({ ...core, snapshotDigest }), registered.semantic.tableId,
+       core.schemaRevision, snapshotDigest, JSON.stringify(changedFieldIds)]);
   }
 
   insert(table: string, row: Record<string, unknown>): QueryRow {
@@ -2232,10 +2371,14 @@ export class ClayStore {
     )) {
       const id = String(row.id);
       try {
-        const input = JSON.parse(String(row.definition_json)) as AutomationDefinitionInput;
-        const normalized = validateAutomationDefinition(this.reg, input);
-        if (normalized.id !== id)
-          issues.push(`automation '${id}' identity does not match its definition`);
+        const input = JSON.parse(String(row.definition_json)) as Record<string, unknown>;
+        if (input.v === 2) {
+          const definition = this.automationDefinitionV2FromRow(row);
+          if (definition.id !== id) throw new Error("identity mismatch");
+        } else {
+          if (input.id !== id) throw new Error("legacy identity mismatch");
+          validateAutomationDefinition(this.reg, input as unknown as AutomationDefinitionInput);
+        }
         if (!Number.isSafeInteger(Number(row.last_event_seq)) || Number(row.last_event_seq) < 0
             || !Number.isFinite(Date.parse(String(row.created_at)))
             || !Number.isFinite(Date.parse(String(row.updated_at))))
@@ -2254,16 +2397,645 @@ export class ClayStore {
         `schema change would invalidate an automation rule: ${issues.join("; ")}`, issues);
   }
 
-  listAutomations(): AutomationDefinition[] {
-    return this.#driver.select(
-      `SELECT id, definition_json, created_at, updated_at FROM sys.automations
-       ORDER BY created_at ASC, id ASC`).map(row => ({
-      ...(JSON.parse(String(row.definition_json)) as AutomationDefinitionInput),
-      id: String(row.id), createdAt: String(row.created_at), updatedAt: String(row.updated_at),
-    }));
+  private automationDefinitionV2FromRow(row: SqlRow): AutomationDefinitionV2 {
+    const raw = JSON.parse(String(row.definition_json)) as AutomationDraftInputV2 & {
+      definitionRevision?: unknown;
+      state?: unknown;
+      enableProof?: unknown;
+      authorityTarget?: unknown;
+      authorityDefinitionRevision?: unknown;
+      authorityDefinitionDigest?: unknown;
+    };
+    if (typeof raw.id !== "string" || raw.id !== String(row.id))
+      throw new ClayError("E_VALIDATION", "stored automation identity does not match its row");
+    if (raw.v !== 2 || !Number.isSafeInteger(raw.definitionRevision)
+        || Number(raw.definitionRevision) < 1
+        || (raw.state !== "draft" && raw.state !== "simulated" && raw.state !== "enabled"
+          && raw.state !== "paused" && raw.state !== "error"))
+      throw new ClayError("E_VALIDATION", "stored automation V2 metadata is invalid");
+    const resolved = resolveAutomationDraftV2(this.reg, raw);
+    const revision = Number(raw.definitionRevision);
+    const digest = automationDefinitionDigest(resolved.stored);
+    const rawAuthorityTarget = raw.authorityTarget ?? automationTargetFromJson(row.authority_target_json);
+    const authorityTarget = rawAuthorityTarget === null || rawAuthorityTarget === undefined
+      ? null : validateAutomationTargetIdentity(rawAuthorityTarget as AutomationTargetIdentityV1);
+    const authorityDefinitionRevision = raw.authorityDefinitionRevision === null
+      || raw.authorityDefinitionRevision === undefined
+      ? (row.authority_definition_revision === null || row.authority_definition_revision === undefined
+        ? null : Number(row.authority_definition_revision))
+      : Number(raw.authorityDefinitionRevision);
+    const authorityDefinitionDigest = raw.authorityDefinitionDigest === null
+      || raw.authorityDefinitionDigest === undefined
+      ? (typeof row.authority_definition_digest === "string" ? row.authority_definition_digest : null)
+      : String(raw.authorityDefinitionDigest);
+    const enableProof = raw.state === "enabled" || raw.state === "error"
+      ? validateAutomationEnableProof(raw.enableProof, {
+        automationId: raw.id,
+        definitionRevision: revision,
+        definitionDigest: digest,
+      })
+      : null;
+    if (raw.state === "enabled" && (!enableProof || !authorityTarget
+        || authorityDefinitionRevision !== revision || authorityDefinitionDigest !== digest
+        || !sameAutomationTarget(enableProof.target, authorityTarget)))
+      throw new ClayError("E_VALIDATION", "enabled automation authority binding is missing or stale");
+    if (raw.state !== "enabled" && raw.state !== "error" && raw.enableProof !== null)
+      throw new ClayError("E_VALIDATION", "disabled automation must not retain an enable proof");
+    return {
+      ...resolved.stored,
+      id: String(row.id),
+      definitionRevision: revision,
+      state: raw.state,
+      enabled: raw.state === "enabled",
+      needsRepair: false,
+      enableProof,
+      authorityTarget,
+      authorityDefinitionRevision,
+      authorityDefinitionDigest,
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  automationRecipes(): AutomationRecipeCardV1[] {
+    return automationRecipeCatalog(this.reg);
+  }
+
+  automationRuntimeStatus(target: AutomationTargetIdentityV1): AutomationRuntimeStatusV1 {
+    const definitions = this.listAutomations(validateAutomationTargetIdentity(target));
+    const enabledDefinitions = definitions.filter(definition => definition.enabled).length;
+    return Object.freeze({
+      v: 1,
+      engine: "local_worker_session",
+      sessionActive: true,
+      backgroundExecution: false,
+      offDeviceExecution: false,
+      modelAccess: false,
+      networkAccess: false,
+      headline: "Automations run on this device while Clay is open.",
+      detail: "If Clay is closed or this device sleeps, scheduled work waits until a Clay session is available.",
+      enabledDefinitions,
+      disabledDefinitions: definitions.length - enabledDefinitions,
+      needsRepairDefinitions: definitions.filter(definition => definition.needsRepair).length,
+    });
+  }
+
+  private automationNextState(definition: AutomationDefinitionAny):
+  AutomationRuleRuntimeStateV1["next"] {
+    const trigger = definition.trigger;
+    if (trigger.kind === "manual") return Object.freeze({
+      kind: "manual" as const,
+      detail: "When you preview and confirm Run while Clay is open.",
+    });
+    if (trigger.kind === "schedule") {
+      const weekday = trigger.cadence === "weekly"
+        ? ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+          [trigger.weekday ?? 0] : null;
+      const timeZone = definition.v === 2 ? definition.runtime.timeZone : undefined;
+      return Object.freeze({
+        kind: "schedule" as const,
+        detail: `${trigger.cadence === "daily" ? "Daily" : weekday} at ${trigger.localTime}`
+          + `${timeZone ? ` (${timeZone})` : ""}, when Clay is open.`,
+      });
+    }
+    const table = typeof trigger.table === "string" ? trigger.table : trigger.table.lastKnownName;
+    if (trigger.kind === "record_created") return Object.freeze({
+      kind: "event" as const,
+      detail: `When a new ${table} record is created while Clay is open.`,
+    });
+    if (trigger.kind === "record_updated") return Object.freeze({
+      kind: "event" as const,
+      detail: `When a ${table} record is updated while Clay is open.`,
+    });
+    if (trigger.kind === "record_matches") return Object.freeze({
+      kind: "event" as const,
+      detail: `When a ${table} record newly matches while Clay is open.`,
+    });
+    if (!("dateField" in trigger) || !("daysBefore" in trigger))
+      throw new ClayError("E_INTERNAL", "automation trigger projection is incomplete");
+    const dateField = typeof trigger.dateField === "string"
+      ? trigger.dateField : trigger.dateField.lastKnownName;
+    return Object.freeze({
+      kind: "event" as const,
+      detail: `When ${table}.${dateField} reaches ${trigger.daysBefore} day${trigger.daysBefore === 1 ? "" : "s"} before due while Clay is open.`,
+    });
+  }
+
+  private automationSkipState(
+    definition: AutomationDefinitionAny,
+    target: AutomationTargetIdentityV1,
+    now: Date,
+  ):
+  AutomationRuleRuntimeStateV1["skip"] {
+    if (definition.needsRepair) return Object.freeze({
+      code: "REVIEW_REQUIRED_AFTER_UPGRADE" as const,
+      detail: "Skipped because this older rule needs review after upgrade and is disabled.",
+    });
+    if (definition.enabled) {
+      if (definition.v === 2 && definition.trigger.kind === "schedule"
+          && definition.runtime.missedPolicy === "skip") {
+        const clock = automationClock(now, definition.runtime.timeZone);
+        const [hour, minute] = definition.trigger.localTime.split(":").map(Number);
+        const scheduleMinutes = hour! * 60 + minute!;
+        const appliesToday = definition.trigger.cadence === "daily"
+          || clock.weekday === definition.trigger.weekday;
+        const day = `${clock.year}-${String(clock.month).padStart(2, "0")}-${String(clock.day).padStart(2, "0")}`;
+        if (appliesToday && clock.hour * 60 + clock.minute > scheduleMinutes
+            && !this.automationTriggerSucceeded(definition, target, `schedule:${day}`)) return Object.freeze({
+          code: "MISSED_SCHEDULE_WINDOW" as const,
+          detail: `Skipped because the ${definition.trigger.localTime} local schedule window passed and this rule is set to skip missed runs.`,
+        });
+      }
+      return null;
+    }
+    if (definition.state === "paused") return Object.freeze({
+      code: "PAUSED" as const,
+      detail: "Skipped because this rule is paused; resume it only after a fresh simulation.",
+    });
+    if (definition.state === "error") return Object.freeze({
+      code: "ERROR_DISABLED" as const,
+      detail: "Skipped because this rule is disabled after an error and needs review.",
+    });
+    return Object.freeze({
+      code: "DRAFT_DISABLED" as const,
+      detail: "Skipped because this draft is disabled until its current simulation is approved.",
+    });
+  }
+
+  private automationRunRuntimeState(
+    run: AutomationRun,
+    target: AutomationTargetIdentityV1,
+  ): AutomationRunRuntimeStateV1 {
+    if (!sameAutomationLineage(run.target, target)) return Object.freeze({
+      v: 1 as const,
+      runId: run.id,
+      failure: null,
+      undo: Object.freeze({
+        available: false,
+        reason: "FOREIGN_TARGET" as const,
+        detail: "This receipt belongs to another target and is available for audit only.",
+      }),
+    });
+    if (run.status === "failed") return Object.freeze({
+      v: 1 as const,
+      runId: run.id,
+      failure: Object.freeze({
+        code: run.errorCode ?? "E_INTERNAL",
+        detail: "The run failed safely; no partial changes were kept.",
+      }),
+      undo: Object.freeze({
+        available: false,
+        reason: "RUN_FAILED" as const,
+        detail: "A failed run has no retained changes to undo.",
+      }),
+    });
+    if (run.undone) return Object.freeze({
+      v: 1 as const,
+      runId: run.id,
+      failure: null,
+      undo: Object.freeze({
+        available: false,
+        reason: "ALREADY_UNDONE" as const,
+        detail: "This run was already undone.",
+      }),
+    });
+    if (run.batchId !== null) {
+      const batch = this.#driver.select(
+        `SELECT changed_count, undone_at FROM sys.operation_batches WHERE id = ?`, [run.batchId],
+      )[0];
+      const entries = this.#driver.select(
+        `SELECT "table", "row_id", "after_json" FROM "row_history"
+         WHERE "batch_id" = ? ORDER BY "sequence" DESC`, [run.batchId]);
+      if (!batch || batch.undone_at !== null || entries.length !== Number(batch.changed_count))
+        return Object.freeze({
+          v: 1 as const, runId: run.id, failure: null,
+          undo: Object.freeze({
+            available: false,
+            reason: "HISTORY_MISSING" as const,
+            detail: "Undo is unavailable because the exact retained history is no longer complete.",
+          }),
+        });
+      for (const entry of entries) {
+        let current: SqlRow | undefined;
+        try {
+          getTable(this.reg, String(entry.table));
+          current = this.#driver.select(
+            `SELECT * FROM ${qid(String(entry.table))} WHERE "id" = ?`, [String(entry.row_id)],
+          )[0];
+        } catch { current = undefined; }
+        if (!current || JSON.stringify(current) !== String(entry.after_json)) return Object.freeze({
+          v: 1 as const, runId: run.id, failure: null,
+          undo: Object.freeze({
+            available: false,
+            reason: "RECORD_CHANGED" as const,
+            detail: "Undo is unavailable because a record changed after this run.",
+          }),
+        });
+      }
+    }
+    return Object.freeze({
+      v: 1 as const,
+      runId: run.id,
+      failure: null,
+      undo: Object.freeze({
+        available: true,
+        reason: "AVAILABLE" as const,
+        detail: run.batchId === null
+          ? "Undo will dismiss reminders created by this run."
+          : "Undo is available while the affected records remain unchanged.",
+      }),
+    });
+  }
+
+  automationRuntimeOverview(
+    target: AutomationTargetIdentityV1,
+    limit = 100,
+    now: Date = new Date(),
+  ): AutomationRuntimeOverviewV1 {
+    const currentTarget = validateAutomationTargetIdentity(target);
+    if (!Number.isFinite(now.getTime()))
+      throw new ClayError("E_VALIDATION", "automation runtime status time is invalid");
+    const definitions = this.listAutomations(currentTarget);
+    const runs = this.automationRuns(currentTarget, undefined, limit);
+    const latestRuns = new Map(definitions.map(definition => [
+      definition.id, this.automationRuns(currentTarget, definition.id, 1)[0] ?? null,
+    ]));
+    const runtimeRuns = [...latestRuns.values(), ...runs]
+      .filter((run): run is AutomationRun => run !== null)
+      .filter((run, index, all) => all.findIndex(candidate => candidate.id === run.id) === index);
+    return Object.freeze({
+      v: 1 as const,
+      rules: Object.freeze(definitions.map(definition => {
+        const last = latestRuns.get(definition.id) ?? null;
+        return Object.freeze({
+          v: 1 as const,
+          automationId: definition.id,
+          lastRunId: last?.id ?? null,
+          lastRun: last,
+          next: this.automationNextState(definition),
+          skip: this.automationSkipState(definition, currentTarget, now),
+        });
+      })),
+      runs: Object.freeze(runtimeRuns.map(run => this.automationRunRuntimeState(run, currentTarget))),
+    });
+  }
+
+  saveAutomationRecipeDraft(
+    request: AutomationRecipeDraftRequestV1,
+    now: Date = new Date(),
+  ): AutomationDefinitionV2 {
+    return this.saveAutomationDraft(compileAutomationRecipeDraft(this.reg, request), undefined, now);
+  }
+
+  saveAutomationDraft(
+    input: AutomationDraftInputV2,
+    expectedRevision?: number,
+    now: Date = new Date(),
+  ): AutomationDefinitionV2 {
+    const resolved = resolveAutomationDraftV2(this.reg, input);
+    const current = resolved.stored.id
+      ? this.#driver.select(
+        `SELECT id, definition_json, created_at, updated_at, last_event_seq
+         FROM sys.automations WHERE id = ?`, [resolved.stored.id],
+      )[0]
+      : undefined;
+    if (resolved.stored.id && !current)
+      throw new ClayError("E_VALIDATION", "unknown automation");
+    let revision = 1;
+    if (current) {
+      const rawCurrent = JSON.parse(String(current.definition_json)) as Record<string, unknown>;
+      if (rawCurrent.v === 2) {
+        const prior = this.automationDefinitionV2FromRow(current);
+        if (!Number.isSafeInteger(expectedRevision) || expectedRevision !== prior.definitionRevision)
+          throw new ClayError("E_CONFLICT", "automation definition revision changed");
+        revision = prior.definitionRevision + 1;
+      } else {
+        if (rawCurrent.id !== String(current.id))
+          throw new ClayError("E_VALIDATION", "legacy automation identity does not match its row");
+        validateAutomationDefinition(this.reg, rawCurrent as unknown as AutomationDefinitionInput);
+        if (expectedRevision !== 0)
+          throw new ClayError("E_CONFLICT", "legacy automation repair requires expected revision 0");
+      }
+    } else if (expectedRevision !== undefined) {
+      throw new ClayError("E_CONFLICT", "new automation cannot have an expected revision");
+    }
+    if (!Number.isFinite(now.getTime()))
+      throw new ClayError("E_VALIDATION", "automation draft time is invalid");
+    const wallClock = now.toISOString();
+    const at = current && wallClock <= String(current.updated_at)
+      ? new Date(Date.parse(String(current.updated_at)) + 1).toISOString() : wallClock;
+    const id = resolved.stored.id ?? `auto_${uuidv7().replaceAll("-", "")}`;
+    const maxSeq = Number(this.#driver.select(
+      `SELECT COALESCE(MAX(seq), 0) AS n FROM sys.record_events`,
+    )[0]?.n ?? 0);
+    const cursor = current ? Number(current.last_event_seq) : maxSeq;
+    const stored = {
+      ...resolved.stored,
+      id,
+      definitionRevision: revision,
+      state: "draft" as const,
+      enableProof: null,
+      authorityTarget: null,
+      authorityDefinitionRevision: null,
+      authorityDefinitionDigest: null,
+    };
+    this.#driver.exec(
+      `INSERT INTO sys.automations(
+         id, definition_json, created_at, updated_at, last_event_seq,
+         authority_target_json, authority_definition_revision, authority_definition_digest,
+         cursor_target_json, cursor_definition_revision, cursor_definition_digest,
+         storage_version)
+       VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, 2)
+       ON CONFLICT(id) DO UPDATE SET definition_json = excluded.definition_json,
+         updated_at = excluded.updated_at, last_event_seq = excluded.last_event_seq,
+         authority_target_json = NULL, authority_definition_revision = NULL,
+         authority_definition_digest = NULL, cursor_target_json = NULL,
+         cursor_definition_revision = NULL, cursor_definition_digest = NULL,
+         last_schedule_period = NULL, schedule_target_json = NULL,
+         schedule_definition_revision = NULL, schedule_definition_digest = NULL,
+         storage_version = 2`,
+      [id, JSON.stringify(stored), current ? String(current.created_at) : at, at, cursor],
+    );
+    return {
+      ...resolved.stored,
+      id,
+      definitionRevision: revision,
+      state: "draft",
+      enabled: false,
+      needsRepair: false,
+      enableProof: null,
+      authorityTarget: null,
+      authorityDefinitionRevision: null,
+      authorityDefinitionDigest: null,
+      createdAt: current ? String(current.created_at) : at,
+      updatedAt: at,
+    };
+  }
+
+  enableAutomation(
+    request: AutomationEnableRequestV1,
+    now: Date = new Date(),
+  ): AutomationDefinitionV2 {
+    if (!Number.isFinite(now.getTime()))
+      throw new ClayError("E_VALIDATION", "automation enable time is invalid");
+    if (!Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 1
+        || typeof request.id !== "string" || !request.simulation)
+      throw new ClayError("E_VALIDATION", "automation enable request is invalid");
+    const simulation = validateAutomationSimulationProof(request.simulation);
+    if (simulation.purpose !== "enable")
+      throw new ClayError("E_VALIDATION", "automation enable request is invalid");
+    const target = validateAutomationTargetIdentity(request.target);
+    const evaluatedMs = Date.parse(simulation.evaluatedAt);
+    const expiryMs = Date.parse(simulation.expiresAt);
+    if (!Number.isFinite(evaluatedMs) || !Number.isFinite(expiryMs)
+        || evaluatedMs > now.getTime() || expiryMs < now.getTime())
+      throw new ClayError("E_CONFLICT", "automation simulation proof expired or has invalid time");
+    if (stableAutomationJson(simulation.target) !== stableAutomationJson(target)
+        || simulation.automationId !== request.id
+        || simulation.definitionRevision !== request.expectedRevision)
+      throw new ClayError("E_CONFLICT", "automation simulation proof target or revision is stale");
+
+    return this.#driver.tx(() => {
+      const row = this.#driver.select(
+        `SELECT id, definition_json, created_at, updated_at, last_event_seq
+         FROM sys.automations WHERE id = ?`, [request.id],
+      )[0];
+      if (!row) throw new ClayError("E_VALIDATION", "unknown automation");
+      const current = this.automationDefinitionV2FromRow(row);
+      if (current.definitionRevision !== request.expectedRevision || current.state === "enabled")
+        throw new ClayError("E_CONFLICT", "automation definition state or revision changed");
+      const exact = this.simulateAutomation({
+        id: request.id,
+        target,
+        expectedRevision: request.expectedRevision,
+        purpose: "enable",
+      }, new Date(evaluatedMs));
+      if (stableAutomationJson(exact) !== stableAutomationJson(simulation))
+        throw new ClayError("E_CONFLICT",
+          "automation simulation is stale after definition, schema, target, data, or limit drift");
+      const baselineRows = current.trigger.kind === "record_matches"
+        ? this.automationRows(this.executableAutomationV2(current), new Date(evaluatedMs), {
+            maxMatches: 100,
+            truncate: false,
+          })
+        : [];
+      if (current.trigger.kind === "record_matches"
+          && stableAutomationJson(baselineRows.map(candidate => String(candidate.id)))
+            !== stableAutomationJson(exact.matchedScope.recordIds))
+        throw new ClayError("E_CONFLICT", "automation activation baseline is stale");
+      const issuedAt = now.toISOString();
+      const proofCore = {
+        v: 1 as const,
+        target,
+        automationId: request.id,
+        simulationId: exact.id,
+        definitionRevision: current.definitionRevision,
+        definitionDigest: exact.definitionDigest,
+        issuedAt,
+      };
+      const enableProof = Object.freeze({
+        ...proofCore,
+        id: `aep_${automationSha256(proofCore).slice("sha256:".length)}`,
+      });
+      const raw = JSON.parse(String(row.definition_json)) as Record<string, unknown>;
+      const stored = {
+        ...raw,
+        state: "enabled",
+        enableProof,
+        authorityTarget: target,
+        authorityDefinitionRevision: current.definitionRevision,
+        authorityDefinitionDigest: exact.definitionDigest,
+      };
+      const nextAt = issuedAt <= String(row.updated_at)
+        ? new Date(Date.parse(String(row.updated_at)) + 1).toISOString() : issuedAt;
+      const targetJson = automationTargetJson(target);
+      this.#driver.exec(
+        `UPDATE sys.automations SET definition_json = ?, updated_at = ?, last_event_seq = ?,
+           authority_target_json = ?, authority_definition_revision = ?,
+           authority_definition_digest = ?, cursor_target_json = ?,
+           cursor_definition_revision = ?, cursor_definition_digest = ?, storage_version = 2
+         WHERE id = ?`,
+        [JSON.stringify(stored), nextAt, Number(row.last_event_seq), targetJson,
+         current.definitionRevision, exact.definitionDigest, targetJson,
+         current.definitionRevision, exact.definitionDigest, request.id],
+      );
+      if (current.trigger.kind === "record_matches") {
+        this.#driver.exec(
+          `DELETE FROM sys.automation_matches WHERE automation_id = ? AND target_json = ?
+             AND definition_revision = ? AND definition_digest = ?`,
+          [request.id, targetJson, current.definitionRevision, exact.definitionDigest],
+        );
+        for (const baseline of baselineRows) this.#driver.exec(
+          `INSERT INTO sys.automation_matches(
+             automation_id, row_id, target_json, definition_revision,
+             definition_digest, snapshot_digest, run_id, baseline)
+           VALUES (?, ?, ?, ?, ?, ?, NULL, 1)`,
+          [request.id, String(baseline.id), targetJson, current.definitionRevision,
+           exact.definitionDigest, automationSha256(baseline)],
+        );
+      }
+      const after = this.#driver.select(
+        `SELECT id, definition_json, created_at, updated_at, last_event_seq
+         FROM sys.automations WHERE id = ?`, [request.id],
+      )[0];
+      if (!after) throw new ClayError("E_INTERNAL", "enabled automation read-back is missing");
+      const enabled = this.automationDefinitionV2FromRow(after);
+      if (enabled.state !== "enabled" || stableAutomationJson(enabled.enableProof) !== stableAutomationJson(enableProof))
+        throw new ClayError("E_INTERNAL", "enabled automation proof failed read-back");
+      return enabled;
+    });
+  }
+
+  pauseAutomation(
+    request: AutomationPauseRequestV1,
+    now: Date = new Date(),
+  ): AutomationDefinitionV2 {
+    if (!Number.isFinite(now.getTime()) || typeof request.id !== "string"
+        || !Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 1)
+      throw new ClayError("E_VALIDATION", "automation pause request is invalid");
+    return this.#driver.tx(() => {
+      const row = this.#driver.select(
+        `SELECT id, definition_json, created_at, updated_at, last_event_seq
+         FROM sys.automations WHERE id = ?`, [request.id],
+      )[0];
+      if (!row) throw new ClayError("E_VALIDATION", "unknown automation");
+      const current = this.automationDefinitionV2FromRow(row);
+      if (current.definitionRevision !== request.expectedRevision)
+        throw new ClayError("E_CONFLICT", "automation definition revision changed");
+      if (current.state !== "enabled") return current;
+      const raw = JSON.parse(String(row.definition_json)) as Record<string, unknown>;
+      const at = now.toISOString() <= String(row.updated_at)
+        ? new Date(Date.parse(String(row.updated_at)) + 1).toISOString() : now.toISOString();
+      this.#driver.exec(
+        `UPDATE sys.automations SET definition_json = ?, updated_at = ? WHERE id = ?`,
+        [JSON.stringify({ ...raw, state: "paused", enableProof: null }), at, request.id],
+      );
+      const after = this.#driver.select(
+        `SELECT id, definition_json, created_at, updated_at, last_event_seq
+         FROM sys.automations WHERE id = ?`, [request.id],
+      )[0];
+      if (!after) throw new ClayError("E_INTERNAL", "paused automation read-back is missing");
+      return this.automationDefinitionV2FromRow(after);
+    });
+  }
+
+  private executableAutomationV2(definition: AutomationDefinitionV2): AutomationDefinition {
+    const resolved = resolveAutomationDraftV2(this.reg, definition);
+    return {
+      ...resolved.executable,
+      id: definition.id,
+      enabled: definition.state === "enabled",
+      createdAt: definition.createdAt,
+      updatedAt: definition.updatedAt,
+      runtime: definition.runtime,
+    };
+  }
+
+  private automationForSimulation(id: string): AutomationDefinition {
+    const row = this.#driver.select(
+      `SELECT id, definition_json, created_at, updated_at FROM sys.automations WHERE id = ?`, [id],
+    )[0];
+    if (!row) throw new ClayError("E_VALIDATION", "unknown automation");
+    const raw = JSON.parse(String(row.definition_json)) as Record<string, unknown>;
+    if (raw.v === 2) return this.executableAutomationV2(this.automationDefinitionV2FromRow(row));
+    const normalized = validateAutomationDefinition(
+      this.reg,
+      { ...(raw as AutomationDefinitionInput), enabled: false },
+    );
+    return {
+      ...normalized,
+      id,
+      enabled: false,
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  private pauseForeignAutomation(
+    row: SqlRow,
+    definition: AutomationDefinitionV2,
+    target: AutomationTargetIdentityV1,
+  ): AutomationDefinitionV2 {
+    if (definition.state !== "enabled" || sameAutomationLineage(definition.authorityTarget, target))
+      return definition;
+    const raw = JSON.parse(String(row.definition_json)) as Record<string, unknown>;
+    const targetJson = automationTargetJson(target);
+    this.#driver.tx(() => {
+      this.#driver.exec(
+        `UPDATE sys.automations SET definition_json = ?, authority_target_json = ?,
+           authority_definition_revision = ?, authority_definition_digest = ?,
+           cursor_target_json = NULL, cursor_definition_revision = NULL,
+           cursor_definition_digest = NULL, last_schedule_period = NULL,
+           schedule_target_json = NULL, schedule_definition_revision = NULL,
+           schedule_definition_digest = NULL
+         WHERE id = ?`,
+        [JSON.stringify({
+          ...raw,
+          state: "paused",
+          enableProof: null,
+          authorityTarget: target,
+          authorityDefinitionRevision: definition.definitionRevision,
+          authorityDefinitionDigest: definition.authorityDefinitionDigest,
+        }), targetJson, definition.definitionRevision,
+         definition.authorityDefinitionDigest, definition.id],
+      );
+    });
+    const after = this.#driver.select(`SELECT * FROM sys.automations WHERE id = ?`, [definition.id])[0];
+    if (!after) throw new ClayError("E_INTERNAL", "foreign automation pause read-back is missing");
+    return this.automationDefinitionV2FromRow(after);
+  }
+
+  private runnableAutomations(target: AutomationTargetIdentityV1): AutomationDefinitionV2[] {
+    return this.listAutomations(target)
+      .filter((definition): definition is AutomationDefinitionV2 =>
+        definition.v === 2 && !definition.needsRepair && definition.state === "enabled")
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt)
+        || left.id.localeCompare(right.id));
+  }
+
+  listAutomations(target?: AutomationTargetIdentityV1): AutomationDefinitionAny[] {
+    const currentTarget = target === undefined ? null : validateAutomationTargetIdentity(target);
+    const rows = this.#driver.select(
+      `SELECT * FROM sys.automations ORDER BY created_at ASC, id ASC`,
+    );
+    return rows.map(row => {
+      const raw = JSON.parse(String(row.definition_json)) as Record<string, unknown>;
+      if (raw.v === 2) {
+        const definition = this.automationDefinitionV2FromRow(row);
+        return currentTarget ? this.pauseForeignAutomation(row, definition, currentTarget) : definition;
+      }
+      if (raw.id !== String(row.id))
+        throw new ClayError("E_VALIDATION", "stored legacy automation identity does not match its row");
+      const legacy = validateAutomationDefinition(
+        this.reg, raw as unknown as AutomationDefinitionInput,
+      );
+      let persistedEnabled = legacy.enabled;
+      if (typeof row.legacy_definition_json === "string") {
+        try {
+          const audit = JSON.parse(row.legacy_definition_json) as { enabled?: unknown };
+          persistedEnabled = audit.enabled === true;
+        } catch { throw new ClayError("E_VALIDATION", "legacy automation audit copy is invalid"); }
+      }
+      return {
+        ...legacy,
+        v: 1,
+        id: String(row.id),
+        enabled: false,
+        persistedEnabled,
+        definitionRevision: 0,
+        state: persistedEnabled ? "paused" : "draft",
+        needsRepair: true,
+        repairReason: "REVIEW_REQUIRED_AFTER_UPGRADE",
+        createdAt: String(row.created_at),
+        updatedAt: String(row.updated_at),
+      } satisfies AutomationLegacyDefinitionV1;
+    });
   }
 
   upsertAutomation(input: AutomationDefinitionInput): AutomationDefinition {
+    if (input.enabled)
+      throw new ClayError("E_VALIDATION",
+        "enabled=true requires a current simulation proof and the separate enable operation");
     const normalized = validateAutomationDefinition(this.reg, input);
     const current = normalized.id
       ? this.#driver.select(`SELECT definition_json, created_at, updated_at, last_event_seq
@@ -2323,9 +3095,10 @@ export class ClayStore {
         let matches = true;
         if (trigger.kind === "date_due") {
           const raw = row[trigger.dateField];
-          const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+          const clock = automationClock(now, definition.runtime?.timeZone);
+          const today = Date.UTC(clock.year, clock.month - 1, clock.day);
           const due = typeof raw === "string"
-            ? new Date(`${raw.slice(0, 10)}T00:00:00`).getTime() : Number.NaN;
+            ? Date.parse(`${raw.slice(0, 10)}T00:00:00.000Z`) : Number.NaN;
           matches = Number.isFinite(due)
             && today >= due - trigger.daysBefore * 86_400_000;
         }
@@ -2341,6 +3114,50 @@ export class ClayStore {
       afterId = String(page.at(-1)!.id);
     }
     return rows;
+  }
+
+  private queuedAutomationEventScope(
+    definition: AutomationDefinitionV2,
+    now: Date,
+  ): Readonly<{
+    cursor: number;
+    watermark: number;
+    sources: ReadonlyArray<{ sequence: number; row: QueryRow; snapshotDigest: string }>;
+  }> {
+    if (definition.trigger.kind !== "record_created"
+        && definition.trigger.kind !== "record_updated")
+      return { cursor: 0, watermark: 0, sources: [] };
+    const cursor = Number(this.#driver.select(
+      `SELECT last_event_seq FROM sys.automations WHERE id = ?`, [definition.id],
+    )[0]?.last_event_seq ?? 0);
+    const executable = this.executableAutomationV2(definition);
+    if ((executable.trigger.kind !== "record_created"
+        && executable.trigger.kind !== "record_updated")
+        || executable.trigger.kind !== definition.trigger.kind)
+      throw new ClayError("E_INTERNAL", "queued automation trigger resolution changed kind");
+    const executableTrigger = executable.trigger;
+    const events = this.#driver.select(
+      `SELECT * FROM sys.record_events
+       WHERE (table_id = ? OR (table_id IS NULL AND table_name = ?))
+         AND seq > ? ORDER BY seq ASC`,
+      [definition.trigger.table.tableId, executableTrigger.table, cursor],
+    );
+    const sources: Array<{ sequence: number; row: QueryRow; snapshotDigest: string }> = [];
+    let watermark = cursor;
+    for (const event of events) {
+      const sequence = Number(event.seq);
+      watermark = Math.max(watermark, sequence);
+      if (event.origin !== "user"
+          || (definition.trigger.kind === "record_created" && event.kind !== "created")
+          || (definition.trigger.kind === "record_updated" && event.kind !== "updated")) continue;
+      const row = this.automationEventSnapshot(event, definition);
+      if (!rowMatchesConditions(row, executableTrigger.conditions, now)) continue;
+      sources.push({ sequence, row, snapshotDigest: String(event.snapshot_digest) });
+      if (sources.length > 100)
+        throw new ClayError("E_LIMIT",
+          "automation matches more than 100 queued event records; narrow its conditions");
+    }
+    return Object.freeze({ cursor, watermark, sources: Object.freeze(sources) });
   }
 
   private automationLabel(definition: AutomationDefinition, row: QueryRow): string {
@@ -2408,9 +3225,145 @@ export class ClayStore {
     return { mutations, notifications };
   }
 
-  simulateAutomation(id: string, now: Date = new Date()): AutomationSimulation {
-    const definition = this.listAutomations().find(candidate => candidate.id === id);
-    if (!definition) throw new ClayError("E_VALIDATION", "unknown automation");
+  private retainedAutomationMutations(mutations: BatchMutation[]): BatchMutation[] {
+    return mutations.filter(mutation => {
+      if (mutation.kind !== "update") return true;
+      const table = getTable(this.reg, mutation.table);
+      const { cols, vals } = validatePatch(table, mutation.patch);
+      const current = this.#driver.select(
+        `SELECT ${cols.map(qid).join(", ")} FROM ${qid(mutation.table)} WHERE "id" = ?`,
+        [mutation.id],
+      )[0];
+      if (!current) throw new ClayError("E_VALIDATION", "automation target record is missing");
+      return !cols.every((column, index) =>
+        (current[column] ?? null) === (vals[index] ?? null));
+    });
+  }
+
+  simulateAutomation(id: string, now?: Date): AutomationSimulation;
+  simulateAutomation(
+    request: AutomationSimulationRequestV1,
+    now?: Date,
+  ): AutomationSimulationProofV1;
+  simulateAutomation(
+    idOrRequest: string | AutomationSimulationRequestV1,
+    now: Date = new Date(),
+  ): AutomationSimulation | AutomationSimulationProofV1 {
+    if (typeof idOrRequest !== "string") {
+      if (!Number.isFinite(now.getTime()))
+        throw new ClayError("E_VALIDATION", "automation simulation time is invalid");
+      const request = idOrRequest;
+      const target = validateAutomationTargetIdentity(request.target);
+      if (!Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 1
+          || (request.purpose !== "enable" && request.purpose !== "run_now"
+            && request.purpose !== "proposal_review"))
+        throw new ClayError("E_VALIDATION", "automation simulation request is invalid");
+      const row = this.#driver.select(
+        `SELECT id, definition_json, created_at, updated_at FROM sys.automations WHERE id = ?`,
+        [request.id],
+      )[0];
+      if (!row) throw new ClayError("E_VALIDATION", "unknown automation");
+      const definition = this.automationDefinitionV2FromRow(row);
+      if (definition.definitionRevision !== request.expectedRevision)
+        throw new ClayError("E_CONFLICT", "automation definition revision changed");
+      const resolved = resolveAutomationDraftV2(this.reg, definition);
+      const executable: AutomationDefinition = {
+        ...resolved.executable,
+        id: definition.id,
+        createdAt: definition.createdAt,
+        updatedAt: definition.updatedAt,
+        runtime: definition.runtime,
+      };
+      const queuedScope = request.purpose !== "run_now"
+        && (definition.trigger.kind === "record_created"
+          || definition.trigger.kind === "record_updated")
+        ? this.queuedAutomationEventScope(definition, now) : null;
+      const rows = queuedScope
+        ? queuedScope.sources.map(source => source.row)
+        : this.automationRows(executable, now, { maxMatches: 100, truncate: false });
+      const rawPlan = this.automationPlan(executable, rows);
+      const plan = {
+        mutations: this.retainedAutomationMutations(rawPlan.mutations),
+        notifications: rawPlan.notifications,
+      };
+      if (plan.mutations.length > 0) this.validateBatchMutations(plan.mutations);
+      const matchedRecords = executable.trigger.kind === "schedule" ? 1 : rows.length;
+      const definitionDigest = automationDefinitionDigest(resolved.stored);
+      const plannedEffects = plannedEffectsFor(resolved.stored, matchedRecords).map((effect, index) => {
+        if (effect.kind === "set_fields") return Object.freeze({
+          ...effect,
+          count: plan.mutations.filter(mutation => mutation.kind === "update").length,
+        });
+        if (effect.kind === "create_record" || effect.kind === "create_related") {
+          const action = executable.actions[index];
+          const table = action && (action.kind === "create_record" || action.kind === "create_related")
+            ? action.table : null;
+          return Object.freeze({
+            ...effect,
+            count: table === null ? 0 : plan.mutations.filter(mutation =>
+              mutation.kind === "insert" && mutation.table === table).length,
+          });
+        }
+        return Object.freeze({ ...effect, count: plan.notifications.length });
+      });
+      const evaluatedAt = now.toISOString();
+      const expiresAt = new Date(now.getTime() + 5 * 60_000).toISOString();
+      const matchedScope = Object.freeze({
+        kind: executable.trigger.kind === "schedule" ? "schedule" as const : "records" as const,
+        recordIds: Object.freeze(rows.map(source => String(source.id))),
+      });
+      const snapshotDigest = automationSha256({
+        v: 1,
+        target,
+        definitionDigest,
+        matchedScope,
+        sources: rows,
+        plannedEffects,
+        plannedMutations: plan.mutations,
+        plannedNotifications: plan.notifications.map(item => ({
+          title: item.action.title,
+          body: item.action.body,
+          sourceId: item.source ? String(item.source.id) : null,
+        })),
+      });
+      const dataRevision = Number(this.#driver.select(
+        `SELECT COALESCE(MAX(seq), 0) AS n FROM sys.record_events`,
+      )[0]?.n ?? 0);
+      const core = {
+        v: 1 as const,
+        target,
+        purpose: request.purpose,
+        automationId: definition.id,
+        definitionRevision: definition.definitionRevision,
+        definitionDigest,
+        schemaRevision: this.currentVersion(),
+        referenceFingerprint: resolved.referenceFingerprint,
+        dataRevision,
+        evaluatedAt,
+        expiresAt,
+        snapshotDigest,
+        matchedRecords,
+        matchedScope,
+        plannedMutations: plan.mutations.length,
+        plannedNotifications: plan.notifications.length,
+        plannedEffects: Object.freeze(plannedEffects),
+        sampleLabels: Object.freeze(rows.slice(0, 5)
+          .map(source => this.automationLabel(executable, source))),
+        runtime: Object.freeze({
+          mode: "local" as const,
+          requiresAppOpen: true as const,
+          timeZone: resolved.stored.runtime.timeZone ?? null,
+        }),
+        undo: plan.mutations.length > 0
+          ? "available_after_commit" as const : "no_data_changes" as const,
+      };
+      return Object.freeze({
+        ...core,
+        id: `asim_${automationSha256(core).slice("sha256:".length)}`,
+      });
+    }
+    const id = idOrRequest;
+    const definition = this.automationForSimulation(id);
     const rows = this.automationRows(definition, now,
       { maxMatches: 100, truncate: false });
     const plan = this.automationPlan(definition, rows);
@@ -2424,7 +3377,11 @@ export class ClayStore {
     };
   }
 
-  private automationRunFromRow(row: SqlRow): AutomationRun {
+  private automationRunFromRow(
+    row: SqlRow,
+    currentTarget: AutomationTargetIdentityV1 | null = null,
+  ): AutomationRun {
+    const target = automationTargetFromJson(row.target_json);
     return {
       id: String(row.id), automationId: String(row.automation_id), at: String(row.at),
       status: String(row.status) as "success" | "failed",
@@ -2432,90 +3389,319 @@ export class ClayStore {
       batchId: row.batch_id === null ? null : String(row.batch_id),
       errorCode: row.error_code === null ? null : String(row.error_code),
       undone: row.undone_at !== null,
+      target,
+      definitionRevision: row.definition_revision === null
+        || row.definition_revision === undefined ? null : Number(row.definition_revision),
+      definitionDigest: typeof row.definition_digest === "string" ? row.definition_digest : null,
+      logicalTriggerKey: String(row.trigger_key),
+      triggerKind: typeof row.trigger_kind === "string"
+        ? row.trigger_kind as AutomationDefinition["trigger"]["kind"] : null,
+      auditOnly: currentTarget !== null && !sameAutomationLineage(target, currentTarget),
     };
   }
 
-  private automationTriggerSucceeded(automationId: string, triggerKey: string): boolean {
+  private automationRuntimeBindingTarget(
+    definition: AutomationDefinitionV2,
+    currentTarget: AutomationTargetIdentityV1,
+  ): AutomationTargetIdentityV1 {
+    if (definition.state !== "enabled") return currentTarget;
+    if (!sameAutomationLineage(definition.authorityTarget, currentTarget))
+      throw new ClayError("E_CONFLICT", "automation authority belongs to another target lineage");
+    return definition.authorityTarget!;
+  }
+
+  private automationTriggerSucceeded(
+    definition: AutomationDefinitionV2,
+    target: AutomationTargetIdentityV1,
+    triggerKey: string,
+  ): boolean {
+    const definitionDigest = automationDefinitionDigest(definition);
+    const bindingTarget = this.automationRuntimeBindingTarget(definition, target);
     return this.#driver.select(
-      `SELECT id FROM sys.automation_runs WHERE automation_id = ? AND status = 'success'
-       AND (trigger_key = ? OR trigger_key LIKE ?) LIMIT 1`,
-      [automationId, triggerKey, `${triggerKey}:retry:%`],
+      `SELECT run_id FROM sys.automation_trigger_ledger
+       WHERE automation_id = ? AND trigger_key = ? AND target_json = ?
+         AND definition_revision = ? AND definition_digest = ?
+         AND disposition = 'success' LIMIT 1`,
+      [definition.id, triggerKey, automationTargetJson(bindingTarget),
+       definition.definitionRevision, definitionDigest],
     ).length > 0;
   }
 
   private executeAutomation(
-    definition: AutomationDefinition,
+    storedDefinition: AutomationDefinitionV2,
     sources: QueryRow[],
     triggerKey: string,
     now: Date,
-    onSuccess?: () => void,
+    target: AutomationTargetIdentityV1,
+    onSuccess?: (runId: string) => void,
   ): AutomationRun | null {
-    if (this.automationTriggerSucceeded(definition.id, triggerKey)) return null;
-    const priorFailures = Number(this.#driver.select(
-      `SELECT COUNT(*) AS n FROM sys.automation_runs WHERE automation_id = ?
-       AND (trigger_key = ? OR trigger_key LIKE ?)`,
-      [definition.id, triggerKey, `${triggerKey}:retry:%`],
-    )[0]?.n ?? 0);
-    const persistedTriggerKey = priorFailures > 0
-      ? `${triggerKey}:retry:${uuidv7()}` : triggerKey;
+    const definition = this.executableAutomationV2(storedDefinition);
+    const definitionDigest = automationDefinitionDigest(storedDefinition);
+    const targetJson = automationTargetJson(target);
+    const bindingTargetJson = automationTargetJson(
+      this.automationRuntimeBindingTarget(storedDefinition, target),
+    );
+    if (this.automationTriggerSucceeded(storedDefinition, target, triggerKey)) return null;
     const runId = uuidv7();
     const at = now.toISOString();
     try {
       return this.#driver.tx(() => {
-        const plan = this.automationPlan(definition, sources);
+        const rawPlan = this.automationPlan(definition, sources);
+        const plan = {
+          mutations: this.retainedAutomationMutations(rawPlan.mutations),
+          notifications: rawPlan.notifications,
+        };
+        if (plan.mutations.length === 0 && plan.notifications.length === 0) return null;
         const batch = plan.mutations.length > 0 ? this.applyBatch({
           source: "automation", summary: definition.name, mutations: plan.mutations,
         }) : null;
+        if (batch) this.#driver.exec(
+          `UPDATE sys.operation_batches SET automation_target_json = ?,
+             automation_definition_revision = ?, automation_definition_digest = ?,
+             automation_run_id = ? WHERE id = ?`,
+          [targetJson, storedDefinition.definitionRevision, definitionDigest, runId, batch.id],
+        );
         for (const notice of plan.notifications) {
           const table = definition.trigger.kind === "schedule" ? null : definition.trigger.table;
           this.#driver.exec(
             `INSERT INTO sys.notifications(
-               id, at, automation_id, run_id, title, body, table_name, row_id, read_at, dismissed_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
+               id, at, automation_id, run_id, title, body, table_name, row_id,
+               read_at, dismissed_at, target_json, definition_revision, definition_digest)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)`,
             [uuidv7(), at, definition.id, runId, notice.action.title, notice.action.body,
-             table, notice.source ? String(notice.source.id) : null]);
+             table, notice.source ? String(notice.source.id) : null, targetJson,
+             storedDefinition.definitionRevision, definitionDigest]);
         }
         const matched = definition.trigger.kind === "schedule" ? 1 : sources.length;
         this.#driver.exec(
           `INSERT INTO sys.automation_runs(
              id, automation_id, at, trigger_key, status, matched_count,
-             changed_count, batch_id, error_code, undone_at)
-           VALUES (?, ?, ?, ?, 'success', ?, ?, ?, NULL, NULL)`,
-          [runId, definition.id, at, persistedTriggerKey, matched,
-           batch?.changed ?? 0, batch?.id ?? null]);
-        onSuccess?.();
+             changed_count, batch_id, error_code, undone_at, target_json,
+             definition_revision, definition_digest, trigger_kind)
+           VALUES (?, ?, ?, ?, 'success', ?, ?, ?, NULL, NULL, ?, ?, ?, ?)`,
+          [runId, definition.id, at, triggerKey, matched,
+           batch?.changed ?? 0, batch?.id ?? null, targetJson,
+           storedDefinition.definitionRevision, definitionDigest, definition.trigger.kind]);
+        this.#driver.exec(
+          `INSERT INTO sys.automation_trigger_ledger(
+             automation_id, trigger_key, target_json, definition_revision,
+             definition_digest, run_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [definition.id, triggerKey, bindingTargetJson, storedDefinition.definitionRevision,
+           definitionDigest, runId, at],
+        );
+        onSuccess?.(runId);
         return {
           id: runId, automationId: definition.id, at, status: "success" as const,
           matchedRecords: matched, changed: batch?.changed ?? 0,
           batchId: batch?.id ?? null, errorCode: null, undone: false,
+          target, definitionRevision: storedDefinition.definitionRevision,
+          definitionDigest, logicalTriggerKey: triggerKey,
+          triggerKind: definition.trigger.kind, auditOnly: false,
         };
       });
     } catch (error) {
+      if (error instanceof ClayError && error.code === "E_LIMIT") throw error;
       const code = error instanceof ClayError ? error.code : "E_INTERNAL";
-      this.#driver.exec(
-        `INSERT OR IGNORE INTO sys.automation_runs(
-           id, automation_id, at, trigger_key, status, matched_count,
-           changed_count, batch_id, error_code, undone_at)
-         VALUES (?, ?, ?, ?, 'failed', ?, 0, NULL, ?, NULL)`,
-        [runId, definition.id, at, persistedTriggerKey,
-         definition.trigger.kind === "schedule" ? 1 : sources.length, code]);
-      return {
+      const failed = {
         id: runId, automationId: definition.id, at, status: "failed",
         matchedRecords: definition.trigger.kind === "schedule" ? 1 : sources.length,
         changed: 0, batchId: null, errorCode: code, undone: false,
-      };
+        target, definitionRevision: storedDefinition.definitionRevision,
+        definitionDigest, logicalTriggerKey: triggerKey,
+        triggerKind: definition.trigger.kind, auditOnly: false,
+      } satisfies AutomationRun;
+      this.#driver.exec(
+        `INSERT INTO sys.automation_runs(
+           id, automation_id, at, trigger_key, status, matched_count,
+           changed_count, batch_id, error_code, undone_at, target_json,
+           definition_revision, definition_digest, trigger_kind)
+         VALUES (?, ?, ?, ?, 'failed', ?, 0, NULL, ?, NULL, ?, ?, ?, ?)`,
+        [runId, definition.id, at, triggerKey, failed.matchedRecords, code, targetJson,
+         storedDefinition.definitionRevision, definitionDigest, definition.trigger.kind],
+      );
+      return failed;
     }
   }
 
-  runAutomationNow(id: string, now: Date = new Date()): AutomationRun {
-    const definition = this.listAutomations().find(candidate => candidate.id === id);
-    if (!definition) throw new ClayError("E_VALIDATION", "unknown automation");
-    const rows = this.automationRows(definition, now,
+  runAutomationNow(id: string, now?: Date): AutomationRun;
+  runAutomationNow(request: AutomationRunNowRequestV1, now?: Date): AutomationExecutionResultV1;
+  runAutomationNow(
+    idOrRequest: string | AutomationRunNowRequestV1,
+    now: Date = new Date(),
+  ): AutomationRun | AutomationExecutionResultV1 {
+    if (typeof idOrRequest === "string") {
+      throw new ClayError("E_VALIDATION",
+        "automation Run now requires a current target-bound simulation proof");
+    }
+    const request = idOrRequest;
+    if (!Number.isFinite(now.getTime()))
+      throw new ClayError("E_VALIDATION", "automation run time is invalid");
+    if (!Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 1
+        || typeof request.id !== "string" || !request.simulation)
+      throw new ClayError("E_VALIDATION", "automation run requires a run-now simulation proof");
+    const simulation = validateAutomationSimulationProof(request.simulation);
+    if (simulation.purpose !== "run_now")
+      throw new ClayError("E_VALIDATION", "automation run requires a run-now simulation proof");
+    const target = validateAutomationTargetIdentity(request.target);
+    const evaluatedMs = Date.parse(simulation.evaluatedAt);
+    const expiryMs = Date.parse(simulation.expiresAt);
+    if (!Number.isFinite(evaluatedMs) || !Number.isFinite(expiryMs)
+        || evaluatedMs > now.getTime() || expiryMs < now.getTime())
+      throw new ClayError("E_CONFLICT", "automation run simulation expired or has invalid time");
+    if (stableAutomationJson(simulation.target) !== stableAutomationJson(target)
+        || simulation.automationId !== request.id
+        || simulation.definitionRevision !== request.expectedRevision)
+      throw new ClayError("E_CONFLICT", "automation run simulation target or revision is stale");
+    const row = this.#driver.select(
+      `SELECT id, definition_json, created_at, updated_at FROM sys.automations WHERE id = ?`,
+      [request.id],
+    )[0];
+    if (!row) throw new ClayError("E_VALIDATION", "unknown automation");
+    const current = this.automationDefinitionV2FromRow(row);
+    if (current.definitionRevision !== request.expectedRevision)
+      throw new ClayError("E_CONFLICT", "automation definition revision changed");
+    const exact = this.simulateAutomation({
+      id: request.id,
+      target,
+      expectedRevision: request.expectedRevision,
+      purpose: "run_now",
+    }, new Date(evaluatedMs));
+    if (stableAutomationJson(exact) !== stableAutomationJson(simulation))
+      throw new ClayError("E_CONFLICT",
+        "automation run simulation is stale after definition, schema, target, data, or limit drift");
+    const definition = this.executableAutomationV2(current);
+    const rows = this.automationRows(definition, new Date(evaluatedMs),
       { maxMatches: 100, truncate: false });
-    return this.executeAutomation(definition, rows, `manual:${uuidv7()}`, now)!;
+    const run = this.executeAutomation(current, rows, `manual:${exact.id}`, now, target);
+    if (!run) return Object.freeze({
+      v: 1,
+      kind: "no_op",
+      target,
+      automationId: request.id,
+      reasonCode: "NO_ACTUAL_RETAINED_MUTATION",
+      evaluatedAt: now.toISOString(),
+    });
+    const core = {
+      v: 1 as const,
+      kind: "committed" as const,
+      target,
+      automationId: request.id,
+      simulationId: exact.id,
+      definitionRevision: current.definitionRevision,
+      definitionDigest: exact.definitionDigest,
+      committedAt: now.toISOString(),
+      receipt: run,
+    };
+    return Object.freeze({
+      ...core,
+      id: `aer_${automationSha256(core).slice("sha256:".length)}`,
+    });
+   }
+
+  private automationEventSnapshot(
+    event: SqlRow,
+    definition: AutomationDefinitionV2,
+  ): QueryRow {
+    const fail = (detail: string): never => {
+      throw new ClayError("E_VALIDATION", `automation event-time snapshot is invalid: ${detail}`);
+    };
+    if (typeof event.row_json !== "string" || typeof event.snapshot_digest !== "string"
+        || typeof event.table_id !== "string" || !Number.isSafeInteger(Number(event.schema_revision)))
+      return fail("required identity or digest is missing");
+    let value: unknown;
+    try { value = JSON.parse(event.row_json); }
+    catch { return fail("snapshot JSON is malformed"); }
+    if (value === null || typeof value !== "object" || Array.isArray(value))
+      return fail("snapshot is not an object");
+    const snapshot = value as Record<string, unknown>;
+    const allowed = new Set([
+      "v", "tableId", "tableNameAtEvent", "rowId", "schemaRevision", "kernel", "fields",
+      "snapshotDigest",
+    ]);
+    if (Object.keys(snapshot).some(key => !allowed.has(key)) || snapshot.v !== 1
+        || snapshot.tableId !== event.table_id || snapshot.rowId !== event.row_id
+        || snapshot.schemaRevision !== Number(event.schema_revision)
+        || snapshot.snapshotDigest !== event.snapshot_digest)
+      return fail("snapshot identity does not match its event envelope");
+    const { snapshotDigest: _digest, ...core } = snapshot;
+    if (automationSha256(core) !== event.snapshot_digest)
+      return fail("snapshot digest does not verify");
+    if (definition.trigger.kind === "schedule" || definition.trigger.table.tableId !== event.table_id)
+      return fail("snapshot table identity does not match the automation trigger");
+    const table = [...this.reg.values()].find(candidate =>
+      candidate.semantic?.tableId === event.table_id);
+    if (!table || !table.semantic || table.inactive)
+      return fail("snapshot table semantic identity cannot be resolved");
+    if (!Array.isArray(snapshot.fields)) return fail("snapshot field map is missing");
+    const values = new Map<string, unknown>();
+    for (const entry of snapshot.fields) {
+      if (entry === null || typeof entry !== "object" || Array.isArray(entry))
+        return fail("snapshot field entry is malformed");
+      const field = entry as Record<string, unknown>;
+      if (Object.keys(field).some(key => key !== "fieldId" && key !== "value")
+          || typeof field.fieldId !== "string" || values.has(field.fieldId))
+        return fail("snapshot field identity is malformed or duplicated");
+      values.set(field.fieldId, field.value);
+    }
+    const kernel = snapshot.kernel;
+    if (kernel === null || typeof kernel !== "object" || Array.isArray(kernel))
+      return fail("snapshot kernel row is missing");
+    const output: QueryRow = { ...(kernel as QueryRow) };
+    if (String(output.id) !== String(event.row_id)) return fail("snapshot row identity is foreign");
+    for (const column of table.columns) {
+      if (column.inactive || !column.semantic) continue;
+      if (values.has(column.semantic.fieldId))
+        output[column.name] = values.get(column.semantic.fieldId) as never;
+    }
+    const requiredFieldIds = new Set<string>();
+    for (const condition of definition.trigger.conditions) requiredFieldIds.add(condition.field.fieldId);
+    for (const action of definition.actions) {
+      if (action.kind === "set_fields" || action.kind === "create_record"
+          || action.kind === "create_related") {
+        for (const mapping of action.values) {
+          if (mapping.value.source === "field")
+            requiredFieldIds.add(mapping.value.field);
+        }
+      }
+    }
+    for (const fieldId of requiredFieldIds) if (!values.has(fieldId))
+      return fail(`referenced field ${fieldId} is absent`);
+    return output;
   }
 
-  runDueAutomations(now: Date = new Date()): AutomationRun[] {
+  private transitionAutomationToError(
+    definition: AutomationDefinitionV2,
+    target: AutomationTargetIdentityV1,
+    phase: string,
+    reasonCode: string,
+    detail: string,
+    now: Date,
+  ): void {
+    const row = this.#driver.select(
+      `SELECT definition_json, updated_at FROM sys.automations WHERE id = ?`, [definition.id],
+    )[0];
+    if (!row) return;
+    const raw = JSON.parse(String(row.definition_json)) as Record<string, unknown>;
+    const at = now.toISOString();
+    this.#driver.exec(
+      `UPDATE sys.automations SET definition_json = ?, updated_at = ? WHERE id = ?`,
+      [JSON.stringify({
+        ...raw,
+        state: "error",
+        authorityTarget: target,
+        error: { phase, reasonCode, detail, failedAt: at, retryable: false },
+      }), at, definition.id],
+    );
+  }
+
+  runDueAutomations(
+    target: AutomationTargetIdentityV1,
+    now: Date = new Date(),
+  ): AutomationRun[] {
+    const currentTarget = validateAutomationTargetIdentity(target);
+    if (!Number.isFinite(now.getTime()))
+      throw new ClayError("E_VALIDATION", "automation scheduler time is invalid");
     return this.#driver.tx(() => {
       const completed: AutomationRun[] = [];
       let matchedRecords = 0;
@@ -2525,38 +3711,65 @@ export class ClayStore {
           throw new ClayError("E_LIMIT",
             "automation run request matches more than 100 records; narrow its rules");
       };
-      for (const definition of this.listAutomations().filter(candidate => candidate.enabled)) {
+      for (const storedDefinition of this.runnableAutomations(currentTarget)) {
+        const definition = this.executableAutomationV2(storedDefinition);
         const trigger = definition.trigger;
         if (trigger.kind === "record_created" || trigger.kind === "record_updated") {
+          const stableTrigger = storedDefinition.trigger;
+          if ((stableTrigger.kind !== "record_created" && stableTrigger.kind !== "record_updated")
+              || stableTrigger.kind !== trigger.kind)
+            throw new ClayError("E_INTERNAL", "queued automation trigger resolution changed kind");
           const stored = this.#driver.select(
-            `SELECT last_event_seq FROM sys.automations WHERE id = ?`, [definition.id])[0]!;
-          const events = this.#driver.select(
-            `SELECT seq, row_id, kind, origin, row_json FROM sys.record_events
-             WHERE table_name = ? AND seq > ? ORDER BY seq ASC LIMIT 500`,
-            [trigger.table, Number(stored.last_event_seq)]);
+            `SELECT last_event_seq, cursor_target_json, cursor_definition_revision,
+                    cursor_definition_digest
+               FROM sys.automations WHERE id = ?`, [definition.id],
+          )[0]!;
           let cursor = Number(stored.last_event_seq);
+          const bindingTarget = this.automationRuntimeBindingTarget(
+            storedDefinition, currentTarget,
+          );
+          if (!sameAutomationTarget(
+            automationTargetFromJson(stored.cursor_target_json), bindingTarget,
+          ) || Number(stored.cursor_definition_revision) !== storedDefinition.definitionRevision
+            || stored.cursor_definition_digest !== automationDefinitionDigest(storedDefinition)) {
+            this.transitionAutomationToError(
+              storedDefinition, currentTarget, "cursor", "E_CONFLICT",
+              "event cursor authority does not belong to the current target", now,
+            );
+            continue;
+          }
+          const events = this.#driver.select(
+            `SELECT * FROM sys.record_events
+             WHERE (table_id = ? OR (table_id IS NULL AND table_name = ?))
+               AND seq > ? ORDER BY seq ASC`,
+            [stableTrigger.table.tableId, trigger.table, cursor],
+          );
           const eligible = new Map<number, QueryRow>();
+          let blocked = false;
           for (const event of events) {
             if (event.origin !== "user"
                 || (trigger.kind === "record_created" && event.kind !== "created")
                 || (trigger.kind === "record_updated" && event.kind !== "updated")) continue;
-            let snapshot: QueryRow | null = null;
-            if (typeof event.row_json === "string") {
-              try { snapshot = JSON.parse(event.row_json) as QueryRow; }
-              catch { snapshot = null; }
-            }
-            if (!snapshot) snapshot = this.query({
-              from: trigger.table,
-              where: [{ field: "id", op: "eq", value: String(event.row_id) }],
-              limit: 1,
-            }, now)[0] ?? null;
-            if (snapshot && rowMatchesConditions(snapshot, trigger.conditions, now)) {
-              eligible.set(Number(event.seq), snapshot);
-              if (eligible.size > 100)
-                throw new ClayError("E_LIMIT",
-                  "automation matches more than 100 queued event records; narrow its conditions");
+            try {
+              const snapshot = this.automationEventSnapshot(event, storedDefinition);
+              if (rowMatchesConditions(snapshot, trigger.conditions, now)) {
+                eligible.set(Number(event.seq), snapshot);
+                if (eligible.size > 100)
+                  throw new ClayError("E_LIMIT",
+                    "automation matches more than 100 queued event records; narrow its conditions");
+              }
+            } catch (error) {
+              if (error instanceof ClayError && error.code === "E_LIMIT") throw error;
+              this.transitionAutomationToError(
+                storedDefinition, currentTarget, "source_snapshot",
+                error instanceof ClayError ? error.code : "E_INTERNAL",
+                error instanceof Error ? error.message : String(error), now,
+              );
+              blocked = true;
+              break;
             }
           }
+          if (blocked) continue;
           for (const event of events) {
             const sequence = Number(event.seq);
             if (event.origin !== "user"
@@ -2571,49 +3784,72 @@ export class ClayStore {
               continue;
             }
             const key = `event:${sequence}`;
-            if (this.automationTriggerSucceeded(definition.id, key)) {
+            if (this.automationTriggerSucceeded(storedDefinition, currentTarget, key)) {
               cursor = sequence;
               continue;
             }
             consumeMatch();
-            const run = this.executeAutomation(definition, [snapshot], key, now);
+            const run = this.executeAutomation(
+              storedDefinition, [snapshot], key, now, currentTarget,
+            );
             if (run) completed.push(run);
-            if (run?.status === "failed") break;
-            if (run?.status === "success" || this.automationTriggerSucceeded(definition.id, key))
+            if (run?.status === "failed") { blocked = true; break; }
+            if (run?.status === "success" || this.automationTriggerSucceeded(storedDefinition, currentTarget, key))
               cursor = sequence;
           }
-          this.#driver.exec(`UPDATE sys.automations SET last_event_seq = ? WHERE id = ?`,
-            [cursor, definition.id]);
+          if (!blocked) this.#driver.exec(
+            `UPDATE sys.automations SET last_event_seq = ?, cursor_target_json = ?,
+               cursor_definition_revision = ?, cursor_definition_digest = ? WHERE id = ?`,
+            [cursor, automationTargetJson(bindingTarget), storedDefinition.definitionRevision,
+             automationDefinitionDigest(storedDefinition), definition.id],
+          );
           continue;
         }
         if (trigger.kind === "record_matches") {
           const rows = this.automationRows(definition, now,
             { maxMatches: 100, truncate: false });
           const currentIds = new Set(rows.map(row => String(row.id)));
+          const bindingTarget = this.automationRuntimeBindingTarget(
+            storedDefinition, currentTarget,
+          );
+          const matchBinding = [automationTargetJson(bindingTarget),
+            storedDefinition.definitionRevision, automationDefinitionDigest(storedDefinition)] as const;
           for (const active of this.#driver.select(
-            `SELECT row_id FROM sys.automation_matches WHERE automation_id = ?`, [definition.id])) {
+            `SELECT row_id FROM sys.automation_matches WHERE automation_id = ?
+               AND target_json = ? AND definition_revision = ? AND definition_digest = ?`,
+            [definition.id, ...matchBinding])) {
             if (!currentIds.has(String(active.row_id)))
               this.#driver.exec(
-                `DELETE FROM sys.automation_matches WHERE automation_id = ? AND row_id = ?`,
-                [definition.id, String(active.row_id)]);
+                `DELETE FROM sys.automation_matches WHERE automation_id = ? AND row_id = ?
+                   AND target_json = ? AND definition_revision = ? AND definition_digest = ?`,
+                [definition.id, String(active.row_id), ...matchBinding]);
           }
           const active = new Set(this.#driver.select(
-            `SELECT row_id FROM sys.automation_matches WHERE automation_id = ?`, [definition.id])
+            `SELECT row_id FROM sys.automation_matches WHERE automation_id = ?
+               AND target_json = ? AND definition_revision = ? AND definition_digest = ?`,
+            [definition.id, ...matchBinding])
             .map(row => String(row.row_id)));
           for (const row of rows.filter(candidate => !active.has(String(candidate.id)))) {
             const key = `match:${String(row.id)}:${String(row.updated_at)}:${definition.updatedAt}`;
             const rowId = String(row.id);
-            const persistMatch = (): void => this.#driver.exec(
-              `INSERT OR IGNORE INTO sys.automation_matches(automation_id, row_id) VALUES (?, ?)`,
-              [definition.id, rowId]);
-            if (this.automationTriggerSucceeded(definition.id, key)) {
+            const persistMatch = (runId = ""): void => this.#driver.exec(
+              `INSERT OR IGNORE INTO sys.automation_matches(
+                 automation_id, row_id, target_json, definition_revision,
+                 definition_digest, snapshot_digest, run_id, baseline)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+              [definition.id, rowId, automationTargetJson(bindingTarget),
+               storedDefinition.definitionRevision, automationDefinitionDigest(storedDefinition),
+               automationSha256(row), runId || null]);
+            if (this.automationTriggerSucceeded(storedDefinition, currentTarget, key)) {
               persistMatch();
               continue;
             }
             consumeMatch();
-            const run = this.executeAutomation(definition, [row], key, now, persistMatch);
+            const run = this.executeAutomation(
+              storedDefinition, [row], key, now, currentTarget, persistMatch,
+            );
             if (run) completed.push(run);
-            if (!run && this.automationTriggerSucceeded(definition.id, key)) persistMatch();
+            if (!run && this.automationTriggerSucceeded(storedDefinition, currentTarget, key)) persistMatch();
           }
           continue;
         }
@@ -2622,23 +3858,26 @@ export class ClayStore {
             { maxMatches: 100, truncate: false })) {
             const due = String(row[trigger.dateField] ?? "");
             const key = `due:${String(row.id)}:${due}:${trigger.daysBefore}`;
-            if (this.automationTriggerSucceeded(definition.id, key)) continue;
+            if (this.automationTriggerSucceeded(storedDefinition, currentTarget, key)) continue;
             consumeMatch();
-            const run = this.executeAutomation(definition, [row], key, now);
+            const run = this.executeAutomation(storedDefinition, [row], key, now, currentTarget);
             if (run) completed.push(run);
           }
           continue;
         }
         if (trigger.kind === "schedule") {
-          const minutes = now.getHours() * 60 + now.getMinutes();
+          const clock = automationClock(now, definition.runtime?.timeZone);
+          const minutes = clock.hour * 60 + clock.minute;
           const [hour, minute] = trigger.localTime.split(":").map(Number);
-          if (minutes < hour! * 60 + minute!) continue;
-          if (trigger.cadence === "weekly" && now.getDay() !== trigger.weekday) continue;
-          const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+          const scheduleMinutes = hour! * 60 + minute!;
+          if (minutes < scheduleMinutes) continue;
+          if (trigger.cadence === "weekly" && clock.weekday !== trigger.weekday) continue;
+          if (definition.runtime?.missedPolicy === "skip" && minutes > scheduleMinutes) continue;
+          const day = `${clock.year}-${String(clock.month).padStart(2, "0")}-${String(clock.day).padStart(2, "0")}`;
           const key = `schedule:${day}`;
-          if (this.automationTriggerSucceeded(definition.id, key)) continue;
+          if (this.automationTriggerSucceeded(storedDefinition, currentTarget, key)) continue;
           consumeMatch();
-          const run = this.executeAutomation(definition, [], key, now);
+          const run = this.executeAutomation(storedDefinition, [], key, now, currentTarget);
           if (run) completed.push(run);
         }
       }
@@ -2646,35 +3885,64 @@ export class ClayStore {
     });
   }
 
-  automationRuns(automationId?: string, limit = 100): AutomationRun[] {
+  automationRuns(
+    target: AutomationTargetIdentityV1,
+    automationId?: string,
+    limit = 100,
+  ): AutomationRun[] {
+    const currentTarget = validateAutomationTargetIdentity(target);
     const bounded = Math.max(1, Math.min(500, Math.trunc(limit)));
     const rows = automationId
       ? this.#driver.select(`SELECT * FROM sys.automation_runs WHERE automation_id = ?
           ORDER BY at DESC, id DESC LIMIT ?`, [automationId, bounded])
       : this.#driver.select(`SELECT * FROM sys.automation_runs
           ORDER BY at DESC, id DESC LIMIT ?`, [bounded]);
-    return rows.map(row => this.automationRunFromRow(row));
+    return rows.map(row => this.automationRunFromRow(row, currentTarget));
   }
 
-  undoAutomationRun(id: string): AutomationRun {
+  undoAutomationRun(request: {
+    id: string;
+    target: AutomationTargetIdentityV1;
+  }): AutomationRun {
+    const id = request.id;
+    const target = validateAutomationTargetIdentity(request.target);
     let original: SqlRow | undefined;
     this.#driver.tx(() => {
       const row = this.#driver.select(
         `SELECT * FROM sys.automation_runs WHERE id = ?`, [id])[0];
       if (!row) throw new ClayError("E_VALIDATION", "unknown automation run");
+      const runTarget = automationTargetFromJson(row.target_json);
+      if (!sameAutomationLineage(runTarget, target))
+        throw new ClayError("E_CONFLICT", "automation run belongs to another target and is audit-only");
       if (row.undone_at !== null)
         throw new ClayError("E_CONFLICT", "automation run is already undone");
       if (row.status !== "success")
         throw new ClayError("E_CONFLICT", "failed automation has nothing to undo");
       original = row;
-      if (row.batch_id !== null) this.undoBatch(String(row.batch_id));
+      if (row.batch_id !== null) {
+        const batch = this.#driver.select(
+          `SELECT automation_target_json, automation_definition_revision,
+                  automation_definition_digest, automation_run_id
+             FROM sys.operation_batches WHERE id = ?`, [String(row.batch_id)],
+        )[0];
+        if (!batch || !sameAutomationTarget(
+          automationTargetFromJson(batch.automation_target_json), runTarget,
+        ) || Number(batch.automation_definition_revision) !== Number(row.definition_revision)
+          || batch.automation_definition_digest !== row.definition_digest
+          || batch.automation_run_id !== row.id)
+          throw new ClayError("E_CONFLICT", "automation batch receipt lineage is foreign or incomplete");
+        this.undoBatch(String(row.batch_id));
+      }
       const at = nowIso();
       this.#driver.exec(
         `UPDATE sys.automation_runs SET undone_at = ? WHERE id = ?`, [at, id]);
       this.#driver.exec(
-        `UPDATE sys.notifications SET dismissed_at = ? WHERE run_id = ?`, [at, id]);
+        `UPDATE sys.notifications SET dismissed_at = ? WHERE run_id = ?
+           AND target_json = ? AND definition_revision = ? AND definition_digest = ?`,
+        [at, id, automationTargetJson(runTarget!), Number(row.definition_revision),
+         String(row.definition_digest)]);
     });
-    return { ...this.automationRunFromRow(original!), undone: true };
+    return { ...this.automationRunFromRow(original!, target), undone: true };
   }
 
   listNotifications(limit = 100): ClayNotification[] {

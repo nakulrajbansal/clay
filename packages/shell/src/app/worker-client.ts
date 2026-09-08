@@ -1,7 +1,11 @@
 // Typed promise wrapper over the DB worker's command protocol.
 import type {
   AttachmentFile, AttachmentMetadata, AttachmentStorageSummary,
-  AutomationDefinition, AutomationDefinitionInput, AutomationRun, AutomationSimulation,
+  AutomationDefinition, AutomationDefinitionAny, AutomationDefinitionInput,
+  AutomationDefinitionV2, AutomationDraftInputV2, AutomationExecutionResultV1,
+  AutomationRecipeCardV1, AutomationRecipeDraftRequestV1, AutomationRun,
+  AutomationRuntimeOverviewV1, AutomationRuntimeStatusV1,
+  AutomationSimulation, AutomationSimulationProofV1,
   BatchMutation, BatchReceipt, ClayNotification, DebugEvent, FieldProvenance,
   GlobalSearchResult,
   HistoryEntry, LivePanel, PanelProvenance,
@@ -12,6 +16,8 @@ import { ClayError } from "@clay/kernel/errors";
 import type { IntentOutcome } from "../worker/db-worker";
 
 export type TraceEntry = { at: string; intent: string; events: DebugEvent[] };
+
+export type DurableMutationPromise<T> = Promise<T> & Readonly<{ requestId: string }>;
 
 export type BootAppEntry = {
   id: string;
@@ -149,12 +155,31 @@ export class WorkerClient {
     };
   }
 
-  private call<T>(op: string, payload?: Record<string, unknown>, transfer?: Transferable[]): Promise<T> {
+  private call<T>(
+    op: string,
+    payload?: Record<string, unknown>,
+    transfer?: Transferable[],
+    requestId: string = mintWorkerRequestId(),
+  ): Promise<T> {
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
       this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
-      this.worker.postMessage({ id, requestId: mintWorkerRequestId(), op, payload }, transfer ?? []);
+      this.worker.postMessage({ id, requestId, op, payload }, transfer ?? []);
     });
+  }
+
+  private mutationCall<T>(
+    op: string,
+    payload?: Record<string, unknown>,
+    requestId: string = mintWorkerRequestId(),
+  ): DurableMutationPromise<T> {
+    if (!/^req_[a-z2-7]{26}$/.test(requestId))
+      throw new Error("invalid durable worker request identity");
+    const completion = this.call<T>(op, payload, undefined, requestId) as DurableMutationPromise<T>;
+    Object.defineProperty(completion, "requestId", {
+      value: requestId, enumerable: true, configurable: false, writable: false,
+    });
+    return completion;
   }
 
   /** Terminate the worker, releasing its OPFS access handles. Call before a
@@ -229,35 +254,93 @@ export class WorkerClient {
   purgeDeletedAttachments(): Promise<{ files: number; bytes: number }> {
     return this.call("purgeDeletedAttachments", {});
   }
-  listAutomations(): Promise<AutomationDefinition[]> {
+  automationRecipes(): Promise<AutomationRecipeCardV1[]> {
+    return this.call("automationRecipes", {});
+  }
+  automationRuntimeStatus(): Promise<AutomationRuntimeStatusV1> {
+    return this.call("automationRuntimeStatus", {});
+  }
+  automationRuntimeOverview(limit = 100): Promise<AutomationRuntimeOverviewV1> {
+    return this.call("automationRuntimeOverview", { limit });
+  }
+  listAutomations(): Promise<AutomationDefinitionAny[]> {
     return this.call("listAutomations", {});
   }
-  upsertAutomation(input: AutomationDefinitionInput): Promise<AutomationDefinition> {
-    return this.call("upsertAutomation", { input });
+  /** Legacy V1 import/edit path. enabled=true is rejected by the kernel. */
+  upsertAutomation(
+    input: AutomationDefinitionInput,
+    requestId?: string,
+  ): DurableMutationPromise<AutomationDefinition> {
+    return this.mutationCall("upsertAutomation", { input }, requestId);
   }
-  deleteAutomation(id: string): Promise<null> {
-    return this.call("deleteAutomation", { id });
+  saveAutomationDraft(
+    input: AutomationDraftInputV2,
+    expectedRevision?: number,
+    requestId?: string,
+  ): DurableMutationPromise<AutomationDefinitionV2> {
+    return this.mutationCall(
+      "saveAutomationDraft", { input, expectedRevision: expectedRevision ?? null }, requestId,
+    );
   }
-  simulateAutomation(id: string): Promise<AutomationSimulation> {
-    return this.call("simulateAutomation", { id });
+  saveAutomationRecipeDraft(
+    request: AutomationRecipeDraftRequestV1,
+    requestId?: string,
+  ): DurableMutationPromise<AutomationDefinitionV2> {
+    return this.mutationCall("saveAutomationRecipeDraft", { request }, requestId);
   }
-  runAutomations(): Promise<AutomationRun[]> {
-    return this.call("runAutomations", {});
+  deleteAutomation(id: string, requestId?: string): DurableMutationPromise<null> {
+    return this.mutationCall("deleteAutomation", { id }, requestId);
   }
-  runAutomationNow(id: string): Promise<AutomationRun> {
-    return this.call("runAutomationNow", { id });
+  simulateAutomation(
+    id: string,
+    expectedRevision?: number,
+    purpose?: "enable" | "run_now" | "proposal_review",
+  ): Promise<AutomationSimulationProofV1> {
+    return this.call("simulateAutomation", { id,
+      ...(expectedRevision === undefined ? {} : { expectedRevision }),
+      ...(purpose === undefined ? {} : { purpose }),
+    });
+  }
+  enableAutomation(
+    id: string,
+    expectedRevision: number,
+    simulation: AutomationSimulationProofV1,
+    requestId?: string,
+  ): DurableMutationPromise<AutomationDefinitionV2> {
+    return this.mutationCall("enableAutomation", { id, expectedRevision, simulation }, requestId);
+  }
+  pauseAutomation(
+    id: string,
+    expectedRevision: number,
+    requestId?: string,
+  ): DurableMutationPromise<AutomationDefinitionV2> {
+    return this.mutationCall("pauseAutomation", { id, expectedRevision }, requestId);
+  }
+  runAutomations(requestId?: string): DurableMutationPromise<AutomationRun[]> {
+    return this.mutationCall("runAutomations", {}, requestId);
+  }
+  runAutomationNow(
+    id: string,
+    expectedRevision?: number,
+    simulation?: AutomationSimulationProofV1,
+    requestId?: string,
+  ): DurableMutationPromise<AutomationExecutionResultV1> {
+    return this.mutationCall("runAutomationNow", { id,
+      ...(expectedRevision === undefined ? {} : { expectedRevision }),
+      ...(simulation === undefined ? {} : { simulation }),
+    }, requestId);
   }
   automationRuns(automationId?: string, limit = 100): Promise<AutomationRun[]> {
     return this.call("automationRuns", { automationId: automationId ?? null, limit });
   }
-  undoAutomationRun(id: string): Promise<AutomationRun> {
-    return this.call("undoAutomationRun", { id });
+  undoAutomationRun(id: string, requestId?: string): DurableMutationPromise<AutomationRun> {
+    return this.mutationCall("undoAutomationRun", { id }, requestId);
   }
   notifications(limit = 100): Promise<ClayNotification[]> {
     return this.call("notifications", { limit });
   }
-  markNotificationRead(id: string): Promise<null> {
-    return this.call("markNotificationRead", { id });
+  markNotificationRead(id: string, requestId?: string): DurableMutationPromise<null> {
+    return this.mutationCall("markNotificationRead", { id }, requestId);
   }
   globalSearch(term: string, limit = 20): Promise<GlobalSearchResult[]> {
     return this.call("globalSearch", { term, limit });
