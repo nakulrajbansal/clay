@@ -872,7 +872,8 @@ function assertCapturedMutationBytes(request: CapturedProductionMutation): void 
       ? MAX_INTAKE_CAPTURE_BYTES
       : MAX_CAPTURE_BYTES;
   if (UTF8_ENCODER.encode(serialized).byteLength > limit)
-    throw invalid(PRODUCTION_MUTATION_PREFIX + "request exceeds its UTF-8 byte limit");
+    throw invalid(PRODUCTION_MUTATION_PREFIX
+      + `request exceeds ${limit.toLocaleString("en-US")} UTF-8 bytes`);
 }
 
 type FixedOperationalMutation = CapturedOperationalMetricMutation;

@@ -304,7 +304,7 @@ describe("production sample-row authority", () => {
         },
       }))).rejects.toMatchObject({
         code: "E_TARGET_AUTHORITY_INVALID",
-        message: expect.stringMatching(/aggregate capture limit/i),
+        message: expect.stringMatching(/2,000,000 UTF-8 bytes/i),
       });
       expect(authority.inspectAuthority().targetReservations).toHaveLength(0);
       expect(authority.inspectAuthority().catalogReservations).toHaveLength(0);
@@ -316,7 +316,7 @@ describe("production sample-row authority", () => {
   it("rejects escaped aggregate JSON above 2,000,000 bytes before reservation", async () => {
     const authority = await freshAuthority("6");
     try {
-      const escaped = "\\".repeat(999_950);
+      const escaped = "\\".repeat(1_000_000);
       await expect(Promise.resolve().then(() => authority.executeMutation({
         requestId: opaque("req", "6"),
         route: "samples.fill",

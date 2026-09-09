@@ -43,7 +43,7 @@ const SAMPLE_CAPTURE_POLICY: StrictJsonCapturePolicy = [
     if (reason === 10 || reason === 12)
       throw invalid("sample fields must use plain data properties");
     throw invalid(reason === 1
-      ? "sample input exceeds aggregate capture limits"
+      ? "sample input exceeds 2,000,000 UTF-8 bytes"
       : "sample input is invalid");
   },
 ];

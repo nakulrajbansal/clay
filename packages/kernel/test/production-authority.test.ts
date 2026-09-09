@@ -405,7 +405,8 @@ describe("production Store authority", () => {
       const reader = authority.readStore();
       expect(Object.isFrozen(reader)).toBe(true);
       expect(Reflect.ownKeys(reader).sort()).toEqual([
-        "attachmentStorage", "attachmentsForRecord", "attemptStats", "automationRuns",
+        "attachmentStorage", "attachmentsForRecord", "attemptStats", "automationRecipes",
+        "automationRuns", "automationRuntimeOverview", "automationRuntimeStatus",
         "dailyHomeNotificationWatermark", "dailyHomeRecordRevisions",
         "dailyHomeUnreadNotifications",
         "fieldProvenance", "getSetting", "globalSearch", "headVersion", "history",
@@ -413,7 +414,7 @@ describe("production Store authority", () => {
         "listNotifications", "livePanels", "operationBatches",
         "panelProvenance", "previewRelationConversion",
         "privateMetricsSummary", "projectionSnapshot", "query", "queryBounded", "readAttachment", "registrySnapshot",
-        "restorableRows", "rowHistory", "semanticSchemaTrace", "simulateAutomation",
+        "restorableRows", "rowHistory", "semanticSchemaTrace",
         "suggestions",
       ].sort());
       for (const forbidden of [

@@ -500,16 +500,15 @@ describe("production data lifecycle routes", () => {
   });
 
   it("purges only eligible retained bytes atomically and preserves purge no-ops", async () => {
-    const { authority } = await dataAuthority(async (store, driver, firstId) => {
-      const metadata = await store.addAttachment({
-        table: "documents", rowId: firstId, field: "files",
-        name: "old.pdf", mime: "application/pdf",
-        bytes: new Uint8Array([37, 80, 68, 70]),
-      });
-      store.removeAttachment("documents", firstId, "files", metadata.id);
+    const { authority } = await dataAuthority((_store, driver) => {
+      const bytes = new Uint8Array([37, 80, 68, 70]);
       driver.exec(
-        `UPDATE "__clay_attachments" SET deleted_at = ? WHERE id = ?`,
-        ["2020-01-01T00:00:00.000Z", metadata.id],
+        `INSERT INTO "__clay_attachments"(
+           id, name, mime, size, sha256, bytes, created_at, deleted_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        ["file_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "old.pdf", "application/pdf",
+          bytes.byteLength, sha256HexSync(bytes), bytes,
+          "2019-12-01T00:00:00.000Z", "2020-01-01T00:00:00.000Z"],
       );
     });
     try {

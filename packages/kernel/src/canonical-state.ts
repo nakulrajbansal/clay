@@ -445,7 +445,8 @@ function systemRowKey(table: string, row: SqlRow, registry: Registry): string {
     case "automation_trigger_ledger":
       return `system/automation_trigger_ledger/${textKey(row, "automation_id")}`
         + `/${textKey(row, "target_json")}/${integerKey(row, "definition_revision")}`
-        + `/${textKey(row, "definition_digest")}/${textKey(row, "trigger_key")}`;
+        + `/${textKey(row, "definition_digest")}/${textKey(row, "trigger_key")}`
+        + `/${textKey(row, "disposition")}`;
     case "record_events":
       return `system/record_events/${textKey(row, "id")}`;
     case "inactive_cells": {

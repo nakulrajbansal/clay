@@ -16,6 +16,14 @@ import {
 } from "../src/canonical-state";
 import { StateMerkleIndex } from "../src/state-merkle-index";
 
+const AUTOMATION_TARGET_JSON = JSON.stringify({
+  appInstanceId: `app_${"a".repeat(26)}`,
+  activeGenerationId: `gen_${"b".repeat(26)}`,
+  storageNamespace: "default",
+  schemaVersion: 1,
+});
+const AUTOMATION_DEFINITION_DIGEST = "c".repeat(64);
+
 async function fixture(): Promise<{
   store: ClayStore;
   driver: DbDriver;
@@ -56,20 +64,45 @@ async function fixture(): Promise<{
 }
 
 function seedSystemIdentityFamilies(driver: DbDriver, rowId: string): void {
+  const targetJson = AUTOMATION_TARGET_JSON;
+  const definitionDigest = AUTOMATION_DEFINITION_DIGEST;
   driver.exec(`INSERT INTO sys.attempts VALUES (
     'attempt_probe','2026-09-05T00:00:00.000Z','probe','applied',NULL)`);
-  driver.exec(`INSERT INTO sys.automations VALUES (
+  driver.exec(`INSERT INTO sys.automations(
+    id, definition_json, created_at, updated_at, last_event_seq
+  ) VALUES (
     'automation_probe','{}','2026-09-05T00:00:00.000Z','2026-09-05T00:00:00.000Z',0)`);
-  driver.exec(`INSERT INTO sys.automation_runs VALUES (
-    'run_probe','automation_probe','2026-09-05T00:00:00.000Z','trigger_probe','succeeded',1,1,NULL,NULL,NULL)`);
-  driver.exec(`INSERT INTO sys.automation_matches VALUES (
-    'automation_probe',?)`, [rowId]);
+  driver.exec(`INSERT INTO sys.automation_runs(
+    id, automation_id, at, trigger_key, status, matched_count, changed_count,
+    batch_id, error_code, undone_at, target_json, definition_revision,
+    definition_digest, trigger_kind
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+    "run_probe", "automation_probe", "2026-09-05T00:00:00.000Z", "trigger_probe",
+    "succeeded", 1, 1, null, null, null, targetJson, 1, definitionDigest, "manual",
+  ]);
+  driver.exec(`INSERT INTO sys.automation_matches(
+    automation_id, row_id, target_json, definition_revision, definition_digest,
+    snapshot_digest, run_id, baseline
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [
+    "automation_probe", rowId, targetJson, 1, definitionDigest, null, "run_probe", 0,
+  ]);
+  driver.exec(`INSERT INTO sys.automation_trigger_ledger(
+    automation_id, trigger_key, target_json, definition_revision,
+    definition_digest, run_id, created_at, disposition
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [
+    "automation_probe", "trigger_probe", targetJson, 1, definitionDigest,
+    "run_probe", "2026-09-05T00:00:00.000Z", "success",
+  ]);
   driver.exec("INSERT INTO sys.checkpoints VALUES (999,'Probe','2026-09-05T00:00:00.000Z')");
   driver.exec("INSERT INTO sys.inactive_cells VALUES ('projects','name',?)", [rowId]);
-  driver.exec(`INSERT INTO sys.notifications VALUES (
+  driver.exec(`INSERT INTO sys.notifications(
+    id, at, automation_id, run_id, title, body, table_name, row_id, read_at, dismissed_at
+  ) VALUES (
     'notification_probe','2026-09-05T00:00:00.000Z','automation_probe','run_probe',
     'Probe','Body','projects',?,NULL,NULL)`, [rowId]);
-  driver.exec(`INSERT INTO sys.operation_batches VALUES (
+  driver.exec(`INSERT INTO sys.operation_batches(
+    id, at, source, summary, changed_count, created_json, undone_at
+  ) VALUES (
     'batch_probe','2026-09-05T00:00:00.000Z','user','Probe',1,'[]',NULL)`);
   driver.exec(`INSERT INTO sys.panel_blobs VALUES (
     999,'panel_probe','export default {}','{}','[]')`);
@@ -107,7 +140,7 @@ describe("canonical target-state enumeration", () => {
         expect(entry.rowCount).toBe(count[0]!.count);
         physicalRowCount += Number(count[0]!.count);
       }
-      expect(result.leaves).toHaveLength(physicalRowCount + 24);
+      expect(result.leaves).toHaveLength(physicalRowCount + 25);
       expect(result.leaves.filter(entry => entry.seed.key.startsWith("schema/index/main/"))
         .map(entry => entry.seed.key)).toEqual([
           "schema/index/main/idx_row_history_batch",
@@ -174,7 +207,10 @@ describe("canonical target-state enumeration", () => {
         `system/attempts/${t("attempt_probe")}`,
         `system/automations/${t("automation_probe")}`,
         `system/automation_runs/${t("run_probe")}`,
-        `system/automation_matches/${t("automation_probe")}/${t(rowId)}`,
+        `system/automation_matches/${t("automation_probe")}/${t(AUTOMATION_TARGET_JSON)}`
+          + `/i:1/${t(AUTOMATION_DEFINITION_DIGEST)}/${t(rowId)}`,
+        `system/automation_trigger_ledger/${t("automation_probe")}/${t(AUTOMATION_TARGET_JSON)}`
+          + `/i:1/${t(AUTOMATION_DEFINITION_DIGEST)}/${t("trigger_probe")}/${t("success")}`,
         "system/checkpoints/i:999",
         `system/inactive_cells/${table.semantic!.tableId}/${field.semantic!.fieldId}/${t(rowId)}`,
         `system/notifications/${t("notification_probe")}`,
