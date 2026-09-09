@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 import { act, useState, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AppSwitcher } from "../src/app/AppSwitcher";
 import { THEMES } from "../src/app/themes";
 import type { WorkspaceMode } from "../src/app/workspace-mode";
@@ -17,6 +17,7 @@ function Harness(): React.JSX.Element {
     onOpenSearch: () => undefined, onOpenAutomations: () => undefined,
     unreadNotifications: 0, onOpenData: () => undefined, onOpenShapeMap: () => undefined,
     railOpen: false, onToggleRail: () => undefined, version: 2, persistent: true,
+    onOpenRecovery: vi.fn(),
     themes: [THEMES[0]!], themeId: THEMES[0]!.id, onSelectTheme: () => undefined,
     lenses: [
       { id: "all", name: "Workspace", description: "Your complete workspace", panelIds: [] },
@@ -43,10 +44,12 @@ describe("AppSwitcher workspace mode", () => {
 
     expect(button("Work")?.getAttribute("aria-pressed")).toBe("true");
     expect(button("Customize")?.getAttribute("aria-pressed")).toBe("false");
-    expect(document.body.textContent).toContain("Stored on this device");
+    expect(document.body.textContent).toContain("Saved in this browser's OPFS only");
     expect(document.body.textContent).not.toContain("version 2");
-    expect(document.body.textContent).not.toContain("· v2");
+    expect(document.body.textContent).not.toContain("v2");
     expect(document.body.textContent).not.toContain("Protected on this device");
+    expect(document.body.textContent).not.toContain("Backed up");
+    expect(button("Open Recovery Center")).toBeDefined();
     expect(button("Search and act")).toBeDefined();
     expect(button("Open automations")).toBeUndefined();
     expect(button("Open all data")).toBeUndefined();

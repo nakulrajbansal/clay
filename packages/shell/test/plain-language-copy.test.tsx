@@ -39,7 +39,6 @@ describe("Release A plain-language surfaces", () => {
       onRemoveSamples={noop}
       onReset={noop}
       onExport={noop}
-      onImport={noop}
       onPurgeAttachments={async () => undefined}
       suggestions={[]}
       onAcceptSuggestion={noop}
@@ -67,8 +66,7 @@ describe("Release A plain-language surfaces", () => {
     const advanced = [...document.querySelectorAll<HTMLButtonElement>("button")]
       .find(button => button.textContent?.includes("Advanced"));
     await act(async () => advanced?.click());
-    expect(document.body.textContent).toContain("Download a complete backup");
-    expect(document.body.textContent).toContain("Restore from a backup");
+    expect(document.body.textContent).toContain("Export portable .clay copy");
     expect(document.body.textContent).not.toContain("Export .clay backup");
     await unmount();
   });

@@ -27,6 +27,7 @@ export function AppSwitcher(props: {
   onToggleRail: () => void;
   version: number;
   persistent: boolean;
+  onOpenRecovery: () => void;
   themes: Theme[];
   themeId: string;
   onSelectTheme: (id: string) => void;
@@ -148,11 +149,12 @@ export function AppSwitcher(props: {
         ))}
       </div>
 
-      <span className={`appbar-trust${props.persistent ? "" : " appbar-trust-warn"}`}>
+      <button className={`appbar-trust${props.persistent ? "" : " appbar-trust-warn"}`}
+        aria-label="Open Recovery Center" onClick={props.onOpenRecovery}>
         <span className="appbar-trust-dot" aria-hidden="true" />
-        {props.persistent ? "Stored on this device" : "Temporary session"}
-        {props.workspaceMode === "customize" ? ` · version ${props.version}` : ""}
-      </span>
+        {props.persistent ? "Saved in this browser's OPFS only" : "Not saved - temporary session"}
+        {props.workspaceMode === "customize" ? ` - version ${props.version}` : ""}
+      </button>
       <div className="appbar-lens">
         <button
           ref={lensButtonRef}

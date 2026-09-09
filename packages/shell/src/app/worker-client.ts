@@ -21,12 +21,25 @@ import {
   type ProjectionRequestV1,
   type ProjectionTransportV1,
 } from "@clay/kernel/projection";
+import type {
+  BackupPublicationReceipt,
+  BackupPublicationRequest,
+  BackupRecord,
+  BackupRun,
+  BackupStageValidation,
+} from "@clay/kernel/backup";
+import type { AuthenticatedFormat5RestoreGrant } from "@clay/kernel/recovery";
+import type {
+  ProductionAuthenticatedRestoreInspection,
+  ProductionBackupSelection,
+} from "@clay/kernel/worker-authority";
 import { ClayError } from "@clay/kernel/errors";
 import { extractAcornStaticStrings } from "@clay/kernel/shell-runtime";
 import type {
   IntakeAutoAcceptDraftV1, IntakeAutoAcceptRuleV1,
   IntakeSubmissionPlaintextV1, LocalIntakeFormV1,
 } from "@clay/schema/intake";
+import { TargetEvidenceV1 } from "@clay/schema/catalog";
 import type { IntentOutcome } from "../worker/db-worker";
 import type { FirstRunPublicationReceipt } from "../worker/first-run-activation";
 import type { FirstSuccessState } from "./first-success-state";
@@ -39,6 +52,11 @@ import type {
   ImportCoordinatorPreview,
   ImportStructure,
 } from "../worker/release-c/import-session-coordinator";
+import type {
+  BackupTrustRuntimeStatus,
+  ImportedRecoveryKitStatus as RecoveryKitImportResult,
+  RecoveryKitEnrollment,
+} from "../worker/backup-trust-runtime";
 
 export type TraceEntry = { at: string; intent: string; events: DebugEvent[] };
 
@@ -65,6 +83,23 @@ export type BootInfo = {
 };
 
 export type WorkerMutationContext = Readonly<{ requestId: string }>;
+
+export type AuthorityCommitNotice = Readonly<{
+  appInstanceId: string;
+  activeGenerationId: string;
+  lineageEpoch: string;
+  protectionRevision: string;
+  digestSchema: 1;
+  stateSha256: string;
+}>;
+
+export type RecoveryRecordCandidate = Readonly<{
+  table: string;
+  id: string;
+  deleted: boolean;
+  historyAt: string;
+  attachmentCount: number;
+}>;
 
 const APP_ID = /^app_[a-z2-7]{26}$/;
 const UINT64 = /^(?:0|[1-9][0-9]{0,19})$/;
@@ -529,6 +564,7 @@ export class WorkerClient {
   #modelAccessGeneration = 0;
   #shutdownPromise: Promise<void> | null = null;
   #activePlanners = new Set<ActivePlanner>();
+  #authorityCommitListeners = new Set<(notice: AuthorityCommitNotice) => void>();
   private nextId = 1;
   private readonly pending = new Map<number, {
     resolve: (v: unknown) => void; reject: (e: Error) => void; cleanup: () => void;
@@ -536,6 +572,15 @@ export class WorkerClient {
 
   constructor(private readonly worker: Worker) {
     worker.onmessage = (ev): void => {
+      const event = ev.data as { event?: unknown; target?: unknown };
+      if (event?.event === "authority_commit") {
+        const parsed = TargetEvidenceV1.safeParse(event.target);
+        if (parsed.success) {
+          const notice = Object.freeze({ ...parsed.data });
+          for (const listener of this.#authorityCommitListeners) listener(notice);
+        }
+        return;
+      }
       const msg = ev.data as {
         id: number; ok: boolean; result?: unknown;
         error?: string | { code?: string; message?: string };
@@ -728,6 +773,11 @@ export class WorkerClient {
     return createWorkerMutationContext();
   }
 
+  onAuthorityCommit(listener: (notice: AuthorityCommitNotice) => void): () => void {
+    this.#authorityCommitListeners.add(listener);
+    return () => { this.#authorityCommitListeners.delete(listener); };
+  }
+
   /** Terminate the worker, close every per-call planner port, and reject work
    * before a replacement worker can observe a stale model result. */
   shutdown(timeoutMs = WORKER_SHUTDOWN_TIMEOUT_MS): Promise<void> {
@@ -775,6 +825,7 @@ export class WorkerClient {
       entry.reject(error);
     }
     this.pending.clear();
+    this.#authorityCommitListeners.clear();
     for (const active of this.#activePlanners) {
       if (active.binding && !active.closed) {
         try { active.port.postMessage({ v: 1, kind: "planner.cancel", ...active.binding }); }
@@ -1619,6 +1670,79 @@ export class WorkerClient {
     subject: string, kind: string, context: WorkerMutationContext,
   ): Promise<null> {
     return this.mutationCall("acceptSuggestion", { subject, kind }, context);
+  }
+  backupSelection(): Promise<ProductionBackupSelection> {
+    return this.ephemeralCall("backupSelection");
+  }
+  backupRecords(): Promise<BackupRecord[]> {
+    return this.ephemeralCall("backupRecords");
+  }
+  prepareAutomaticBackup(
+    target: BackupRun["target"],
+    reason: BackupRun["reason"],
+  ): Promise<{ run: BackupRun; bytes: ArrayBuffer }> {
+    return this.mutationCall(
+      "prepareAutomaticBackup", { target, reason }, createWorkerMutationContext(),
+    );
+  }
+  validateBackupStage(
+    bytes: ArrayBuffer,
+    expected: ProductionBackupSelection["selected"]["target"],
+  ): Promise<BackupStageValidation> {
+    return this.ephemeralCall("validateBackupStage", { bytes, expected }, [bytes]);
+  }
+  publishBackup(request: BackupPublicationRequest): Promise<BackupPublicationReceipt> {
+    return this.mutationCall(
+      "publishBackup", { request }, createWorkerMutationContext(),
+    );
+  }
+  backupTrustStatus(): Promise<BackupTrustRuntimeStatus> {
+    return this.ephemeralCall("backupTrustStatus");
+  }
+  beginBackupTrustEnrollment(): Promise<RecoveryKitEnrollment> {
+    return this.mutationCall(
+      "beginBackupTrustEnrollment", undefined, createWorkerMutationContext(),
+    );
+  }
+  confirmBackupTrustEnrollment(
+    enrollmentId: string,
+    recoveryKitBytes: ArrayBuffer,
+  ): Promise<BackupTrustRuntimeStatus> {
+    return this.mutationCall(
+      "confirmBackupTrustEnrollment",
+      { enrollmentId, recoveryKitBytes },
+      createWorkerMutationContext(),
+      [recoveryKitBytes],
+    );
+  }
+  importRecoveryKit(recoveryKitBytes: ArrayBuffer): Promise<RecoveryKitImportResult> {
+    return this.mutationCall(
+      "importRecoveryKit",
+      { recoveryKitBytes },
+      createWorkerMutationContext(),
+      [recoveryKitBytes],
+    );
+  }
+  activateImportedBackupSeries(
+    seriesId: string,
+    expectedActiveSeriesId: string | null,
+  ): Promise<BackupTrustRuntimeStatus> {
+    return this.mutationCall(
+      "activateImportedBackupSeries",
+      { seriesId, expectedActiveSeriesId },
+      createWorkerMutationContext(),
+    );
+  }
+  recoveryCandidates(): Promise<RecoveryRecordCandidate[]> {
+    return this.ephemeralCall("recoveryCandidates");
+  }
+  validateRestoreArchive(bytes: ArrayBuffer): Promise<ProductionAuthenticatedRestoreInspection> {
+    return this.ephemeralCall("validateRestoreArchive", { bytes }, [bytes]);
+  }
+  restoreAsNew(grant: AuthenticatedFormat5RestoreGrant): Promise<BootInfo> {
+    return this.mutationCall(
+      "restoreAsNew", { grant }, createWorkerMutationContext(),
+    );
   }
   exportArchive(): Promise<{ bytes: ArrayBuffer; filename: string }> {
     return this.ephemeralCall("exportArchive");

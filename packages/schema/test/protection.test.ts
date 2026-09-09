@@ -4,6 +4,7 @@ import {
   DeviceProtectionInputV1,
   DurableStoreCapability,
   ExpectedStoreFailure,
+  ProtectionReasonCode,
   TargetIdentityV1,
   TemporaryEligibilityV1,
   UInt64Decimal,
@@ -102,5 +103,18 @@ describe("A/B shared protection schemas", () => {
     expect(DeviceProtectionInputV1.safeParse({
       ...input, checkpoint: { state: "in_progress", target },
     }).success).toBe(true);
+  });
+
+  it("shares the closed Release B backup-plane protection reasons", () => {
+    for (const reason of [
+      "adapter_uncertified",
+      "target_unconfigured",
+      "permission_required",
+      "target_unreachable",
+      "backup_stale",
+      "backup_invalid",
+      "stale_write_epoch",
+    ] as const) expect(ProtectionReasonCode.parse(reason)).toBe(reason);
+    expect(ProtectionReasonCode.safeParse("NotAllowedError").success).toBe(false);
   });
 });

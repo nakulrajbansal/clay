@@ -30,6 +30,11 @@ function aggregateGateNames() {
   return names;
 }
 
+test("production document exposes a build-time source-tree evidence marker", async () => {
+  const source = await readFile(new URL("packages/shell/index.html", root), "utf8");
+  assert.match(source, /<meta name="clay-source-tree" content="%VITE_CLAY_SOURCE_TREE%" \/>/);
+});
+
 test("every actual aggregate product gate uses the shared origin resolver", async () => {
   const gates = aggregateGateNames();
   for (const gate of gates) {

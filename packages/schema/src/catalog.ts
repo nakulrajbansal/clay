@@ -192,6 +192,7 @@ export const CatalogGenerationEventV1 = z.object({
   eventKind: z.enum([
     "app_seed", "lease_issued", "revision_reserved", "revision_committed",
     "revision_abandoned", "recovery_takeover", "app_selected", "app_metadata",
+    "backup_published",
   ]),
   appInstanceId: AppInstanceId.nullable(),
   operationId: OperationId.nullable(),
