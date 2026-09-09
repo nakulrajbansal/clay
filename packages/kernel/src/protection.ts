@@ -8,7 +8,7 @@ import type {
 export { DeviceProtectionInputV1, DeviceStateResultV1 };
 export type {
   DeviceState, DurableStoreCapability, ExpectedStoreFailure,
-  ProtectionReasonCode, TemporaryUserChoice,
+  ProtectionReasonCode, TargetIdentityV1, TemporaryUserChoice,
 } from "@clay/schema";
 
 export type DeviceStateResult = DeviceStateResultV1;

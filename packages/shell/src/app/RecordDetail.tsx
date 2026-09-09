@@ -4,6 +4,7 @@ import type {
 } from "@clay/kernel";
 import { createStoreMutationContext } from "@clay/kernel/shell-runtime";
 import type { WorkerClient } from "./worker-client";
+import type { FirstSuccessState } from "./first-success-state";
 import { loadAllTableRows } from "./paged-query";
 import { ModalDialog } from "./ModalDialog";
 
@@ -184,6 +185,7 @@ export function RecordDetail(props: {
   onNavigate: (table: string, id: string) => void;
   onClose: () => void;
   onWrite: (table: string) => void;
+  onEverydayAction?: (state: FirstSuccessState) => void;
   onError: (message: string) => void;
   onInfo: (message: string) => void;
   onExport?: () => void;
@@ -216,6 +218,7 @@ export function RecordDetail(props: {
     table: RegTable; relation: RegColumn; draft: Record<string, string>;
   } | null>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
+  const reportedEverydayRecord = useRef<string | null>(null);
   const columns = useMemo(() => props.table.columns
     .filter(column => !column.hidden && !column.inactive), [props.table]);
 
@@ -317,6 +320,20 @@ export function RecordDetail(props: {
     setAttachments(files);
     setRelated(groups);
     setLoaded(true);
+    const everydayKey = `${props.table.name}\u0000${props.recordId}`;
+    if (canonical && props.worker?.completeEverydayAction
+        && reportedEverydayRecord.current !== everydayKey) {
+      try {
+        const progress = await props.worker.completeEverydayAction({
+          action: "open", table: props.table.name, rowId: props.recordId,
+        });
+        props.onEverydayAction?.(progress);
+        if (progress.steps.everyday.state === "complete")
+          reportedEverydayRecord.current = everydayKey;
+      } catch (error) {
+        props.onError(error instanceof Error ? error.message : String(error));
+      }
+    }
   };
 
   useEffect(() => {

@@ -6,9 +6,11 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { createPortal } from "react-dom";
 import { Bridge, StoreRpcClient, deriveSafeDiffKind, portFromMessagePort }
   from "@clay/kernel/shell-runtime";
-import type {
-  ClayNotification, FieldProvenance, HistoryEntry, LivePanel, PanelProvenance,
-  PrivateMetricEvent, PrivateMetricsSummary, RegTable, SemanticSchemaTraceV1, Suggestion,
+import {
+  targetIdentityEquals,
+  type ClayNotification, type FieldProvenance, type HistoryEntry, type LivePanel,
+  type PanelProvenance, type PrivateMetricEvent, type PrivateMetricsSummary,
+  type RegTable, type SemanticSchemaTraceV1, type Suggestion,
 } from "@clay/kernel";
 import { WorkerClient } from "./worker-client";
 import { fetchModelHealth } from "./model-health";
@@ -19,10 +21,18 @@ import {
   redeemHostedAuthAttempt, observeHostedAccountChanges, publishHostedAccountChange,
   type HostedAuthAttempt,
 } from "./account-auth";
-import type { IntentOutcome, PreviewInfo } from "../worker/db-worker";
+import type {
+  DeviceProtectionProjection, IntentOutcome, PreviewInfo,
+} from "../worker/db-worker";
 import type { StarterShellId } from "../shells/seed";
 import { ConversationRail, pruneFeedAfterVersion, type FeedItem } from "./ConversationRail";
+import {
+  firstSuccessCount, loadFirstSuccessState, mutateFirstSuccessState,
+  type FirstSuccessState, type ShellFirstSuccessEvent,
+} from "./first-success-state";
+import { openEverydayActionTarget } from "./everyday-action-navigation";
 import { Onboarding } from "./Onboarding";
+import { ImportReview, type ReviewedImportFile } from "./ImportReview";
 import { TimeSlider } from "./TimeSlider";
 import { AppSwitcher } from "./AppSwitcher";
 import {
@@ -43,10 +53,14 @@ import { buildTrustReceipt } from "./change-contract";
 import { useLensController } from "./useLensController";
 import { LazySurfaceBoundary } from "./LazySurfaceBoundary";
 import { ModalDialog, ModalScopedPortal } from "./ModalDialog";
-import { useWorkspaceMode, type WorkspaceMode } from "./workspace-mode";
+import {
+  readWorkspaceModeForEntry, useWorkspaceMode, type WorkspaceMode,
+} from "./workspace-mode";
 
 type Phase = "loading" | "onboarding" | "main" | "error";
 
+const FirstSuccessChecklist = lazy(() => import("./FirstSuccessChecklist")
+  .then(module => ({ default: module.FirstSuccessChecklist })));
 const DataView = lazy(() => import("./DataView").then(module => ({ default: module.DataView })));
 const TodayView = lazy(() => import("./TodayView").then(module => ({ default: module.TodayView })));
 const CommandPalette = lazy(() => import("./CommandPalette")
@@ -73,6 +87,16 @@ function durationBucket(ms: number): "under_3m" | "3_to_10m" | "10_to_30m" | "ov
   if (ms < 600_000) return "3_to_10m";
   if (ms < 1_800_000) return "10_to_30m";
   return "over_30m";
+}
+
+export function firstSuccessJourneyComplete(
+  state: FirstSuccessState | null,
+  protection: DeviceProtectionProjection | null,
+): boolean {
+  return state !== null && firstSuccessCount(state) === 4
+    && protection?.result.state === "protected_on_device"
+    && protection.checkpoint.state === "valid"
+    && targetIdentityEquals(protection.target, protection.checkpoint.target);
 }
 
 async function wipeOpfsWithoutWorker(): Promise<void> {
@@ -188,6 +212,19 @@ export function App(): React.JSX.Element {
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [workspaceMode, setWorkspaceMode] = useWorkspaceMode(currentId);
   const [bootError, setBootError] = useState<string | null>(null);
+  const [onboardingError, setOnboardingError] = useState<string | null>(null);
+  const [pendingImport, setPendingImport] = useState<{
+    operationId: string; fileName: string; parsed: ReviewedImportFile;
+  } | null>(null);
+  const [firstSuccess, setFirstSuccess] = useState<FirstSuccessState | null>(null);
+  const [deviceProtectionState, setDeviceProtectionState] =
+    useState<DeviceProtectionProjection | null>(null);
+  const [firstSuccessLoading, setFirstSuccessLoading] = useState(false);
+  const [firstSuccessError, setFirstSuccessError] = useState<string | null>(null);
+  const [firstRunEvidence, setFirstRunEvidence] = useState({
+    sampleCount: 0, sampleTables: [] as string[], realRecordCount: 0,
+    provenanceValid: false,
+  });
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{ region: Region; index: number; col: number | null } | null>(null);
   const [themeId, setThemeId] = useState<string>(() => getThemeId(currentAppId()));
@@ -298,6 +335,72 @@ export function App(): React.JSX.Element {
     return workerRef.current;
   };
   const mutationContext = () => client().createMutationContext();
+  const firstSuccessSettings = (wc: WorkerClient) => ({
+    getSetting: (key: string) => wc.getSetting(key),
+    compareAndSetSetting: (key: string, expectedRevision: number, value: FirstSuccessState) =>
+      wc.compareAndSetSetting(key, expectedRevision, value, wc.createMutationContext()),
+  });
+
+  const loadFirstSuccess = useCallback(async (wc: WorkerClient): Promise<void> => {
+    setFirstSuccessLoading(true);
+    setFirstSuccessError(null);
+    try {
+      setFirstSuccess(await loadFirstSuccessState(firstSuccessSettings(wc)));
+    } catch {
+      setFirstSuccess(null);
+      setFirstSuccessError("Setup progress could not be loaded. Your records were not changed.");
+    } finally {
+      setFirstSuccessLoading(false);
+    }
+  }, []);
+
+  const refreshDeviceProtection = useCallback(async (wc: WorkerClient): Promise<void> => {
+    try { setDeviceProtectionState(await wc.deviceProtection()); }
+    catch { setDeviceProtectionState(null); }
+  }, []);
+
+  const updateFirstSuccess = useCallback(async (
+    event: ShellFirstSuccessEvent, wc: WorkerClient = client(),
+  ): Promise<void> => {
+    try {
+      const next = await mutateFirstSuccessState(firstSuccessSettings(wc), event);
+      setFirstSuccess(next);
+      setFirstSuccessError(null);
+      await refreshDeviceProtection(wc);
+    } catch {
+      setFirstSuccessError("Setup progress could not be saved. Your records were not changed.");
+    }
+  }, [refreshDeviceProtection]);
+
+  const refreshFirstRunEvidence = useCallback(async (wc: WorkerClient): Promise<void> => {
+    const evidence = await wc.firstRunEvidence();
+    setFirstRunEvidence(evidence);
+    if (evidence.provenanceValid && evidence.realRecordCount > 0) {
+      await updateFirstSuccess({
+        type: "real_record", source: "create", changed: evidence.realRecordCount, sample: false,
+      }, wc);
+    }
+  }, [updateFirstSuccess]);
+
+  // Until the first real record is observed, poll only content-free worker
+  // evidence. Exact sample row ids remain inside the worker boundary.
+  useEffect(() => {
+    if (phase !== "main" || !workerRef.current
+        || firstSuccess?.start.state !== "complete"
+        || firstSuccess.steps.realRecord.state === "complete") return;
+    const wc = workerRef.current;
+    let live = true;
+    const check = (): void => {
+      void refreshFirstRunEvidence(wc).catch(() => {
+        if (live) setFirstSuccessError(
+          "Setup progress could not be checked. Your records were not changed.",
+        );
+      });
+    };
+    check();
+    const timer = window.setInterval(check, 4_000);
+    return () => { live = false; window.clearInterval(timer); };
+  }, [phase, firstSuccess, refreshFirstRunEvidence]);
 
   useEffect(() => {
     if (phase !== "main" || !workerRef.current) return;
@@ -356,9 +459,10 @@ export function App(): React.JSX.Element {
 
   const refreshPanels = useCallback(async (): Promise<void> => {
     const [nextPanels, nextHistory, nextTables, nextProvenance,
-      nextSemanticTrace, nextFieldProvenance] = await Promise.all([
+      nextSemanticTrace, nextFieldProvenance, nextProtection] = await Promise.all([
       client().panels(), client().history(), client().registryTables(),
       client().panelProvenance(), client().semanticTrace(), client().fieldProvenance(),
+      client().deviceProtection(),
     ]);
     setPanels(nextPanels);
     setHistory(nextHistory);
@@ -366,6 +470,7 @@ export function App(): React.JSX.Element {
     setPanelProvenance(nextProvenance);
     setSemanticTrace(nextSemanticTrace);
     setFieldProvenance(nextFieldProvenance);
+    setDeviceProtectionState(nextProtection);
     setFaults({});
   }, []);
 
@@ -381,6 +486,23 @@ export function App(): React.JSX.Element {
   const recordPrivateMetric = useCallback((event: PrivateMetricEvent): void => {
     void client().recordPrivateMetric(event, mutationContext()).catch(() => undefined);
   }, []);
+
+  const journeyComplete = firstSuccessJourneyComplete(firstSuccess, deviceProtectionState);
+  useEffect(() => {
+    if (phase !== "main" || activationRecorded.current || !journeyComplete
+        || deviceProtectionState?.result.state !== "protected_on_device") return;
+    activationRecorded.current = true;
+    recordPrivateMetric({ type: "activation_completed",
+      elapsed: durationBucket(Date.now() - appReadyAt.current) });
+  }, [phase, journeyComplete, deviceProtectionState, recordPrivateMetric]);
+
+  useEffect(() => {
+    if (phase !== "main" || !workerRef.current) return;
+    const wc = workerRef.current;
+    void refreshDeviceProtection(wc);
+    const timer = window.setInterval(() => void refreshDeviceProtection(wc), 4_000);
+    return () => window.clearInterval(timer);
+  }, [phase, refreshDeviceProtection]);
 
   // Ambient: re-derive the Observer's nudges on a gentle idle cadence so a
   // pattern that appears from data entry (e.g. invoices going overdue) is
@@ -440,6 +562,11 @@ export function App(): React.JSX.Element {
             await withTimeout(wc.seed(
               activeApp.shellId as StarterShellId, wc.createMutationContext()),
               20_000, "Setting up the app");
+            await updateFirstSuccess({
+              type: "app_created",
+              path: activeApp.shellId === "blank" ? "blank" : "gallery",
+              shellId: activeApp.shellId as StarterShellId,
+            }, wc);
           } else {
             setPhase("onboarding");         // first run ever — pick a template
             return;
@@ -450,9 +577,13 @@ export function App(): React.JSX.Element {
         setLiveBridge(makeBridge(wc, "live", pushToast, recordFault, askConfirm,
           (table, id) => openRecordRef.current(table, id)));
         const [bootPanels, bootHistory, bootTables, bootSuggestions, bootProvenance,
-          bootSemanticTrace, bootFieldProvenance] = await Promise.all([
+          bootSemanticTrace, bootFieldProvenance, bootFirstRunEvidence,
+          bootFirstSuccess, bootProtection] = await Promise.all([
           wc.panels(), wc.history(), wc.registryTables(), wc.suggestions(), wc.panelProvenance(),
           wc.semanticTrace(), wc.fieldProvenance(),
+          wc.firstRunEvidence(),
+          loadFirstSuccessState(firstSuccessSettings(wc)).catch(() => null),
+          wc.deviceProtection().catch(() => null),
         ]);
         setPanels(bootPanels);
         setHistory(bootHistory);
@@ -461,6 +592,19 @@ export function App(): React.JSX.Element {
         setPanelProvenance(bootProvenance);
         setSemanticTrace(bootSemanticTrace);
         setFieldProvenance(bootFieldProvenance);
+        setFirstRunEvidence(bootFirstRunEvidence);
+        setFirstSuccess(bootFirstSuccess);
+        setDeviceProtectionState(bootProtection);
+        const firstJourneyComplete = firstSuccessJourneyComplete(
+          bootFirstSuccess, bootProtection,
+        );
+        const entryMode = readWorkspaceModeForEntry(
+          boot.selectedAppInstanceId, firstJourneyComplete,
+        );
+        setWorkspaceMode(entryMode);
+        if (entryMode === "work") setRailOpen(false);
+        setFirstSuccessError(bootFirstSuccess ? null
+          : "Setup progress could not be loaded. Your records were not changed.");
         setPhase("main");
         void wc.recordPrivateMetric({ type: "app_ready",
           entry: boot.seeded ? "existing" : "new_starter" },
@@ -476,7 +620,7 @@ export function App(): React.JSX.Element {
       }
     })();
     return (): void => { void wc.shutdown().catch(() => undefined); };
-  }, [pushToast, recordFault]);
+  }, [pushToast, recordFault, updateFirstSuccess]);
 
   const pickShell = async (id: StarterShellId): Promise<void> => {
     setBusy(true);
@@ -485,6 +629,13 @@ export function App(): React.JSX.Element {
     if (first) {
       // the worker already holds this app's (empty, "default") files open
       await client().seed(id, mutationContext());
+      await updateFirstSuccess({
+        type: "app_created",
+        path: id === "blank" ? "blank" : "recommended",
+        shellId: id,
+      });
+      await refreshFirstRunEvidence(client());
+      await refreshDeviceProtection(client());
       setApps(listApps());
       setCurrentId(currentApp()?.id ?? null);
       setLiveBridge(makeBridge(client(), "live", pushToast, recordFault, askConfirm,
@@ -512,6 +663,58 @@ export function App(): React.JSX.Element {
   };
   const switchApp = (id: string): void => { setCurrentApp(id); reloadApp(); };
   const newApp = (): void => setPhase("onboarding");
+  const reviewedImportFromFile = async (file: File): Promise<ReviewedImportFile> => {
+    const text = await file.text();
+    const lines = text.split(/\r?\n/).filter(line => line.trim() !== "");
+    const headers = (lines[0] ?? "value").split(/\t|,/).slice(0, 20)
+      .map((header, index) => {
+        const cleaned = header.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_")
+          .replace(/^_+|_+$/g, "");
+        return (cleaned || `column_${index + 1}`).replace(/^[0-9]/, "c_$&").slice(0, 40);
+      });
+    const acceptedRows = Math.max(0, Math.min(5_000, lines.length - 1));
+    const table = (file.name.replace(/\.[^.]+$/, "").toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "imported_data")
+      .replace(/^[0-9]/, "t_$&").slice(0, 40);
+    return {
+      table,
+      columns: headers.map(name => ({ name, type: "text" })),
+      rows: lines.slice(1, acceptedRows + 1).map(line => {
+        const cells = line.split(/\t|,/);
+        return Object.fromEntries(headers.map((name, index) => [name, cells[index] ?? ""]));
+      }),
+      review: {
+        sourceRows: Math.max(0, lines.length - 1),
+        acceptedRows,
+        skippedRows: 0,
+        truncatedRows: Math.max(0, lines.length - 1 - acceptedRows),
+        sourceColumns: headers.length,
+        acceptedColumns: headers.length,
+        truncatedColumns: 0,
+      },
+    };
+  };
+  const reviewNewAppImport = async (file: File): Promise<void> => {
+    setBusy(true);
+    setOnboardingError(null);
+    try {
+      setPendingImport({
+        operationId: `import-${crypto.randomUUID?.() ?? Date.now()}`,
+        fileName: file.name,
+        parsed: await reviewedImportFromFile(file),
+      });
+    } catch (error) {
+      setOnboardingError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const importNewApp = async (): Promise<void> => {
+    const warning = persistent ? "Continue anyway?" : "Continue with temporary storage?";
+    if (!(await askConfirm(`${warning} Safe creation of another imported app is not available yet. Your existing apps were not changed.`)))
+      return;
+    setOnboardingError("Safe creation of another imported app is not available yet. Your existing apps were not changed.");
+  };
   // B5 fork-and-explore: duplicate the current app (data + history + panels)
   // into a new one, then switch to it — experiment freely without risking the
   // original. Uses the validated .clay export/import path in the worker.
@@ -554,6 +757,9 @@ export function App(): React.JSX.Element {
         repaired: outcome.preview.repaired, stage: "none",
         diff: deriveSafeDiffKind(outcome.preview.diff) });
       setPreview(outcome.preview);
+      void updateFirstSuccess({
+        type: "reshape_previewed", baseVersion: outcome.preview.version,
+      });
       setShadowBridge(makeBridge(client(), "shadow", pushToast, recordFault, askConfirm));
     }
   };
@@ -776,6 +982,15 @@ export function App(): React.JSX.Element {
     setDataSavedView(savedViewId ?? null);
     setShowData(true);
   };
+  const startEverydayAction = async (): Promise<void> => {
+    chooseWorkspaceMode("work");
+    try {
+      await openEverydayActionTarget(client(), openData);
+      pushToast("Opened your real record. Reviewing it completes this step.", "info");
+    } catch (error) {
+      pushToast(error instanceof Error ? error.message : String(error), "danger");
+    }
+  };
   openRecordRef.current = (table, id): void => openData(table, id);
   const closeData = (): void => {
     setShowData(false);
@@ -814,12 +1029,12 @@ export function App(): React.JSX.Element {
         method: pendingRecovery.current, result: "success" });
       pendingRecovery.current = null;
     }
-    if (!activationRecorded.current) {
-      activationRecorded.current = true;
-      firstKeepAt.current = Date.now();
-      recordPrivateMetric({ type: "activation_completed",
-        elapsed: durationBucket(Date.now() - appReadyAt.current) });
-    }
+    if (firstKeepAt.current === null) firstKeepAt.current = Date.now();
+    await updateFirstSuccess({
+      type: "reshape_kept",
+      version,
+      changed: preview.diff.length > 0 || preview.panels.length > 0 || preview.removePanels.length > 0,
+    });
     setFeed(f => [...f, { kind: "committed", summary: preview.summary, version, receipt }]);
     resetLens();
     closePreview();
@@ -1252,11 +1467,29 @@ export function App(): React.JSX.Element {
     </>);
   if (phase === "onboarding")
     return (
-      <Onboarding
-        onPick={id => void pickShell(id)}
-        busy={busy}
-        onCancel={listApps().length > 0 ? () => setPhase("main") : undefined}
-      />
+      <>
+        <Onboarding
+          onPick={id => void pickShell(id)}
+          onImport={file => void reviewNewAppImport(file)}
+          busy={busy}
+          error={onboardingError}
+          onCancel={listApps().length > 0 ? () => setPhase("main") : undefined}
+        />
+        {pendingImport ? (
+          <ImportReview
+            fileName={pendingImport.fileName}
+            parsed={pendingImport.parsed}
+            busy={busy}
+            error={onboardingError}
+            onCancel={() => {
+              setPendingImport(null);
+              setOnboardingError(null);
+            }}
+            onConfirm={() => void importNewApp()}
+          />
+        ) : null}
+        {confirmDialog}
+      </>
     );
 
   // Direct manipulation (B4): drag a panel by its grip to rearrange. Each
@@ -1573,6 +1806,44 @@ export function App(): React.JSX.Element {
         workspaceMode={workspaceMode}
         onWorkspaceModeChange={chooseWorkspaceMode}
       />
+      {(firstSuccessLoading || firstSuccessError
+          || firstSuccess?.start.state === "complete") ? (
+        <LazySurfaceBoundary label="first steps">
+          <Suspense fallback={<SurfaceFallback label="first steps" />}>
+            <FirstSuccessChecklist
+              state={firstSuccess}
+              loading={firstSuccessLoading}
+              error={firstSuccessError}
+              persistent={persistent}
+              protection={deviceProtectionState}
+              onAddRecord={() => {
+                chooseWorkspaceMode("work");
+                setShowCommandPalette(true);
+              }}
+              onDoEveryday={() => void startEverydayAction()}
+              onAskClay={() => {
+                chooseWorkspaceMode("customize");
+                setRailOpen(true);
+                try { localStorage.setItem("clay_reshape_open", "true"); }
+                catch { /* presentation only */ }
+                seedIntent("Add one useful summary to this app.");
+              }}
+              onReviewPreview={() => {
+                chooseWorkspaceMode("customize");
+                setRailOpen(true);
+                try { localStorage.setItem("clay_reshape_open", "true"); }
+                catch { /* presentation only */ }
+                if (!preview) seedIntent("Add one useful summary to this app.");
+              }}
+              onDismiss={() => void updateFirstSuccess({ type: "set_dismissed", dismissed: true })}
+              onResume={() => void updateFirstSuccess({ type: "set_dismissed", dismissed: false })}
+              onRetry={() => {
+                if (workerRef.current) void loadFirstSuccess(workerRef.current);
+              }}
+            />
+          </Suspense>
+        </LazySurfaceBoundary>
+      ) : null}
       {!persistent ? (
         <div className="banner">
           <span>
@@ -1730,7 +2001,11 @@ export function App(): React.JSX.Element {
               onClose={() => { setShowCommandPalette(false); setQuickCaptureMode(false); }}
               onOpenRecord={(table, id) => openData(table, id)}
               onOpenData={table => openData(table)}
-              onWrite={table => { liveBridge?.notifyWrite(table); invalidateDailyHome(); }}
+              onWrite={table => {
+                liveBridge?.notifyWrite(table);
+                invalidateDailyHome();
+                void refreshFirstRunEvidence(workerRef.current!);
+              }}
               onError={message => pushToast(message, "danger")}
               onInfo={(message, action) => pushToast(message, "info", action)}
             />
@@ -1748,8 +2023,13 @@ export function App(): React.JSX.Element {
           initialRecordId={dataRecord}
           initialSavedViewId={dataSavedView}
           returnFocusRef={surfaceReturnFocus}
-          onWrite={table => { liveBridge?.notifyWrite(table); invalidateDailyHome(); }}
+          onWrite={table => {
+            liveBridge?.notifyWrite(table);
+            invalidateDailyHome();
+            void refreshFirstRunEvidence(workerRef.current!);
+          }}
           onDailyHomeInvalidated={invalidateDailyHome}
+          onEverydayAction={setFirstSuccess}
           onClose={closeData}
           onError={msg => pushToast(msg, "danger")}
           onInfo={msg => pushToast(msg, "info")}

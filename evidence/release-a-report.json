@@ -1,0 +1,1657 @@
+{
+  "schema": 3,
+  "verdict": "PASS",
+  "baseUrl": "http://127.0.0.1:4188",
+  "generatedAt": "2026-09-06T09:11:53.640Z",
+  "sourceIdentity": {
+    "sourceTree": "7b15cca46413c4bba2148ede83d3737bec8657d9",
+    "indexTree": "7b15cca46413c4bba2148ede83d3737bec8657d9",
+    "baseCommit": "efa83e494649d34d9673254f3c36d5ee7e36c27d",
+    "changedSourceFiles": [
+      {
+        "path": "package.json",
+        "mode": "100644",
+        "gitBlob": "879d096e0e6b41b33c62aa8c084ff94a08a0e586",
+        "byteLength": 2252,
+        "sha256": "sha256:1bad9da45141ce21afd7c0cb81b3c67a6aef54e5e0480ab8de926862a6b037a4"
+      },
+      {
+        "path": "packages/kernel/src/store.ts",
+        "mode": "100644",
+        "gitBlob": "f77308af71e8717cdb6c9f9da651ec7dc0e174a5",
+        "byteLength": 157093,
+        "sha256": "sha256:3887349a1902deb35fc834144c923debd57da930108a1c6287be081d8421a462"
+      },
+      {
+        "path": "packages/kernel/test/archive.test.ts",
+        "mode": "100644",
+        "gitBlob": "92381d31a6bccd3114454c5eb3c4e2c2553a475e",
+        "byteLength": 20634,
+        "sha256": "sha256:05846270156c5a484a0253ed0e6fa72c15e8f01fe58453a11bbb85c95d5e6c3f"
+      },
+      {
+        "path": "packages/panel-runtime/src/vnode.ts",
+        "mode": "100644",
+        "gitBlob": "208c0601580eb1120047395647ecc425ceb17421",
+        "byteLength": 71128,
+        "sha256": "sha256:034552ebf328a88552e45bc20ab34a35ada3564e3c9ffb5c40bd895bd9c0ad26"
+      },
+      {
+        "path": "packages/panel-runtime/test/primitives.test.ts",
+        "mode": "100644",
+        "gitBlob": "90f62caca39c5ecf523bd380a687fbf6eb6c07ac",
+        "byteLength": 36160,
+        "sha256": "sha256:e461580f8677556e5c0e16695d16988f3235649fe59ec8443a32bdc70db022fa"
+      },
+      {
+        "path": "packages/shell/src/app/App.tsx",
+        "mode": "100644",
+        "gitBlob": "447a7f246edbb9af15376efbd5383003fb97c232",
+        "byteLength": 92022,
+        "sha256": "sha256:06a63672c7c064931ba5c115135cd3570fdba6878c47936fe4f26c49053e582c"
+      },
+      {
+        "path": "packages/shell/src/app/FirstSuccessChecklist.tsx",
+        "mode": "100644",
+        "gitBlob": "14726a80000ac402cca0370775d5d08921eaa61b",
+        "byteLength": 3578,
+        "sha256": "sha256:f300cbfb338f00cc9c4c0d28171fe3609e3c28d1d1348279a60df0ef1fd65f4a"
+      },
+      {
+        "path": "packages/shell/src/app/ImportReview.tsx",
+        "mode": "100644",
+        "gitBlob": "ebbff6975b0c1e014e0f2c4d95403ab36692aff2",
+        "byteLength": 2817,
+        "sha256": "sha256:f25acf76daa7d3a13edfea7cb8473eb3f394e649eb4b2ebfd4dd3178d231fd27"
+      },
+      {
+        "path": "packages/shell/src/app/Onboarding.tsx",
+        "mode": "100644",
+        "gitBlob": "de216065da59705a1a5548fc2372b41c6ce59bbd",
+        "byteLength": 6783,
+        "sha256": "sha256:68bf2cf9af7f56bdca93952afd2bc2d2fc498359ab5ff4940f84266550ae5202"
+      },
+      {
+        "path": "packages/shell/src/app/apps.ts",
+        "mode": "100644",
+        "gitBlob": "1866e3d821c0ba71a5a7cb39ee7098442ffb2ad1",
+        "byteLength": 6218,
+        "sha256": "sha256:68cd34505ca237f67b3dba1e3fd1e83078cba01bbca6e078ee4749f359cebf61"
+      },
+      {
+        "path": "packages/shell/src/app/first-success-state.ts",
+        "mode": "100644",
+        "gitBlob": "8c8bda9638112a28ce385fd1dc8516f9877146f8",
+        "byteLength": 8331,
+        "sha256": "sha256:0aa284414d609f8b858867336945f8fb474453637acb86f65fbf1dda596d6e1e"
+      },
+      {
+        "path": "packages/shell/src/app/importData.ts",
+        "mode": "100644",
+        "gitBlob": "3e8dba0f8c50379fef65b27cfeaf59df6e1d921d",
+        "byteLength": 7094,
+        "sha256": "sha256:62e88ccbd8116fea02cb67159ae7ac07f7481ddf1c2c2649014be7676325ef32"
+      },
+      {
+        "path": "packages/shell/src/app/starter-recommendation.ts",
+        "mode": "100644",
+        "gitBlob": "720bb091b68235d6f153e88f5654a4131cd14039",
+        "byteLength": 3114,
+        "sha256": "sha256:d804aadface542282e39b1b63c1830fd449797e496f4887d20faa55251486604"
+      },
+      {
+        "path": "packages/shell/src/app/styles.css",
+        "mode": "100644",
+        "gitBlob": "8719e86104e22e343ae7d83218a6ba8c8ae0e2e3",
+        "byteLength": 65503,
+        "sha256": "sha256:5b82a67f6b2e61000769a62df764fb7b22d0681873819fc19d3231e786010788"
+      },
+      {
+        "path": "packages/shell/src/app/worker-client.ts",
+        "mode": "100644",
+        "gitBlob": "82142c35d996ab4bbe7a8064a45a7f9a2e762ca6",
+        "byteLength": 13040,
+        "sha256": "sha256:79ee0cca50ece35271f6ab1e563b8c7090d140745c33f3177f5db37fccd0af37"
+      },
+      {
+        "path": "packages/shell/src/shells/sample-provenance.ts",
+        "mode": "100644",
+        "gitBlob": "572b93139f29b053dbfbb9dc929c0d5bd1f69e7d",
+        "byteLength": 10588,
+        "sha256": "sha256:8d358248a912c155aeea61b4d46baf7a4e44983bcce3aa1337f7605f45ffc44e"
+      },
+      {
+        "path": "packages/shell/src/shells/seed.ts",
+        "mode": "100644",
+        "gitBlob": "bc964dd49803dbca6aa1bca406c9cc53192bc343",
+        "byteLength": 31972,
+        "sha256": "sha256:e4ba7b0749d8d9223c6d5d7a3b690579bf5a37529348c66a4819e1cf117bb6b7"
+      },
+      {
+        "path": "packages/shell/src/shells/starter-catalog.ts",
+        "mode": "100644",
+        "gitBlob": "f97e48649824936296c6ad4aa1068b0f14942a21",
+        "byteLength": 2548,
+        "sha256": "sha256:14e30d034b7369b04b7d6b928eacda639eaf99920776b7042418f10de413e9ec"
+      },
+      {
+        "path": "packages/shell/src/worker/db-worker.ts",
+        "mode": "100644",
+        "gitBlob": "71ac01c7663fdd356a31769b4cbfa606233c7a6c",
+        "byteLength": 21945,
+        "sha256": "sha256:f0ce2099da081cea5e92d91eb97078491dbc08c6e901501d9e1cc612ec52907d"
+      },
+      {
+        "path": "packages/shell/src/worker/first-run-activation.ts",
+        "mode": "100644",
+        "gitBlob": "6ebd3bb8800184f78911db8d70b35cc652bbc7db",
+        "byteLength": 27565,
+        "sha256": "sha256:40c82d2964e64cff4ceb2d71be59f161e9153b1535b442c2ca45f914e669e975"
+      },
+      {
+        "path": "packages/shell/src/worker/samples.ts",
+        "mode": "100644",
+        "gitBlob": "ddc29ac1bc51a178e6d81852e0bb11f0a3efdd7b",
+        "byteLength": 10281,
+        "sha256": "sha256:1bc176e7df98a5df3779f1dfacadc14f0a0ec4682d998e5ef5e62128e59de12c"
+      },
+      {
+        "path": "packages/shell/test/apps.test.ts",
+        "mode": "100644",
+        "gitBlob": "22344d72a14df608b20ed468e5f2d477a9bdb73f",
+        "byteLength": 5218,
+        "sha256": "sha256:d1f283389a5e6dd0a2f000072a3163d38a00f94bfbef28e3f1f3c35378b0dc29"
+      },
+      {
+        "path": "packages/shell/test/first-run-activation.test.ts",
+        "mode": "100644",
+        "gitBlob": "2913a56799eecb1e9cedbbe62edac43c19e02bda",
+        "byteLength": 14215,
+        "sha256": "sha256:7d640c497a82c81e11158733a0dd7df3b08194ce3fea4c2e3ff00dc2889219bf"
+      },
+      {
+        "path": "packages/shell/test/first-success-checklist.test.tsx",
+        "mode": "100644",
+        "gitBlob": "201a5bb3a26146a9ad4a47111bace5f48cd34f6b",
+        "byteLength": 4600,
+        "sha256": "sha256:72171d5654501b822c4ba241981783f7700fca60f23bc49ccde540f8544c72f0"
+      },
+      {
+        "path": "packages/shell/test/first-success-state.test.ts",
+        "mode": "100644",
+        "gitBlob": "c33d3fbc8038153491755423b37d70d221fa7266",
+        "byteLength": 7422,
+        "sha256": "sha256:ee815fe96ca11b80a72f314735529c768e6033776927e531d097f82c04ab5785"
+      },
+      {
+        "path": "packages/shell/test/import-data.test.ts",
+        "mode": "100644",
+        "gitBlob": "480cee3f0f9dc386c1023c21e69591f51dd14b69",
+        "byteLength": 4162,
+        "sha256": "sha256:949c8595eb0be3f48e1ddae9d41ffde65505dcd0692366aef986404fdf6f9c06"
+      },
+      {
+        "path": "packages/shell/test/import-review.test.tsx",
+        "mode": "100644",
+        "gitBlob": "3772034d12abb1f828ae2be95dd142eef4717646",
+        "byteLength": 4508,
+        "sha256": "sha256:cc79a362171d2cbe83bc10a2d1842737052d2bc37f59c9154059d549ed55a074"
+      },
+      {
+        "path": "packages/shell/test/onboarding.test.tsx",
+        "mode": "100644",
+        "gitBlob": "b0edac9e719f980660eb9ac9a08a35d83b0c208c",
+        "byteLength": 4859,
+        "sha256": "sha256:9ac72a825ac8c41960da7c3065b4eea363f393c0238f3dbf14c0085d14bab874"
+      },
+      {
+        "path": "packages/shell/test/release-a-foundation-boundary.test.ts",
+        "mode": "100644",
+        "gitBlob": "0902ab5edf3f85d801eb6e8ebb86048de47a2fcb",
+        "byteLength": 1908,
+        "sha256": "sha256:eb63f5b1ac4dabbdc0030cb64e5d97dc8cd8827594e3bfea55d163c0ffd6cc33"
+      },
+      {
+        "path": "packages/shell/test/samples.test.ts",
+        "mode": "100644",
+        "gitBlob": "5db3008405e58578aec58f287e7e939f6fdde2d6",
+        "byteLength": 9241,
+        "sha256": "sha256:c7346d2120850f79e7be82b468d666d03c71c55ffc88e076e48b0f7bc3eeb4e3"
+      },
+      {
+        "path": "packages/shell/test/seed.test.ts",
+        "mode": "100644",
+        "gitBlob": "3bf3e8f6cd0894f6fdd2b1b9c0794e227450e5ee",
+        "byteLength": 6253,
+        "sha256": "sha256:7b5e254b4de68dfd87e13282b8438376c917507c717bd9c0b211d3cde01018c0"
+      },
+      {
+        "path": "packages/shell/test/starter-recommendation.test.ts",
+        "mode": "100644",
+        "gitBlob": "77ae7e7ab7dd35bdc86f776dac332d7769903cba",
+        "byteLength": 1531,
+        "sha256": "sha256:b13dc293866a034419ae5ab132a9542abe5731d4c40f46e7b2a41c60a635eb58"
+      },
+      {
+        "path": "packages/shell/test/worker-client.test.ts",
+        "mode": "100644",
+        "gitBlob": "3422e469d224375d02d2d0374ec6d544680bd5b0",
+        "byteLength": 7682,
+        "sha256": "sha256:db939df2729da0594dcfd05ad8e84f172728445f4549aa15560227566456d0f2"
+      },
+      {
+        "path": "pnpm-lock.yaml",
+        "mode": "100644",
+        "gitBlob": "66491797ea1025a8157f05bdb60eb255f04f3c1c",
+        "byteLength": 77585,
+        "sha256": "sha256:36fab2e2edbcdc6724b1ef55f6c7061d77cd2c94614e0bdd063ab67960476cd1"
+      },
+      {
+        "path": "scripts/bundle-budget.mjs",
+        "mode": "100644",
+        "gitBlob": "9cd606f65c2ba54661142e951469e1c9353ae2f7",
+        "byteLength": 7880,
+        "sha256": "sha256:208485163c2efa90762f8c4c2a385722474dc852244072747cd62fd323f7c891"
+      },
+      {
+        "path": "scripts/release-a-evidence-lib.mjs",
+        "mode": "100644",
+        "gitBlob": "59c4b248e23ad94182f97f0a77d33cb3c8aa9797",
+        "byteLength": 7602,
+        "sha256": "sha256:a2b834cd877ce5a60f9d456f94047d40c4a13697adb2d5d6d9b11a3e2c06900c"
+      },
+      {
+        "path": "scripts/release-a-evidence.mjs",
+        "mode": "100644",
+        "gitBlob": "f4c68a18b47d5bc3e2c9e8ab580de488c0be8bd5",
+        "byteLength": 38697,
+        "sha256": "sha256:67bf38e15583c4785e2f947d0ac97f143b4d46de4d3a3c5b2eb1c8dcb91df9ab"
+      },
+      {
+        "path": "scripts/release-a-evidence.test.mjs",
+        "mode": "100644",
+        "gitBlob": "ea0efe301b611eb4a1085a0125701588b488a851",
+        "byteLength": 5896,
+        "sha256": "sha256:edd682acce17f94cc31b40a7b96ef5152b0f605135d538ab230c794788824f33"
+      }
+    ]
+  },
+  "buildIdentity": {
+    "renderedId": "7b15cca46413c4bba2148ede83d3737bec8657d9",
+    "buildEntry": "assets/index-Bk4-aPef.js",
+    "expectedBuildEntry": "assets/index-Bk4-aPef.js",
+    "expectedBuildDigest": "sha256:d5bee6cd9d67d2c48b7bfa1ee947729e8b5188d1169d7121446e5e04fa139f3e",
+    "servedBuildDigest": "sha256:d5bee6cd9d67d2c48b7bfa1ee947729e8b5188d1169d7121446e5e04fa139f3e",
+    "assetCount": 21
+  },
+  "browser": {
+    "family": "msedge",
+    "version": "152.0.4191.53"
+  },
+  "assertions": [
+    {
+      "id": "identity.source-tree",
+      "passed": true,
+      "detail": {
+        "sourceTree": "7b15cca46413c4bba2148ede83d3737bec8657d9",
+        "hashedFiles": 38
+      }
+    },
+    {
+      "id": "identity.build-digest",
+      "passed": true,
+      "detail": {
+        "renderedId": "7b15cca46413c4bba2148ede83d3737bec8657d9",
+        "buildEntry": "assets/index-Bk4-aPef.js",
+        "expectedBuildEntry": "assets/index-Bk4-aPef.js",
+        "expectedBuildDigest": "sha256:d5bee6cd9d67d2c48b7bfa1ee947729e8b5188d1169d7121446e5e04fa139f3e",
+        "servedBuildDigest": "sha256:d5bee6cd9d67d2c48b7bfa1ee947729e8b5188d1169d7121446e5e04fa139f3e",
+        "assetCount": 21
+      }
+    },
+    {
+      "id": "desktop.primary-actions",
+      "passed": true,
+      "detail": {
+        "count": 2,
+        "labels": [
+          "↑Import a spreadsheetChoose a CSV or JSON file, review every accepted, skipped, and limited row, then import.Review →",
+          "◩Use a recommended starterTracker. A flexible status tracker with ready-to-use views. Projects, tasks, anything with a statusOpen →"
+        ],
+        "equalClassAndStyle": true,
+        "order": {
+          "importAction": 0,
+          "recommended": 1,
+          "blankAction": 9
+        }
+      }
+    },
+    {
+      "id": "desktop.hidden-file-input-activation",
+      "passed": true,
+      "detail": {
+        "hidden": true,
+        "tabIndex": -1,
+        "nativeFileChooser": true
+      }
+    },
+    {
+      "id": "desktop.onboarding",
+      "passed": true,
+      "detail": {
+        "focusedHeading": "Welcome to Clay",
+        "defaultGoal": "tasks",
+        "primaryOrder": {
+          "importAction": 0,
+          "recommended": 1,
+          "blankAction": 9
+        },
+        "geometry": {
+          "viewport": {
+            "width": 1440,
+            "height": 1000
+          },
+          "document": {
+            "clientWidth": 1440,
+            "scrollWidth": 1440,
+            "clientHeight": 1000,
+            "scrollHeight": 2028
+          },
+          "body": {
+            "clientWidth": 1440,
+            "scrollWidth": 1440,
+            "clientHeight": 1000,
+            "scrollHeight": 2028
+          },
+          "regions": null
+        },
+        "axe": {
+          "scenario": "desktop-onboarding",
+          "seriousOrCritical": 0,
+          "ruleIds": []
+        }
+      }
+    },
+    {
+      "id": "desktop.activation",
+      "passed": true,
+      "detail": {
+        "appName": "Small Business\n▾",
+        "checklist": [
+          "Start with a working app: Complete",
+          "Add your first real record: Next",
+          "Review your Work view: Not started",
+          "Keep your first customization: Not started"
+        ],
+        "geometry": {
+          "viewport": {
+            "width": 1440,
+            "height": 1000
+          },
+          "document": {
+            "clientWidth": 1440,
+            "scrollWidth": 1440,
+            "clientHeight": 1000,
+            "scrollHeight": 1000
+          },
+          "body": {
+            "clientWidth": 1440,
+            "scrollWidth": 1440,
+            "clientHeight": 1000,
+            "scrollHeight": 1000
+          },
+          "regions": {
+            "clientWidth": 1440,
+            "scrollWidth": 1440,
+            "clientHeight": 666,
+            "scrollHeight": 1359
+          }
+        },
+        "screenshot": "evidence/release-a-first-success-desktop.png"
+      }
+    },
+    {
+      "id": "desktop.focus",
+      "passed": true,
+      "detail": {
+        "activeElementLabel": "Work workspace"
+      }
+    },
+    {
+      "id": "desktop.live-announcement",
+      "passed": true,
+      "detail": {
+        "text": "Small Business is ready. Work is open."
+      }
+    },
+    {
+      "id": "desktop.work-default",
+      "passed": true,
+      "detail": {
+        "work": true,
+        "customize": false
+      }
+    },
+    {
+      "id": "desktop.iframe",
+      "passed": true,
+      "detail": {
+        "count": 8,
+        "matchedText": [
+          "Open jobs",
+          "Kitchen faucet fix",
+          "Alice Nguyen",
+          "Add job"
+        ],
+        "absentText": [],
+        "frames": [
+          {
+            "name": "",
+            "url": "",
+            "geometry": {
+              "clientWidth": 1398,
+              "scrollWidth": 1398
+            }
+          },
+          {
+            "name": "",
+            "url": "",
+            "geometry": {
+              "clientWidth": 1398,
+              "scrollWidth": 1398
+            }
+          },
+          {
+            "name": "",
+            "url": "",
+            "geometry": {
+              "clientWidth": 532,
+              "scrollWidth": 532
+            }
+          },
+          {
+            "name": "",
+            "url": "",
+            "geometry": {
+              "clientWidth": 1082,
+              "scrollWidth": 1082
+            }
+          },
+          {
+            "name": "",
+            "url": "",
+            "geometry": {
+              "clientWidth": 532,
+              "scrollWidth": 532
+            }
+          },
+          {
+            "name": "",
+            "url": "",
+            "geometry": {
+              "clientWidth": 532,
+              "scrollWidth": 532
+            }
+          },
+          {
+            "name": "",
+            "url": "",
+            "geometry": {
+              "clientWidth": 298,
+              "scrollWidth": 298
+            }
+          },
+          {
+            "name": "",
+            "url": "",
+            "geometry": {
+              "clientWidth": 298,
+              "scrollWidth": 298
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "desktop.no-early-backup",
+      "passed": true,
+      "detail": {
+        "realRecordCount": 0,
+        "backupNudgePresent": false
+      }
+    },
+    {
+      "id": "desktop.first-real-record",
+      "passed": true,
+      "detail": {
+        "recordName": "Release A real customer",
+        "checklist": [
+          "Start with a working app: Complete",
+          "Add your first real record: Complete",
+          "Review your Work view: Next",
+          "Keep your first customization: Not started"
+        ],
+        "canonicalPanelReadback": true
+      }
+    },
+    {
+      "id": "desktop.sample-provenance",
+      "passed": true,
+      "detail": {
+        "beforeClear": "Example data. 16 example records are included across customers, jobs, invoices, items, expenses.\nClear examples",
+        "examplesCleared": true,
+        "realRecordSurvived": true,
+        "iframe": {
+          "count": 8,
+          "matchedText": [
+            "Release A real customer"
+          ],
+          "absentText": [
+            "Alice Nguyen",
+            "Kitchen faucet fix"
+          ],
+          "frames": [
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 1398,
+                "scrollWidth": 1398
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 1398,
+                "scrollWidth": 1398
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 532,
+                "scrollWidth": 532
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 1082,
+                "scrollWidth": 1082
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 532,
+                "scrollWidth": 532
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 532,
+                "scrollWidth": 532
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 298,
+                "scrollWidth": 298
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 298,
+                "scrollWidth": 298
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "desktop.import-review",
+      "passed": true,
+      "detail": {
+        "counts": {
+          "Proposed table": "release_a_import",
+          "Rows in file": "5002",
+          "Rows accepted": "5000",
+          "Rows skipped": "1",
+          "Rows truncated": "1",
+          "Fields in file": "22",
+          "Fields accepted": "20",
+          "Fields truncated": "2"
+        },
+        "proposedFieldCount": 20,
+        "appCacheUnchanged": true,
+        "screenshot": "evidence/release-a-import-review-desktop.png",
+        "axe": {
+          "scenario": "desktop-import-review",
+          "seriousOrCritical": 0,
+          "ruleIds": []
+        }
+      }
+    },
+    {
+      "id": "desktop.import-publication",
+      "passed": true,
+      "detail": {
+        "acceptedRows": 5000,
+        "appId": "default",
+        "revision": 1,
+        "receipt": "Import published. 5000 accepted rows are in release_a_import. Undo import removes only the imported rows; the table and view remain.\nWorker receipt: app default · revision 1 · operation import-0ca80684-a486-4d20-aed7-b0d99f85ba3f\nUndo import",
+        "cache": {
+          "apps": [
+            {
+              "id": "default",
+              "name": "Release a import",
+              "shellId": "blank"
+            }
+          ],
+          "current": "default"
+        },
+        "iframe": {
+          "count": 1,
+          "matchedText": [
+            "Accepted"
+          ],
+          "absentText": [],
+          "frames": [
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 922,
+                "scrollWidth": 922
+              }
+            }
+          ]
+        },
+        "screenshot": "evidence/release-a-import-published-desktop.png",
+        "axe": {
+          "scenario": "desktop-import-publication",
+          "seriousOrCritical": 0,
+          "ruleIds": []
+        }
+      }
+    },
+    {
+      "id": "desktop.import-undo",
+      "passed": true,
+      "detail": {
+        "removedRows": 5000,
+        "structureRetained": true,
+        "receipt": "Import undone. 5000 imported rows were removed. The release_a_import table and view remain.\nWorker receipt: app default · revision 1 · operation import-0ca80684-a486-4d20-aed7-b0d99f85ba3f",
+        "iframe": {
+          "count": 1,
+          "matchedText": [
+            "No rows yet"
+          ],
+          "absentText": [
+            "Accepted"
+          ],
+          "frames": [
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 922,
+                "scrollWidth": 922
+              }
+            }
+          ]
+        },
+        "screenshot": "evidence/release-a-import-undo-desktop.png",
+        "axe": {
+          "scenario": "desktop-import-undo",
+          "seriousOrCritical": 0,
+          "ruleIds": []
+        }
+      }
+    },
+    {
+      "id": "mobile.onboarding",
+      "passed": true,
+      "detail": {
+        "viewport": "390x844",
+        "geometry": {
+          "viewport": {
+            "width": 390,
+            "height": 844
+          },
+          "document": {
+            "clientWidth": 390,
+            "scrollWidth": 390,
+            "clientHeight": 844,
+            "scrollHeight": 1755
+          },
+          "body": {
+            "clientWidth": 390,
+            "scrollWidth": 390,
+            "clientHeight": 844,
+            "scrollHeight": 1755
+          },
+          "regions": null
+        },
+        "defaultGoal": "tasks",
+        "primaryTargets": [
+          {
+            "label": "mobile default goal",
+            "width": 354,
+            "height": 67
+          },
+          {
+            "label": "mobile recommended starter",
+            "width": 354,
+            "height": 181
+          },
+          {
+            "label": "mobile import",
+            "width": 354,
+            "height": 181
+          },
+          {
+            "label": "mobile blank",
+            "width": 354,
+            "height": 111
+          }
+        ],
+        "axe": {
+          "scenario": "mobile-onboarding",
+          "seriousOrCritical": 0,
+          "ruleIds": []
+        }
+      }
+    },
+    {
+      "id": "mobile.activation",
+      "passed": true,
+      "detail": {
+        "viewport": "390x844",
+        "geometry": {
+          "viewport": {
+            "width": 390,
+            "height": 844
+          },
+          "document": {
+            "clientWidth": 390,
+            "scrollWidth": 390,
+            "clientHeight": 844,
+            "scrollHeight": 844
+          },
+          "body": {
+            "clientWidth": 390,
+            "scrollWidth": 390,
+            "clientHeight": 844,
+            "scrollHeight": 844
+          },
+          "regions": {
+            "clientWidth": 390,
+            "scrollWidth": 390,
+            "clientHeight": 374,
+            "scrollHeight": 2252
+          }
+        },
+        "focused": "Work workspace",
+        "announcement": "Small Business is ready. Work is open.",
+        "workDefault": {
+          "work": true,
+          "customize": false
+        }
+      }
+    },
+    {
+      "id": "mobile.touch-targets",
+      "passed": true,
+      "detail": {
+        "minimum": "44x44",
+        "targets": [
+          {
+            "label": "mobile default goal",
+            "width": 354,
+            "height": 67
+          },
+          {
+            "label": "mobile recommended starter",
+            "width": 354,
+            "height": 181
+          },
+          {
+            "label": "mobile import",
+            "width": 354,
+            "height": 181
+          },
+          {
+            "label": "mobile blank",
+            "width": 354,
+            "height": 111
+          },
+          {
+            "label": "mobile Work",
+            "width": 44,
+            "height": 44
+          },
+          {
+            "label": "mobile Customize",
+            "width": 67,
+            "height": 44
+          },
+          {
+            "label": "mobile add record",
+            "width": 106,
+            "height": 44
+          },
+          {
+            "label": "mobile dismiss checklist",
+            "width": 46,
+            "height": 44
+          },
+          {
+            "label": "mobile clear examples",
+            "width": 92,
+            "height": 44
+          }
+        ]
+      }
+    },
+    {
+      "id": "mobile.iframe",
+      "passed": true,
+      "detail": {
+        "count": 8,
+        "matchedText": [
+          "Open jobs",
+          "Kitchen faucet fix",
+          "Alice Nguyen",
+          "Add job"
+        ],
+        "absentText": [],
+        "frames": [
+          {
+            "name": "",
+            "url": "",
+            "geometry": {
+              "clientWidth": 364,
+              "scrollWidth": 364
+            }
+          },
+          {
+            "name": "",
+            "url": "",
+            "geometry": {
+              "clientWidth": 364,
+              "scrollWidth": 364
+            }
+          },
+          {
+            "name": "",
+            "url": "",
+            "geometry": {
+              "clientWidth": 364,
+              "scrollWidth": 364
+            }
+          },
+          {
+            "name": "",
+            "url": "",
+            "geometry": {
+              "clientWidth": 364,
+              "scrollWidth": 364
+            }
+          },
+          {
+            "name": "",
+            "url": "",
+            "geometry": {
+              "clientWidth": 364,
+              "scrollWidth": 364
+            }
+          },
+          {
+            "name": "",
+            "url": "",
+            "geometry": {
+              "clientWidth": 364,
+              "scrollWidth": 364
+            }
+          },
+          {
+            "name": "",
+            "url": "",
+            "geometry": {
+              "clientWidth": 300,
+              "scrollWidth": 300
+            }
+          },
+          {
+            "name": "",
+            "url": "",
+            "geometry": {
+              "clientWidth": 300,
+              "scrollWidth": 300
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "mobile.reflow",
+      "passed": true,
+      "detail": {
+        "viewport": "320x800",
+        "rootTextSize": "200%",
+        "geometry": {
+          "viewport": {
+            "width": 320,
+            "height": 800
+          },
+          "document": {
+            "clientWidth": 320,
+            "scrollWidth": 320,
+            "clientHeight": 800,
+            "scrollHeight": 1340
+          },
+          "body": {
+            "clientWidth": 320,
+            "scrollWidth": 320,
+            "clientHeight": 800,
+            "scrollHeight": 1340
+          },
+          "regions": null
+        },
+        "axe": {
+          "scenario": "mobile-reflow",
+          "seriousOrCritical": 0,
+          "ruleIds": []
+        }
+      }
+    },
+    {
+      "id": "lazy.onboarding-chunk-failure",
+      "passed": true,
+      "detail": {
+        "chunk": "assets/Onboarding-DRcN3olL.js",
+        "abortCount": 1,
+        "alert": "RECOVERABLE LOADING ERROR\nCouldn’t open setup\n\nYour records and app history are untouched. Reload Clay to fetch this surface again.\n\nReload Clay",
+        "recoveryFocused": true
+      }
+    },
+    {
+      "id": "lazy.checklist-chunk-failure",
+      "passed": true,
+      "detail": {
+        "chunk": "assets/FirstSuccessChecklist-BEfoKfzJ.js",
+        "abortCount": 1,
+        "alert": "RECOVERABLE LOADING ERROR\nCouldn’t open first steps\n\nYour records and app history are untouched. Reload Clay to fetch this surface again.\n\nReload Clay",
+        "recoveryFocused": true
+      }
+    },
+    {
+      "id": "accessibility.axe",
+      "passed": true,
+      "detail": {
+        "scenarios": [
+          "desktop-onboarding",
+          "desktop-activation",
+          "desktop-import-review",
+          "desktop-import-publication",
+          "desktop-import-undo",
+          "mobile-onboarding",
+          "mobile-activation",
+          "mobile-reflow"
+        ],
+        "scans": 8,
+        "seriousOrCritical": 0
+      }
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "desktop",
+      "viewport": "1440x1000",
+      "activatedDesktop": {
+        "recommendationLabel": "⌂\nUse a recommended starter\nSmall Business. Customers, jobs, invoices, items, and expenses in one app. Customers, jobs, invoices, money — your whole business in one app\nOpen →",
+        "appName": "Small Business\n▾",
+        "checklist": [
+          "Start with a working app: Complete",
+          "Add your first real record: Next",
+          "Review your Work view: Not started",
+          "Keep your first customization: Not started"
+        ],
+        "provenance": "Example data. 16 example records are included across customers, jobs, invoices, items, expenses.\nClear examples",
+        "announcementText": "Small Business is ready. Work is open.",
+        "focused": "Work workspace",
+        "workspaceMode": {
+          "work": true,
+          "customize": false
+        },
+        "iframe": {
+          "count": 8,
+          "matchedText": [
+            "Open jobs",
+            "Kitchen faucet fix",
+            "Alice Nguyen",
+            "Add job"
+          ],
+          "absentText": [],
+          "frames": [
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 1398,
+                "scrollWidth": 1398
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 1398,
+                "scrollWidth": 1398
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 532,
+                "scrollWidth": 532
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 1082,
+                "scrollWidth": 1082
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 532,
+                "scrollWidth": 532
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 532,
+                "scrollWidth": 532
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 298,
+                "scrollWidth": 298
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 298,
+                "scrollWidth": 298
+              }
+            }
+          ]
+        }
+      },
+      "realRecord": {
+        "recordName": "Release A real customer",
+        "checklist": [
+          "Start with a working app: Complete",
+          "Add your first real record: Complete",
+          "Review your Work view: Next",
+          "Keep your first customization: Not started"
+        ],
+        "beforeClear": "Example data. 16 example records are included across customers, jobs, invoices, items, expenses.\nClear examples",
+        "examplesCleared": true,
+        "realRecordSurvived": true,
+        "iframe": {
+          "count": 8,
+          "matchedText": [
+            "Release A real customer"
+          ],
+          "absentText": [
+            "Alice Nguyen",
+            "Kitchen faucet fix"
+          ],
+          "frames": [
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 1398,
+                "scrollWidth": 1398
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 1398,
+                "scrollWidth": 1398
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 532,
+                "scrollWidth": 532
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 1082,
+                "scrollWidth": 1082
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 532,
+                "scrollWidth": 532
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 532,
+                "scrollWidth": 532
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 298,
+                "scrollWidth": 298
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 298,
+                "scrollWidth": 298
+              }
+            }
+          ]
+        }
+      },
+      "geometry": {
+        "viewport": {
+          "width": 1440,
+          "height": 1000
+        },
+        "document": {
+          "clientWidth": 1440,
+          "scrollWidth": 1440,
+          "clientHeight": 1000,
+          "scrollHeight": 1000
+        },
+        "body": {
+          "clientWidth": 1440,
+          "scrollWidth": 1440,
+          "clientHeight": 1000,
+          "scrollHeight": 1000
+        },
+        "regions": {
+          "clientWidth": 1440,
+          "scrollWidth": 1440,
+          "clientHeight": 666,
+          "scrollHeight": 1359
+        }
+      },
+      "bottom": {
+        "scrollTop": 357,
+        "scrollHeight": 1112,
+        "clientHeight": 755
+      },
+      "accessibility": [
+        {
+          "scenario": "desktop-onboarding",
+          "seriousOrCritical": 0,
+          "ruleIds": []
+        },
+        {
+          "scenario": "desktop-activation",
+          "seriousOrCritical": 0,
+          "ruleIds": []
+        }
+      ]
+    },
+    {
+      "id": "import-review-publication-undo",
+      "viewport": "1280x900",
+      "review": {
+        "Proposed table": "release_a_import",
+        "Rows in file": "5002",
+        "Rows accepted": "5000",
+        "Rows skipped": "1",
+        "Rows truncated": "1",
+        "Fields in file": "22",
+        "Fields accepted": "20",
+        "Fields truncated": "2"
+      },
+      "receipt": "Import published. 5000 accepted rows are in release_a_import. Undo import removes only the imported rows; the table and view remain.\nWorker receipt: app default · revision 1 · operation import-0ca80684-a486-4d20-aed7-b0d99f85ba3f\nUndo import",
+      "undo": "Import undone. 5000 imported rows were removed. The release_a_import table and view remain.\nWorker receipt: app default · revision 1 · operation import-0ca80684-a486-4d20-aed7-b0d99f85ba3f",
+      "accessibility": [
+        {
+          "scenario": "desktop-import-review",
+          "seriousOrCritical": 0,
+          "ruleIds": []
+        },
+        {
+          "scenario": "desktop-import-publication",
+          "seriousOrCritical": 0,
+          "ruleIds": []
+        },
+        {
+          "scenario": "desktop-import-undo",
+          "seriousOrCritical": 0,
+          "ruleIds": []
+        }
+      ]
+    },
+    {
+      "id": "mobile",
+      "viewport": "390x844",
+      "before": {
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "document": {
+          "clientWidth": 390,
+          "scrollWidth": 390,
+          "clientHeight": 844,
+          "scrollHeight": 1755
+        },
+        "body": {
+          "clientWidth": 390,
+          "scrollWidth": 390,
+          "clientHeight": 844,
+          "scrollHeight": 1755
+        },
+        "regions": null
+      },
+      "after": {
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "document": {
+          "clientWidth": 390,
+          "scrollWidth": 390,
+          "clientHeight": 844,
+          "scrollHeight": 844
+        },
+        "body": {
+          "clientWidth": 390,
+          "scrollWidth": 390,
+          "clientHeight": 844,
+          "scrollHeight": 844
+        },
+        "regions": {
+          "clientWidth": 390,
+          "scrollWidth": 390,
+          "clientHeight": 374,
+          "scrollHeight": 2252
+        }
+      },
+      "targets": [
+        {
+          "label": "mobile default goal",
+          "width": 354,
+          "height": 67
+        },
+        {
+          "label": "mobile recommended starter",
+          "width": 354,
+          "height": 181
+        },
+        {
+          "label": "mobile import",
+          "width": 354,
+          "height": 181
+        },
+        {
+          "label": "mobile blank",
+          "width": 354,
+          "height": 111
+        },
+        {
+          "label": "mobile Work",
+          "width": 44,
+          "height": 44
+        },
+        {
+          "label": "mobile Customize",
+          "width": 67,
+          "height": 44
+        },
+        {
+          "label": "mobile add record",
+          "width": 106,
+          "height": 44
+        },
+        {
+          "label": "mobile dismiss checklist",
+          "width": 46,
+          "height": 44
+        },
+        {
+          "label": "mobile clear examples",
+          "width": 92,
+          "height": 44
+        }
+      ],
+      "activated": {
+        "recommendationLabel": "⌂\nUse a recommended starter\nSmall Business. Customers, jobs, invoices, items, and expenses in one app. Customers, jobs, invoices, money — your whole business in one app\nOpen →",
+        "appName": "Small Business\n▾",
+        "checklist": [
+          "Start with a working app: Complete",
+          "Add your first real record: Next",
+          "Review your Work view: Not started",
+          "Keep your first customization: Not started"
+        ],
+        "provenance": "Example data. 16 example records are included across customers, jobs, invoices, items, expenses.\nClear examples",
+        "announcementText": "Small Business is ready. Work is open.",
+        "focused": "Work workspace",
+        "workspaceMode": {
+          "work": true,
+          "customize": false
+        },
+        "iframe": {
+          "count": 8,
+          "matchedText": [
+            "Open jobs",
+            "Kitchen faucet fix",
+            "Alice Nguyen",
+            "Add job"
+          ],
+          "absentText": [],
+          "frames": [
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 364,
+                "scrollWidth": 364
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 364,
+                "scrollWidth": 364
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 364,
+                "scrollWidth": 364
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 364,
+                "scrollWidth": 364
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 364,
+                "scrollWidth": 364
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 364,
+                "scrollWidth": 364
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 300,
+                "scrollWidth": 300
+              }
+            },
+            {
+              "name": "",
+              "url": "",
+              "geometry": {
+                "clientWidth": 300,
+                "scrollWidth": 300
+              }
+            }
+          ]
+        }
+      },
+      "bottom": {
+        "scrollTop": 2064,
+        "scrollHeight": 2438,
+        "clientHeight": 374
+      },
+      "accessibility": [
+        {
+          "scenario": "mobile-onboarding",
+          "seriousOrCritical": 0,
+          "ruleIds": []
+        },
+        {
+          "scenario": "mobile-activation",
+          "seriousOrCritical": 0,
+          "ruleIds": []
+        }
+      ]
+    },
+    {
+      "id": "reflow",
+      "viewport": "320x800",
+      "textSize": "200%",
+      "geometry": {
+        "viewport": {
+          "width": 320,
+          "height": 800
+        },
+        "document": {
+          "clientWidth": 320,
+          "scrollWidth": 320,
+          "clientHeight": 800,
+          "scrollHeight": 1340
+        },
+        "body": {
+          "clientWidth": 320,
+          "scrollWidth": 320,
+          "clientHeight": 800,
+          "scrollHeight": 1340
+        },
+        "regions": null
+      },
+      "accessibility": {
+        "scenario": "mobile-reflow",
+        "seriousOrCritical": 0,
+        "ruleIds": []
+      }
+    }
+  ],
+  "accessibility": [
+    {
+      "scenario": "desktop-onboarding",
+      "seriousOrCritical": 0,
+      "ruleIds": []
+    },
+    {
+      "scenario": "desktop-activation",
+      "seriousOrCritical": 0,
+      "ruleIds": []
+    },
+    {
+      "scenario": "desktop-import-review",
+      "seriousOrCritical": 0,
+      "ruleIds": []
+    },
+    {
+      "scenario": "desktop-import-publication",
+      "seriousOrCritical": 0,
+      "ruleIds": []
+    },
+    {
+      "scenario": "desktop-import-undo",
+      "seriousOrCritical": 0,
+      "ruleIds": []
+    },
+    {
+      "scenario": "mobile-onboarding",
+      "seriousOrCritical": 0,
+      "ruleIds": []
+    },
+    {
+      "scenario": "mobile-activation",
+      "seriousOrCritical": 0,
+      "ruleIds": []
+    },
+    {
+      "scenario": "mobile-reflow",
+      "seriousOrCritical": 0,
+      "ruleIds": []
+    }
+  ],
+  "screenshots": [
+    {
+      "path": "evidence/release-a-onboarding-desktop.png",
+      "byteLength": 180498,
+      "sha256": "sha256:80689a0239287c0838e4eefc3df8a265c183de9135dafb6b544a0ede288ba63d"
+    },
+    {
+      "path": "evidence/release-a-first-success-desktop.png",
+      "byteLength": 98073,
+      "sha256": "sha256:0261cdf2816f3f5ab8b46ee5e85b46f04078bbfca38b83f649f980f503cd5a06"
+    },
+    {
+      "path": "evidence/release-a-first-real-record-desktop.png",
+      "byteLength": 100887,
+      "sha256": "sha256:ce3122401e244c6dcc75659dc3a5e54d260d54928af6708f16a56381d8fc7f02"
+    },
+    {
+      "path": "evidence/release-a-first-success-desktop-bottom.png",
+      "byteLength": 109212,
+      "sha256": "sha256:8f5bac5a60dfa9d16c77da47674ec3756b47facff341c0ef65707a4b11eb713a"
+    },
+    {
+      "path": "evidence/release-a-import-review-desktop.png",
+      "byteLength": 92428,
+      "sha256": "sha256:a84cab92683356c21e48b1b966137baa002df7e33775dc28cf16d31137bb73c5"
+    },
+    {
+      "path": "evidence/release-a-import-published-desktop.png",
+      "byteLength": 90529,
+      "sha256": "sha256:bbceba0d9b9b5c4abf85bbd13a2e30608e4395e49ddce39f2bd085553c6291a9"
+    },
+    {
+      "path": "evidence/release-a-import-undo-desktop.png",
+      "byteLength": 63814,
+      "sha256": "sha256:0f353127b9e0f3aa024382dcfd4388dbe03bffb0bdd1f8d3101469f9c66f4f5e"
+    },
+    {
+      "path": "evidence/release-a-onboarding-390.png",
+      "byteLength": 99970,
+      "sha256": "sha256:ef8e7bdb3879bea764054c887de1affd518d33ddaa285f0d68c1710c3c8cf530"
+    },
+    {
+      "path": "evidence/release-a-first-success-390.png",
+      "byteLength": 54746,
+      "sha256": "sha256:d741a0ebebcd7c62b52158b2f15b11412181a4b546897f9c4fefc2f39721e51e"
+    },
+    {
+      "path": "evidence/release-a-first-success-390-bottom.png",
+      "byteLength": 41274,
+      "sha256": "sha256:03d721480bd1e7b4e5b18a531f4f65b488605998b50c8b777254ab65d7b1abed"
+    },
+    {
+      "path": "evidence/release-a-onboarding-320-text-200.png",
+      "byteLength": 70858,
+      "sha256": "sha256:5fef6d8d937bf749aa5ab5a792abff3dea12a917384dde3dc0ad7bd983bd4f91"
+    },
+    {
+      "path": "evidence/release-a-onboarding-chunk-failure.png",
+      "byteLength": 21764,
+      "sha256": "sha256:2c3de8e537f246c10469a9148e70e8c6bd5648a8247b6adbd79dae148e0891f1"
+    },
+    {
+      "path": "evidence/release-a-checklist-chunk-failure.png",
+      "byteLength": 48928,
+      "sha256": "sha256:1f0587681719742cca25ba4ad4bae5f5dd030f70d293a66e526f7dd1e3b5b687"
+    }
+  ],
+  "expectedChunkErrors": [
+    {
+      "scenario": "onboarding-lazy-failure",
+      "source": "console",
+      "text": "Failed to load resource: net::ERR_FAILED"
+    },
+    {
+      "scenario": "onboarding-lazy-failure",
+      "source": "console",
+      "text": "TypeError: Failed to fetch dynamically imported module: http://127.0.0.1:4188/assets/Onboarding-DRcN3olL.js"
+    },
+    {
+      "scenario": "onboarding-lazy-failure",
+      "source": "console",
+      "text": "[clay lazy surface: setup] TypeError: Failed to fetch dynamically imported module: http://127.0.0.1:4188/assets/Onboarding-DRcN3olL.js \n    at Lazy (<anonymous>)\n    at Suspense (<anonymous>)\n    at js (http://127.0.0.1:4188/assets/index-Bk4-aPef.js:94:8060)\n    at HS (http://127.0.0.1:4188/assets/index-Bk4-aPef.js:94:13575)"
+    },
+    {
+      "scenario": "checklist-lazy-failure",
+      "source": "console",
+      "text": "Failed to load resource: net::ERR_FAILED"
+    },
+    {
+      "scenario": "checklist-lazy-failure",
+      "source": "console",
+      "text": "TypeError: Failed to fetch dynamically imported module: http://127.0.0.1:4188/assets/FirstSuccessChecklist-BEfoKfzJ.js"
+    },
+    {
+      "scenario": "checklist-lazy-failure",
+      "source": "console",
+      "text": "[clay lazy surface: first steps] TypeError: Failed to fetch dynamically imported module: http://127.0.0.1:4188/assets/FirstSuccessChecklist-BEfoKfzJ.js \n    at Lazy (<anonymous>)\n    at Suspense (<anonymous>)\n    at js (http://127.0.0.1:4188/assets/index-Bk4-aPef.js:94:8060)\n    at div (<anonymous>)\n    at HS (http://127.0.0.1:4188/assets/index-Bk4-aPef.js:94:13575)"
+    }
+  ],
+  "unexpectedConsoleErrors": [],
+  "unexpectedPageErrors": [],
+  "externalRequests": []
+}

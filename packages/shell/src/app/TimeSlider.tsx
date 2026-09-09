@@ -27,7 +27,7 @@ export function TimeSlider(props: {
         step={1}
         value={props.current}
         disabled={props.disabled}
-        aria-label="App history"
+        aria-label="Recent changes"
         onChange={e => props.onScrub(Number(e.target.value))}
       />
       <div className="timeslider-info">
@@ -38,13 +38,13 @@ export function TimeSlider(props: {
         {props.scrubbed ? (
           <span className="timeslider-actions">
             <button className="primary" onClick={props.onMakeLatest}>
-              Make this the latest
+              Go back to this point
             </button>
             <button onClick={() => props.onScrub(head)}>Back to now</button>
           </span>
         ) : props.onOpenHistory ? (
           <button className="timeslider-history" onClick={props.onOpenHistory}>
-            History ↗
+            Recent changes ↗
           </button>
         ) : null}
       </div>

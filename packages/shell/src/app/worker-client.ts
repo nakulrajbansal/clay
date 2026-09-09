@@ -28,6 +28,8 @@ import type {
   IntakeSubmissionPlaintextV1, LocalIntakeFormV1,
 } from "@clay/schema/intake";
 import type { IntentOutcome } from "../worker/db-worker";
+import type { FirstRunPublicationReceipt } from "../worker/first-run-activation";
+import type { FirstSuccessState } from "./first-success-state";
 import { fetchModelHealth } from "./model-health";
 import type {
   ImportHeaderChoice, ImportParserChunk, ImportSourceDescriptor,
@@ -1541,6 +1543,45 @@ export class WorkerClient {
     return this.mutationCall("fillSamples", undefined, context);
   }
   sampleCount(): Promise<number> { return this.ephemeralCall("sampleCount"); }
+  firstRunEvidence(): Promise<{
+    sampleCount: number; sampleTables: string[]; realRecordCount: number; provenanceValid: boolean;
+  }> {
+    return this.ephemeralCall("firstRunEvidence");
+  }
+  firstRunPublication(appId: string): Promise<FirstRunPublicationReceipt | null> {
+    return this.ephemeralCall("firstRunPublication", { appId });
+  }
+  firstEverydayActionTarget(): Promise<{ table: string; rowId: string } | null> {
+    return this.ephemeralCall("firstEverydayActionTarget");
+  }
+  completeEverydayAction(input: {
+    action: "open"; table: string; rowId: string;
+  }, context?: WorkerMutationContext): Promise<FirstSuccessState> {
+    return this.mutationCall(
+      "completeEverydayAction",
+      input,
+      context ?? this.createMutationContext(),
+    );
+  }
+  deviceProtection(): Promise<import("../worker/db-worker").DeviceProtectionProjection> {
+    return this.ephemeralCall("deviceProtection");
+  }
+  activateStarter(input: {
+    operationId: string; appId: string; shellId: string;
+  }): Promise<FirstRunPublicationReceipt> {
+    return this.mutationCall("activateStarter", input, this.createMutationContext());
+  }
+  activateImportedApp(input: {
+    operationId: string; appId: string; table: string; columns: unknown[]; rows: unknown[];
+    review: unknown;
+  }): Promise<FirstRunPublicationReceipt> {
+    return this.mutationCall("activateImportedApp", input, this.createMutationContext());
+  }
+  undoFirstRunImport(input: {
+    operationId: string; appId: string; expectedRevision: number;
+  }): Promise<FirstRunPublicationReceipt> {
+    return this.mutationCall("undoFirstRunImport", input, this.createMutationContext());
+  }
   reset(context: WorkerMutationContext): Promise<null> {
     return this.mutationCall("reset", undefined, context);
   }
