@@ -85,6 +85,7 @@ function harness(reply?: (message: Posted) => unknown): {
 async function plannerResultForProvider(
   outcome: { raw: string } | { failure: unknown },
   access: ModelAccess,
+  panels: Array<{ code?: string }> = [],
 ): Promise<Record<string, unknown>> {
   if ("raw" in outcome) modelBridge.rawPlan.mockResolvedValueOnce(outcome.raw);
   else modelBridge.rawPlan.mockRejectedValueOnce(outcome.failure);
@@ -106,7 +107,7 @@ async function plannerResultForProvider(
   plannerPort!.postMessage({
     v: 1, kind: "planner.request", epoch: `boot_${"a".repeat(26)}`,
     generation: 1, contextId: `ctx_${"b".repeat(26)}`, attempt: 0, sequence: 0,
-    context: { registry: [], panels: [], recentSummaries: [], intent: "add a board" },
+    context: { registry: [], panels, recentSummaries: [], intent: "add a board" },
     repair: null,
   });
   const result = await response;
@@ -115,8 +116,9 @@ async function plannerResultForProvider(
   return result;
 }
 
-const plannerResultForRaw = (raw: string, access: ModelAccess) =>
-  plannerResultForProvider({ raw }, access);
+const plannerResultForRaw = (
+  raw: string, access: ModelAccess, panels: Array<{ code?: string }> = [],
+) => plannerResultForProvider({ raw }, access, panels);
 
 const mutation = (client: WorkerClient) => client.createMutationContext();
 
@@ -730,7 +732,7 @@ describe("WorkerClient model credential boundary", () => {
     await vi.waitFor(() => expect(observed.some(
       message => message.kind === "planner.cancel",
     )).toBe(true));
-    modelBridge.rawPlan.mockResolvedValueOnce("{}");
+    modelBridge.rawPlan.mockResolvedValueOnce("{\"panels\":[]}");
     const beforeTransports = modelBridge.transports.length;
     const later = client.intent("must remain signed out", mutation(client));
     const laterPort = plannerPort!;
@@ -749,7 +751,7 @@ describe("WorkerClient model credential boundary", () => {
     });
     expect(modelBridge.transports.at(-1)).not.toHaveProperty("credentials");
     stop();
-    releasePlan("{}");
+    releasePlan("{\"panels\":[]}");
     client.terminate();
     await expect(pending).rejects.toThrow(/terminated/i);
     await expect(later).rejects.toThrow(/terminated/i);
@@ -928,6 +930,18 @@ describe("WorkerClient model credential boundary", () => {
       .map(character => `\\u{${character.codePointAt(0)!.toString(16)}}`).join("")}"`],
     ["static literal concatenation", (secret: string) => secret.match(/.{1,5}/g)!
       .map(part => JSON.stringify(part)).join(" + ")],
+    ["left-grouped static literal concatenation", (secret: string) => {
+      const parts = secret.match(/.{1,5}/g)!;
+      return parts.slice(1).reduce((expression, part) =>
+        `(${expression} + ${JSON.stringify(part)})`, JSON.stringify(parts[0]));
+    }],
+    ["right-grouped static literal concatenation", (secret: string) => {
+      const parts = secret.match(/.{1,5}/g)!;
+      let expression = JSON.stringify(parts.at(-1));
+      for (let index = parts.length - 2; index >= 0; index--)
+        expression = `${JSON.stringify(parts[index])} + (${expression})`;
+      return expression;
+    }],
     ["static template concatenation", (secret: string) => secret.match(/.{1,5}/g)!
       .map(part => `\`${part}\``).join(" + ")],
     ["static template interpolation", (secret: string) => {
@@ -935,8 +949,53 @@ describe("WorkerClient model credential boundary", () => {
       return `\`${parts[0]}${parts.slice(1)
         .map(part => `\${${JSON.stringify(part)}}`).join("")}\``;
     }],
+    ["static expression inside template interpolation", (secret: string) => {
+      const parts = secret.match(/.{1,5}/g)!;
+      return "`" + parts[0] + "${(" + parts.slice(1)
+        .map(part => JSON.stringify(part)).join(" + ") + ")}`";
+    }],
     ["static array join", (secret: string) =>
       `[${secret.match(/.{1,5}/g)!.map(part => JSON.stringify(part)).join(",")}].join("")`],
+    ["parenthesized static array join elements", (secret: string) =>
+      `[${secret.match(/.{1,5}/g)!.map(part => `(${JSON.stringify(part)})`).join(",")}].join("")`],
+    ["concatenated static array join elements", (secret: string) => {
+      const parts = secret.match(/.{1,5}/g)!;
+      return `[(${JSON.stringify(parts[0])} + ${JSON.stringify(parts[1])}),${parts.slice(2)
+        .map(part => JSON.stringify(part)).join(",")}].join("")`;
+    }],
+    ["computed static array join", (secret: string) =>
+      `[${secret.split("-").map(part => JSON.stringify(part)).join(",")}]["join"]("-")`],
+    ["static String concat call", (secret: string) => {
+      const parts = secret.match(/.{1,9}/g)!;
+      return `${JSON.stringify(parts[0])}.concat(${parts.slice(1)
+        .map(part => JSON.stringify(part)).join(",")})`;
+    }],
+    ["tagged-template static array join", (secret: string) =>
+      `[${secret.match(/.{1,8}/g)!.map(part => JSON.stringify(part)).join(",")}].join\`\``],
+    ["spread static character codes", (secret: string) =>
+      `String.fromCharCode(...[${[...secret]
+        .map(character => character.charCodeAt(0)).join(",")}])`],
+    ["whitespace before static character-code member access", (secret: string) =>
+      `String .fromCharCode(${[...secret]
+        .map(character => character.charCodeAt(0)).join(",")})`],
+    ["uppercase hexadecimal static character codes", (secret: string) =>
+      `String.fromCharCode(${[...secret]
+        .map(character => `0X${character.charCodeAt(0).toString(16).toUpperCase()}`).join(",")})`],
+    ["mixed literal and static character-code expression", (secret: string) => {
+      const prefix = secret.slice(0, 9);
+      return `${JSON.stringify(prefix)} + String.fromCharCode(${[...secret.slice(prefix.length)]
+        .map(character => character.charCodeAt(0)).join(",")})`;
+    }],
+    ["wrapped static character codes", (secret: string) =>
+      `String.fromCharCode(${[...secret]
+        .map(character => character.charCodeAt(0) + 0x10000).join(",")})`],
+    ["negative static character codes", (secret: string) => `String.fromCharCode(${[...secret].map(character => character.charCodeAt(0) - 0x10000).join(",")})`],
+    ["fractional static character codes", (secret: string) => `String.fromCharCode(${[...secret].map(character => `${character.charCodeAt(0)}.9`).join(",")})`],
+    ["unsupported character-code expressions", (secret: string) => `String.fromCharCode(${[...secret].map(character => `${character.charCodeAt(0)}+65536`).join(",")})`],
+    ["reversed static character codes", (secret: string) => `String.fromCharCode(${[...secret].reverse().map(character => character.charCodeAt(0)).join(",")})`],
+    ["computed character-code alias", (secret: string) =>
+      `(() => { const f = String["fromCharCode"]; return f(...[${[...secret]
+        .map(character => character.charCodeAt(0)).join(",")}]); })()`],
     ["base64", (secret: string) => JSON.stringify(
       Buffer.from(secret, "utf8").toString("base64"))],
     ["hex", (secret: string) => JSON.stringify(
@@ -959,6 +1018,58 @@ describe("WorkerClient model credential boundary", () => {
       kind: "planner.response", result: { ok: false, error: { code: "E_MODEL" } },
     });
     expect(JSON.stringify(result)).not.toContain(credential);
+  });
+
+  it("rejects new executable panel code even when no credential is active", async () => {
+    const raw = JSON.stringify({ panels: [{ code: "export default function (clay) { clay.ui.render(null); }" }] });
+    const access = { provider: "clay", apiKey: null, backendUrl: "https://clay.example",
+      session: null, allowAmbientCredentials: false } as ModelAccess;
+    const result = await plannerResultForRaw(raw, access);
+    expect(result).toMatchObject({
+      kind: "planner.response", result: { ok: false, error: { code: "E_MODEL" } },
+    });
+  });
+
+  it("allows declarative blueprint panel output while a credential is active", async () => {
+    const raw = JSON.stringify({
+      panels: [{ code: "//#blueprint {\"kind\":\"table\",\"table\":\"tasks\"}" }],
+    });
+    const result = await plannerResultForRaw(raw, withCredential(
+      { provider: "anthropic", backendUrl: null, session: null },
+      "semantic-credential-canary",
+    ));
+    expect(result).toMatchObject({
+      kind: "planner.response", result: { ok: true, raw },
+    });
+  });
+
+  it("rejects a blueprint with fields outside the closed contract", async () => {
+    const raw = JSON.stringify({ panels: [{
+      code: "//#blueprint {\"kind\":\"table\",\"table\":\"tasks\",\"url\":\"https://example.invalid\"}",
+    }] });
+    const result = await plannerResultForRaw(raw, withCredential(
+      { provider: "anthropic", backendUrl: null, session: null },
+      "semantic-credential-canary",
+    ));
+    expect(result).toMatchObject({
+      kind: "planner.response", result: { ok: false, error: { code: "E_MODEL" } },
+    });
+  });
+
+  it("allows byte-identical existing custom panel code but rejects a changed copy", async () => {
+    const code = "export default function (clay) { clay.ui.render(null); }";
+    const access = withCredential(
+      { provider: "anthropic", backendUrl: null, session: null },
+      "semantic-credential-canary",
+    );
+    const raw = JSON.stringify({ panels: [{ code }] });
+    await expect(plannerResultForRaw(raw, access, [{ code }])).resolves.toMatchObject({
+      kind: "planner.response", result: { ok: true, raw },
+    });
+    const changed = JSON.stringify({ panels: [{ code: `${code} ` }] });
+    await expect(plannerResultForRaw(changed, access, [{ code }])).resolves.toMatchObject({
+      kind: "planner.response", result: { ok: false, error: { code: "E_MODEL" } },
+    });
   });
 
   it("screens inactive credentials still held elsewhere on the device", async () => {
@@ -996,7 +1107,7 @@ describe("WorkerClient model credential boundary", () => {
   });
 
   it("discards a preview returned after model access invalidates its planner", async () => {
-    modelBridge.rawPlan.mockResolvedValueOnce("{}");
+    modelBridge.rawPlan.mockResolvedValueOnce("{\"panels\":[]}");
     const posted: Posted[] = [];
     let plannerPort: MessagePort | null = null;
     const worker = {
@@ -1055,7 +1166,7 @@ describe("WorkerClient model credential boundary", () => {
   });
 
   it("acknowledges a bound planner finalization before accepting the outer outcome", async () => {
-    modelBridge.rawPlan.mockResolvedValueOnce("{}");
+    modelBridge.rawPlan.mockResolvedValueOnce("{\"panels\":[]}");
     const posted: Posted[] = [];
     let plannerPort: MessagePort | null = null;
     const worker = {
@@ -1085,7 +1196,7 @@ describe("WorkerClient model credential boundary", () => {
     });
     await expect(response).resolves.toMatchObject({
       v: 1, kind: "planner.response", attempt: 0, sequence: 0,
-      result: { ok: true, raw: "{}" },
+      result: { ok: true, raw: "{\"panels\":[]}" },
     });
     const finalized = nextMessage();
     plannerPort!.postMessage({

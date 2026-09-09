@@ -76,6 +76,8 @@ const expectedLazyChunks = [
   { label: "HistoryView", source: "src/app/HistoryView.tsx" },
   { label: "ShapeMapView", source: "src/app/ShapeMapView.tsx" },
   { label: "PrivateMetricsView", source: "src/app/PrivateMetricsView.tsx" },
+  { label: "ProductionBackupRuntime", source: "src/app/production-backup.browser.ts" },
+  { label: "AutomaticBackupTrigger", source: "src/app/automatic-backup-trigger.browser.ts" },
 ];
 if (await exists(join(sourceRoot, "SettingsPanel.tsx"))) {
   expectedLazyChunks.push({

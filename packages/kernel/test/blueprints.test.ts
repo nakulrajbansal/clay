@@ -110,10 +110,21 @@ describe("blueprint expansion (ADR-029)", () => {
     store.close();
   });
 
-  it("parseBlueprintDirective matches only whole-module directives", () => {
+  it("parseBlueprintDirective matches only whole-module closed directives", () => {
     expect(parseBlueprintDirective('//#blueprint {"kind":"table","table":"t"}'))
       .toEqual({ kind: "table", table: "t" });
+    for (const spec of Object.values(SPECS))
+      expect(parseBlueprintDirective(`//#blueprint ${JSON.stringify(spec)}`)).toEqual(spec);
     expect(parseBlueprintDirective("export default function(clay){}")).toBeNull();
+    expect(() => parseBlueprintDirective(
+      '//#blueprint {"kind":"table","table":"t","url":"https://example.invalid"}',
+    )).toThrow(/unexpected field/i);
+    expect(() => parseBlueprintDirective(
+      '//#blueprint {"kind":"cards","table":"t","item":{"title":"name","script":"x"}}',
+    )).toThrow(/unexpected field/i);
+    expect(() => parseBlueprintDirective(
+      `//#blueprint ${JSON.stringify({ kind: "table", table: "t", search: "x".repeat(17_000) })}`,
+    )).toThrow(/byte limit/i);
   });
 });
 

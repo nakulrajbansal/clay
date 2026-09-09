@@ -59,6 +59,7 @@ function baseProps(): ComponentProps<typeof RecoveryCenter> {
     authoritativeAppInstanceId: currentAppInstanceId,
     opfsAvailable: true,
     backupTrustStatus: { status: "not_enrolled" },
+    backupAdapterStatus: "available",
     backupTarget: null,
     lastVerifiedBackup: null,
     failures: [],
@@ -151,6 +152,25 @@ describe("Release B Recovery Center", () => {
 
     await act(async () => button("Choose backup folder").click());
     expect(props.onChooseFolder).toHaveBeenCalledTimes(1);
+    await act(async () => root.unmount());
+  });
+
+  it("distinguishes adapter loading from a retryable load failure", async () => {
+    const loading = { ...baseProps(), backupAdapterStatus: "loading" as const,
+      onChooseFolder: undefined };
+    const { root } = await mount(loading);
+    expect(button("Checking folder backup…").disabled).toBe(true);
+    expect(document.querySelector('[role="status"]')?.textContent)
+      .toContain("Checking whether this browser can use a backup folder");
+
+    const retry = vi.fn(async () => undefined);
+    await act(async () => root.render(<RecoveryCenter {...loading}
+      backupAdapterStatus="error" onRetryBackupAdapter={retry} />));
+    expect(button("Folder backup needs retry").disabled).toBe(true);
+    expect(document.querySelector('[role="alert"]')?.textContent)
+      .toContain("Your app data was not changed");
+    await act(async () => button("Retry folder support").click());
+    expect(retry).toHaveBeenCalledTimes(1);
     await act(async () => root.unmount());
   });
 

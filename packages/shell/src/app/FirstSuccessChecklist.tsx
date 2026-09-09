@@ -2,7 +2,7 @@ import {
   FIRST_WRITE_STORAGE_COPY, TEMPORARY_FIRST_WRITE_COPY,
   firstSuccessCount, type FirstSuccessState,
 } from "./first-success-state";
-import { targetIdentityEquals } from "@clay/kernel";
+import { targetIdentityEquals } from "@clay/kernel/protection";
 import type { DeviceProtectionProjection } from "../worker/db-worker";
 
 const labels = {

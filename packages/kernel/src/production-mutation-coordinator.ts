@@ -27,6 +27,12 @@ import {
 } from "./db";
 import { DeviceCatalog } from "./device-catalog";
 import { ClayError } from "./errors";
+import {
+  FIRST_SUCCESS_SETTING_KEY,
+  applyFirstSuccessEvent,
+  emptyFirstSuccessState,
+  parseFirstSuccessState,
+} from "./first-success";
 import type { LiveWriteAuthority } from "./live-write-guard";
 import { executeAutomationObserverAuthorityRoute } from "./production-automation-observer-routes";
 import {
@@ -194,6 +200,10 @@ type CapturedProductionMutation = CapturedCoreMutation | Readonly<{
   | {
     route: "setting.compareAndSet";
     payload: Readonly<{ key: string; expectedRevision: number; value: JsonValue }>;
+  }
+  | {
+    route: "firstSuccess.completeEveryday";
+    payload: Readonly<{ action: "open"; table: string; rowId: string }>;
   }
   | { route: "upsertAutomation"; payload: Readonly<{ input: Readonly<JsonRecord> }> }
   | {
@@ -710,6 +720,7 @@ function captureMutation(input: unknown): CapturedProductionMutation {
       case "setting.set": fields = ["key", "value"]; break;
       case "setting.delete": fields = ["key"]; break;
       case "setting.compareAndSet": fields = ["key", "expectedRevision", "value"]; break;
+      case "firstSuccess.completeEveryday": fields = ["action", "table", "rowId"]; break;
       case "upsertAutomation": fields = ["input"]; break;
       case "recordUsage": fields = ["event"]; break;
       case "acceptSuggestion":
@@ -790,6 +801,13 @@ function captureMutation(input: unknown): CapturedProductionMutation {
         if (!Number.isSafeInteger(captured.expectedRevision)
             || Number(captured.expectedRevision) < 0) throw new Error();
         assertSettingKeyAvailable(captured.key as string);
+        break;
+      case "firstSuccess.completeEveryday":
+        strings("action", "table", "rowId");
+        if (captured.action !== "open"
+            || !/^[A-Za-z][A-Za-z0-9_]{0,62}$/.test(captured.table as string)
+            || (captured.rowId as string).length < 1
+            || (captured.rowId as string).length > 128) throw new Error();
         break;
       case "upsertAutomation": capturedJsonRecord(captured.input); break;
       case "recordUsage": validateCapturedUsageEvent(capturedJsonRecord(captured.event)); break;
@@ -974,7 +992,10 @@ const STORE_PURGE_ATTACHMENTS: ClayStore["purgeDeletedAttachments"] =
 const STORE_APPLY_BATCH: ClayStore["applyBatch"] = ClayStore.prototype.applyBatch;
 const STORE_UNDO_BATCH: ClayStore["undoBatch"] = ClayStore.prototype.undoBatch;
 const STORE_RESTORE_ROW: ClayStore["restoreRow"] = ClayStore.prototype.restoreRow;
+const STORE_QUERY: ClayStore["query"] = ClayStore.prototype.query;
 const STORE_REGISTRY_SNAPSHOT: ClayStore["registrySnapshot"] = ClayStore.prototype.registrySnapshot;
+const STORE_VALIDATION_REGISTRY_SNAPSHOT: ClayStore["validationRegistrySnapshot"] =
+  ClayStore.prototype.validationRegistrySnapshot;
 const STORE_BEGIN_ATTEMPT: ClayStore["beginAttempt"] = ClayStore.prototype.beginAttempt;
 const STORE_FINISH_ATTEMPT: ClayStore["finishAttempt"] = ClayStore.prototype.finishAttempt;
 const STORE_RELOAD_AFTER_ROLLBACK: ClayStore["reloadRegistryAfterRollback"] =
@@ -1016,6 +1037,43 @@ function sampleProvenanceCoordinates(
   return STORE_SAMPLE_PROVENANCE.call(store)
     .filter(entry => entry.operationId === operationId)
     .map(entry => Object.freeze({ tableId: entry.tableId, rowId: entry.rowId }));
+}
+
+function executeFirstSuccessEveryday(
+  store: ClayStore,
+  payload: Readonly<{ action: "open"; table: string; rowId: string }>,
+): JsonValue {
+  const table = STORE_VALIDATION_REGISTRY_SNAPSHOT.call(store).get(payload.table);
+  const tableId = table?.semantic?.tableId;
+  if (!table || table.inactive || !tableId)
+    throw invalid("Everyday action did not read back a canonical real record");
+  if (STORE_SAMPLE_PROVENANCE.call(store).some(entry =>
+    entry.tableId === tableId && entry.rowId === payload.rowId))
+    throw invalid("Everyday action cannot use a starter sample record");
+  const row = STORE_QUERY.call(store, {
+    from: payload.table,
+    where: [{ field: "id", op: "eq", value: payload.rowId }],
+    limit: 1,
+  })[0];
+  if (!row || String(row.id) !== payload.rowId || row.deleted_at != null)
+    throw invalid("Everyday action did not read back a canonical real record");
+
+  const stored: unknown = STORE_GET_SETTING.call(store, FIRST_SUCCESS_SETTING_KEY);
+  const current = stored === undefined || stored === null
+    ? emptyFirstSuccessState() : parseFirstSuccessState(stored);
+  const applied = applyFirstSuccessEvent(current, {
+    type: "everyday_action", action: payload.action, changed: true, sample: false,
+  });
+  if (applied === current) {
+    if (current.steps.everyday.state === "complete")
+      return captureJsonValue(current, new WeakSet());
+    throw invalid("The first real record must be verified before an everyday action");
+  }
+  if (current.revision >= Number.MAX_SAFE_INTEGER)
+    throw invalid("First-success progress revision cannot advance");
+  const next = { ...applied, revision: current.revision + 1 };
+  STORE_SET_SETTING.call(store, FIRST_SUCCESS_SETTING_KEY, next);
+  return captureJsonValue(next, new WeakSet());
 }
 
 function capturedExecution(
@@ -1217,6 +1275,8 @@ function executeCapturedMutation(
         { ok: true, current: request.payload.value }, new WeakSet(),
       ));
     }
+    case "firstSuccess.completeEveryday":
+      return capturedExecution(executeFirstSuccessEveryday(store, request.payload));
     case "upsertAutomation":
     case "saveAutomationDraft":
     case "saveAutomationRecipeDraft":

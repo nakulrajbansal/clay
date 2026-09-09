@@ -793,7 +793,9 @@ export function AutomationCenter(props: {
                   ? runs.find(run => run.id === ruleRuntime.lastRunId) ?? null : null);
               const lastRuntime = lastRun
                 ? runtimeOverview.runs.find(state => state.runId === lastRun.id) : undefined;
-              return <article className={`automation-rule${rule.needsRepair ? " needs-repair" : ""}`} key={rule.id}>
+              return <article className={`automation-rule${rule.needsRepair ? " needs-repair" : ""}`}
+                key={rule.id} data-automation-id={rule.id}
+                aria-current={rule.id === props.initialAutomationId ? "true" : undefined}>
                 <button className={`automation-toggle${rule.enabled ? " on" : ""}`}
                   role="switch" aria-checked={rule.enabled}
                   aria-label={rule.needsRepair ? `${rule.name} needs review`

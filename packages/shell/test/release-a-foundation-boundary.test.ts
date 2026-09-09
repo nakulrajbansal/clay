@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { WorkerClient } from "../src/app/worker-client";
+import { DB_WORKER_ROUTE_CENSUS } from "../src/worker/mutation-route-census";
 
 const appSource = await readFile(new URL("../src/app/App.tsx", import.meta.url), "utf8");
 const workerSource = await readFile(new URL("../src/worker/db-worker.ts", import.meta.url), "utf8");
@@ -13,20 +14,23 @@ describe("Release A foundation boundary", () => {
     expect(appSource).toContain("Safe creation of another imported app is not available yet");
   });
 
-  it("routes file selection through explicit review and never deletes a possibly published retry", () => {
+  it("routes file selection through explicit review without exposing unsupported publication", () => {
     expect(appSource).toContain("<ImportReview");
     expect(appSource).toContain("onImport={file => void reviewNewAppImport(file)}");
     expect(appSource).not.toContain("onImport={file => void importNewApp(file)}");
     expect(appSource).not.toMatch(/published[\s\S]{0,500}deleteApp\("default"\)/);
-    expect(workerSource).toContain('case "undoFirstRunImport"');
-    expect(workerSource).toContain('route: "firstRun.undoImport"');
+    for (const name of ["activateStarter", "activateImportedApp", "undoFirstRunImport",
+      "firstRunPublication"] as const) {
+      expect(name in WorkerClient.prototype).toBe(false);
+      expect(name in DB_WORKER_ROUTE_CENSUS).toBe(false);
+      expect(workerSource).not.toContain(`case "${name}"`);
+    }
+    expect(workerSource).not.toContain('route: "firstRun.undoImport"');
   });
 
-  it("keeps publication and conflict-safe Undo inside the worker boundary", () => {
-    expect(workerSource).toContain('case "activateStarter"');
-    expect(workerSource).toContain('case "activateImportedApp"');
-    expect(workerSource).toContain('case "firstRunPublication"');
-    expect(workerSource).toContain('case "undoFirstRunImport"');
+  it("keeps MVP starter creation on the production seed authority", () => {
+    expect(workerSource).toContain('case "seed":');
+    expect(workerSource).toContain('runAuthorityMutation("seed", createStarterSeedBundle');
   });
 
   it("cannot strand a cancelled first write in a split worker-ticket lifecycle", () => {

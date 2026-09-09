@@ -34,14 +34,13 @@ import type {
   ProductionBackupSelection,
 } from "@clay/kernel/worker-authority";
 import { ClayError } from "@clay/kernel/errors";
-import { extractAcornStaticStrings } from "@clay/kernel/shell-runtime";
+import { parseClosedBlueprintDirective } from "@clay/kernel/blueprint-contract";
 import type {
   IntakeAutoAcceptDraftV1, IntakeAutoAcceptRuleV1,
   IntakeSubmissionPlaintextV1, LocalIntakeFormV1,
 } from "@clay/schema/intake";
 import { TargetEvidenceV1 } from "@clay/schema/catalog";
 import type { IntentOutcome } from "../worker/db-worker";
-import type { FirstRunPublicationReceipt } from "../worker/first-run-activation";
 import type { FirstSuccessState } from "./first-success-state";
 import { fetchModelHealth } from "./model-health";
 import type {
@@ -367,7 +366,197 @@ function decodeJavaScriptEscapes(input: string): string {
 
 type StaticLiteral = { start: number; end: number; value: string };
 
-function extractStaticJavaScriptStrings(source: string): string[] {
+function skipStaticTrivia(source: string, start: number): number {
+  let index = start;
+  for (;;) {
+    while (index < source.length && /\s/.test(source[index]!)) index++;
+    if (source.startsWith("//", index)) {
+      const newline = source.indexOf("\n", index + 2);
+      index = newline < 0 ? source.length : newline + 1;
+      continue;
+    }
+    if (source.startsWith("/*", index)) {
+      const close = source.indexOf("*/", index + 2);
+      index = close < 0 ? source.length : close + 2;
+      continue;
+    }
+    return index;
+  }
+}
+
+const STATIC_EXPRESSION_DEPTH_LIMIT = 64;
+const STATIC_EXPRESSION_STEP_LIMIT = 100_000;
+const STATIC_EXPRESSION_VALUE_LIMIT = 8_192;
+
+type StaticStringExpression = { end: number; value: string };
+type StaticExpressionState = {
+  source: string;
+  literalAt: Map<number, StaticLiteral>;
+  steps: number;
+  overflow: boolean;
+};
+
+function spendStaticStep(state: StaticExpressionState, amount = 1): boolean {
+  state.steps += amount;
+  if (state.steps <= STATIC_EXPRESSION_STEP_LIMIT) return true;
+  state.overflow = true;
+  return false;
+}
+
+function combineStaticStrings(
+  state: StaticExpressionState, left: string, right: string,
+): string | null {
+  if (left.length + right.length > ESCAPE_SCAN_WORK_LIMIT) {
+    state.overflow = true;
+    return null;
+  }
+  return left + right;
+}
+
+function parseStaticStringExpression(
+  state: StaticExpressionState, start: number, depth = 0,
+): StaticStringExpression | null {
+  if (depth > STATIC_EXPRESSION_DEPTH_LIMIT || !spendStaticStep(state)) {
+    state.overflow = true;
+    return null;
+  }
+  let current = parseStaticStringPrimary(state, start, depth + 1);
+  if (!current) return null;
+  for (;;) {
+    const operator = skipStaticTrivia(state.source, current.end);
+    if (state.source[operator] !== "+") break;
+    const right = parseStaticStringPrimary(state, operator + 1, depth + 1);
+    if (!right) break;
+    const value = combineStaticStrings(state, current.value, right.value);
+    if (value === null) return null;
+    current = { end: right.end, value };
+  }
+  return current;
+}
+
+function parseStaticTemplate(
+  state: StaticExpressionState, start: number, depth: number,
+): StaticStringExpression | null {
+  const { source } = state;
+  if (source[start] !== "`") return null;
+  let cursor = start + 1;
+  let raw = "";
+  let value = "";
+  while (cursor < source.length) {
+    if (!spendStaticStep(state)) return null;
+    const character = source[cursor]!;
+    if (character === "\\" && cursor + 1 < source.length) {
+      raw += character + source[cursor + 1]!;
+      cursor += 2;
+      continue;
+    }
+    if (character === "`") {
+      const tail = decodeJavaScriptEscapes(raw);
+      const complete = combineStaticStrings(state, value, tail);
+      return complete === null ? null : { end: cursor + 1, value: complete };
+    }
+    if (character === "$" && source[cursor + 1] === "{") {
+      const quasi = decodeJavaScriptEscapes(raw);
+      const withQuasi = combineStaticStrings(state, value, quasi);
+      if (withQuasi === null) return null;
+      const expression = parseStaticStringExpression(state, cursor + 2, depth + 1);
+      if (!expression) return null;
+      const close = skipStaticTrivia(source, expression.end);
+      if (source[close] !== "}") return null;
+      const combined = combineStaticStrings(state, withQuasi, expression.value);
+      if (combined === null) return null;
+      value = combined;
+      raw = "";
+      cursor = close + 1;
+      continue;
+    }
+    raw += character;
+    if (raw.length + value.length > ESCAPE_SCAN_WORK_LIMIT) {
+      state.overflow = true;
+      return null;
+    }
+    cursor++;
+  }
+  return null;
+}
+
+function parseStaticArrayJoin(
+  state: StaticExpressionState, start: number, depth: number,
+): StaticStringExpression | null {
+  const { source, literalAt } = state;
+  if (source[start] !== "[") return null;
+  let cursor = skipStaticTrivia(source, start + 1);
+  const values: string[] = [];
+  if (source[cursor] !== "]") {
+    for (;;) {
+      if (values.length >= STATIC_EXPRESSION_VALUE_LIMIT) {
+        state.overflow = true;
+        return null;
+      }
+      const item = parseStaticStringExpression(state, cursor, depth + 1);
+      if (!item) return null;
+      values.push(item.value);
+      cursor = skipStaticTrivia(source, item.end);
+      if (source[cursor] !== ",") break;
+      cursor = skipStaticTrivia(source, cursor + 1);
+      if (source[cursor] === "]") break;
+    }
+  }
+  if (source[cursor] !== "]") return null;
+  cursor = skipStaticTrivia(source, cursor + 1);
+  if (source[cursor] === ".") {
+    cursor = skipStaticTrivia(source, cursor + 1);
+    if (!source.startsWith("join", cursor) || /[A-Za-z0-9_$]/.test(source[cursor + 4] ?? ""))
+      return null;
+    cursor += 4;
+  } else if (source[cursor] === "[") {
+    cursor = skipStaticTrivia(source, cursor + 1);
+    const member = literalAt.get(cursor);
+    if (!member || member.value !== "join") return null;
+    cursor = skipStaticTrivia(source, member.end);
+    if (source[cursor] !== "]") return null;
+    cursor = skipStaticTrivia(source, cursor + 1);
+  } else return null;
+  if (source[cursor] !== "(") return null;
+  cursor = skipStaticTrivia(source, cursor + 1);
+  let separator = ",";
+  if (source[cursor] !== ")") {
+    const parsed = parseStaticStringExpression(state, cursor, depth + 1);
+    if (!parsed) return null;
+    separator = parsed.value;
+    cursor = skipStaticTrivia(source, parsed.end);
+  }
+  if (source[cursor] !== ")") return null;
+  const value = values.join(separator);
+  if (value.length > ESCAPE_SCAN_WORK_LIMIT) {
+    state.overflow = true;
+    return null;
+  }
+  return { end: cursor + 1, value };
+}
+
+function parseStaticStringPrimary(
+  state: StaticExpressionState, start: number, depth: number,
+): StaticStringExpression | null {
+  if (depth > STATIC_EXPRESSION_DEPTH_LIMIT || !spendStaticStep(state)) {
+    state.overflow = true;
+    return null;
+  }
+  const index = skipStaticTrivia(state.source, start);
+  const literal = state.literalAt.get(index);
+  if (literal) return { end: literal.end, value: literal.value };
+  if (state.source[index] === "(") {
+    const inner = parseStaticStringExpression(state, index + 1, depth + 1);
+    if (!inner) return null;
+    const close = skipStaticTrivia(state.source, inner.end);
+    return state.source[close] === ")" ? { end: close + 1, value: inner.value } : null;
+  }
+  if (state.source[index] === "`") return parseStaticTemplate(state, index, depth + 1);
+  if (state.source[index] === "[") return parseStaticArrayJoin(state, index, depth + 1);
+  return null;
+}
+
+function extractStaticJavaScriptStrings(source: string): string[] | null {
   const literals: StaticLiteral[] = [];
   for (let index = 0; index < source.length; index++) {
     const quote = source[index];
@@ -395,31 +584,72 @@ function extractStaticJavaScriptStrings(source: string): string[] {
     });
   }
   const values = literals.map(literal => literal.value);
-  let folded = "";
-  let previous: StaticLiteral | null = null;
+  let lexicalJoin = "";
   for (const literal of literals) {
-    if (!previous) {
-      folded = literal.value;
-    } else {
-      const separator = source.slice(previous.end, literal.start)
-        .replace(/\/\*[\s\S]*?\*\//g, "")
-        .replace(/\/\/[^\n\r]*/g, "")
-        .replace(/\s/g, "");
-      if (separator === "+" || separator === "") folded += literal.value;
-      else folded = literal.value;
-    }
-    if (folded !== literal.value) values.push(folded);
-    previous = literal;
+    if (lexicalJoin.length + literal.value.length > ESCAPE_SCAN_WORK_LIMIT) return null;
+    lexicalJoin += literal.value;
   }
+  if (literals.length > 1) values.push(lexicalJoin);
+  const literalAt = new Map(literals.map(literal => [literal.start, literal]));
+  const state: StaticExpressionState = {
+    source, literalAt, steps: 0, overflow: false,
+  };
+  let attempts = 0;
+  for (let start = 0; start < source.length; start++) {
+    const character = source[start];
+    if (character !== "\"" && character !== "'" && character !== "`"
+        && character !== "(" && character !== "[") continue;
+    if (++attempts > STATIC_EXPRESSION_VALUE_LIMIT) {
+      state.overflow = true;
+      break;
+    }
+    const expression = parseStaticStringExpression(state, start);
+    if (expression && !values.includes(expression.value)) values.push(expression.value);
+    if (state.overflow) break;
+  }
+  if (state.overflow) return null;
+  const derivedAtoms = literals.map(literal => ({
+    start: literal.start,
+    value: literal.value,
+  }));
+  const characterCodeStarts = [...source.matchAll(
+    /String\s*\.\s*from(?:CharCode|CodePoint)\s*\(/gi,
+  )].length;
+  let characterCodeMatches = 0;
   for (const match of source.matchAll(
-    /String\.from(?:CharCode|CodePoint)\s*\(([\s\d,a-fx]+)\)/gi,
+    /String\s*\.\s*from(CharCode|CodePoint)\s*\(\s*(?:\.\.\.\s*\[\s*)?([\s\d,a-fx+\-.eE]+?)(?:\]\s*)?\)/gi,
   )) {
-    const rawValues = match[1]!.split(",").map(value => value.trim());
+    characterCodeMatches++;
+    const rawValues = match[2]!.split(",").map(value => value.trim());
+    const numericLiteral = /^[+-]?(?:0x[0-9a-f]+|(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:e[+-]?[0-9]+)?)$/i;
     if (rawValues.length < 1 || rawValues.length > 8_192
-        || rawValues.some(value => !/^(?:0x[0-9a-f]+|[0-9]+)$/i.test(value))) continue;
-    const points = rawValues.map(value => Number.parseInt(value, value.startsWith("0x") ? 16 : 10));
-    if (points.some(point => !Number.isSafeInteger(point) || point < 0 || point > 0x10ffff)) continue;
-    try { values.push(String.fromCodePoint(...points)); } catch { /* malformed surrogate */ }
+        || rawValues.some(value => !numericLiteral.test(value))) return null;
+    const numbers = rawValues.map(value => Number(value));
+    if (numbers.some(value => !Number.isFinite(value))) return null;
+    const charCode = match[1]!.toLowerCase() === "charcode";
+    const points = charCode
+      ? numbers.map(value => ((Math.trunc(value) % 0x10000) + 0x10000) % 0x10000)
+      : numbers;
+    if (!charCode && points.some(point =>
+      !Number.isSafeInteger(point) || point < 0 || point > 0x10ffff)) return null;
+    try {
+      const value = match[1]!.toLowerCase() === "charcode"
+        ? String.fromCharCode(...points) : String.fromCodePoint(...points);
+      values.push(value);
+      const reversed = [...value].reverse().join("");
+      if (reversed !== value) values.push(reversed);
+      derivedAtoms.push({ start: match.index!, value });
+    } catch { /* malformed code point */ }
+  }
+  if (characterCodeMatches !== characterCodeStarts) return null;
+  if (derivedAtoms.length > 1) {
+    derivedAtoms.sort((left, right) => left.start - right.start);
+    let combined = "";
+    for (const atom of derivedAtoms) {
+      if (combined.length + atom.value.length > ESCAPE_SCAN_WORK_LIMIT) return null;
+      combined += atom.value;
+    }
+    values.push(combined);
   }
   return values;
 }
@@ -498,10 +728,10 @@ function containsProtectedSecret(text: string, secretsInput: Iterable<string>): 
       const decoded = decodeBase64(match[0]);
       if (decoded !== null) enqueue(decoded);
     }
-    for (const value of extractStaticJavaScriptStrings(candidate)) enqueue(value);
-    const staticStrings = extractAcornStaticStrings(candidate);
+    const staticStrings = extractStaticJavaScriptStrings(candidate);
     if (staticStrings === null) return true;
     for (const value of staticStrings) enqueue(value);
+
     try {
       const parsed = JSON.parse(candidate) as unknown;
       const values: unknown[] = [parsed];
@@ -519,6 +749,46 @@ function containsProtectedSecret(text: string, secretsInput: Iterable<string>): 
     } catch { /* candidate is not standalone JSON */ }
   }
   return overflow;
+}
+
+function isDeclarativeBlueprint(code: string): boolean {
+  try { return parseClosedBlueprintDirective(code) !== null; }
+  catch { return false; }
+}
+
+function existingPlannerPanelCodes(panels: readonly unknown[]): ReadonlySet<string> {
+  const codes = new Set<string>();
+  for (const panel of panels) {
+    if (!panel || typeof panel !== "object" || Array.isArray(panel)) continue;
+    const descriptor = Reflect.getOwnPropertyDescriptor(panel, "code");
+    if (descriptor && "value" in descriptor && typeof descriptor.value === "string")
+      codes.add(descriptor.value);
+  }
+  return codes;
+}
+
+function plannerOutputIsConfined(
+  raw: string,
+  secretsInput: Iterable<string>,
+  existingCodes: ReadonlySet<string>,
+): boolean {
+  const secrets = [...secretsInput].filter(secret => secret.length > 0);
+  if (containsProtectedSecret(raw, secrets)) return false;
+  let value: unknown;
+  try { value = JSON.parse(raw); } catch { return false; }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const panelsDescriptor = Reflect.getOwnPropertyDescriptor(value, "panels");
+  if (!panelsDescriptor || !("value" in panelsDescriptor)
+      || !Array.isArray(panelsDescriptor.value)) return false;
+  for (const panel of panelsDescriptor.value) {
+    if (!panel || typeof panel !== "object" || Array.isArray(panel)) return false;
+    const codeDescriptor = Reflect.getOwnPropertyDescriptor(panel, "code");
+    if (!codeDescriptor || !("value" in codeDescriptor)
+        || typeof codeDescriptor.value !== "string") return false;
+    if (!existingCodes.has(codeDescriptor.value)
+        && !isDeclarativeBlueprint(codeDescriptor.value)) return false;
+  }
+  return true;
 }
 
 type ActivePlanner = {
@@ -1043,6 +1313,7 @@ export class WorkerClient {
         failClosed(binding);
         return;
       }
+      const existingPanelCodes = existingPlannerPanelCodes(message.context.panels);
       busy = true;
       expectedSequence++;
       void (async () => {
@@ -1082,8 +1353,11 @@ export class WorkerClient {
           if (raw.length > 64 * 1024) throw Object.assign(
             new Error("model output exceeds the planner bridge limit"), { code: "E_MODEL" },
           );
-          if (containsProtectedSecret(raw, this.#protectedSecrets)) throw Object.assign(
-            new Error("model response contained protected credential material"), { code: "E_MODEL" },
+          if (!plannerOutputIsConfined(
+            raw, this.#protectedSecrets, existingPanelCodes,
+          )) throw Object.assign(
+            new Error("model response was not confined to declarative panel code"),
+            { code: "E_MODEL" },
           );
           active.port.postMessage({
             v: 1, kind: "planner.response", ...binding,
@@ -1599,39 +1873,20 @@ export class WorkerClient {
   }> {
     return this.ephemeralCall("firstRunEvidence");
   }
-  firstRunPublication(appId: string): Promise<FirstRunPublicationReceipt | null> {
-    return this.ephemeralCall("firstRunPublication", { appId });
-  }
   firstEverydayActionTarget(): Promise<{ table: string; rowId: string } | null> {
     return this.ephemeralCall("firstEverydayActionTarget");
   }
   completeEverydayAction(input: {
     action: "open"; table: string; rowId: string;
-  }, context?: WorkerMutationContext): Promise<FirstSuccessState> {
+  }, context: WorkerMutationContext): Promise<FirstSuccessState> {
     return this.mutationCall(
       "completeEverydayAction",
       input,
-      context ?? this.createMutationContext(),
+      context,
     );
   }
   deviceProtection(): Promise<import("../worker/db-worker").DeviceProtectionProjection> {
     return this.ephemeralCall("deviceProtection");
-  }
-  activateStarter(input: {
-    operationId: string; appId: string; shellId: string;
-  }): Promise<FirstRunPublicationReceipt> {
-    return this.mutationCall("activateStarter", input, this.createMutationContext());
-  }
-  activateImportedApp(input: {
-    operationId: string; appId: string; table: string; columns: unknown[]; rows: unknown[];
-    review: unknown;
-  }): Promise<FirstRunPublicationReceipt> {
-    return this.mutationCall("activateImportedApp", input, this.createMutationContext());
-  }
-  undoFirstRunImport(input: {
-    operationId: string; appId: string; expectedRevision: number;
-  }): Promise<FirstRunPublicationReceipt> {
-    return this.mutationCall("undoFirstRunImport", input, this.createMutationContext());
   }
   reset(context: WorkerMutationContext): Promise<null> {
     return this.mutationCall("reset", undefined, context);

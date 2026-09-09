@@ -54,7 +54,7 @@ describe("Today production wiring", () => {
     const worker = read("src/worker/db-worker.ts");
     const client = read("src/app/worker-client.ts");
     const palette = read("src/app/CommandPalette.tsx");
-    const store = read("../kernel/src/store.ts");
+    const projection = read("../kernel/src/daily-home-projection.ts");
 
     expect(client).toContain("dailyHomeRuntimeTimeZone");
     expect(client).not.toContain("ensureDailyHomeTimeZone");
@@ -62,8 +62,9 @@ describe("Today production wiring", () => {
     expect(worker).toContain('case "dailyHomeResolveDate"');
     expect(worker).toContain('typeof p.timeZone === "string" ? p.timeZone : null');
     expect(palette).toContain("await props.worker.resolveDailyHomeDate(value)");
-    expect(store).toContain("DAILY_TIME_ZONE_SETTING");
-    expect(store).toContain("localCalendarContext(now.toISOString(), timeZone)");
+    expect(projection).toContain("localCalendarContext(context.now, context.timeZone)");
+    expect(projection).toContain("timeZone: context.timeZone");
+    expect(projection).not.toContain("DAILY_TIME_ZONE_SETTING");
   });
 
   it("does not persist recent-work navigation while Daily Home writes are uncertified", () => {

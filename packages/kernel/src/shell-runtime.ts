@@ -3,4 +3,3 @@
 export { Bridge } from "./bridge";
 export { createStoreMutationContext, StoreRpcClient, portFromMessagePort } from "./asyncstore";
 export { deriveSafeDiffKind } from "./private-metrics";
-export { extractAcornStaticStrings } from "./static-javascript-strings";

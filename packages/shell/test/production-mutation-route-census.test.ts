@@ -114,7 +114,8 @@ describe("production mutation route census", () => {
         expect(body).not.toContain("openBrowserDriver(");
       }
       if (classification.enforcement === "authority")
-        expect(body, `${name} must use ProductionStoreAuthority`).toContain(`runAuthorityMutation("${name}"`);
+        expect(body, `${name} must use ProductionStoreAuthority`)
+          .toContain(`runAuthorityMutation("${name}"`);
       if (classification.enforcement === "planner-authority") {
         const expected = name === "keep" ? "keepPendingPreview("
           : name === "discard" ? "discardPendingPreview(" : "runPipelineText(";

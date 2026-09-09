@@ -326,7 +326,7 @@ export function RecordDetail(props: {
       try {
         const progress = await props.worker.completeEverydayAction({
           action: "open", table: props.table.name, rowId: props.recordId,
-        });
+        }, props.worker.createMutationContext());
         props.onEverydayAction?.(progress);
         if (progress.steps.everyday.state === "complete")
           reportedEverydayRecord.current = everydayKey;

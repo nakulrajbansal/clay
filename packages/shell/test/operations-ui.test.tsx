@@ -129,7 +129,7 @@ describe("Daily Workbench UI", () => {
 
     type Progress = ReturnType<typeof applyFirstSuccessEvent>;
     let progress: Progress | null = null;
-    const worker = {
+    const worker = { ...mutationIdentity,
       registryTables: async () => [...store.registrySnapshot().values()],
       semanticTrace: async () => store.semanticSchemaTrace(), sampleCount: async () => 0,
       operationBatches: async () => [], getSetting: async () => null,

@@ -2,26 +2,25 @@
 // regions + conversation rail. Live panels bind to the live store's Bridge;
 // during S5 the proposed panels render in place with a dashed frame,
 // bound to a SECOND Bridge over the shadow store (preview-before-commit).
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Bridge, StoreRpcClient, deriveSafeDiffKind, portFromMessagePort }
   from "@clay/kernel/shell-runtime";
-import {
-  targetIdentityEquals,
-  type BatchReceipt, type ClayNotification, type FieldProvenance, type HistoryEntry,
-  type LivePanel, type PanelProvenance, type PrivateMetricEvent,
-  type PrivateMetricsSummary, type RegTable, type SemanticSchemaTraceV1, type Suggestion,
+import type {
+  BatchReceipt, ClayNotification, FieldProvenance, HistoryEntry,
+  LivePanel, PanelProvenance, PrivateMetricEvent,
+  PrivateMetricsSummary, RegTable, SemanticSchemaTraceV1, Suggestion,
 } from "@clay/kernel";
-import {
-  MAX_BACKUP_ARCHIVE_BYTES,
-  type BackupRecord,
-  type BackupRun,
-} from "@clay/kernel/backup";
+import { targetIdentityEquals } from "@clay/kernel/protection";
+import type { BackupRecord, BackupRun } from "@clay/kernel/backup";
 import type {
   AuthenticatedFormat5RestoreGrant,
   BackupFailureReasonCode,
 } from "@clay/kernel/recovery";
 import { WorkerClient, type RecoveryRecordCandidate } from "./worker-client";
+import {
+  LatestRequestGate, beginLazySession, createRetryingLoader, runLatestRequest,
+} from "./async-lifecycle";
 import type { BackupTrustRuntimeStatus } from "../worker/backup-trust-runtime";
 import { fetchModelHealth } from "./model-health";
 import {
@@ -68,19 +67,17 @@ import type {
   RecoveryBackupSummary,
   RecoveryFailureSummary,
 } from "./RecoveryCenter";
-import {
+import type {
   createProductionBackupAdapter,
-  loadProductionBackupTarget,
-  runProductionAutomaticBackup,
-  saveProductionBackupTarget,
-  type ProductionBackupTargetState,
+  ProductionBackupTargetState,
 } from "./production-backup.browser";
-import { AutomaticBackupTriggerController } from "./automatic-backup-trigger.browser";
+import type { AutomaticBackupTriggerController } from "./automatic-backup-trigger.browser";
 import {
   readWorkspaceModeForEntry, useWorkspaceMode, type WorkspaceMode,
 } from "./workspace-mode";
 
 type Phase = "loading" | "onboarding" | "main" | "error";
+type BackupAdapterStatus = "loading" | "available" | "unavailable" | "error";
 
 const FirstSuccessChecklist = lazy(() => import("./FirstSuccessChecklist")
   .then(module => ({ default: module.FirstSuccessChecklist })));
@@ -99,6 +96,16 @@ const PrivateMetricsView = lazy(() => import("./PrivateMetricsView")
   .then(module => ({ default: module.PrivateMetricsView })));
 const RecoveryCenter = lazy(() => import("./RecoveryCenter")
   .then(module => ({ default: module.RecoveryCenter })));
+
+type ProductionBackupRuntime = typeof import("./production-backup.browser");
+type ProductionBackupAdapter = ReturnType<typeof createProductionBackupAdapter>;
+type AutomaticBackupRuntime = typeof import("./automatic-backup-trigger.browser");
+const loadProductionBackupRuntime = createRetryingLoader<ProductionBackupRuntime>(
+  () => import("./production-backup.browser"),
+);
+const loadAutomaticBackupTriggerRuntime = createRetryingLoader<AutomaticBackupRuntime>(
+  () => import("./automatic-backup-trigger.browser"),
+);
 
 function SurfaceFallback({ label, modal = false }: {
   label: string; modal?: boolean;
@@ -316,6 +323,12 @@ export function App(): React.JSX.Element {
   const [phase, setPhase] = useState<Phase>("loading");
   const [apps, setApps] = useState<AppEntry[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
+  const currentIdRef = useRef(currentId);
+  const recoveryRefreshGate = useRef(new LatestRequestGate()).current;
+  useLayoutEffect(() => {
+    currentIdRef.current = currentId;
+    recoveryRefreshGate.invalidate();
+  }, [currentId, recoveryRefreshGate]);
   const [workspaceMode, setWorkspaceMode] = useWorkspaceMode(currentId);
   const [bootError, setBootError] = useState<string | null>(null);
   const [onboardingError, setOnboardingError] = useState<string | null>(null);
@@ -388,12 +401,48 @@ export function App(): React.JSX.Element {
     useState<RecoveryActionFailure[]>([]);
   const backupFailureId = useRef(0);
   const recoveryFailureId = useRef(0);
-  const backupAdapterRef = useRef<ReturnType<typeof createProductionBackupAdapter> | undefined>(
-    undefined,
-  );
-  if (backupAdapterRef.current === undefined)
-    backupAdapterRef.current = createProductionBackupAdapter();
-  const backupAdapterAvailable = backupAdapterRef.current?.availability().status === "available";
+  const componentActive = useRef(true);
+  const automaticBackupLoadFailed = useRef(false);
+  const automaticBackupRetryAttempts = useRef(0);
+  const [automaticBackupLoadGeneration, setAutomaticBackupLoadGeneration] = useState(0);
+  const backupAdapterRef = useRef<ProductionBackupAdapter | undefined>(undefined);
+  const backupAdapterLoadRef = useRef<Promise<ProductionBackupAdapter> | null>(null);
+  const [backupAdapterStatus, setBackupAdapterStatus] =
+    useState<BackupAdapterStatus>("loading");
+  const backupAdapterAvailable = backupAdapterStatus === "available";
+  const ensureBackupAdapter = useCallback((): Promise<ProductionBackupAdapter> => {
+    if (backupAdapterRef.current !== undefined)
+      return Promise.resolve(backupAdapterRef.current);
+    if (componentActive.current) setBackupAdapterStatus("loading");
+    backupAdapterLoadRef.current ??= loadProductionBackupRuntime().then(runtime => {
+      const adapter = runtime.createProductionBackupAdapter();
+      backupAdapterRef.current = adapter;
+      if (componentActive.current) setBackupAdapterStatus(
+        adapter?.availability().status === "available" ? "available" : "unavailable",
+      );
+      return adapter;
+    }).catch(error => {
+      if (componentActive.current) setBackupAdapterStatus("error");
+      throw error;
+    }).finally(() => { backupAdapterLoadRef.current = null; });
+    return backupAdapterLoadRef.current;
+  }, []);
+  const retryAutomaticBackupRuntime = useCallback((): void => {
+    if (!automaticBackupLoadFailed.current) return;
+    automaticBackupLoadFailed.current = false;
+    setAutomaticBackupLoadGeneration(generation => generation + 1);
+  }, []);
+  useEffect(() => {
+    componentActive.current = true;
+    return () => {
+      componentActive.current = false;
+      recoveryRefreshGate.invalidate();
+    };
+  }, [recoveryRefreshGate]);
+  useEffect(() => {
+    if (phase !== "main") return;
+    void ensureBackupAdapter().catch(() => undefined);
+  }, [phase, ensureBackupAdapter]);
   const [privateMetricsSummary, setPrivateMetricsSummary] = useState<PrivateMetricsSummary | null>(null);
   const [railOpen, setRailOpen] = useState<boolean>(() => {
     try { return localStorage.getItem("clay_reshape_open") !== "false"; }
@@ -1024,28 +1073,43 @@ export function App(): React.JSX.Element {
 
   const refreshRecoveryState = async (): Promise<void> => {
     if (!currentId) return;
-    const [trust, records, batches, candidates] = await Promise.all([
-      client().backupTrustStatus(),
-      client().backupRecords(),
-      client().operationBatches(20),
-      client().recoveryCandidates(),
-    ]);
-    let storedTarget: ProductionBackupTargetState | null = null;
-    try { storedTarget = loadProductionBackupTarget(localStorage, currentId); }
-    catch { /* storage can be unavailable in private mode */ }
-    setBackupTrustStatus(trust);
-    setBackupTargetHint(storedTarget);
-    const adapter = backupAdapterRef.current;
-    if (storedTarget && adapter) {
-      const authorization = await adapter.probe(storedTarget.target);
-      setBackupTarget(authorization.status === "authorized" ? storedTarget : null);
-    } else {
-      setBackupTarget(null);
-    }
-    setBackupHistory(recoveryBackupSummaries(records, currentId));
-    setRecoveryBatches(batches);
-    setRecoveryRecords(candidates);
-    setRecoveryActionFailures(loadRecoveryFailures(currentId));
+    const appId = currentId;
+    await runLatestRequest(recoveryRefreshGate, async () => {
+      const runtime = await loadProductionBackupRuntime();
+      const [trust, records, batches, candidates] = await Promise.all([
+        client().backupTrustStatus(),
+        client().backupRecords(),
+        client().operationBatches(20),
+        client().recoveryCandidates(),
+      ]);
+      let storedTarget: ProductionBackupTargetState | null = null;
+      try { storedTarget = runtime.loadProductionBackupTarget(localStorage, appId); }
+      catch { /* storage can be unavailable in private mode */ }
+      const adapter = await ensureBackupAdapter();
+      let authorizedTarget: ProductionBackupTargetState | null = null;
+      if (storedTarget && adapter) {
+        const authorization = await adapter.probe(storedTarget.target);
+        if (authorization.status === "authorized") authorizedTarget = storedTarget;
+      }
+      return {
+        trust,
+        storedTarget,
+        authorizedTarget,
+        history: recoveryBackupSummaries(records, appId),
+        batches,
+        candidates,
+        failures: loadRecoveryFailures(appId),
+      };
+    }, snapshot => {
+      if (currentIdRef.current !== appId) return;
+      setBackupTrustStatus(snapshot.trust);
+      setBackupTargetHint(snapshot.storedTarget);
+      setBackupTarget(snapshot.authorizedTarget);
+      setBackupHistory(snapshot.history);
+      setRecoveryBatches(snapshot.batches);
+      setRecoveryRecords(snapshot.candidates);
+      setRecoveryActionFailures(snapshot.failures);
+    });
   };
 
   const recordBackupFailure = (reasonCode: BackupFailureReasonCode): void => {
@@ -1061,13 +1125,15 @@ export function App(): React.JSX.Element {
     state: ProductionBackupTargetState,
     reason: BackupRun["reason"],
   ): Promise<boolean> => {
-    const adapter = backupAdapterRef.current;
+    try {
+      const [runtime, adapter] = await Promise.all([
+      loadProductionBackupRuntime(), ensureBackupAdapter(),
+    ]);
     if (!adapter) {
       recordBackupFailure("unsupported_api");
       return false;
     }
-    try {
-      const result = await runProductionAutomaticBackup(
+      const result = await runtime.runProductionAutomaticBackup(
         client(), adapter, state.target, reason,
       );
       if (result.status === "failed") {
@@ -1145,7 +1211,10 @@ export function App(): React.JSX.Element {
   };
 
   const chooseBackupFolder = async (): Promise<void> => {
-    const adapter = backupAdapterRef.current;
+    try {
+      const [runtime, adapter] = await Promise.all([
+      loadProductionBackupRuntime(), ensureBackupAdapter(),
+    ]);
     if (!adapter || !currentId) return;
     const availability = adapter.availability();
     if (availability.status === "unavailable") {
@@ -1164,7 +1233,7 @@ export function App(): React.JSX.Element {
       target: authorization.target,
       folderName: handle.name,
     });
-    try { saveProductionBackupTarget(localStorage, next); }
+    try { runtime.saveProductionBackupTarget(localStorage, next); }
     catch { /* the target remains usable for this session */ }
     setBackupTargetHint(next);
     setBackupTarget(next);
@@ -1172,6 +1241,11 @@ export function App(): React.JSX.Element {
     setBackupTrustStatus(trust);
     if (trust.status === "ready") await runAutomaticBackup(next, "backup_now");
     else pushToast("Folder chosen — finish checking your Recovery Kit to start backup", "default");
+    } catch {
+      setBackupAdapterStatus("error");
+      recordBackupFailure("target_unreachable");
+      pushToast("Backup folder support could not load. Try again.", "danger");
+    }
   };
 
   const retryBackup = async (): Promise<void> => {
@@ -1179,6 +1253,7 @@ export function App(): React.JSX.Element {
   };
 
   const validateRestore = async (file: File): Promise<unknown> => {
+    const { MAX_BACKUP_ARCHIVE_BYTES } = await loadProductionBackupRuntime();
     const bytes = await boundedFileBytes(
       file, MAX_BACKUP_ARCHIVE_BYTES, "Authenticated backup",
     );
@@ -1269,7 +1344,14 @@ export function App(): React.JSX.Element {
     }
   };
 
+  const retryBackupAdapter = async (): Promise<void> => {
+    try { await ensureBackupAdapter(); }
+    catch { pushToast("Backup folder support could not load. Try again.", "danger"); }
+  };
+
   const openRecoveryCenter = (): void => {
+    retryAutomaticBackupRuntime();
+    void retryBackupAdapter();
     setShowRecoveryCenter(true);
     void refreshRecoveryState().catch(() => {
       setBackupTrustStatus(null);
@@ -1281,21 +1363,18 @@ export function App(): React.JSX.Element {
     if (phase !== "main" || !currentId || !backupTarget
         || backupTrustStatus?.status !== "ready" || !workerRef.current) return;
     const wc = workerRef.current;
-    const controller = new AutomaticBackupTriggerController({
-      getTarget: () => backupTarget,
-      run: runAutomaticBackup,
-    });
-    const unsubscribe = wc.onAuthorityCommit(notice => {
-      controller.notifyAuthorityCommit(notice);
-    });
-    let active = true;
-    const inspect = async (): Promise<void> => {
+    let retryTimer: number | null = null;
+    const inspect = async (
+      controller: AutomaticBackupTriggerController,
+      isActive: () => boolean,
+    ): Promise<void> => {
       try {
         const [selection, records] = await Promise.all([
           wc.backupSelection(),
           wc.backupRecords(),
         ]);
-        if (!active || selection.selected.selectedAppInstanceId !== currentId) return;
+        if (!isActive()
+            || selection.selected.selectedAppInstanceId !== currentId) return;
         const exact = records.some(record => record.state === "valid"
           && record.targetId === backupTarget.target.targetId
           && record.evidence.appInstanceId === selection.selected.target.appInstanceId
@@ -1307,16 +1386,50 @@ export function App(): React.JSX.Element {
         if (!exact) controller.notifyAuthorityCommit(selection.selected.target);
       } catch { /* Recovery Center reports durable failure on an attempted run. */ }
     };
-    void inspect();
-    const interval = window.setInterval(() => { void inspect(); }, 60_000);
-    const refreshPermission = (): void => { void refreshRecoveryState(); };
+    const refreshPermission = (): void => {
+      retryAutomaticBackupRuntime();
+      void refreshRecoveryState();
+    };
     window.addEventListener("focus", refreshPermission);
     document.addEventListener("visibilitychange", refreshPermission);
+    const stopSession = beginLazySession(
+      loadAutomaticBackupTriggerRuntime,
+      (module, isActive) => {
+        automaticBackupLoadFailed.current = false;
+        automaticBackupRetryAttempts.current = 0;
+        const controller = new module.AutomaticBackupTriggerController({
+          getTarget: () => backupTarget,
+          run: runAutomaticBackup,
+        });
+        const unsubscribe = wc.onAuthorityCommit(notice => {
+          controller.notifyAuthorityCommit(notice);
+        });
+        void inspect(controller, isActive);
+        const interval = window.setInterval(() => {
+          void inspect(controller, isActive);
+        }, 60_000);
+        return () => {
+          window.clearInterval(interval);
+          unsubscribe();
+          controller.stop();
+        };
+      },
+      () => {
+        automaticBackupLoadFailed.current = true;
+        const attempt = ++automaticBackupRetryAttempts.current;
+        recordBackupFailure("operation_interrupted");
+        const willRetry = attempt <= 2;
+        pushToast(willRetry
+          ? "Automatic backup could not start. Clay will retry."
+          : "Automatic backup is paused. Open Recovery Center to retry.", "danger");
+        if (willRetry) retryTimer = window.setTimeout(
+          retryAutomaticBackupRuntime, attempt * 2_000,
+        );
+      },
+    );
     return () => {
-      active = false;
-      window.clearInterval(interval);
-      unsubscribe();
-      controller.stop();
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+      stopSession();
       window.removeEventListener("focus", refreshPermission);
       document.removeEventListener("visibilitychange", refreshPermission);
     };
@@ -1325,6 +1438,7 @@ export function App(): React.JSX.Element {
     currentId,
     backupTarget?.target.targetId,
     backupTrustStatus?.status,
+    automaticBackupLoadGeneration,
   ]);
 
   // Local-first means the user carries the backup burden — carry it FOR
@@ -2271,6 +2385,7 @@ export function App(): React.JSX.Element {
               authoritativeAppInstanceId={currentId}
               opfsAvailable={persistent}
               backupTrustStatus={backupTrustStatus}
+              backupAdapterStatus={backupAdapterStatus}
               backupTarget={backupTarget ? {
                 targetId: backupTarget.target.targetId,
                 folderName: backupTarget.folderName,
@@ -2285,6 +2400,7 @@ export function App(): React.JSX.Element {
               importedVerifierSeriesId={importedVerifierSeriesId}
               onClose={() => setShowRecoveryCenter(false)}
               onRetry={backupTarget && backupFailures.length > 0 ? retryBackup : undefined}
+              onRetryBackupAdapter={backupAdapterStatus === "error" ? retryBackupAdapter : undefined}
               onChooseFolder={backupAdapterAvailable ? chooseBackupFolder : undefined}
               onExportRecoveryKit={exportRecoveryKit}
               onConfirmRecoveryKit={confirmRecoveryKit}

@@ -1,6 +1,7 @@
 import {
   BackupResultV1,
   BackupTargetV1,
+  MAX_BACKUP_ARCHIVE_BYTES,
   runExternalBackup,
   type BackupPublicationReceipt,
   type BackupPublicationRequest,
@@ -19,6 +20,8 @@ import {
   chromiumBackupEnvironmentFromGlobals,
   type BackupAdapterAvailability,
 } from "./backup-target.browser";
+
+export { MAX_BACKUP_ARCHIVE_BYTES };
 
 const TARGET_STORAGE_PREFIX = "clay_backup_target_v1:";
 const APP_ID = /^app_[a-z2-7]{26}$/;

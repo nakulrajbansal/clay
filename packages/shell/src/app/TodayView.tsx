@@ -6,13 +6,15 @@ import {
   resetDailySourceLibrary,
   resolveDailySourceProfiles,
   upsertReviewedDailySource,
-  type DailyHomeItem,
-  type DailyHomeSnapshot,
   type DailySourceIssueReason,
-  type DailySourceLibrary,
-  type RegTable,
   type ReviewedDailySourceProfile,
-} from "@clay/kernel";
+} from "@clay/kernel/daily-source-profile";
+import type {
+  DailyHomeItemV1 as DailyHomeItem,
+  DailyHomeSnapshotV1 as DailyHomeSnapshot,
+  DailySourceLibraryV1 as DailySourceLibrary,
+} from "@clay/schema/daily-home";
+import type { RegTable } from "@clay/kernel/registry";
 import type { WorkerClient } from "./worker-client";
 import "./TodayView.css";
 

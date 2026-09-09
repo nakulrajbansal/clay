@@ -9,6 +9,7 @@
 // output goes through the same Validator and the same sandbox as
 // hand-written code, and can express nothing custom code couldn't.
 import type { Registry, RegTable } from "./registry";
+import { parseClosedBlueprintDirective } from "./blueprint-contract";
 
 export type BlueprintResult = {
   code: string;
@@ -428,10 +429,6 @@ export function expandBlueprint(spec: unknown, reg: Registry): BlueprintResult {
 }
 
 /** The in-code directive form: a module whose body is a single directive. */
-const DIRECTIVE = /^\s*\/\/#blueprint\s+(\{[\s\S]*\})\s*$/;
-
 export function parseBlueprintDirective(code: string): unknown | null {
-  const m = DIRECTIVE.exec(code);
-  if (!m) return null;
-  return JSON.parse(m[1]!);
+  return parseClosedBlueprintDirective(code);
 }

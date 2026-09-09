@@ -40,6 +40,7 @@ export type RecoveryCenterProps = {
   authoritativeAppInstanceId: string | null;
   opfsAvailable: boolean;
   backupTrustStatus: BackupTrustRuntimeStatus | null;
+  backupAdapterStatus: "loading" | "available" | "unavailable" | "error";
   backupTarget: RecoveryBackupTarget | null;
   lastVerifiedBackup: RecoveryBackupSummary | null;
   failures: RecoveryFailureSummary[];
@@ -51,6 +52,7 @@ export type RecoveryCenterProps = {
   importedVerifierSeriesId: string | null;
   onClose: () => void;
   onRetry?: () => Promise<void>;
+  onRetryBackupAdapter?: () => Promise<void>;
   onChooseFolder?: () => Promise<void>;
   onExportRecoveryKit?: () => Promise<void>;
   onConfirmRecoveryKit?: (file: File) => Promise<void>;
@@ -295,12 +297,27 @@ export function RecoveryCenter(props: RecoveryCenterProps): React.JSX.Element {
               onClick={() => { void props.onRetry?.(); }}>
               Retry backup
             </button>
-            <button className={props.onChooseFolder ? "primary" : undefined} disabled={!props.onChooseFolder}
+            <button className={props.onChooseFolder ? "primary" : undefined}
+              disabled={!props.onChooseFolder}
               onClick={() => { void props.onChooseFolder?.(); }}>
-              {props.onChooseFolder ? "Choose backup folder" : "Choose backup folder (not available yet)"}
+              {props.backupAdapterStatus === "loading" ? "Checking folder backup…"
+                : props.onChooseFolder ? "Choose backup folder"
+                  : props.backupAdapterStatus === "error" ? "Folder backup needs retry"
+                    : "Choose backup folder (not available)"}
             </button>
+            {props.backupAdapterStatus === "error" ? <button
+              className="primary" disabled={!props.onRetryBackupAdapter}
+              onClick={() => { void props.onRetryBackupAdapter?.(); }}>
+              Retry folder support
+            </button> : null}
           </div>
-          {!props.onChooseFolder ? <p>Folder backup is not available yet. This app remains in OPFS only.</p> : null}
+          {props.backupAdapterStatus === "loading"
+            ? <p role="status">Checking whether this browser can use a backup folder…</p>
+            : props.backupAdapterStatus === "error"
+              ? <p role="alert">Folder backup could not load. Your app data was not changed.</p>
+              : props.backupAdapterStatus === "unavailable"
+                ? <p>Folder backup is not supported here. This app remains in OPFS only.</p>
+                : null}
         </section>
 
         <section aria-labelledby="recovery-failures-title">

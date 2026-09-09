@@ -1,16 +1,12 @@
 /** @vitest-environment jsdom */
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { RegTable } from "@clay/kernel";
 import { AutomationCenter } from "../src/app/AutomationCenter";
 import type { WorkerClient } from "../src/app/worker-client";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
-async function settle(): Promise<void> {
-  await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
-}
 
 describe("recurring-record entry", () => {
   it("keeps unavailable mutations gated while opening the exact automation read-only", async () => {
@@ -23,13 +19,26 @@ describe("recurring-record entry", () => {
     }] as RegTable[];
     const automationId = "auto_018f4c2a7b3170018000000000000041";
     const rule = {
+      v: 2,
       id: automationId,
       name: "Create recurring Tasks",
       enabled: false,
+      definitionRevision: 1,
+      state: "draft",
+      needsRepair: false,
+      enableProof: null,
+      authorityTarget: null,
+      authorityDefinitionRevision: null,
+      authorityDefinitionDigest: null,
       trigger: { kind: "schedule", cadence: "daily", localTime: "09:00" },
-      actions: [{ kind: "create_record", table: "tasks", values: {
-        title: { source: "literal", value: "Follow up" },
-      } }],
+      actions: [{ kind: "create_record", table: {
+        tableId: `tbl_${"a".repeat(26)}`, lastKnownName: "tasks",
+      }, values: [{
+        field: { tableId: `tbl_${"a".repeat(26)}`, fieldId: `fld_${"b".repeat(26)}`,
+          lastKnownName: "title" },
+        value: { source: "literal", value: "Follow up" },
+      }] }],
+      runtime: { mode: "local", timeZone: "UTC", missedPolicy: "skip" },
       createdAt: "2026-09-06T10:00:00.000Z",
       updatedAt: "2026-09-06T10:00:00.000Z",
     };
@@ -47,6 +56,19 @@ describe("recurring-record entry", () => {
     const worker = {
       listAutomations: async () => [rule], automationRuns: async () => [],
       notifications: async () => notifications,
+      automationRecipes: async () => [],
+      automationRuntimeStatus: async () => ({
+        v: 1, engine: "local_worker_session", sessionActive: true,
+        backgroundExecution: false, offDeviceExecution: false,
+        modelAccess: false, networkAccess: false,
+        headline: "Automations run on this device while Clay is open.",
+        detail: "If Clay is closed or this device sleeps, scheduled work waits until a Clay session is available.",
+        enabledDefinitions: 0, disabledDefinitions: 1, needsRepairDefinitions: 0,
+      }),
+      automationRuntimeOverview: async () => ({ v: 1 as const, rules: [], runs: [] }),
+      semanticTrace: async () => ({
+        v: 1, tables: [], fields: [], relationships: [], opBindings: [],
+      }),
     } as unknown as WorkerClient;
     const host = document.createElement("div");
     document.body.replaceChildren(host);
@@ -58,7 +80,9 @@ describe("recurring-record entry", () => {
       onWrite={() => undefined} onError={message => { throw new Error(message); }}
       onInfo={() => undefined}
     />));
-    await settle();
+    await vi.waitFor(() => expect(document
+      .querySelector<HTMLElement>(`.automation-rule[data-automation-id="${automationId}"]`)
+      ?.getAttribute("aria-current")).toBe("true"));
 
     expect(document.body.textContent).toContain("Automation changes are unavailable");
     const selected = document.querySelector<HTMLElement>(`.automation-rule[data-automation-id="${automationId}"]`);
@@ -66,9 +90,9 @@ describe("recurring-record entry", () => {
     expect(document.querySelector<HTMLButtonElement>('button[aria-label="Enable Create recurring Tasks"]')?.disabled)
       .toBe(true);
     expect([...document.querySelectorAll<HTMLButtonElement>("button")]
-      .find(button => button.textContent === "Run now")?.disabled).toBe(true);
+      .find(button => button.textContent === "Preview run")?.disabled).toBe(true);
     expect([...document.querySelectorAll<HTMLButtonElement>("button")]
-      .find(button => button.textContent === "＋ New rule")?.disabled).toBe(true);
+      .find(button => button.textContent?.trim() === "Build a custom rule")?.disabled).toBe(true);
 
     await act(async () => [...document.querySelectorAll<HTMLButtonElement>(".automation-tabs button")]
       .find(button => button.textContent?.startsWith("Inbox"))!.click());

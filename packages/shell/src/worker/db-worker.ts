@@ -29,11 +29,6 @@ import type {
 } from "@clay/kernel/planner-pipeline";
 import { createStarterSeedBundle } from "../shells/seed";
 import { parseSampleProvenanceLedger } from "../shells/sample-provenance";
-import {
-  applyFirstSuccessEvent,
-  emptyFirstSuccessState,
-  parseFirstSuccessState,
-} from "../app/first-success-state";
 import { createSampleFillBundle } from "./samples";
 import { DB_WORKER_ROUTE_CENSUS } from "./mutation-route-census";
 import type { ImportSessionCoordinator } from "./release-c/import-session-coordinator";
@@ -525,6 +520,7 @@ const DIRECT_AUTHORITY_ROUTES = Object.freeze({
   setSetting: { route: "setting.set" },
   deleteSetting: { route: "setting.delete" },
   compareAndSetSetting: { route: "setting.compareAndSet" },
+  completeEverydayAction: { route: "firstSuccess.completeEveryday" },
 } as const);
 
 type DirectAuthorityRoute = keyof typeof DIRECT_AUTHORITY_ROUTES;
@@ -532,7 +528,8 @@ type DirectAuthorityRoute = keyof typeof DIRECT_AUTHORITY_ROUTES;
 async function runAuthorityMutation(
   route:
     | "seed" | "importTable" | "removeSamples" | "fillSamples"
-    | "setSetting" | "deleteSetting" | "compareAndSetSetting" | "commitLayout"
+    | "setSetting" | "deleteSetting" | "compareAndSetSetting" | "completeEverydayAction"
+    | "commitLayout"
     | "addAttachment" | "removeAttachment" | "purgeDeletedAttachments"
     | "applyBatch" | "undoBatch" | "restoreRow" | "removeColumn"
     | "commitImport" | "undoImport"
@@ -780,33 +777,6 @@ function firstEverydayActionTarget(): ActiveSampleCoordinate | null {
     if (row) return Object.freeze({ table: table.name, rowId: String(row.id) });
   }
   return null;
-}
-
-async function completeEverydayAction(req: Request, payload: Record<string, unknown>): Promise<unknown> {
-  if (payload.action !== "open" || typeof payload.table !== "string"
-      || typeof payload.rowId !== "string")
-    throw new ClayError("E_VALIDATION", "Everyday-action evidence is invalid");
-  const reader = mustStore();
-  const row = reader.query({
-    from: payload.table,
-    where: [{ field: "id", op: "eq", value: payload.rowId }],
-    limit: 1,
-  })[0];
-  if (!row || String(row.id) !== payload.rowId || row.deleted_at != null)
-    throw new ClayError("E_VALIDATION", "Everyday action did not read back a canonical real record");
-  const stored = reader.getSetting("release_a_first_success_v1");
-  const current = stored === undefined || stored === null
-    ? emptyFirstSuccessState() : parseFirstSuccessState(stored);
-  const applied = applyFirstSuccessEvent(current, {
-    type: "everyday_action", action: "open", changed: true, sample: false,
-  });
-  const next = { ...applied, revision: current.revision + 1 };
-  const committed = await mustAuthority().executeMutation({
-    requestId: authorityRequestId(req),
-    route: "setting.compareAndSet",
-    payload: { key: "release_a_first_success_v1", expectedRevision: current.revision, value: next },
-  });
-  return parseFirstSuccessState((committed.result as { current?: unknown }).current ?? next);
 }
 
 function targetIdentity(value: {
@@ -1116,34 +1086,12 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       return runAuthorityMutation("undoImport", p, req);
     case "seed":
       return runAuthorityMutation("seed", createStarterSeedBundle(p.shellId), req);
-    case "activateStarter": {
-      await runAuthorityMutation("seed", {
-        ...createStarterSeedBundle(p.shellId),
-        activation: { operationId: p.operationId, appId: p.appId },
-      }, req);
-      const receipt = mustStore().getSetting("first_run_publication_v1");
-      if (!receipt) throw new ClayError("E_INTERNAL", "starter publication receipt is missing");
-      return receipt;
-    }
-    case "activateImportedApp":
-      return failClosedMutation(req.op);
-    case "firstRunPublication": {
-      if (p.appId !== "default")
-        throw new ClayError("E_VALIDATION", "first-run publication app binding is invalid");
-      return mustStore().getSetting("first_run_publication_v1") ?? null;
-    }
-    case "undoFirstRunImport":
-      return (await mustAuthority().executeMutation({
-        requestId: authorityRequestId(req),
-        route: "firstRun.undoImport",
-        payload: p,
-      })).result;
     case "firstRunEvidence":
       return firstRunEvidence();
     case "firstEverydayActionTarget":
       return firstEverydayActionTarget();
     case "completeEverydayAction":
-      return completeEverydayAction(req, p);
+      return runAuthorityMutation("completeEverydayAction", p, req);
     case "deviceProtection":
       return deviceProtection();
     case "panels":
