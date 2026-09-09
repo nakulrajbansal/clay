@@ -37,6 +37,17 @@ export function replaceAppCache(apps: readonly AppEntry[], selectedId: string): 
   setCurrentApp(selectedId);
 }
 
+export function updateCachedApp(id: string, name: string, shellId: string): AppEntry {
+  const current = listApps();
+  if (!/^[a-zA-Z0-9_-]{1,80}$/.test(id) || name.trim() === "" || name.length > 80
+      || shellId.trim() === "" || current.filter(app => app.id === id).length !== 1)
+    throw new Error("cached app update is invalid");
+  const entry = { id, name, shellId };
+  saveApps(current.map(app => app.id === id ? entry : app));
+  setCurrentApp(id);
+  return { ...entry };
+}
+
 export function setCurrentApp(id: string): void {
   localStorage.setItem(CURRENT_KEY, id);
 }

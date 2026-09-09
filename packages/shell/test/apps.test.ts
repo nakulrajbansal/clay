@@ -5,7 +5,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   createApp, currentApp, currentAppId, ensureLegacyAdopted, listApps,
-  removeApp, renameApp, replaceAppCache, setCurrentApp, shellName,
+  removeApp, renameApp, replaceAppCache, setCurrentApp, shellName, updateCachedApp,
 } from "../src/app/apps";
 
 beforeEach(() => localStorage.clear());
@@ -24,6 +24,16 @@ describe("app registry", () => {
     expect(b.id).not.toBe("default");
     expect(listApps().map(x => x.name)).toEqual(["Tracker", "Sales CRM"]);
     expect(currentApp()?.id).toBe(b.id);   // new app becomes current
+  });
+
+  it("updates an authoritative unseeded default in place for first-run selection", () => {
+    replaceAppCache([{ id: "default", name: "My app", shellId: "blank" }], "default");
+    expect(updateCachedApp("default", "Tracker", "tracker"))
+      .toEqual({ id: "default", name: "Tracker", shellId: "tracker" });
+    expect(listApps()).toEqual([
+      { id: "default", name: "Tracker", shellId: "tracker" },
+    ]);
+    expect(currentAppId()).toBe("default");
   });
 
   it("switch + rename", () => {

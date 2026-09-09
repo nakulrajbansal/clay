@@ -31,6 +31,10 @@ describe("Release A foundation boundary", () => {
   it("keeps MVP starter creation on the production seed authority", () => {
     expect(workerSource).toContain('case "seed":');
     expect(workerSource).toContain('runAuthorityMutation("seed", createStarterSeedBundle');
+    expect(appSource).toContain("firstRunTargetId.current = boot.selectedAppInstanceId");
+    expect(appSource).toContain("updateCachedApp(targetId, shellName(id), id)");
+    expect(appSource).toContain("canonicalHistory.length === 0");
+    expect(appSource).not.toContain("const first = listApps().length === 0");
   });
 
   it("cannot strand a cancelled first write in a split worker-ticket lifecycle", () => {

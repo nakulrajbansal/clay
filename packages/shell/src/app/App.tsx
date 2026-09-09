@@ -45,8 +45,8 @@ import { ImportReview, type ReviewedImportFile } from "./ImportReview";
 import { TimeSlider } from "./TimeSlider";
 import { AppSwitcher } from "./AppSwitcher";
 import {
-  addForkEntry, createApp, currentApp, currentAppId, deriveAppName, listApps,
-  removeApp, renameApp, replaceAppCache, setCurrentApp, shellName, type AppEntry,
+  addForkEntry, currentApp, currentAppId, deriveAppName, listApps,
+  removeApp, renameApp, replaceAppCache, setCurrentApp, shellName, updateCachedApp, type AppEntry,
 } from "./apps";
 import {
   THEMES, applyThemeToRoot, getThemeId, panelThemeCss, setThemeId as saveThemeId, themeById,
@@ -320,6 +320,8 @@ export function App(): React.JSX.Element {
   const surfaceReturnFocus = useRef<HTMLElement | null>(null);
   const openRecordRef = useRef<(table: string, id: string) => void>(() => {});
   const restoreToRef = useRef<(version: number) => Promise<void>>(async () => {});
+  const firstRunOnboarding = useRef(false);
+  const firstRunTargetId = useRef<string | null>(null);
   const [phase, setPhase] = useState<Phase>("loading");
   const [apps, setApps] = useState<AppEntry[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
@@ -718,7 +720,6 @@ export function App(): React.JSX.Element {
           appCache: cache,
         }), 20_000, "Opening the app");
         replaceAppCache(boot.apps, boot.selectedAppInstanceId);
-        const activeApp = boot.apps.find(app => app.id === boot.selectedAppInstanceId)!;
         setPersistent(boot.persistent);
 
         // Device-global model access remains in trusted shell storage. Authority boot
@@ -734,21 +735,15 @@ export function App(): React.JSX.Element {
         setHasKey(hasModelAccess());
 
         if (!boot.seeded) {
-          if (cache.length > 0) {
-            // a freshly created additional app pending its first seed
-            await withTimeout(wc.seed(
-              activeApp.shellId as StarterShellId, wc.createMutationContext()),
-              20_000, "Setting up the app");
-            await updateFirstSuccess({
-              type: "app_created",
-              path: activeApp.shellId === "blank" ? "blank" : "gallery",
-              shellId: activeApp.shellId as StarterShellId,
-            }, wc);
-          } else {
-            setPhase("onboarding");         // first run ever — pick a template
-            return;
-          }
+          firstRunOnboarding.current = true;
+          firstRunTargetId.current = boot.selectedAppInstanceId;
+          setApps(boot.apps);
+          setCurrentId(boot.selectedAppInstanceId);
+          setPhase("onboarding");
+          return;
         }
+        firstRunOnboarding.current = false;
+        firstRunTargetId.current = null;
         setApps(boot.apps);
         setCurrentId(boot.selectedAppInstanceId);
         setLiveBridge(makeBridge(wc, "live", pushToast, recordFault, askConfirm,
@@ -801,30 +796,46 @@ export function App(): React.JSX.Element {
 
   const pickShell = async (id: StarterShellId): Promise<void> => {
     setBusy(true);
-    const first = listApps().length === 0;
-    createApp(shellName(id), id);
-    if (first) {
-      // the worker already holds this app's (empty, "default") files open
-      await client().seed(id, mutationContext());
+    setOnboardingError(null);
+    try {
+      if (!firstRunOnboarding.current)
+        throw new Error("Creating another app is not available in this MVP.");
+      const targetId = firstRunTargetId.current;
+      if (!targetId) throw new Error("authoritative first-run app is unavailable");
+      updateCachedApp(targetId, shellName(id), id);
+      const canonicalHistory = await withTimeout(
+        client().history(), 20_000, "Checking the first-run app",
+      );
+      if (canonicalHistory.length === 0) await withTimeout(
+        client().seed(id, mutationContext()), 20_000, "Setting up the app",
+      );
       await updateFirstSuccess({
         type: "app_created",
         path: id === "blank" ? "blank" : "recommended",
         shellId: id,
       });
       await refreshFirstRunEvidence(client());
-      await refreshDeviceProtection(client());
+      const protection = await withTimeout(
+        client().deviceProtection(), 20_000, "Checking the app identity",
+      );
+      if (!protection.target || protection.target.appInstanceId !== targetId)
+        throw new Error("the opened app changed while setup was finishing");
+      setDeviceProtectionState(protection);
+      updateCachedApp(targetId, shellName(id), id);
       setApps(listApps());
-      setCurrentId(currentApp()?.id ?? null);
+      setCurrentId(targetId);
       setLiveBridge(makeBridge(client(), "live", pushToast, recordFault, askConfirm,
-        (table, id) => openRecordRef.current(table, id)));
+        (table, rowId) => openRecordRef.current(table, rowId)));
       await refreshPanels();
       setFeed([{ kind: "info", text: "Your app is ready. Describe any change to reshape it." }]);
-      setBusy(false);
+      firstRunOnboarding.current = false;
+      firstRunTargetId.current = null;
       setPhase("main");
       recordPrivateMetric({ type: "app_ready", entry: "new_starter" });
-    } else {
-      // an additional app: reboot so the worker opens its own files, then seed
-      reloadApp();
+    } catch (error) {
+      setOnboardingError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -839,7 +850,9 @@ export function App(): React.JSX.Element {
       .finally(() => window.location.reload());
   };
   const switchApp = (id: string): void => { setCurrentApp(id); reloadApp(); };
-  const newApp = (): void => setPhase("onboarding");
+  const newApp = (): void => pushToast(
+    "Creating another app is not available in this MVP.", "default",
+  );
   const reviewedImportFromFile = async (file: File): Promise<ReviewedImportFile> => {
     const text = await file.text();
     const lines = text.split(/\r?\n/).filter(line => line.trim() !== "");
@@ -2005,7 +2018,8 @@ export function App(): React.JSX.Element {
           onImport={file => void reviewNewAppImport(file)}
           busy={busy}
           error={onboardingError}
-          onCancel={listApps().length > 0 ? () => setPhase("main") : undefined}
+          onCancel={!firstRunOnboarding.current && listApps().length > 0
+            ? () => setPhase("main") : undefined}
         />
         {pendingImport ? (
           <ImportReview
