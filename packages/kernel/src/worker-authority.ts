@@ -3,10 +3,14 @@
 export {
   captureBrowserBootInput,
   ProductionStoreAuthority,
+  type ProductionAuthenticatedArchiveExport,
+  type ProductionAuthenticatedRestoreInspection,
   type ProductionAuthorityInspection,
   type ProductionBrowserBootInput,
+  type ProductionArchiveExport,
   type ProductionBootInfo,
+  type ProductionRestoredAuthority,
   type ProductionStoreReader,
 } from "./production-authority";
-export type { ProductionMutationResult } from "./production-mutation-coordinator";
+export type { ProductionBackupSelection, ProductionMutationResult } from "./production-mutation-coordinator";
 export type { PlannerMutationAuthority } from "./planner-authority";

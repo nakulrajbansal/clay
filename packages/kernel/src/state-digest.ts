@@ -114,6 +114,19 @@ class Sha256Sync {
   }
 }
 
+function bytesFromHex(hex: string): Uint8Array {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let index = 0; index < bytes.length; index++)
+    bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+  return bytes;
+}
+
+export function sha256ChunksBytesSync(chunks: readonly Uint8Array[]): Uint8Array {
+  const hash = new Sha256Sync();
+  for (const chunk of chunks) hash.update(chunk);
+  return bytesFromHex(hash.digestHex());
+}
+
 export function sha256HexSync(input: Uint8Array): string {
   return new Sha256Sync().update(input).digestHex();
 }

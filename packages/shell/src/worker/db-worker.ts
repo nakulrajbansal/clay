@@ -1125,6 +1125,19 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "reset":
     case "exportArchive":
     case "importArchive":
+    case "backupSelection":
+    case "backupRecords":
+    case "prepareAutomaticBackup":
+    case "validateBackupStage":
+    case "publishBackup":
+    case "backupTrustStatus":
+    case "beginBackupTrustEnrollment":
+    case "confirmBackupTrustEnrollment":
+    case "importRecoveryKit":
+    case "activateImportedBackupSeries":
+    case "recoveryCandidates":
+    case "validateRestoreArchive":
+    case "restoreAsNew":
       return failClosedMutation(req.op);
     case "status": {
       // navigator.storage.persist() requested at first commit (doc 04 §8),

@@ -6,7 +6,9 @@ import type { Suggestion } from "@clay/kernel";
 import type { PreviewInfo } from "../worker/db-worker";
 import type { StatusInfo } from "./worker-client";
 import type { Theme } from "./themes";
-import { buildChangeContract, type TrustReceipt } from "./change-contract";
+import { buildChangeContract } from "./change-contract";
+import type { FeedItem } from "./feed";
+export { pruneFeedAfterVersion, type FeedItem } from "./feed";
 import { CODEX_BACKEND_URL, type ModelProviderId } from "./settings";
 
 const MODEL_PROVIDERS: Array<{ id: ModelProviderId; name: string; detail: string }> = [
@@ -15,18 +17,6 @@ const MODEL_PROVIDERS: Array<{ id: ModelProviderId; name: string; detail: string
   { id: "codex", name: "Local Codex (Preview)", detail: "Use this computer’s Codex login" },
   { id: "anthropic", name: "Anthropic", detail: "Bring your browser API key" },
 ];
-
-export type FeedItem =
-  | { kind: "intent"; text: string }
-  | { kind: "clarify"; question: string }
-  | { kind: "failure"; reasons: string[] }
-  | { kind: "committed"; summary: string; version: number; receipt?: TrustReceipt }
-  | { kind: "discarded"; summary: string }
-  | { kind: "info"; text: string };
-
-export function pruneFeedAfterVersion(feed: FeedItem[], version: number): FeedItem[] {
-  return feed.filter(item => item.kind !== "committed" || item.version <= version);
-}
 
 // Reshapes take 10–40s; a wait that TALKS reads as working, a spinner
 // reads as stuck. Purely cosmetic pacing — real stages live in the worker.
@@ -53,7 +43,6 @@ export function ConversationRail(props: {
   onRemoveSamples: () => void;
   onReset: () => void;
   onExport: () => void;
-  onImport: (file: File) => void;
   onPurgeAttachments: () => Promise<void>;
   suggestions: Suggestion[];
   onAcceptSuggestion: (s: Suggestion) => void;
@@ -291,21 +280,8 @@ export function ConversationRail(props: {
           </div>
           <div className="rail-actions">
             <button className="link" onClick={props.onExport}>
-              Export .clay backup
+              Export portable .clay copy
             </button>
-            <label className="link file-label">
-              Import backup…
-              <input
-                type="file"
-                accept=".clay,.zip"
-                style={{ display: "none" }}
-                onChange={e => {
-                  const file = e.target.files?.[0];
-                  if (file) props.onImport(file);
-                  e.target.value = "";
-                }}
-              />
-            </label>
           </div>
           <div className="rail-actions">
             <button className="link" onClick={props.onCopyDiagnostics}>

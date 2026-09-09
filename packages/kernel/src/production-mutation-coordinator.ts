@@ -5,6 +5,14 @@ import {
   type TargetEvidenceV1 as TargetEvidence,
   type WriteFenceV1 as WriteFence,
 } from "@clay/schema/catalog";
+import {
+  BackupPublicationRequestV1,
+  BackupSelectedTargetV1,
+  type BackupPublicationReceiptV1 as BackupPublicationReceipt,
+  type BackupPublicationRequestV1 as BackupPublicationRequest,
+  type BackupRecordV1 as BackupRecord,
+  type BackupSelectedTargetV1 as BackupSelectedTarget,
+} from "@clay/schema/backup";
 import { enumerateCanonicalStateV1 } from "./canonical-state";
 import { isThenable, type DbDriver } from "./db";
 import { DeviceCatalog } from "./device-catalog";
@@ -1334,6 +1342,11 @@ export function armProductionMutationFailureForTest(
 }
 
 /** Package-private: only ProductionStoreAuthority can construct this coordinator. */
+export type ProductionBackupSelection = Readonly<{
+  selected: BackupSelectedTarget;
+  fence: WriteFence;
+}>;
+
 export class ProductionMutationCoordinator {
   readonly #driver: DbDriver;
   readonly #writeAuthority: LiveWriteAuthority;
@@ -1382,6 +1395,81 @@ export class ProductionMutationCoordinator {
       if (this.#poisoned)
         throw invalid("production authority is poisoned; reopen for reservation recovery");
       return this.#executeCaptured(captured);
+    });
+    this.#tail = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  /** Serialize an authority-owned read behind prior writes and ahead of later writes. */
+  serializeRead<T>(read: () => Promise<T>): Promise<T> {
+    const run = this.#tail.then(() => {
+      if (this.#poisoned)
+        throw invalid("production authority is poisoned; reopen for reservation recovery");
+      return read();
+    });
+    this.#tail = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  backupSelection(): Promise<ProductionBackupSelection> {
+    const run = this.#tail.then(() => {
+      if (this.#poisoned)
+        throw invalid("production authority is poisoned; reopen for reservation recovery");
+      this.#ensureWriteFence();
+      const catalog = DeviceCatalog.openExisting(this.#driver);
+      const snapshot = catalog.snapshot();
+      const target = catalog.selectedTargetStorage().target;
+      if (snapshot.selectedAppInstanceId === null
+          || snapshot.selectedAppInstanceId !== target.appInstanceId
+          || snapshot.catalogGeneration !== this.#catalogGeneration
+          || snapshot.writeEpoch !== this.#fence.writeEpoch
+          || !sameTarget(target, this.#target))
+        throw new ClayError("E_GENERATION_NOT_SELECTED", "backup target is not current");
+      return Object.freeze({
+        selected: BackupSelectedTargetV1.parse({
+          schema: 1,
+          authorityIncarnationId: snapshot.authorityIncarnationId,
+          catalogGeneration: snapshot.catalogGeneration,
+          selectedAppInstanceId: snapshot.selectedAppInstanceId,
+          selectedActiveGenerationId: target.activeGenerationId,
+          writeEpoch: snapshot.writeEpoch,
+          target,
+        }),
+        fence: Object.freeze({ ...this.#fence }),
+      });
+    });
+    this.#tail = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  backupRecords(): Promise<BackupRecord[]> {
+    return this.serializeRead(async () => {
+      const catalog = DeviceCatalog.openExisting(this.#driver);
+      return catalog.backupRecords(this.#target.appInstanceId);
+    });
+  }
+
+  publishBackup(input: BackupPublicationRequest): Promise<BackupPublicationReceipt> {
+    const captured = BackupPublicationRequestV1.parse(input);
+    const run = this.#tail.then(() => {
+      if (this.#poisoned)
+        throw invalid("production authority is poisoned; reopen for reservation recovery");
+      this.#ensureWriteFence();
+      const now = trustedInstant(this.#clock).milliseconds;
+      const catalog = DeviceCatalog.openExisting(this.#driver);
+      const receipt = this.#writeAuthority.run(() => catalog.publishBackup({
+        request: captured,
+        operationId: mintProductionAuthorityId("op"),
+        nowMs: now,
+      }));
+      const after = catalog.snapshot();
+      const selected = catalog.selectedTargetStorage().target;
+      if (!sameTarget(selected, this.#target)
+          || after.selectedAppInstanceId !== this.#target.appInstanceId
+          || after.writeEpoch !== this.#fence.writeEpoch)
+        throw invalid("backup publication changed the selected production target");
+      this.#catalogGeneration = after.catalogGeneration;
+      return receipt;
     });
     this.#tail = run.then(() => undefined, () => undefined);
     return run;
