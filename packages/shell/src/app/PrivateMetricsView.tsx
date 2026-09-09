@@ -135,7 +135,7 @@ export function PrivateMetricsView(props: {
             <Metric label="History" value={s.trust.historyOpened} detail="opens" />
             <Metric label="Safe rewind" value={pct(s.trust.rewindSuccessRate)}
               detail={`${s.trust.rewindSucceeded} of ${s.trust.rewindAttempted} attempts`} />
-            <Metric label="Backups" value={s.trust.exportsSucceeded} detail="successful exports" />
+            <Metric label="Portable copies" value={s.trust.exportsSucceeded} detail="successful exports" />
           </div>
         </section>
 

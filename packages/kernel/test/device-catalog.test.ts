@@ -980,4 +980,86 @@ describe("worker-owned device catalog root", () => {
       driver.close();
     }
   });
+
+  it("durably journals, reconciles, and atomically publishes restore-as-new work", async () => {
+    const driver = await attachedCatalog();
+    try {
+      const sourceIds = seedValidCatalog(driver);
+      const catalog = DeviceCatalog.openExisting(driver);
+      const before = catalog.snapshot();
+      const nowMs = Date.parse("2026-09-04T20:00:01.000Z");
+      const fence = catalog.acquireWriteLease({
+        expectedAuthorityIncarnationId: before.authorityIncarnationId,
+        expectedCatalogGeneration: before.catalogGeneration,
+        expectedWriteEpoch: before.writeEpoch,
+        releaseId: id("rel", "r"),
+        nowMs,
+        ttlMs: 60_000,
+      });
+      const selected = catalog.selectedTargetStorage().target;
+      const first = {
+        jobId: id("job", "j"),
+        appInstanceId: id("app", "k"),
+        generationId: id("gen", "l"),
+        namespaceId: id("ns", "m"),
+        operationId: id("op", "n"),
+        sourceArchiveSha256: `sha256:${"a".repeat(64)}`,
+        sourceProvenanceId: id("restoreval", "p"),
+        expectedCatalogGeneration: catalog.snapshot().catalogGeneration,
+        expectedSourceTarget: selected,
+        fence,
+        nowMs: nowMs + 1,
+      };
+      expect(catalog.beginRestoreJob(first)).toMatchObject({
+        jobId: first.jobId,
+        state: "prepared",
+        namespaceId: first.namespaceId,
+      });
+      expectCode(() => DeviceCatalog.openExisting(driver), "E_CATALOG_UNAVAILABLE");
+      const recovering = DeviceCatalog.openForRestoreRecovery(driver);
+      expect(recovering.pendingRestoreJobs()).toHaveLength(1);
+      recovering.clearPendingRestoreJob(first.jobId);
+      expect(DeviceCatalog.openExisting(driver).snapshot().selectedAppInstanceId).toBe(sourceIds.app);
+
+      const second = {
+        ...first,
+        jobId: id("job", "q"),
+        appInstanceId: id("app", "s"),
+        generationId: id("gen", "t"),
+        namespaceId: id("ns", "u"),
+        operationId: id("op", "v"),
+      };
+      catalog.beginRestoreJob(second);
+      const recoveryCatalog = DeviceCatalog.openForRestoreRecovery(driver);
+      const destinationTarget = {
+        appInstanceId: second.appInstanceId,
+        activeGenerationId: second.generationId,
+        lineageEpoch: "0",
+        protectionRevision: "0",
+        digestSchema: 1 as const,
+        stateSha256: `sha256:${"b".repeat(64)}`,
+      };
+      const published = recoveryCatalog.addAppTarget({
+        expectedCatalogGeneration: second.expectedCatalogGeneration,
+        target: destinationTarget,
+        namespaceId: second.namespaceId,
+        storageKey: second.namespaceId,
+        displayName: "Restored app",
+        shellId: "tracker",
+        operationId: second.operationId,
+        fence,
+        nowMs: nowMs + 2,
+        select: true,
+        sourceArchiveSha256: second.sourceArchiveSha256,
+        sourceProvenanceId: second.sourceProvenanceId,
+      }, second.jobId);
+      expect(published.selectedAppInstanceId).toBe(second.appInstanceId);
+      expect(DeviceCatalog.openExisting(driver).pendingRestoreJobs()).toEqual([]);
+      expect(recoveryCatalog.activeTargetStorageInventory()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ namespaceId: second.namespaceId, target: destinationTarget }),
+      ]));
+    } finally {
+      driver.close();
+    }
+  });
 });

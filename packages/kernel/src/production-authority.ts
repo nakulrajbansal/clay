@@ -3,6 +3,9 @@ import type {
   TargetEvidenceV1 as TargetEvidence,
   WriteFenceV1 as WriteFence,
 } from "@clay/schema/catalog";
+import type {
+  BackupAuthenticationV1 as BackupAuthentication,
+} from "@clay/schema/backup";
 import type { AsyncStore, StoreMutationContext } from "./asyncstore";
 import {
   validateAutomationTargetIdentity,
@@ -56,6 +59,32 @@ export type ProductionBootInfo = {
   catalogGeneration: string;
   apps: Array<{ id: string; name: string; shellId: string }>;
 };
+
+export type ProductionArchiveExport = Readonly<{
+  format: 5;
+  bytes: Uint8Array;
+  filename: string;
+  target: TargetEvidence;
+  catalogGeneration: string;
+}>;
+
+export type ProductionAuthenticatedArchiveExport = ProductionArchiveExport & Readonly<{
+  authentication: BackupAuthentication;
+}>;
+
+export type ProductionAuthenticatedRestoreInspection = Readonly<{
+  archiveSha256: string;
+  target: TargetEvidence;
+  authentication: BackupAuthentication;
+  displayName: string;
+  shellId: string;
+}>;
+
+export type ProductionRestoredAuthority = Readonly<{
+  authority: ProductionStoreAuthority;
+  target: TargetEvidence;
+  boot: ProductionBootInfo;
+}>;
 
 export type ProductionAuthorityInspection = {
   catalog: ReturnType<DeviceCatalog["snapshot"]>;

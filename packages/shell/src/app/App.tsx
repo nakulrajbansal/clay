@@ -7,10 +7,20 @@ import { createPortal } from "react-dom";
 import { Bridge, StoreRpcClient, deriveSafeDiffKind, portFromMessagePort }
   from "@clay/kernel/shell-runtime";
 import type {
-  ClayNotification, FieldProvenance, HistoryEntry, LivePanel, PanelProvenance,
+  BatchReceipt, ClayNotification, FieldProvenance, HistoryEntry, LivePanel, PanelProvenance,
   PrivateMetricEvent, PrivateMetricsSummary, RegTable, SemanticSchemaTraceV1, Suggestion,
 } from "@clay/kernel";
-import { WorkerClient } from "./worker-client";
+import {
+  MAX_BACKUP_ARCHIVE_BYTES,
+  type BackupRecord,
+  type BackupRun,
+} from "@clay/kernel/backup";
+import type {
+  AuthenticatedFormat5RestoreGrant,
+  BackupFailureReasonCode,
+} from "@clay/kernel/recovery";
+import { WorkerClient, type RecoveryRecordCandidate } from "./worker-client";
+import type { BackupTrustRuntimeStatus } from "../worker/backup-trust-runtime";
 import { fetchModelHealth } from "./model-health";
 import {
   HostedAuthFence, advanceHostedAuthRevocation, captureHostedAuthLanding,
@@ -43,6 +53,19 @@ import { buildTrustReceipt } from "./change-contract";
 import { useLensController } from "./useLensController";
 import { LazySurfaceBoundary } from "./LazySurfaceBoundary";
 import { ModalDialog, ModalScopedPortal } from "./ModalDialog";
+import type {
+  RecoveryActionFailure,
+  RecoveryBackupSummary,
+  RecoveryFailureSummary,
+} from "./RecoveryCenter";
+import {
+  createProductionBackupAdapter,
+  loadProductionBackupTarget,
+  runProductionAutomaticBackup,
+  saveProductionBackupTarget,
+  type ProductionBackupTargetState,
+} from "./production-backup.browser";
+import { AutomaticBackupTriggerController } from "./automatic-backup-trigger.browser";
 import { useWorkspaceMode, type WorkspaceMode } from "./workspace-mode";
 
 type Phase = "loading" | "onboarding" | "main" | "error";
@@ -60,6 +83,8 @@ const PanelFrame = lazy(() => import("./PanelFrame").then(module => ({ default: 
 const ShapeMapView = lazy(() => import("./ShapeMapView").then(module => ({ default: module.ShapeMapView })));
 const PrivateMetricsView = lazy(() => import("./PrivateMetricsView")
   .then(module => ({ default: module.PrivateMetricsView })));
+const RecoveryCenter = lazy(() => import("./RecoveryCenter")
+  .then(module => ({ default: module.RecoveryCenter })));
 
 function SurfaceFallback({ label, modal = false }: {
   label: string; modal?: boolean;
@@ -132,6 +157,87 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
       setTimeout(() => reject(new Error(`${what} timed out after ${ms / 1000}s`)), ms)),
   ]);
 }
+
+const MAX_RECOVERY_KIT_BYTES = 16 * 1024;
+const RECOVERY_FAILURE_PREFIX = "clay_recovery_failures_v1:";
+
+function recoveryBackupSummaries(
+  records: readonly BackupRecord[],
+  appInstanceId: string,
+): RecoveryBackupSummary[] {
+  return records
+    .filter(record => record.evidence.appInstanceId === appInstanceId
+      && record.state === "valid" && record.validationCode === "archive_valid")
+    .sort((left, right) => right.validatedAt.localeCompare(left.validatedAt))
+    .slice(0, 64)
+    .map(record => ({
+      backupId: record.backupId,
+      fileName: record.fileName,
+      verifiedAt: record.validatedAt,
+      byteLength: record.byteLength,
+    }));
+}
+
+function closedBackupFailureCode(reason: string): BackupFailureReasonCode {
+  switch (reason) {
+    case "unsupported_api":
+    case "adapter_uncertified":
+    case "permission_required":
+    case "target_unreachable":
+    case "operation_interrupted":
+      return reason;
+    default:
+      return "adapter_uncertified";
+  }
+}
+
+function recoveryActionCode(error: unknown): string {
+  if (error && (typeof error === "object" || typeof error === "function")) {
+    const code = Reflect.get(error, "code");
+    if (typeof code === "string" && /^E_[A-Z0-9_]{1,63}$/.test(code)) return code;
+  }
+  return "E_RECOVERY_CONFLICT";
+}
+
+function loadRecoveryFailures(appInstanceId: string): RecoveryActionFailure[] {
+  if (!/^app_[a-z2-7]{26}$/.test(appInstanceId)) return [];
+  try {
+    const encoded = localStorage.getItem(`${RECOVERY_FAILURE_PREFIX}${appInstanceId}`);
+    if (encoded === null || encoded.length > 16_384) return [];
+    const value: unknown = JSON.parse(encoded);
+    if (!Array.isArray(value)) return [];
+    return value.slice(0, 20).filter((entry): entry is RecoveryActionFailure =>
+      !!entry && typeof entry === "object" && !Array.isArray(entry)
+        && typeof Reflect.get(entry, "id") === "string"
+        && typeof Reflect.get(entry, "at") === "string"
+        && ["record", "batch", "structure"].includes(String(Reflect.get(entry, "action")))
+        && /^E_[A-Z0-9_]{1,63}$/.test(String(Reflect.get(entry, "code"))));
+  } catch { return []; }
+}
+
+async function boundedFileBytes(file: File, maximum: number, label: string): Promise<ArrayBuffer> {
+  if (!(file instanceof File) || file.size < 1 || file.size > maximum)
+    throw new Error(`${label} has an invalid size`);
+  return file.arrayBuffer();
+}
+
+function startBrowserDownload(
+  fileName: string,
+  bytes: ArrayBuffer | Uint8Array,
+  contentType: string,
+): void {
+  const payload = bytes instanceof Uint8Array ? bytes.slice().buffer as ArrayBuffer : bytes;
+  const url = URL.createObjectURL(new Blob([payload], { type: contentType }));
+  try {
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = fileName;
+    anchor.click();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 type Toast = { id: number; msg: string; kind: string;
   action?: { label: string; run: () => void } };
 
@@ -229,6 +335,28 @@ export function App(): React.JSX.Element {
   const [showHistory, setShowHistory] = useState(false);
   const [showShapeMap, setShowShapeMap] = useState(false);
   const [showPrivateMetrics, setShowPrivateMetrics] = useState(false);
+  const [showRecoveryCenter, setShowRecoveryCenter] = useState(false);
+  const [backupTrustStatus, setBackupTrustStatus] =
+    useState<BackupTrustRuntimeStatus | null>(null);
+  const [importedVerifierSeriesId, setImportedVerifierSeriesId] =
+    useState<string | null>(null);
+  const [backupTarget, setBackupTarget] = useState<ProductionBackupTargetState | null>(null);
+  const [backupTargetHint, setBackupTargetHint] =
+    useState<ProductionBackupTargetState | null>(null);
+  const [backupHistory, setBackupHistory] = useState<RecoveryBackupSummary[]>([]);
+  const [backupFailures, setBackupFailures] = useState<RecoveryFailureSummary[]>([]);
+  const [recoveryBatches, setRecoveryBatches] = useState<BatchReceipt[]>([]);
+  const [recoveryRecords, setRecoveryRecords] = useState<RecoveryRecordCandidate[]>([]);
+  const [recoveryActionFailures, setRecoveryActionFailures] =
+    useState<RecoveryActionFailure[]>([]);
+  const backupFailureId = useRef(0);
+  const recoveryFailureId = useRef(0);
+  const backupAdapterRef = useRef<ReturnType<typeof createProductionBackupAdapter> | undefined>(
+    undefined,
+  );
+  if (backupAdapterRef.current === undefined)
+    backupAdapterRef.current = createProductionBackupAdapter();
+  const backupAdapterAvailable = backupAdapterRef.current?.availability().status === "available";
   const [privateMetricsSummary, setPrivateMetricsSummary] = useState<PrivateMetricsSummary | null>(null);
   const [railOpen, setRailOpen] = useState<boolean>(() => {
     try { return localStorage.getItem("clay_reshape_open") !== "false"; }
@@ -671,17 +799,327 @@ export function App(): React.JSX.Element {
   };
 
   const exportArchive = async (): Promise<void> => {
-    const { bytes, filename } = await client().exportArchive();
-    const url = URL.createObjectURL(new Blob([bytes], { type: "application/zip" }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
-    try { localStorage.setItem("clay_last_backup", String(Date.now())); } catch { /* private mode */ }
-    pushToast("Exported your whole app to one file", "success");
-    recordPrivateMetric({ type: "backup_finished", action: "export", result: "success" });
+    try {
+      const { bytes, filename } = await client().exportArchive();
+      try {
+        startBrowserDownload(filename, bytes, "application/octet-stream");
+      } finally {
+        new Uint8Array(bytes).fill(0);
+      }
+      try { localStorage.setItem("clay_last_backup", String(Date.now())); }
+      catch { /* private mode */ }
+      pushToast("Exported an authenticated portable copy", "success");
+      recordPrivateMetric({ type: "backup_finished", action: "export", result: "success" });
+    } catch (error) {
+      pushToast(error instanceof Error ? error.message : String(error), "danger");
+      recordPrivateMetric({ type: "backup_finished", action: "export", result: "failed" });
+    }
   };
+
+  const refreshRecoveryState = async (): Promise<void> => {
+    if (!currentId) return;
+    const [trust, records, batches, candidates] = await Promise.all([
+      client().backupTrustStatus(),
+      client().backupRecords(),
+      client().operationBatches(20),
+      client().recoveryCandidates(),
+    ]);
+    let storedTarget: ProductionBackupTargetState | null = null;
+    try { storedTarget = loadProductionBackupTarget(localStorage, currentId); }
+    catch { /* storage can be unavailable in private mode */ }
+    setBackupTrustStatus(trust);
+    setBackupTargetHint(storedTarget);
+    const adapter = backupAdapterRef.current;
+    if (storedTarget && adapter) {
+      const authorization = await adapter.probe(storedTarget.target);
+      setBackupTarget(authorization.status === "authorized" ? storedTarget : null);
+    } else {
+      setBackupTarget(null);
+    }
+    setBackupHistory(recoveryBackupSummaries(records, currentId));
+    setRecoveryBatches(batches);
+    setRecoveryRecords(candidates);
+    setRecoveryActionFailures(loadRecoveryFailures(currentId));
+  };
+
+  const recordBackupFailure = (reasonCode: BackupFailureReasonCode): void => {
+    const id = `backup-failure-${++backupFailureId.current}`;
+    setBackupFailures(current => [{
+      id,
+      at: new Date().toISOString(),
+      reasonCode,
+    }, ...current].slice(0, 20));
+  };
+
+  const runAutomaticBackup = async (
+    state: ProductionBackupTargetState,
+    reason: BackupRun["reason"],
+  ): Promise<boolean> => {
+    const adapter = backupAdapterRef.current;
+    if (!adapter) {
+      recordBackupFailure("unsupported_api");
+      return false;
+    }
+    try {
+      const result = await runProductionAutomaticBackup(
+        client(), adapter, state.target, reason,
+      );
+      if (result.status === "failed") {
+        recordBackupFailure(result.reasonCode);
+        pushToast("Backup not verified; the earlier copy was kept.", "danger");
+        return false;
+      }
+      setBackupFailures([]);
+      setBackupHistory(recoveryBackupSummaries(
+        await client().backupRecords(),
+        state.target.appInstanceId,
+      ));
+      try { localStorage.setItem("clay_last_backup", String(Date.now())); }
+      catch { /* private mode */ }
+      pushToast("Backup written and verified", "success");
+      return true;
+    } catch {
+      recordBackupFailure("target_unreachable");
+      pushToast("Backup not verified; the earlier copy was kept.", "danger");
+      return false;
+    }
+  };
+
+  const exportRecoveryKit = async (): Promise<void> => {
+    const enrollment = await client().beginBackupTrustEnrollment();
+    try {
+      startBrowserDownload(enrollment.fileName, enrollment.bytes, "text/plain;charset=utf-8");
+    } finally {
+      enrollment.bytes.fill(0);
+    }
+    setBackupTrustStatus(await client().backupTrustStatus());
+    pushToast("Recovery Kit downloaded — check that exact file in Recovery Center", "success");
+  };
+
+  const confirmRecoveryKit = async (file: File): Promise<void> => {
+    const status = await client().backupTrustStatus();
+    if (status.status !== "needs_test_import")
+      throw new Error("Recovery Kit enrollment is unavailable");
+    const bytes = await boundedFileBytes(file, MAX_RECOVERY_KIT_BYTES, "Recovery Kit");
+    const ready = await client().confirmBackupTrustEnrollment(
+      status.enrollmentId,
+      bytes,
+    );
+    setBackupTrustStatus(ready);
+    pushToast("Recovery Kit checked — authenticated backup is ready", "success");
+    if (backupTarget) await runAutomaticBackup(backupTarget, "backup_now");
+  };
+
+  const importRecoveryKit = async (file: File): Promise<void> => {
+    const bytes = await boundedFileBytes(file, MAX_RECOVERY_KIT_BYTES, "Recovery Kit");
+    const imported = await client().importRecoveryKit(bytes);
+    const active = await client().backupTrustStatus();
+    setBackupTrustStatus(active);
+    setImportedVerifierSeriesId(imported.activeForBackup ? null : imported.seriesId);
+    pushToast(imported.activeForBackup
+      ? "Recovery Kit verified for the active backup series"
+      : "Recovery Kit imported for restore verification; future backups still use the active series",
+    "success");
+    if (imported.activeForBackup && backupTarget)
+      await runAutomaticBackup(backupTarget, "backup_now");
+  };
+
+  const activateImportedBackupSeries = async (seriesId: string): Promise<void> => {
+    const expectedActiveSeriesId = backupTrustStatus?.status === "ready"
+      ? backupTrustStatus.seriesId : null;
+    if (!(await askConfirm(
+      "Use the imported Recovery Kit series for every future backup on this device? "
+      + "This is an explicit trust rotation; the previous series will no longer receive backups.",
+    ))) return;
+    const active = await client().activateImportedBackupSeries(seriesId, expectedActiveSeriesId);
+    setBackupTrustStatus(active);
+    setImportedVerifierSeriesId(null);
+    pushToast("Imported Recovery Kit series activated for future backups", "success");
+    if (backupTarget) await runAutomaticBackup(backupTarget, "backup_now");
+  };
+
+  const chooseBackupFolder = async (): Promise<void> => {
+    const adapter = backupAdapterRef.current;
+    if (!adapter || !currentId) return;
+    const availability = adapter.availability();
+    if (availability.status === "unavailable") {
+      recordBackupFailure(closedBackupFailureCode(availability.reasonCode));
+      return;
+    }
+    const authorization = backupTargetHint
+      ? await adapter.reauthorizeFromUserGesture(backupTargetHint.target)
+      : await adapter.authorizeFromUserGesture(currentId);
+    if (authorization.status === "unavailable") {
+      recordBackupFailure(closedBackupFailureCode(authorization.reasonCode));
+      return;
+    }
+    const handle = await adapter.reacquire(authorization.target);
+    const next = Object.freeze({
+      target: authorization.target,
+      folderName: handle.name,
+    });
+    try { saveProductionBackupTarget(localStorage, next); }
+    catch { /* the target remains usable for this session */ }
+    setBackupTargetHint(next);
+    setBackupTarget(next);
+    const trust = await client().backupTrustStatus();
+    setBackupTrustStatus(trust);
+    if (trust.status === "ready") await runAutomaticBackup(next, "backup_now");
+    else pushToast("Folder chosen — finish checking your Recovery Kit to start backup", "default");
+  };
+
+  const retryBackup = async (): Promise<void> => {
+    if (backupTarget) await runAutomaticBackup(backupTarget, "retry");
+  };
+
+  const validateRestore = async (file: File): Promise<unknown> => {
+    const bytes = await boundedFileBytes(
+      file, MAX_BACKUP_ARCHIVE_BYTES, "Authenticated backup",
+    );
+    return client().validateRestoreArchive(bytes);
+  };
+
+  const restoreAsNew = async (grant: AuthenticatedFormat5RestoreGrant): Promise<void> => {
+    const boot = await client().restoreAsNew(grant);
+    replaceAppCache(boot.apps, boot.selectedAppInstanceId);
+    setShowRecoveryCenter(false);
+    reloadApp();
+  };
+
+  const recordRecoveryFailure = (
+    action: RecoveryActionFailure["action"],
+    error: unknown,
+  ): void => {
+    if (!currentId) return;
+    const failureTime = Date.now();
+    const nextFailure: RecoveryActionFailure = {
+      id: `recovery-failure-${failureTime}-${++recoveryFailureId.current}`,
+      at: new Date(failureTime).toISOString(),
+      action,
+      code: recoveryActionCode(error),
+    };
+    setRecoveryActionFailures(current => {
+      const next = [nextFailure, ...current].slice(0, 20);
+      try {
+        localStorage.setItem(`${RECOVERY_FAILURE_PREFIX}${currentId}`, JSON.stringify(next));
+      } catch { /* in-memory history remains available for this session */ }
+      return next;
+    });
+  };
+
+  const restoreRecoveryRecord = async (
+    candidate: RecoveryRecordCandidate,
+  ): Promise<boolean> => {
+    const confirmed = await askConfirm(
+      `${candidate.deleted ? "Restore this deleted" : "Undo the latest change to this"} `
+      + `${candidate.table} record${candidate.attachmentCount > 0
+        ? ` and its ${candidate.attachmentCount} attached file${candidate.attachmentCount === 1 ? "" : "s"}`
+        : ""}? The current snapshot remains in history. Conflicting relationships stop safely.`,
+    );
+    if (!confirmed) return false;
+    try {
+      await client().restoreRow(candidate.table, candidate.id, mutationContext());
+      liveBridge?.notifyWrite(candidate.table);
+      await Promise.all([refreshPanels(), refreshRecoveryState()]);
+      return true;
+    } catch (error) {
+      recordRecoveryFailure("record", error);
+      throw error;
+    }
+  };
+
+  const undoRecoveryBatch = async (batch: BatchReceipt): Promise<boolean> => {
+    if (!(await askConfirm(
+      `Undo “${batch.summary}” across ${batch.changed} record${batch.changed === 1 ? "" : "s"}? `
+      + "Clay will stop without publishing if later edits conflict.",
+    ))) return false;
+    try {
+      await client().undoBatch(batch.id, mutationContext());
+      for (const table of registryTables) liveBridge?.notifyWrite(table.name);
+      await Promise.all([refreshPanels(), refreshRecoveryState()]);
+      return true;
+    } catch (error) {
+      recordRecoveryFailure("batch", error);
+      throw error;
+    }
+  };
+
+  const rewindRecoveryStructure = async (version: number): Promise<boolean> => {
+    if (!(await askConfirm(
+      `Rewind the app structure to version ${version}? Later structural versions will be removed; `
+      + "record data is preserved unless those versions changed its schema.",
+    ))) return false;
+    try {
+      await client().makeLatest(version, mutationContext());
+      setScrub(null);
+      await Promise.all([refreshPanels(), refreshRecoveryState()]);
+      setFeed(current => [...pruneFeedAfterVersion(current, version), {
+        kind: "info", text: `Rewound — v${version} is the latest again.`,
+      }]);
+      return true;
+    } catch (error) {
+      recordRecoveryFailure("structure", error);
+      throw error;
+    }
+  };
+
+  const openRecoveryCenter = (): void => {
+    setShowRecoveryCenter(true);
+    void refreshRecoveryState().catch(() => {
+      setBackupTrustStatus(null);
+      pushToast("Recovery status is temporarily unavailable", "danger");
+    });
+  };
+
+  useEffect(() => {
+    if (phase !== "main" || !currentId || !backupTarget
+        || backupTrustStatus?.status !== "ready" || !workerRef.current) return;
+    const wc = workerRef.current;
+    const controller = new AutomaticBackupTriggerController({
+      getTarget: () => backupTarget,
+      run: runAutomaticBackup,
+    });
+    const unsubscribe = wc.onAuthorityCommit(notice => {
+      controller.notifyAuthorityCommit(notice);
+    });
+    let active = true;
+    const inspect = async (): Promise<void> => {
+      try {
+        const [selection, records] = await Promise.all([
+          wc.backupSelection(),
+          wc.backupRecords(),
+        ]);
+        if (!active || selection.selected.selectedAppInstanceId !== currentId) return;
+        const exact = records.some(record => record.state === "valid"
+          && record.targetId === backupTarget.target.targetId
+          && record.evidence.appInstanceId === selection.selected.target.appInstanceId
+          && record.evidence.activeGenerationId === selection.selected.target.activeGenerationId
+          && record.evidence.lineageEpoch === selection.selected.target.lineageEpoch
+          && record.evidence.protectionRevision === selection.selected.target.protectionRevision
+          && record.evidence.digestSchema === selection.selected.target.digestSchema
+          && record.evidence.stateSha256 === selection.selected.target.stateSha256);
+        if (!exact) controller.notifyAuthorityCommit(selection.selected.target);
+      } catch { /* Recovery Center reports durable failure on an attempted run. */ }
+    };
+    void inspect();
+    const interval = window.setInterval(() => { void inspect(); }, 60_000);
+    const refreshPermission = (): void => { void refreshRecoveryState(); };
+    window.addEventListener("focus", refreshPermission);
+    document.addEventListener("visibilitychange", refreshPermission);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+      unsubscribe();
+      controller.stop();
+      window.removeEventListener("focus", refreshPermission);
+      document.removeEventListener("visibilitychange", refreshPermission);
+    };
+  }, [
+    phase,
+    currentId,
+    backupTarget?.target.targetId,
+    backupTrustStatus?.status,
+  ]);
 
   // Local-first means the user carries the backup burden — carry it FOR
   // them as far as a browser allows: a gentle weekly nudge with a
@@ -701,26 +1139,6 @@ export function App(): React.JSX.Element {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, history.length]);
-
-  const importArchive = async (file: File): Promise<void> => {
-    if (!(await askConfirm(
-      `Replace this app with the contents of "${file.name}"? `
-      + `Your current data will be overwritten — export a backup first if unsure.`))) return;
-    try {
-      const result = await client().importArchive(
-        await file.arrayBuffer(), mutationContext());
-      if (result.invalidPanels.length > 0) {
-        window.alert(
-          `Imported, but ${result.invalidPanels.length} panel(s) failed validation `
-          + `and were flagged: ${result.invalidPanels.join(", ")} (G15).`);
-      }
-      recordPrivateMetric({ type: "backup_finished", action: "import", result: "success" });
-      window.location.reload();
-    } catch (e) {
-      recordPrivateMetric({ type: "backup_finished", action: "import", result: "failed" });
-      pushToast(e instanceof Error ? e.message : String(e), "danger");
-    }
-  };
 
   const copyDiagnostics = async (): Promise<void> => {
     const log = await client().debugLog();
@@ -1561,6 +1979,7 @@ export function App(): React.JSX.Element {
         onToggleRail={toggleRail}
         version={head}
         persistent={persistent}
+        onOpenRecovery={openRecoveryCenter}
         themes={THEMES}
         themeId={themeId}
         onSelectTheme={selectTheme}
@@ -1573,6 +1992,42 @@ export function App(): React.JSX.Element {
         workspaceMode={workspaceMode}
         onWorkspaceModeChange={chooseWorkspaceMode}
       />
+      {showRecoveryCenter ? (
+        <LazySurfaceBoundary label="Recovery Center" modal>
+          <Suspense fallback={<SurfaceFallback label="Recovery Center" modal />}>
+            <RecoveryCenter
+              appName={apps.find(app => app.id === currentId)?.name ?? "This app"}
+              authoritativeAppInstanceId={currentId}
+              opfsAvailable={persistent}
+              backupTrustStatus={backupTrustStatus}
+              backupTarget={backupTarget ? {
+                targetId: backupTarget.target.targetId,
+                folderName: backupTarget.folderName,
+              } : null}
+              lastVerifiedBackup={backupHistory[0] ?? null}
+              failures={backupFailures}
+              history={backupHistory}
+              structuralHistory={history}
+              recentBatches={recoveryBatches}
+              recordCandidates={recoveryRecords}
+              recoveryFailures={recoveryActionFailures}
+              importedVerifierSeriesId={importedVerifierSeriesId}
+              onClose={() => setShowRecoveryCenter(false)}
+              onRetry={backupTarget && backupFailures.length > 0 ? retryBackup : undefined}
+              onChooseFolder={backupAdapterAvailable ? chooseBackupFolder : undefined}
+              onExportRecoveryKit={exportRecoveryKit}
+              onConfirmRecoveryKit={confirmRecoveryKit}
+              onImportRecoveryKit={importRecoveryKit}
+              onActivateImportedSeries={activateImportedBackupSeries}
+              onRestoreRecord={restoreRecoveryRecord}
+              onUndoBatch={undoRecoveryBatch}
+              onRewindStructure={rewindRecoveryStructure}
+              onValidateRestore={validateRestore}
+              onRestoreAsNew={restoreAsNew}
+            />
+          </Suspense>
+        </LazySurfaceBoundary>
+      ) : null}
       {!persistent ? (
         <div className="banner">
           <span>
@@ -1791,7 +2246,6 @@ export function App(): React.JSX.Element {
         onRemoveSamples={() => void removeSamples()}
         onReset={() => void resetApp()}
         onExport={() => void exportArchive()}
-        onImport={file => void importArchive(file)}
         onPurgeAttachments={async () => {
           const result = await client().purgeDeletedAttachments(mutationContext());
           pushToast(result.files === 0 ? "No removed files are old enough to clean up"

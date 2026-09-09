@@ -939,8 +939,11 @@ button.shape-field[aria-expanded="true"] { color: var(--shell-accent-text); bord
 }
 .shape-map-footer b { color: var(--shell-text); }
 
+/* Recovery Center reuses the audited Shape Map modal shell. */
+.recovery-center { grid-template-rows: auto 1fr; }
+
 @media (max-width: 1180px) {
-  .appbar-trust { display: none; }
+  .appbar-trust { font-size: 0; }
   .appbar-switch { margin-right: auto; }
   .appbar-data-btn { margin-left: 0; }
   .rail { position: fixed; z-index: 25; top: 60px; right: 0; bottom: 0; box-shadow: var(--shadow-lg); }
@@ -967,6 +970,7 @@ button.shape-field[aria-expanded="true"] { color: var(--shell-accent-text); bord
   .appbar { padding-inline: 6px; gap: 6px; }
   .appbar-brand { font-size: 0; gap: 0; }
   .appbar-mark { width: 28px; height: 28px; }
+
   .appbar-current { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .appbar-shape-btn { font-size: 0; gap: 0; }
   .appbar-shape-btn .appbar-action-icon { font-size: 14px; }
