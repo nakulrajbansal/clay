@@ -57,6 +57,38 @@ export function createApp(name: string, shellId: string): AppEntry {
   return entry;
 }
 
+/** Cache a worker-published identity without minting or rebinding it. The two
+ * localStorage keys are presentation hints only, but a failed cache update is
+ * rolled back so retry cannot observe a half-written duplicate. */
+export function cachePublishedApp(entry: AppEntry): AppEntry {
+  if (!entry || typeof entry.id !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(entry.id)
+      || typeof entry.name !== "string" || entry.name.trim() === "" || entry.name.length > 80
+      || typeof entry.shellId !== "string" || entry.shellId.trim() === "")
+    throw new Error("published app binding is invalid");
+  const current = listApps();
+  const duplicates = current.filter(candidate => candidate.id === entry.id);
+  if (duplicates.length > 1) throw new Error("published app binding is ambiguous");
+  const existing = duplicates[0];
+  if (existing && (existing.name !== entry.name || existing.shellId !== entry.shellId))
+    throw new Error("published app binding conflicts with the local cache");
+  const next = existing ? current : [...current, { ...entry }];
+  const previousApps = localStorage.getItem(APPS_KEY);
+  const previousCurrent = localStorage.getItem(CURRENT_KEY);
+  try {
+    saveApps(next);
+    setCurrentApp(entry.id);
+  } catch (error) {
+    try {
+      if (previousApps === null) localStorage.removeItem(APPS_KEY);
+      else localStorage.setItem(APPS_KEY, previousApps);
+      if (previousCurrent === null) localStorage.removeItem(CURRENT_KEY);
+      else localStorage.setItem(CURRENT_KEY, previousCurrent);
+    } catch { /* cache remains nonauthoritative; worker read-back wins */ }
+    throw error;
+  }
+  return { ...entry };
+}
+
 /** Register a forked copy with a fresh id and make it current. Always a uuid
  * (a fork is never the first app), so its OPFS files are its own. */
 export function addForkEntry(name: string, shellId: string): AppEntry {

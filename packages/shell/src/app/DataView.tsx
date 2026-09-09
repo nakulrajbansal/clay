@@ -17,6 +17,7 @@ import type { WorkerClient, WorkerMutationContext } from "./worker-client";
 import type {
   RichTextDraftSnapshot, RichTextFieldIdentity, RichTextSaveCoordinator, RichTextSaveIntent,
 } from "./RecordDetail";
+import type { FirstSuccessState } from "./first-success-state";
 import { loadAllTableRows } from "./paged-query";
 import { ModalDialog } from "./ModalDialog";
 import {
@@ -310,6 +311,8 @@ export function DataView(props: {
   appInstanceId?: string | null;
   initialTable?: string | null;
   initialRecordId?: string | null;
+  onImport?: () => void;
+  onEverydayAction?: (state: FirstSuccessState) => void;
   onWrite: (table: string) => void;
   onClose: () => void;
   returnFocusRef?: RefObject<HTMLElement | null>;
@@ -1550,6 +1553,7 @@ export function DataView(props: {
           onExport={() => void openRecordExport()}
           onShare={() => void openRecordShare()}
           onConfirm={props.onConfirm}
+          onEverydayAction={props.onEverydayAction}
         />
         </Suspense>
       ) : null}

@@ -118,10 +118,10 @@ export function ConversationRail(props: {
   return (
     <aside className="rail">
       <header className="rail-header">
-        <span>Reshape</span>
+        <span>Ask Clay</span>
         <span className="rail-header-links">
           <button className="link" onClick={() => setShowSettings(s => !s)}>
-            ⚙ settings
+            ⚙ Advanced
           </button>
         </span>
       </header>
@@ -283,7 +283,7 @@ export function ConversationRail(props: {
           ) : null}
           <div className="rail-actions">
             <button className="link" onClick={props.onRemoveSamples}>
-              Remove sample rows
+              Clear example data
             </button>
             <button className="link danger" onClick={props.onReset}>
               Start over…
@@ -291,10 +291,10 @@ export function ConversationRail(props: {
           </div>
           <div className="rail-actions">
             <button className="link" onClick={props.onExport}>
-              Export .clay backup
+              Download a complete backup
             </button>
             <label className="link file-label">
-              Import backup…
+              Restore from a backup…
               <input
                 type="file"
                 accept=".clay,.zip"
@@ -315,7 +315,7 @@ export function ConversationRail(props: {
         </div>
       ) : null}
 
-      <div className="rail-feed" tabIndex={0} role="log" aria-label="Reshape history">
+      <div className="rail-feed" tabIndex={0} role="log" aria-label="Recent changes">
         {props.feed.map((item, i) => {
           switch (item.kind) {
             case "intent":
@@ -361,7 +361,7 @@ export function ConversationRail(props: {
                 </details>
               );
             case "discarded":
-              return <div key={i} className="feed-item feed-discarded">Discarded: {item.summary}</div>;
+              return <div key={i} className="feed-item feed-discarded">Not kept: {item.summary}</div>;
             case "info":
               return <div key={i} className="feed-item feed-info">{item.text}</div>;
           }
@@ -394,10 +394,10 @@ export function ConversationRail(props: {
       ) : null}
 
       {contract ? (
-        <div className="change-contract" role="region" aria-label="Change contract">
+        <div className="change-contract" role="region" aria-label="Proposed change">
           <header className="contract-header">
             <div>
-              <span className="contract-eyebrow">Change contract</span>
+              <span className="contract-eyebrow">Proposed change</span>
               <strong>Ready as v{contract.version}</strong>
             </div>
             <span className="contract-verified"><i aria-hidden="true">✓</i> verified</span>
@@ -458,8 +458,8 @@ export function ConversationRail(props: {
           ) : null}
           <p className="contract-promise">Nothing is live until you keep it.</p>
           <div className="contract-actions">
-            <button className="primary" onClick={props.onKeep}>Keep change</button>
-            <button onClick={props.onDiscard}>Discard</button>
+            <button className="primary" onClick={props.onKeep}>Keep this change</button>
+            <button onClick={props.onDiscard}>Go back</button>
           </div>
         </div>
       ) : (
@@ -467,7 +467,7 @@ export function ConversationRail(props: {
           <textarea
             ref={inputRef}
             value={text}
-            placeholder='Describe a change… e.g. "add a priority field and show it as a colored badge"'
+            placeholder='Ask Clay for a change… e.g. "add a priority field and show it as a colored badge"'
             maxLength={500}
             rows={3}
             disabled={props.busy}
@@ -477,7 +477,7 @@ export function ConversationRail(props: {
             }}
           />
           <button className="primary" disabled={props.busy || text.trim() === ""} onClick={submit}>
-            Reshape
+            Preview this change
           </button>
         </div>
       )}

@@ -38,7 +38,7 @@ export function HistoryView(props: {
   const startEdit = (v: number, label: string): void => { setEditing(v); setDraft(label); };
   const save = (v: number): void => { props.onSetCheckpoint(v, draft); setEditing(null); };
   return (
-    <div ref={dialogRef} className="historyview" role="dialog" aria-label="App history"
+    <div ref={dialogRef} className="historyview" role="dialog" aria-label="Recent changes"
       tabIndex={-1} onKeyDown={event => {
         if (event.key !== "Escape") return;
         event.preventDefault(); event.stopPropagation();
@@ -47,10 +47,10 @@ export function HistoryView(props: {
       }}>
       <div className="historyview-header">
         <div>
-          <h2 className="historyview-title">History</h2>
+          <h2 className="historyview-title">Recent changes</h2>
           <p className="historyview-sub">
-            {props.history.length} version{props.history.length === 1 ? "" : "s"} ·
-            your app’s whole evolution — jump to any moment, or rewind to it
+            {props.history.length} saved point{props.history.length === 1 ? "" : "s"} ·
+            preview an earlier point or go back to it
           </p>
         </div>
         <button className="link" onClick={props.onClose}>Close</button>
@@ -109,10 +109,10 @@ export function HistoryView(props: {
                       {!isHead ? (
                         <>
                           <button className="link" onClick={() => props.onJump(e.version)}>
-                            Jump here
+                            Preview this point
                           </button>
                           <button className="link" onClick={() => props.onRestore(e.version)}>
-                            Rewind to here
+                            Go back to this point
                           </button>
                         </>
                       ) : null}

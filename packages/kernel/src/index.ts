@@ -7,7 +7,7 @@ export {
   deriveDeviceState, DeviceProtectionInputV1, DeviceStateResultV1, targetIdentityEquals,
   type CheckpointObservation, type DeviceProtectionInput, type DeviceState,
   type DeviceStateResult, type DurableStoreCapability, type ExpectedStoreFailure,
-  type ProtectionReasonCode, type TemporaryUserChoice,
+  type ProtectionReasonCode, type TargetIdentityV1, type TemporaryUserChoice,
 } from "./protection";
 export {
   compileExpr, evalExpr, parseExpr, typecheckExpr, exprFields,

@@ -4,9 +4,10 @@
 // serveStore RPC ports for the Bridge's AsyncStore (live and shadow).
 // Records never leave this worker except over those ports to the Bridge.
 import type {
-  DebugEvent, LivePanel, PanelProvenance,
-  PreparedMutationPreview,
+  CheckpointObservation, DebugEvent, DeviceStateResult, LivePanel, PanelProvenance,
+  PreparedMutationPreview, TargetIdentityV1,
 } from "@clay/kernel";
+import { deriveDeviceState, targetIdentityEquals } from "@clay/kernel";
 import { portFromMessagePort, serveStore } from "@clay/kernel/worker-rpc";
 import type { StoreServerControl } from "@clay/kernel/worker-rpc";
 import {
@@ -25,6 +26,12 @@ import type {
   Planner, PlannerContext, PlannerResult,
 } from "@clay/kernel/planner-pipeline";
 import { createStarterSeedBundle } from "../shells/seed";
+import { parseSampleProvenanceLedger } from "../shells/sample-provenance";
+import {
+  applyFirstSuccessEvent,
+  emptyFirstSuccessState,
+  parseFirstSuccessState,
+} from "../app/first-success-state";
 import { createSampleFillBundle } from "./samples";
 import { DB_WORKER_ROUTE_CENSUS } from "./mutation-route-census";
 import type { ImportSessionCoordinator } from "./release-c/import-session-coordinator";
@@ -42,6 +49,12 @@ export type IntentOutcome =
   | { status: "clarify"; question: string; repaired: boolean }
   | { status: "preview"; preview: PreviewInfo }
   | { status: "failed"; stage: string; reasons: string[]; repaired: boolean };
+
+export type DeviceProtectionProjection = Readonly<{
+  result: DeviceStateResult;
+  target: TargetIdentityV1 | null;
+  checkpoint: CheckpointObservation;
+}>;
 
 type Request = {
   id: number;
@@ -664,6 +677,157 @@ async function runAuthorityMutation(
   })).result;
 }
 
+const SAMPLE_PROVENANCE_SETTING = "sample_provenance_v1";
+const LEGACY_SAMPLE_ROWS_SETTING = "sample_rows";
+
+type ActiveSampleCoordinate = Readonly<{ table: string; rowId: string }>;
+
+function activeSampleCoordinates(reader: ProductionStoreReader): readonly ActiveSampleCoordinate[] {
+  if (reader.getSetting(LEGACY_SAMPLE_ROWS_SETTING) !== undefined)
+    throw new ClayError("E_TARGET_AUTHORITY_INVALID", "legacy sample provenance is unauthenticated");
+  const ledger = parseSampleProvenanceLedger(reader.getSetting(SAMPLE_PROVENANCE_SETTING));
+  const byId = new Map<string, { name: string; active: boolean }>();
+  for (const table of reader.registrySnapshot().values()) {
+    const tableId = table.semantic?.tableId;
+    if (!tableId) continue;
+    if (byId.has(tableId))
+      throw new ClayError("E_TARGET_AUTHORITY_INVALID", "sample table identity is ambiguous");
+    byId.set(tableId, { name: table.name, active: !table.inactive });
+  }
+  const active: ActiveSampleCoordinate[] = [];
+  for (const entry of ledger.entries) {
+    const table = byId.get(entry.tableId);
+    if (!table) continue;
+    const row = reader.query({
+      from: table.name,
+      where: [{ field: "id", op: "eq", value: entry.rowId }],
+      includeDeleted: true,
+      limit: 1,
+    })[0];
+    if (table.active && row?.deleted_at == null)
+      active.push(Object.freeze({ table: table.name, rowId: entry.rowId }));
+  }
+  return Object.freeze(active);
+}
+
+function firstRunEvidence(): Readonly<{
+  sampleCount: number; sampleTables: string[]; realRecordCount: number; provenanceValid: boolean;
+}> {
+  const reader = mustStore();
+  try {
+    const samples = activeSampleCoordinates(reader);
+    const sampleKeys = new Set(samples.map(item => JSON.stringify([item.table, item.rowId])));
+    let realRecordCount = 0;
+    for (const table of reader.registrySnapshot().values()) {
+      if (table.inactive) continue;
+      for (const row of reader.query({ from: table.name, limit: 500 })) {
+        if (!sampleKeys.has(JSON.stringify([table.name, String(row.id)]))) realRecordCount++;
+      }
+    }
+    return Object.freeze({
+      sampleCount: samples.length,
+      sampleTables: [...new Set(samples.map(item => item.table))].sort(),
+      realRecordCount,
+      provenanceValid: true,
+    });
+  } catch {
+    return Object.freeze({
+      sampleCount: 0,
+      sampleTables: [],
+      realRecordCount: 0,
+      provenanceValid: false,
+    });
+  }
+}
+
+function firstEverydayActionTarget(): ActiveSampleCoordinate | null {
+  const reader = mustStore();
+  const samples = new Set(activeSampleCoordinates(reader)
+    .map(item => JSON.stringify([item.table, item.rowId])));
+  for (const table of reader.registrySnapshot().values()) {
+    if (table.inactive) continue;
+    const row = reader.query({ from: table.name, limit: 500 })
+      .find(candidate => !samples.has(JSON.stringify([table.name, String(candidate.id)])));
+    if (row) return Object.freeze({ table: table.name, rowId: String(row.id) });
+  }
+  return null;
+}
+
+async function completeEverydayAction(req: Request, payload: Record<string, unknown>): Promise<unknown> {
+  if (payload.action !== "open" || typeof payload.table !== "string"
+      || typeof payload.rowId !== "string")
+    throw new ClayError("E_VALIDATION", "Everyday-action evidence is invalid");
+  const reader = mustStore();
+  const row = reader.query({
+    from: payload.table,
+    where: [{ field: "id", op: "eq", value: payload.rowId }],
+    limit: 1,
+  })[0];
+  if (!row || String(row.id) !== payload.rowId || row.deleted_at != null)
+    throw new ClayError("E_VALIDATION", "Everyday action did not read back a canonical real record");
+  const stored = reader.getSetting("release_a_first_success_v1");
+  const current = stored === undefined || stored === null
+    ? emptyFirstSuccessState() : parseFirstSuccessState(stored);
+  const applied = applyFirstSuccessEvent(current, {
+    type: "everyday_action", action: "open", changed: true, sample: false,
+  });
+  const next = { ...applied, revision: current.revision + 1 };
+  const committed = await mustAuthority().executeMutation({
+    requestId: authorityRequestId(req),
+    route: "setting.compareAndSet",
+    payload: { key: "release_a_first_success_v1", expectedRevision: current.revision, value: next },
+  });
+  return parseFirstSuccessState((committed.result as { current?: unknown }).current ?? next);
+}
+
+function targetIdentity(value: {
+  appInstanceId: string; activeGenerationId: string; lineageEpoch: string;
+  protectionRevision: string; stateSha256: string;
+}): TargetIdentityV1 {
+  return Object.freeze({
+    appInstanceId: value.appInstanceId,
+    activeGenerationId: value.activeGenerationId,
+    lineageEpoch: value.lineageEpoch,
+    stateRevision: value.protectionRevision,
+    stateDigest: value.stateSha256,
+  });
+}
+
+async function deviceProtection(): Promise<DeviceProtectionProjection> {
+  const inspection = mustAuthority().inspectAuthority();
+  const target = targetIdentity(inspection.target);
+  const selected = inspection.catalog.entries.find(entry =>
+    entry.appInstanceId === inspection.catalog.selectedAppInstanceId) ?? null;
+  const selectedTarget = selected ? Object.freeze({
+    appInstanceId: selected.appInstanceId,
+    activeGenerationId: selected.activeGenerationId,
+    lineageEpoch: selected.currentLineageEpoch,
+    stateRevision: selected.currentProtectionRevision,
+    stateDigest: selected.stateSha256,
+  }) : null;
+  const checkpoint: CheckpointObservation = targetIdentityEquals(selectedTarget, target)
+    ? { state: "valid", target }
+    : { state: "generation_not_selected", target };
+  const result = deriveDeviceState({
+    checksComplete: true,
+    expectedStoreFailure: null,
+    catalogReadable: true,
+    catalogAppCount: inspection.catalog.entries.length,
+    namespaceInventoryReadable: true,
+    durableNamespaceCount: inspection.catalog.entries.length,
+    jobInventoryReadable: true,
+    pendingOperationCount: 0,
+    capability: "supported",
+    userChoice: null,
+    storeOpen: "yes",
+    transactionCertified: checkpoint.state === "valid",
+    persisted: "unknown",
+    target,
+    checkpoint,
+  });
+  return Object.freeze({ result: Object.freeze(result), target, checkpoint: Object.freeze(checkpoint) });
+}
+
 async function executePipelineText(text: string, plannerPort: MessagePort): Promise<IntentOutcome> {
   if (pending)
     throw new ClayError("E_CONFLICT", "Finish the current preview before reshaping again");
@@ -923,6 +1087,36 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       return runAuthorityMutation("undoImport", p, req);
     case "seed":
       return runAuthorityMutation("seed", createStarterSeedBundle(p.shellId), req);
+    case "activateStarter": {
+      await runAuthorityMutation("seed", {
+        ...createStarterSeedBundle(p.shellId),
+        activation: { operationId: p.operationId, appId: p.appId },
+      }, req);
+      const receipt = mustStore().getSetting("first_run_publication_v1");
+      if (!receipt) throw new ClayError("E_INTERNAL", "starter publication receipt is missing");
+      return receipt;
+    }
+    case "activateImportedApp":
+      return failClosedMutation(req.op);
+    case "firstRunPublication": {
+      if (p.appId !== "default")
+        throw new ClayError("E_VALIDATION", "first-run publication app binding is invalid");
+      return mustStore().getSetting("first_run_publication_v1") ?? null;
+    }
+    case "undoFirstRunImport":
+      return (await mustAuthority().executeMutation({
+        requestId: authorityRequestId(req),
+        route: "firstRun.undoImport",
+        payload: p,
+      })).result;
+    case "firstRunEvidence":
+      return firstRunEvidence();
+    case "firstEverydayActionTarget":
+      return firstEverydayActionTarget();
+    case "completeEverydayAction":
+      return completeEverydayAction(req, p);
+    case "deviceProtection":
+      return deviceProtection();
     case "panels":
       return mustStore().livePanels();
     case "panelProvenance":
