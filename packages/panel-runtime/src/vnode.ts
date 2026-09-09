@@ -1348,13 +1348,13 @@ function buildFlow(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
     root.appendChild(head);
     for (const it of group) {
       const row = el(ctx, "div", "clay-flow-item");
+      let defaultOpen: ((event: Event) => void) | null = null;
       if (typeof onItemClick === "function") {
         row.classList.add("clay-clickable");
         row.addEventListener("click", (event) =>
           ctx.userAction(() => (onItemClick as (x: Item) => void)(it), event));
       } else {
-        const open = makeDefaultRecordClick(ctx, it);
-        if (open) bindDefaultRecordOpen(row, open);
+        defaultOpen = makeDefaultRecordClick(ctx, it);
       }
       const main = el(ctx, "div", "clay-flow-item-main");
       const title = el(ctx, "div", "clay-flow-item-title");
@@ -1366,6 +1366,7 @@ function buildFlow(ctx: Ctx, props: Record<string, unknown>): HTMLElement {
         main.appendChild(sub);
       }
       row.appendChild(main);
+      if (defaultOpen) bindDefaultRecordOpen(main, defaultOpen);
       if (it.badge !== undefined && it.badge !== null && it.badge !== "") {
         const b = el(ctx, "span", "clay-badge");
         const bt = clampTone(it.badgeTone);

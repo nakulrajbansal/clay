@@ -478,7 +478,7 @@ describe("record-aware primitives", () => {
     renderWithRecordContext(h(Flow, {
       stages: [{ key: "open", label: "Open" }],
       items: [{ id, title: "Apollo", stage: "open" }],
-    })).querySelector(".clay-flow-item")!
+    })).querySelector(".clay-flow-item-main")!
       .dispatchEvent(new window.Event("click", { bubbles: true }));
     expect(opened).toEqual([
       { table: "projects", id }, { table: "projects", id },
@@ -509,7 +509,7 @@ describe("record-aware primitives", () => {
       renderWithRecordContext(h(Flow, {
         stages: [{ key: "open", label: "Open" }],
         items: [{ id: recordId, title: "Apollo", stage: "open" }],
-      })).querySelector<HTMLElement>(".clay-flow-item")!,
+      })).querySelector<HTMLElement>(".clay-flow-item-main")!,
     ];
     for (const [index, control] of controls.entries()) {
       expect(control.tabIndex).toBe(0);
@@ -531,7 +531,12 @@ describe("record-aware primitives", () => {
       items: [{ id: recordId, title: "Apollo", stage: "open" }],
       onAdvance: () => { advanced++; },
     }), c, { primaryTable: "projects", openRecord: (_table, id) => opened.push(id) });
+    const row = c.querySelector<HTMLElement>(".clay-flow-item")!;
+    const open = c.querySelector<HTMLElement>(".clay-flow-item-main")!;
     const button = c.querySelector<HTMLButtonElement>(".clay-flow-advance")!;
+    expect(row.getAttribute("role")).toBeNull();
+    expect(open.getAttribute("role")).toBe("button");
+    expect(open.contains(button)).toBe(false);
     for (const key of ["Enter", " "]) {
       const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
       button.dispatchEvent(event);
