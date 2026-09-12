@@ -3,7 +3,7 @@
 ## Workspace identity
 
 - Project: Clay, a local-first malleable personal application.
-- Open this directory: `D:\Projects\workspaces\clay-codex`.
+- Open this directory: `D:\Clay`.
 - Active Codex branch: `codex/clay-project`.
 - Starting source commit: `1e6245c3363874642d49f22b371dad48543f53d8`.
 - Starting source tree: `5af88c75a2eca8e4bad8a2edd7cb9e200d994ca5`.

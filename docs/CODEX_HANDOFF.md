@@ -6,7 +6,7 @@ This document gives Codex the compact engineering, product, safety, and release 
 
 ## Repository identity
 
-- Codex checkout: `D:\Projects\workspaces\clay-codex`
+- Codex checkout: `D:\Clay`
 - Branch: `codex/clay-project`
 - Remote: `https://github.com/nakulrajbansal/clay.git`
 - Base commit: `1e6245c3363874642d49f22b371dad48543f53d8`
@@ -14,7 +14,7 @@ This document gives Codex the compact engineering, product, safety, and release 
 - Integration branch upstream reference: `agent/af-fast-integration`
 - Canonical Git repository storage: `C:\Users\nakul\OneDrive\Project Folder\clay`
 
-The OneDrive checkout is on an older feature branch. Development in Codex must occur in this dedicated `clay-codex` worktree unless Nakul explicitly changes the target.
+The OneDrive checkout and the older linked Codex worktree are not the active project. Development in Codex must occur in the standalone `D:\Clay` repository unless Nakul explicitly changes the target.
 
 ## Product goal
 
