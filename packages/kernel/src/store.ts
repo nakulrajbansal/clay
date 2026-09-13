@@ -4,6 +4,7 @@
 // rollback applies inverses; roll-forward (pre-truncation) re-applies
 // forward ops; truncation is the only destructive-ish operation (ADR-007).
 import { ClayError } from "./errors";
+import { readInboxDispositions, writeInboxDisposition } from "./inbox-dispositions";
 import { LEGACY_CREDENTIAL_SETTING_KEYS } from "./credential-policy";
 import { userIndexAuthorities } from "./index-authority";
 import {
@@ -4935,6 +4936,10 @@ export class ClayStore {
     return { ...this.automationRunFromRow(original!, target), undone: true };
   }
 
+  inboxDispositions() { return readInboxDispositions(this.#driver); }
+
+  writeInboxDisposition(input: unknown) { return writeInboxDisposition(this.#driver, input); }
+
   dailyHomeRecordRevisions(): Readonly<{
     watermark: number;
     truncated: boolean;
@@ -5844,6 +5849,8 @@ export class ClayStore {
     const issues: string[] = [...semanticRegistryIssues(
       this.reg, this.headVersion(), this.semanticOperationBounds(),
     )];
+    try { readInboxDispositions(this.#driver); }
+    catch { issues.push("Inbox disposition storage is invalid"); }
     issues.push(...this.archiveTimelineIssues(manifest?.format === 4));
     const registryNames = new Set(this.reg.keys());
     const physicalTables = new Set(this.#driver.select(
@@ -6051,6 +6058,8 @@ export class ClayStore {
  * kernel entrypoint.
  */
 export const PRODUCTION_STORE_PRIMITIVES = Object.freeze({
+  inboxDispositions: ClayStore.prototype.inboxDispositions,
+  writeInboxDisposition: ClayStore.prototype.writeInboxDisposition,
   applyBatch: ClayStore.prototype.applyBatch,
   undoBatch: ClayStore.prototype.undoBatch,
   query: ClayStore.prototype.query,

@@ -1259,3 +1259,82 @@ ADR-059 (2026-09-13) Terminal cancellation before replacing a presentation reque
   CONSEQUENCE: Persistent Capture Undo invocation and original source/navigation
   intent recovery remain separate required work; this decision does not waive them
   or claim completed Inbox, automation, sharing, or release certification.
+
+ADR-060 (2026-09-13) Original-source presentation recovery and development Inbox writes.
+  CONTEXT: Capture Undo and navigation could acquire a new target after presentation
+  loss; discarding a timed-out Undo could forget an invocation. D2 also needs real
+  dispositions rather than copying canonical work into another queue.
+  DECISION: Extend ADR-059's closed cancellation/outcome set only with capture and
+  conversion Undo, source/navigation CAS, Inbox action/Undo, and automation.command.
+  Each retains its immutable request before invocation. Original producer payloads,
+  mirrored receipts, request hashes, operation identities, app/generation/lineage,
+  semantic IDs and exact result targets bound Undo. Historical acknowledgement is
+  not replay; intervening canonical writes close the Undo window. Incidental recents,
+  onboarding and scheduled checks defer during retained review/Undo work.
+  Daily readback now pairs an authority target with a complete trusted projection.
+  Source/navigation persist the reviewed basis/digest, original revision and exact
+  desired value. Favorite retry cannot retoggle. Inbox actions additionally match
+  the entire original occurrence and source generation against a fresh projection.
+  Complete updates only an explicitly bound completion field. Snooze uses a reviewed
+  local date 1..30 days ahead in the stored IANA zone, resolving local midnight with
+  the existing DST utility. Dismiss only changes presentation state.
+  The new optional sys.inbox_dispositions table is created inside the first actual
+  authority transaction, never by a read or boot. This preserves pre-D2 fingerprints.
+  Closed DDL, every physical row and physical/parsed cardinality participate in
+  canonical validation, shadow copying and authenticated format-5 archives. No work
+  records are copied. Superseding the reserved D2 row-counter sketch, CAS revisions
+  are globally monotonic tokens assigned once per action across this table; a row
+  retains its last assigned token and MAX(revision) is the projection watermark.
+  Undo writes an active/restored-state tombstone with a new token, not a rewind.
+  Filtering dispositions precedes paging. Time-only expiry participates in the
+  projection invalidation boundary. Existing absent-table archives stay readable.
+  CONSEQUENCE: Development routes and UI may exercise this journaled implementation.
+  ADR-054's release-bound physical/browser certificate requirement is NOT waived.
+  Focused in-memory worker and archive tests are development feedback, not shipment.
+
+ADR-061 (2026-09-13) Retained automation commands and honest adapter availability.
+  CONTEXT: A V2 rule may contain multiple conditions/actions that the initial sentence
+  builder cannot represent. Per-click IDs, implicit timezone recomputation and
+  fire-and-forget scheduling lose reviewed intent after reload or timeout.
+  DECISION: Add one closed source-bound automation.command envelope around the nine
+  existing production automation writers. Explicit WorkerClient request context,
+  exact target CAS, the existing shadow/live journal and the physical transaction
+  guard all remain mandatory. Reject unknown draft fields before normalization.
+  Store only immutable presentation requests and bounded editable workspace data
+  in session storage. The complete V2 editor retains all actions, value sources,
+  conditions, recipe metadata and runtime policy; saving remains disabled-draft,
+  followed by target-bound simulation and explicit enable. Recipe selection retains
+  semantic option identity, not just an array index. Each rule can review its IANA
+  timezone, including due-date recipes. Closed terminal cancellation precedes a
+  replacement request; an uncertain request or Undo is never silently cleared.
+  A paired authority read reports actual adapter availability, rules, history,
+  notifications and runtime facts. Remove hardcoded UI feature-off flags in favor
+  of that prerequisite. The current OPFS driver remains uncertified and closed;
+  a memory-driver success must never grant it a production certificate.
+  Local polling retains a due invocation before sending and acknowledges the
+  original result after worker loss. It defers for reviewed work or Undo, never
+  impersonates off-device execution and never repeats unknown work with a new ID.
+  CONSEQUENCE: The development UI and real worker protocol are connected. A supported
+  durable physical-transaction capability and its later certification remain open.
+
+ADR-062 (2026-09-13) Secret-free intake metadata and trusted-shell custody boundary.
+  CONTEXT: Legacy LocalIntakeFormV1 contains private and owner/submit capabilities.
+  Changing that schema in place could lose access to existing forms or archived data.
+  DECISION: Introduce a separate strict LocalIntakeFormV2 containing only public
+  definition metadata, original owner app/generation/lineage, relay origin and
+  lifecycle status. Public transport V1 is unchanged. A trusted-shell IndexedDB
+  vault binds private material to exact shell origin, owner source, relay origin,
+  form identity and immutable public definition. A retained form ID reconciles an
+  ambiguous custody commit; conflicting material is never overwritten. Publication
+  metadata cannot be presented until custody commit and readback succeed. Only the
+  trusted shell can join submit/owner capabilities and the private key at delivery.
+  Capture the reviewed metadata before asynchronous custody work, and verify key
+  possession before returning delivery capabilities. Discard ephemeral verification
+  bytes and sanitize custody errors. Owned transactional fixtures exercise commit
+  abort, reload, first-writer preservation and late-open cleanup; they are not a
+  host IndexedDB or physical-browser certificate.
+  CONSEQUENCE: This is a development boundary, not a completed migration. The legacy
+  intake DB/WorkerClient/UI callers have NOT switched to V2 yet. Their migration,
+  explicit source-bound request recovery, safe handling of old secret-bearing
+  state, delivery and sharing integration remain required. No real vault, credential,
+  production configuration or user data was inspected or migrated by this change.

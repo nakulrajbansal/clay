@@ -7,6 +7,8 @@ import type { WorkerClient } from "./worker-client";
 import type { FirstSuccessState } from "./first-success-state";
 import { loadAllTableRows } from "./paged-query";
 import { ModalDialog } from "./ModalDialog";
+import { beginDailyCas, executeDailyCas, recentValue } from "./daily-intent";
+import { finishPresentationIntent } from "./presentation-intent";
 
 const MAX_BROWSER_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
@@ -177,6 +179,7 @@ function RichNoteEditor(props: {
 }
 
 export function RecordDetail(props: {
+  appInstanceId?: string | null;
   table: RegTable;
   recordId: string;
   tables: RegTable[];
@@ -251,6 +254,8 @@ export function RecordDetail(props: {
     const identity = recordIdentity;
     if (identity !== recordIdentityRef.current) return;
     const token = ++reloadTokenRef.current;
+    const reviewed = props.worker?.dailyPresentation && props.appInstanceId ? await props.worker.dailyPresentation() : null;
+    if (reviewed && reviewed.authorityTarget.appInstanceId !== props.appInstanceId) throw new Error("Original record app changed; reopen it");
     const found = await props.store.query({
       from: props.table.name,
       where: [{ field: "id", op: "eq", value: props.recordId }],
@@ -322,19 +327,26 @@ export function RecordDetail(props: {
     setAttachments(files);
     setRelated(groups);
     setLoaded(true);
+    const incidentalWrites = props.worker?.mayRecordPresentationSideEffects
+      ? await props.worker.mayRecordPresentationSideEffects() : false;
+    if (token !== reloadTokenRef.current || identity !== recordIdentityRef.current) return;
     const navigationKey = `${props.table.semantic?.tableId}\u0000${props.recordId}`;
-    if (canonical && props.table.semantic?.tableId && props.worker?.rememberDailyRecordOpened
+    if (incidentalWrites && reviewed && canonical && props.table.semantic?.tableId && props.worker
         && reportedNavigationRecord.current !== navigationKey) {
       reportedNavigationRecord.current = navigationKey;
       try {
-        await props.worker.rememberDailyRecordOpened(props.table.semantic.tableId, props.recordId);
+        const value = recentValue(reviewed, props.table.semantic.tableId, props.recordId);
+        const intent = beginDailyCas(sessionStorage, props.worker, reviewed, "dailyNavigation", value.revision - 1, value);
+        const result = await executeDailyCas(props.worker, intent);
+        if (!result.ok) throw new Error("Original navigation CAS did not win; recover it in Today");
         props.onDailyHomeInvalidated?.();
+        finishPresentationIntent(sessionStorage, intent.appInstanceId, intent.slot, intent.requestId);
       } catch (error) {
         props.onError(`Recently opened could not be saved: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
     const everydayKey = `${props.table.name}\u0000${props.recordId}`;
-    if (canonical && props.worker?.completeEverydayAction
+    if (incidentalWrites && canonical && props.worker?.completeEverydayAction
         && reportedEverydayRecord.current !== everydayKey) {
       try {
         const progress = await props.worker.completeEverydayAction({

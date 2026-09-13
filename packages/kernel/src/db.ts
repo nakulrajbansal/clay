@@ -9,6 +9,7 @@ import {
   type DurableNamespaceInventoryEntry,
 } from "./durable-inventory";
 import { ClayError } from "./errors";
+import { inboxDispositionTablePresent, createInboxDispositionTable, readInboxDispositions } from "./inbox-dispositions";
 
 export type SqlValue = string | number | bigint | Uint8Array | null;
 export type SqlRow = Record<string, SqlValue>;
@@ -97,6 +98,12 @@ export const SYSTEM_TABLES = [
   "automations", "automation_runs", "automation_matches", "automation_trigger_ledger",
   "record_events", "notifications",
 ] as const;
+
+/** Additive app-owned tables are installed by a fenced mutation, not by boot.
+ * Legacy absence keeps old canonical fingerprints and format-5 archives valid. */
+export function presentSystemTables(driver: DbDriver, database: "main" | "sys" = "sys"): readonly string[] {
+  return inboxDispositionTablePresent(driver, database) ? [...SYSTEM_TABLES, "inbox_dispositions"] : SYSTEM_TABLES;
+}
 
 let sqlite3Promise: Promise<Sqlite3Static> | null = null;
 function sqlite3(): Promise<Sqlite3Static> {
@@ -383,7 +390,8 @@ class SqliteWasmDriver implements DbDriver {
     const target = new SqliteWasmDriver(copy, s);
     markAutomationTransactionCapability(target, automationPhysicalTransactionCapability(this));
     target.exec(SYSTEM_SCHEMA_SQL);
-    for (const table of SYSTEM_TABLES) {
+    for (const table of presentSystemTables(this)) {
+      if (table === "inbox_dispositions") { readInboxDispositions(this); createInboxDispositionTable(target); }
       copyRows(this, `sys.${table}`, target, `sys.${table}`);
     }
     return target;
@@ -396,8 +404,10 @@ class SqliteWasmDriver implements DbDriver {
     const temp = new s.oo1.DB(":memory:");
     const tempDriver = new SqliteWasmDriver(temp, s);
     tempDriver.exec(systemSchemaSql(""));
-    for (const table of SYSTEM_TABLES)
+    for (const table of presentSystemTables(this)) {
+      if (table === "inbox_dispositions") { readInboxDispositions(this); createInboxDispositionTable(tempDriver, "main"); }
       copyRows(this, `sys.${table}`, tempDriver, `"${table}"`);
+    }
     const system = exportMain(s, temp);
     temp.close();
     return { user, system };
@@ -464,7 +474,8 @@ export async function openDriverFromBytes(
   deserializeInto(s, temp, system);
   temp.exec("PRAGMA trusted_schema = OFF");
   const tempDriver = new SqliteWasmDriver(temp, s);
-  for (const table of SYSTEM_TABLES) {
+  for (const table of presentSystemTables(tempDriver, "main")) {
+    if (table === "inbox_dispositions") { readInboxDispositions(tempDriver, "main"); createInboxDispositionTable(driver); }
     const exists = tempDriver.select(
       `SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, [table]);
     if (exists.length > 0) copyRows(tempDriver, `"${table}"`, driver, `sys.${table}`);
@@ -528,7 +539,9 @@ export function copyDatabase(
     }
 
     to.exec(SYSTEM_SCHEMA_SQL);
-    for (const table of SYSTEM_TABLES) {
+    if (!inboxDispositionTablePresent(from) && inboxDispositionTablePresent(to)) to.exec("DROP TABLE sys.inbox_dispositions");
+    for (const table of presentSystemTables(from)) {
+      if (table === "inbox_dispositions") { readInboxDispositions(from); createInboxDispositionTable(to); }
       to.exec(`DELETE FROM sys.${dbIdentifier(table)}`);
       copyRows(from, `sys.${dbIdentifier(table)}`, to, `sys.${dbIdentifier(table)}`);
     }

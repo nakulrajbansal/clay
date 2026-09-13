@@ -393,18 +393,21 @@ excluded from ordering. Exact section occurrence counts are sums over only that
 section's contributing sources. Partial gaps likewise name only incomplete contributing
 sources; a section's own bounded page continuation does not manufacture a source gap.
 
-When the state-changing D2 slice is authorized, `sys.inbox_dispositions` will hold
-only presentation state for one exact `(source_key, source_generation)` occurrence:
-seen time, snooze-until time, dismissal time, and a positive integer
-`disposition_revision`. Absence is expected revision 0, first effective insertion
-creates revision 1, and each later effective mutation increments once. A no-op or
-projection inserts nothing and advances neither the row nor its global watermark.
-Canonical work remains in user tables, and automation notices remain in
-`sys.notifications`.
+ADR-060 supersedes the reserved D2 storage sketch for development. The optional
+`sys.inbox_dispositions` table retains the latest presentation disposition per
+`source_key`, tagged with its exact `source_generation`, original request and a
+globally monotonic CAS token. State is closed to `active`, `snoozed`, or `dismissed`;
+Snooze additionally stores the reviewed local date, IANA zone and resolved UTC
+midnight. Absence is expected token 0. Each actual action/Undo assigns the next
+table-wide token; its maximum is the projection watermark. Reads/no-ops do not
+create a table or advance it. Undo restores prior state with a new token and an
+exact producer/result bound, never by rewinding intervening edits. Canonical work
+remains in user tables and notices remain in `sys.notifications`; no copied queue
+or separate Seen action is implied.
 
-App-owned profile and disposition state is included in authenticated archive
-format 5 after its schema and lifecycle are implemented. Device permission,
-subscription, delivery credential, and opaque remote route state is device-owned
-and excluded. Until the release-bound physical transaction certificate and
-worker-owned write routes pass, the disposition table is a reserved design and no
-production writer may create or mutate it.
+Closed physical DDL and all disposition rows participate in canonical snapshots,
+shadow copying and authenticated format 5. Existing absent-table databases keep
+their old fingerprints until an explicit action. Device credentials remain out
+of this table. Source-bound worker routes and focused archive tests are connected
+for development; physical/browser certification and the final release gates are
+still required before shipment.

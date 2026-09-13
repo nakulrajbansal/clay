@@ -104,3 +104,11 @@
   .today-setup, .today-source-empty { align-items: stretch; flex-direction: column; }
   .today-source-form { grid-template-columns: minmax(0, 1fr); }
 }
+.today-inbox-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.4rem;
+  align-items: center;
+}
+.today-inbox-actions input { max-width: 100%; }

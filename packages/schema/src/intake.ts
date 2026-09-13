@@ -57,7 +57,7 @@ export const PublicFileRequestV1 = z.object({
 });
 export type PublicFileRequestV1 = z.infer<typeof PublicFileRequestV1>;
 
-export const PublicIntakeFormV1 = z.object({
+const PublicIntakeFormShapeV1 = z.object({
   schema: z.literal(1),
   formId: IntakeFormId,
   revision: z.number().int().min(1).max(1_000_000),
@@ -77,7 +77,8 @@ export const PublicIntakeFormV1 = z.object({
     submitToken: IntakeToken,
     expiresAt: IntakeCanonicalInstant,
   }).strict(),
-}).strict().superRefine((form, context) => {
+}).strict();
+function validateIntakeFields(form: Pick<z.infer<typeof PublicIntakeFormShapeV1>, "fields" | "fileRequests">, context: z.RefinementCtx): void {
   const fieldIds = form.fields.map(field => field.fieldId);
   const fileFieldIds = form.fileRequests.map(request => request.fieldId);
   const requestIds = form.fileRequests.map(request => request.requestId);
@@ -89,8 +90,15 @@ export const PublicIntakeFormV1 = z.object({
     context.addIssue({ code: "custom", path: ["fileRequests"], message: "file request ids must be unique" });
   if (fileFieldIds.some(id => fieldIds.includes(id)))
     context.addIssue({ code: "custom", path: ["fileRequests"], message: "file and value fields cannot overlap" });
-});
+}
+export const PublicIntakeFormV1 = PublicIntakeFormShapeV1.superRefine(validateIntakeFields);
 export type PublicIntakeFormV1 = z.infer<typeof PublicIntakeFormV1>;
+/** App-owned form definition, without a submit capability. Public transport V1
+ * stays unchanged; only the trusted shell joins its token at delivery time. */
+export const IntakeFormDefinitionV1 = PublicIntakeFormShapeV1.extend({
+  delivery: z.object({ expiresAt: IntakeCanonicalInstant }).strict(),
+}).strict().superRefine(validateIntakeFields);
+export type IntakeFormDefinitionV1 = z.infer<typeof IntakeFormDefinitionV1>;
 
 export const MAX_INTAKE_CIPHERTEXT_BYTES = 12 * 1024 * 1024;
 const MAX_INTAKE_CIPHERTEXT_BASE64URL = Math.ceil(MAX_INTAKE_CIPHERTEXT_BYTES * 4 / 3);
@@ -245,6 +253,24 @@ export const LocalIntakeFormV1 = z.object({
     context.addIssue({ code: "custom", path: ["terminalReason"], message: "terminal reason requires a terminal time" });
 });
 export type LocalIntakeFormV1 = z.infer<typeof LocalIntakeFormV1>;
+
+// Intake is re-exported by the base schema module; importing the catalog here
+// would create an initialization cycle. Keep this protocol's primitive IDs closed.
+export const IntakeOwnerSourceV1 = z.object({ appInstanceId: z.string().regex(/^app_[a-z2-7]{26}$/),
+  activeGenerationId: z.string().regex(/^gen_[a-z2-7]{26}$/),
+  lineageEpoch: z.string().regex(/^(0|[1-9][0-9]*)$/).max(20).refine(value => /^(0|[1-9][0-9]*)$/.test(value) && BigInt(value) <= 18446744073709551615n),
+}).strict();
+export const LocalIntakeFormV2 = z.object({ schema: z.literal(2), publicForm: IntakeFormDefinitionV1,
+  ownerSource: IntakeOwnerSourceV1, relayBaseUrl: RelayBaseUrl,
+  publishedAt: IntakeCanonicalInstant.nullable(), revokedAt: IntakeCanonicalInstant.nullable(),
+  terminalReason: z.enum(["revoked", "expired"]).nullable(),
+}).strict().superRefine((form, context) => {
+  if (form.publishedAt !== null && Date.parse(form.publishedAt) >= Date.parse(form.publicForm.delivery.expiresAt))
+    context.addIssue({ code: "custom", message: "Publication must precede form expiry" });
+  if ((form.revokedAt !== null && form.publishedAt === null) || ((form.terminalReason !== null) !== (form.revokedAt !== null)))
+    context.addIssue({ code: "custom", message: "Terminal form state is inconsistent" });
+});
+export type LocalIntakeFormV2 = z.infer<typeof LocalIntakeFormV2>;
 
 export const IntakeAutoAcceptRuleV1 = z.object({
   schema: z.literal(1),

@@ -1710,6 +1710,15 @@ export class WorkerClient {
   automationRecipes(): Promise<AutomationRecipeCardV1[]> {
     return this.ephemeralCall("automationRecipes", {});
   }
+  automationCommand<T>(payload: import("@clay/schema/catalog").AutomationCommandPayloadV1, context: WorkerMutationContext): Promise<T> {
+    return this.mutationCall("automationCommand", structuredClone(payload), captureWorkerMutationContext(context));
+  }
+  automationPresentation(): Promise<{
+    authorityTarget: import("@clay/schema/catalog").TargetEvidenceV1;
+    availability: { available: boolean; reason: "physical_transaction_uncertified" | null };
+    rules: AutomationDefinitionAny[]; runs: AutomationRun[]; notifications: ClayNotification[];
+    recipes: AutomationRecipeCardV1[]; runtime: AutomationRuntimeStatusV1; overview: AutomationRuntimeOverviewV1; trace: SemanticSchemaTraceV1;
+  }> { return this.ephemeralCall("automationPresentation", {}); }
   automationRuntimeStatus(): Promise<AutomationRuntimeStatusV1> {
     return this.ephemeralCall("automationRuntimeStatus", {});
   }
@@ -1811,15 +1820,20 @@ export class WorkerClient {
   }
   compareAndSetDailySource<T>(
     expectedRevision: number, value: T,
-    context: WorkerMutationContext = createWorkerMutationContext(),
+    context: WorkerMutationContext, review: import("@clay/schema/catalog").DailyCasReviewV1,
   ): Promise<{ ok: boolean; current: unknown }> {
-    return this.mutationCall("dailyHomeSourceCompareAndSet", { expectedRevision, value }, context);
+    return this.mutationCall("dailyHomeSourceCompareAndSet", structuredClone({ expectedRevision, value, review }), captureWorkerMutationContext(context));
   }
   compareAndSetDailyNavigation<T>(
     expectedRevision: number, value: T,
-    context: WorkerMutationContext = createWorkerMutationContext(),
+    context: WorkerMutationContext, review: import("@clay/schema/catalog").DailyCasReviewV1,
   ): Promise<{ ok: boolean; current: unknown }> {
-    return this.mutationCall("dailyHomeNavigationCompareAndSet", { expectedRevision, value }, context);
+    return this.mutationCall("dailyHomeNavigationCompareAndSet", structuredClone({ expectedRevision, value, review }), captureWorkerMutationContext(context));
+  }
+  async dailyPresentation(): Promise<import("@clay/schema/catalog").DailyPresentationV1> {
+    await this.ensureDailyHomeTimeZone();
+    const request = this.ephemeralCall("dailyPresentation");
+    return (await import("@clay/schema/catalog")).DailyPresentationV1.parse(await request);
   }
   initializeDailyHomeTimeZone(timeZone: string, context: WorkerMutationContext = createWorkerMutationContext()): Promise<string> {
     return this.mutationCall("dailyHomeInitializeTimeZone", { timeZone }, context);
@@ -1827,6 +1841,16 @@ export class WorkerClient {
   async presentationSource(): Promise<import("@clay/schema/catalog").TargetEvidenceV1> {
     const result = await this.ephemeralCall("presentationSource");
     return (await import("@clay/schema/catalog")).TargetEvidenceV1.parse(result);
+  }
+  async mayRecordPresentationSideEffects(): Promise<boolean> {
+    const source = await this.presentationSource();
+    const { readPresentationIntent } = await import("./presentation-intent");
+    // A cache can suppress incidental UI writes, never authorize a durable one.
+    // Missing/unreadable browser storage is not permission to close an Undo window.
+    if (typeof sessionStorage === "undefined") return false;
+    for (const slot of ["capture", "captureUndo", "relation", "conversionUndo", "dailySource", "dailyNavigation", "dailyInbox", "dailyInboxUndo", "automation"] as const)
+      if (readPresentationIntent(sessionStorage, source.appInstanceId, slot)) return false;
+    return true;
   }
   async cancelPresentation(route: string, payload: unknown, context: WorkerMutationContext): Promise<import("@clay/schema/catalog").PresentationMutationOutcomeV1> {
     const request = this.mutationCall("cancelPresentation", { route, payload: structuredClone(payload) }, captureWorkerMutationContext(context));
@@ -1836,16 +1860,16 @@ export class WorkerClient {
     const captured = captureWorkerMutationContext(context); const capturedRow = structuredClone(row);
     return this.mutationCall("dailyHomeQuickCapture", { appInstanceId, table, row: capturedRow, tableId }, captured);
   }
-  undoQuickCapture(batchId: string, context: WorkerMutationContext = createWorkerMutationContext()): Promise<BatchReceipt> {
-    return this.mutationCall("dailyHomeUndoCapture", { batchId }, context);
+  undoQuickCapture(payload: import("@clay/schema/catalog").DailyCaptureUndoPayloadV1, context: WorkerMutationContext): Promise<BatchReceipt> {
+    return this.mutationCall("dailyHomeUndoCapture", structuredClone(payload), captureWorkerMutationContext(context));
   }
-  async rememberDailyRecordOpened(tableId: string, rowId: string): Promise<void> {
-    const navigation = await import("@clay/kernel/daily-navigation");
-    await navigation.rememberDailyRecordOpened(this, { tableId, rowId });
+  dailyInboxAction(payload: import("@clay/schema/catalog").DailyInboxActionPayloadV1, context: WorkerMutationContext) {
+    return this.mutationCall<import("@clay/schema/catalog").DailyInboxReceiptV1>(
+      "dailyInboxAction", structuredClone(payload), captureWorkerMutationContext(context));
   }
-  async toggleDailyFavorite(tableId: string, rowId: string): Promise<void> {
-    const navigation = await import("@clay/kernel/daily-navigation");
-    await navigation.toggleDailyFavorite(this, { tableId, rowId });
+  dailyInboxUndo(payload: import("@clay/schema/catalog").DailyInboxUndoPayloadV1, context: WorkerMutationContext) {
+    return this.mutationCall<{ undone: true; disposition: import("@clay/schema/daily-home").InboxDispositionV1 }>(
+      "dailyInboxUndo", structuredClone(payload), captureWorkerMutationContext(context));
   }
   notifications(limit = 100): Promise<ClayNotification[]> {
     return this.ephemeralCall("notifications", { limit });
@@ -1918,8 +1942,10 @@ export class WorkerClient {
   ): Promise<RelationConversionResult> {
     return this.mutationCall("convertTextToRelation", input, context);
   }
-  undoRelationConversion(conversionRequestId: string, beforeVersion: number, context: WorkerMutationContext): Promise<{ undone: true; version: number }> {
-    return this.mutationCall("undoRelationConversion", { conversionRequestId, beforeVersion }, context);
+  undoRelationConversion(conversionRequestId: string, beforeVersion: number, context: WorkerMutationContext,
+    authorityTarget?: import("@clay/schema/catalog").TargetEvidenceV1): Promise<{ undone: true; version: number }> {
+    return this.mutationCall("undoRelationConversion", { conversionRequestId, beforeVersion,
+      ...(authorityTarget ? { authorityTarget: structuredClone(authorityTarget) } : {}) }, context);
   }
   async mutationOutcome(route: import("@clay/schema/catalog").PresentationIntentV1["route"], payload: unknown,
     context: WorkerMutationContext): Promise<import("@clay/schema/catalog").PresentationMutationOutcomeV1> {

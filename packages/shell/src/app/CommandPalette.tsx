@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import type { AsyncStore, GlobalSearchResult, RegColumn, RegTable } from "@clay/kernel";
 import type { WorkerClient } from "./worker-client";
+import { DailyCaptureUndoPayloadV1 } from "@clay/schema/catalog";
 import { ModalDialog } from "./ModalDialog";
-import { beginPresentationIntent, cancelPresentationIntent, finishPresentationIntent, readPresentationIntent, reconcilePresentation } from "./presentation-intent";
+import { beginPresentationIntent, cancelPresentationIntent, finishPresentationIntent, readPresentationIntent, reconcilePresentation, retainCaptureUndo, type PresentationIntent } from "./presentation-intent";
 import "./Operations.css";
 
 const humanize = (name: string): string => name.replace(/_/g, " ")
@@ -33,9 +34,11 @@ export function CommandPalette(props: {
   onInfo: (message: string, action?: { label: string; run: () => void }) => void;
 }): React.JSX.Element {
   const [recovery] = useState(() => {
-    try { return { pending: props.appInstanceId ? readPresentationIntent(sessionStorage, props.appInstanceId, "capture") : null, error: "" }; }
-    catch { return { pending: null, error: "The stored capture request needs recovery; no new capture can replace it." }; }
+    try { return { pending: props.appInstanceId ? readPresentationIntent(sessionStorage, props.appInstanceId, "capture") : null,
+      undo: props.appInstanceId ? readPresentationIntent(sessionStorage, props.appInstanceId, "captureUndo") : null, error: "" }; }
+    catch { return { pending: null, undo: null, error: "The stored capture request needs recovery; no new capture can replace it." }; }
   });
+  const [undoIntent, setUndoIntent] = useState(recovery.undo);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<GlobalSearchResult[]>([]);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -132,6 +135,8 @@ export function CommandPalette(props: {
     submitting.current = true;
     setBusy(true);
     try {
+      if (!pendingCreate.current && readPresentationIntent(sessionStorage, props.appInstanceId, "captureUndo"))
+        throw new Error("Undo or explicitly Keep the previous capture before creating another record; its request was kept.");
       const tableId = creating.semantic?.tableId;
       if (!tableId)
         throw new Error("Quick capture requires a stable record type identity");
@@ -153,20 +158,11 @@ export function CommandPalette(props: {
       const created = receipt.created[0];
       if (!created || created.table !== creating.name)
         throw new Error("Quick capture did not return its durable created-record receipt");
+      const undo = await retainCaptureUndo(sessionStorage, props.worker, intent, receipt.id);
+      setUndoIntent(undo); // Persisted before any callback, toast, navigation or teardown.
       props.onWrite(creating.name);
-      const undoContext = props.worker.createMutationContext();
-      props.onInfo(`Capture recorded in ${humanize(creating.name)}. Recovery Center keeps its bounded Undo receipt.`, {
-        label: "Undo",
-        run: () => {
-          const undo = props.worker.undoQuickCapture(receipt.id, undoContext);
-          void undo.then(() => {
-            props.onWrite(creating.name);
-            props.onInfo(`Undid quick capture in ${humanize(creating.name)}.`);
-          }).catch(error => props.onError(
-            `Could not undo quick capture: ${error instanceof Error ? error.message : String(error)}`,
-          ));
-        },
-      });
+      props.onInfo(`Capture recorded in ${humanize(creating.name)}. Reopen Quick Capture for Undo while the app is unchanged.`,
+        { label: "Undo", run: () => { void undoCapture(undo); } });
       props.onClose();
       props.onOpenRecord(creating.name, created.id);
       finishPresentationIntent(sessionStorage, intent.appInstanceId, "capture", intent.requestId);
@@ -174,6 +170,32 @@ export function CommandPalette(props: {
     } catch (error) {
       props.onError(error instanceof Error ? error.message : String(error));
     } finally { submitting.current = false; setBusy(false); }
+  };
+
+  const undoCapture = async (intent: PresentationIntent): Promise<void> => {
+    if (submitting.current || intent.appInstanceId !== props.appInstanceId) return;
+    submitting.current = true; setBusy(true);
+    try {
+      const payload = DailyCaptureUndoPayloadV1.parse(intent.payload);
+      let historical = false;
+      await reconcilePresentation(props.worker, intent, () => props.worker.undoQuickCapture(payload, { requestId: intent.requestId }),
+        current => { historical = !current; });
+      props.onWrite(payload.capturePayload.table);
+      props.onInfo(historical ? "Capture Undo was already recorded; later edits were kept." : `Undid quick capture in ${humanize(payload.capturePayload.table)}.`);
+      finishPresentationIntent(sessionStorage, intent.appInstanceId, "captureUndo", intent.requestId);
+      setUndoIntent(null);
+    } catch (error) { props.onError(`Could not undo quick capture: ${error instanceof Error ? error.message : String(error)}`); }
+    finally { submitting.current = false; setBusy(false); }
+  };
+  const keepCapture = async (): Promise<void> => {
+    if (!undoIntent || submitting.current || undoIntent.appInstanceId !== props.appInstanceId) return;
+    submitting.current = true; setBusy(true);
+    try {
+      if (await cancelPresentationIntent(sessionStorage, props.worker, undoIntent)) {
+        setUndoIntent(null); props.onInfo("Previous capture kept; its pending Undo can no longer execute.");
+      } else props.onError("Undo already committed. Retry Undo to acknowledge its result before creating another capture.");
+    } catch (error) { props.onError(error instanceof Error ? error.message : "Undo outcome needs recovery"); }
+    finally { submitting.current = false; setBusy(false); }
   };
 
   const cancelPending = async (): Promise<void> => {
@@ -194,6 +216,11 @@ export function CommandPalette(props: {
       ariaLabel="Search and act" onClose={props.onClose}>
       <div className="command-search-row">
         {recovery.error ? <p role="alert">{recovery.error}</p> : null}
+        {undoIntent && !pendingCreate.current ? <section aria-label="Previous capture recovery">
+          <p>Undo is bounded to the original app with no intervening writes. Keep closes this Undo request without removing the record.</p>
+          <button disabled={busy || !!recovery.error} onClick={() => void undoCapture(undoIntent)}>Undo previous capture</button>
+          <button disabled={busy || !!recovery.error} onClick={() => void keepCapture()}>Keep previous capture</button>
+        </section> : null}
         {pendingCreate.current ? <button disabled={busy || !!recovery.error} onClick={() => void cancelPending()}>Cancel pending capture and edit</button> : null}
         {pendingCreate.current && !creating ? <p role="alert">The captured record type changed. Return to its original app and inspect Recovery Center; the request was kept.</p> : null}
         <span aria-hidden="true">⌕</span>
@@ -241,7 +268,7 @@ export function CommandPalette(props: {
           {pendingCreate.current && !busy && <p role="status">The outcome is not yet reconciled. Retry the same capture; closing does not cancel a committed record.</p>}
           <footer><button type="button" disabled={submitting.current}
             onClick={() => pendingCreate.current ? props.onClose() : setCreating(null)}>{pendingCreate.current ? "Close" : "Cancel"}</button>
-            <button className="primary" disabled={busy || !!recovery.error || !props.appInstanceId} type="submit">{busy ? "Creating…" : pendingCreate.current ? "Retry capture" : "Create record"}</button></footer>
+            <button className="primary" disabled={busy || !!recovery.error || !props.appInstanceId || (!!undoIntent && !pendingCreate.current)} type="submit">{busy ? "Creating…" : pendingCreate.current ? "Retry capture" : "Create record"}</button></footer>
         </form>
       ) : (
         <div id="command-results" className="command-results">

@@ -1,7 +1,9 @@
 /** @vitest-environment jsdom */
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { automationUiFixture } from "./helpers/automation-ui-fixture";
+beforeEach(() => sessionStorage.clear());
 import type {
   AutomationDefinitionAny, AutomationDefinitionV2, AutomationDraftInputV2,
   AutomationRecipeDraftRequestV1, AutomationRun, AutomationRuntimeOverviewV1,
@@ -64,7 +66,7 @@ it("puts eligible recipes first, exposes local limits, and saves a recipe draft 
   let repairInput: AutomationDraftInputV2 | null = null;
   let repairRevision: number | undefined;
   let enables = 0;
-  const worker = {
+  const worker = automationUiFixture({
     listAutomations: async () => rules,
     automationRuns: async () => [],
     notifications: async () => [],
@@ -153,7 +155,7 @@ it("puts eligible recipes first, exposes local limits, and saves a recipe draft 
       undo: "no_data_changes",
     }),
     enableAutomation: async () => { enables++; throw new Error("must not enable while saving"); },
-  } as unknown as WorkerClient;
+  });
 
   const host = document.createElement("div");
   document.body.replaceChildren(host);
@@ -291,7 +293,7 @@ it("shows trusted per-rule last, next, skip, failure, and conflict-safe undo sta
           detail: "Undo is unavailable because a record changed after this run." } },
     ],
   };
-  const worker = {
+  const worker = automationUiFixture({
     listAutomations: async () => [active, legacy],
     automationRuns: async () => [failed, changedLater],
     notifications: async () => [],
@@ -299,7 +301,7 @@ it("shows trusted per-rule last, next, skip, failure, and conflict-safe undo sta
     automationRuntimeStatus: async () => ({ ...runtime, enabledDefinitions: 1, disabledDefinitions: 1 }),
     automationRuntimeOverview: async () => overview,
     automationRecipes: async () => [],
-  } as unknown as WorkerClient;
+  });
 
   const host = document.createElement("div");
   document.body.replaceChildren(host);

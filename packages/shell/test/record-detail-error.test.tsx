@@ -1,13 +1,33 @@
 /** @vitest-environment jsdom */
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { WorkerClient } from "../src/app/worker-client";
 import { ClayStore, InProcessAsyncStore, deriveInverse, type AsyncStore, type ForwardOpT } from "@clay/kernel";
 import { RecordDetail } from "../src/app/RecordDetail";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const runWrite = <T,>(operation: () => Promise<T>): Promise<T> => operation();
+
+it("does not invalidate a pending exact-state Undo with implicit navigation or onboarding writes", async () => {
+  const store = await ClayStore.openMemory();
+  const operations: ForwardOpT[] = [{ op: "create_table", table: "tasks", columns: [{ name: "title", type: "text", required: true }] }];
+  store.commit({ intent: "Fixture", summary: "Fixture", migration: { operations, inverse: deriveInverse(operations, store.registrySnapshot()) } });
+  const row = store.insert("tasks", { title: "Captured" });
+  const worker = { mayRecordPresentationSideEffects: vi.fn(async () => false), rememberDailyRecordOpened: vi.fn(), completeEverydayAction: vi.fn() };
+  const host = document.createElement("div"); document.body.replaceChildren(host); const root = createRoot(host);
+  try {
+    const table = store.registrySnapshot().get("tasks")!;
+    await act(async () => root.render(<RecordDetail table={table} tables={[table]} recordId={String(row.id)} store={new InProcessAsyncStore(store)}
+      worker={worker as unknown as WorkerClient} runWrite={runWrite} onNavigate={() => {}} onClose={() => {}} onWrite={() => {}} onInfo={() => {}} onError={() => {}} />));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+    expect(worker.mayRecordPresentationSideEffects).toHaveBeenCalledOnce();
+    expect(worker.rememberDailyRecordOpened).not.toHaveBeenCalled();
+    expect(worker.completeEverydayAction).not.toHaveBeenCalled();
+    expect(document.querySelector<HTMLInputElement>("#record-title")?.value).toBe("Captured");
+  } finally { await act(async () => root.unmount()); store.close(); }
+});
 
 it("resets a rejected scalar edit to the canonical value", async () => {
   const store = await ClayStore.openMemory();

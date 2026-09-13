@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DailySourceLibraryV1, SnapshotBasisV1, DailyHomeSnapshotV1, InboxItemV1, InboxDispositionV1, CanonicalLocalDateV1 } from "./daily-home";
 import {
   AppInstanceId,
   AuthorityIncarnationId,
@@ -34,18 +35,76 @@ export const RelationKeepPayloadV1 = RelationPreviewPayloadV1.extend({
   cardinality: z.literal("one"), authorityTarget: TargetEvidenceV1,
 }).strict();
 export const RelationUndoPayloadV1 = z.object({ conversionRequestId: RequestId,
-  beforeVersion: z.number().int().nonnegative().safe() }).strict();
+  beforeVersion: z.number().int().nonnegative().safe(), authorityTarget: TargetEvidenceV1.optional() }).strict();
 export const DailyCapturePayloadV1 = z.object({ appInstanceId: AppInstanceId, table: presentationName,
   tableId: z.string().regex(/^tbl_[0-9a-f-]{36}$/), row: z.record(JsonValue) }).strict();
-export const DailyCaptureUndoPayloadV1 = z.object({ batchId: z.string().uuid() }).strict();
+export const DailyCaptureUndoPayloadV1 = z.object({ batchId: z.string().uuid(), captureRequestId: RequestId,
+  capturePayload: DailyCapturePayloadV1, authorityTarget: TargetEvidenceV1 }).strict().superRefine((value, context) => {
+  if (value.capturePayload.appInstanceId !== value.authorityTarget.appInstanceId)
+    context.addIssue({ code: "custom", message: "Capture Undo belongs to another app" });
+});
+export type DailyCaptureUndoPayloadV1 = z.infer<typeof DailyCaptureUndoPayloadV1>;
+
+export const DailyCasReviewV1 = z.object({ authorityTarget: TargetEvidenceV1, basis: SnapshotBasisV1, snapshotDigest: Sha256 }).strict()
+  .superRefine((value, context) => {
+    if (value.basis.appInstanceId !== value.authorityTarget.appInstanceId || value.basis.activeGenerationId !== value.authorityTarget.activeGenerationId)
+      context.addIssue({ code: "custom", message: "Daily review belongs to another source" });
+  });
+export type DailyCasReviewV1 = z.infer<typeof DailyCasReviewV1>;
+const navigationRef = z.object({ tableId: z.string().regex(/^tbl_[0-9a-f-]{36}$/), rowId: z.string().uuid() });
+const navigationInstant = z.string().datetime().refine(value => new Date(value).toISOString() === value);
+export const DailyNavigationStateV1 = z.object({ schema: z.literal(1), revision: z.number().int().nonnegative().safe(),
+  favorites: z.array(navigationRef.extend({ pinnedAt: navigationInstant }).strict()).max(50),
+  recents: z.array(navigationRef.extend({ openedAt: navigationInstant }).strict()).max(20),
+}).strict().superRefine((value, context) => {
+  for (const refs of [value.favorites, value.recents]) if (new Set(refs.map(ref => `${ref.tableId}/${ref.rowId}`)).size !== refs.length)
+    context.addIssue({ code: "custom", message: "Duplicate navigation identity" });
+});
+export const DailySourceCasPayloadV1 = z.object({ review: DailyCasReviewV1,
+  expectedRevision: z.number().int().nonnegative().safe(), value: DailySourceLibraryV1 }).strict();
+export const DailyNavigationCasPayloadV1 = z.object({ review: DailyCasReviewV1,
+  expectedRevision: z.number().int().nonnegative().safe(), value: DailyNavigationStateV1 }).strict();
+export const DailyPresentationV1 = z.object({ authorityTarget: TargetEvidenceV1, snapshot: DailyHomeSnapshotV1,
+  sourceLibrary: JsonValue, navigation: JsonValue }).strict();
+export type DailyPresentationV1 = z.infer<typeof DailyPresentationV1>;
+export const DailyInboxActionPayloadV1 = z.object({ review: DailyCasReviewV1, item: InboxItemV1,
+  action: z.enum(["complete", "snooze", "dismiss"]), untilLocalDate: CanonicalLocalDateV1.optional() }).strict().superRefine((value, context) => {
+  if ((value.action === "snooze") !== (value.untilLocalDate !== undefined))
+    context.addIssue({ code: "custom", message: "Only Snooze takes a reviewed local date" });
+});
+export type DailyInboxActionPayloadV1 = z.infer<typeof DailyInboxActionPayloadV1>;
+export const DailyInboxReceiptV1 = z.object({ disposition: InboxDispositionV1, previous: InboxDispositionV1.nullable(), batchId: z.string().uuid().nullable() }).strict();
+export type DailyInboxReceiptV1 = z.infer<typeof DailyInboxReceiptV1>;
+export const DailyInboxUndoPayloadV1 = z.object({ actionRequestId: RequestId,
+  actionPayload: DailyInboxActionPayloadV1, authorityTarget: TargetEvidenceV1 }).strict().superRefine((value, context) => {
+  if (value.actionPayload.review.authorityTarget.appInstanceId !== value.authorityTarget.appInstanceId)
+    context.addIssue({ code: "custom", message: "Inbox Undo belongs to another app" });
+});
+export type DailyInboxUndoPayloadV1 = z.infer<typeof DailyInboxUndoPayloadV1>;
+
+export const AutomationCommandRouteV1 = z.enum(["saveAutomationDraft", "saveAutomationRecipeDraft", "enableAutomation",
+  "pauseAutomation", "deleteAutomation", "runAutomationNow", "runDueAutomations", "undoAutomationRun", "markNotificationRead"]);
+/** Each inner payload is separately closed by its existing kernel route. */
+export const AutomationCommandPayloadV1 = z.object({ authorityTarget: TargetEvidenceV1,
+  command: z.object({ route: AutomationCommandRouteV1, payload: z.record(JsonValue) }).strict() }).strict();
+export type AutomationCommandPayloadV1 = z.infer<typeof AutomationCommandPayloadV1>;
+export const AutomationWorkspaceV1 = z.object({ schema: z.literal(1), draftId: RequestId, authorityTarget: TargetEvidenceV1,
+  kind: z.enum(["custom", "edit", "recipe", "legacy"]), fields: z.record(z.string().max(64_000)),
+  definition: z.record(JsonValue).nullable(), expectedRevision: z.number().int().nonnegative().safe().nullable(),
+  recipeId: z.enum(["overdue_invoice_reminder", "weekly_checklist", "new_customer_follow_up"]).nullable(),
+}).strict();
+export type AutomationWorkspaceV1 = z.infer<typeof AutomationWorkspaceV1>;
 
 /** Presentation retry metadata is not authority. The worker independently
  * captures the full payload and binds its hash to the mirrored request journal. */
 export const RecoverablePresentationRouteV1 = z.enum([
   "schema.convertTextToRelation", "schema.undoRelationConversion", "daily.capture", "daily.undoCapture", "batch.apply", "batch.undo",
+  "daily.source", "daily.navigation",
+  "daily.inbox", "daily.undoInbox",
+  "automation.command",
 ]);
 export const PresentationIntentV1 = z.object({
-  schema: z.literal(1), appInstanceId: AppInstanceId, slot: z.enum(["relation", "capture", "conversionUndo", "captureUndo"]),
+  schema: z.literal(1), appInstanceId: AppInstanceId, slot: z.enum(["relation", "capture", "conversionUndo", "captureUndo", "dailySource", "dailyNavigation", "dailyInbox", "dailyInboxUndo", "automation"]),
   requestId: RequestId, route: RecoverablePresentationRouteV1, payload: z.record(JsonValue),
 }).strict().superRefine((value, context) => {
   const contract = {
@@ -53,12 +112,18 @@ export const PresentationIntentV1 = z.object({
     conversionUndo: { route: "schema.undoRelationConversion", payload: RelationUndoPayloadV1 },
     capture: { route: "daily.capture", payload: DailyCapturePayloadV1 },
     captureUndo: { route: "daily.undoCapture", payload: DailyCaptureUndoPayloadV1 },
+    dailySource: { route: "daily.source", payload: DailySourceCasPayloadV1 },
+    dailyNavigation: { route: "daily.navigation", payload: DailyNavigationCasPayloadV1 },
+    dailyInbox: { route: "daily.inbox", payload: DailyInboxActionPayloadV1 },
+    dailyInboxUndo: { route: "daily.undoInbox", payload: DailyInboxUndoPayloadV1 },
+    automation: { route: "automation.command", payload: AutomationCommandPayloadV1 },
   }[value.slot];
   if (value.route !== contract.route || !contract.payload.safeParse(value.payload).success) {
     context.addIssue({ code: "custom", message: "Stored retry payload or route is invalid for its slot" });
     return;
   }
-  const source = value.slot === "capture" ? value.payload.appInstanceId : value.slot === "relation"
+  const source = value.payload.review ? (value.payload.review as DailyCasReviewV1).authorityTarget.appInstanceId
+    : value.slot === "capture" ? value.payload.appInstanceId : value.payload.authorityTarget
     ? (value.payload.authorityTarget as TargetEvidenceV1).appInstanceId : value.appInstanceId;
   if (source !== value.appInstanceId)
     context.addIssue({ code: "custom", message: "Stored retry payload is bound to another app" });

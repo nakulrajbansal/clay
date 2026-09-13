@@ -12,6 +12,39 @@ import { executeAutomationObserverAuthorityRoute } from
   "../src/production-automation-observer-routes";
 
 const opaque = (prefix: string, char: string): string => `${prefix}_${char.repeat(26)}`;
+
+it("retains a source-bound automation command through acknowledgement and rejects stale or cancelled creation", async () => {
+  const { authority } = await automationAuthority();
+  try {
+    const input = authorityAutomationDraft(authority, { name: "Bound draft", enabled: false,
+      trigger: { kind: "manual", table: "deals", conditions: [] }, actions: [{ kind: "notify", title: "Review", body: "Review" }] });
+    const request = { requestId: authority.createRequestId(), route: "automation.command", payload: {
+      authorityTarget: authority.inspectAuthority().target, command: { route: "saveAutomationDraft", payload: { input, expectedRevision: null } } } };
+    const result = await authority.executeMutation(request);
+    expect(result.result).toMatchObject({ name: "Bound draft", enabled: false });
+    expect((await authority.executeMutation(request)).replayed).toBe(true);
+    await expect(authority.executeMutation({ ...request, requestId: authority.createRequestId() })).rejects.toThrow(/source|intervening|target/);
+    expect(await authority.mutationOutcome(request)).toMatchObject({ status: "recorded" });
+    const cancelled = { ...request, requestId: authority.createRequestId() };
+    expect(await authority.cancelPresentation(cancelled)).toEqual({ status: "cancelled" });
+    await expect(authority.executeMutation(cancelled)).rejects.toThrow(/cancelled/);
+    expect(authority.readStore().listAutomations()).toHaveLength(1);
+  } finally { authority.close(); }
+});
+
+it("rejects unrepresented V2 input fields instead of silently dropping a reviewed edit", async () => {
+  const { authority } = await automationAuthority();
+  try {
+    const input = authorityAutomationDraft(authority, { name: "Closed edit", enabled: false,
+      trigger: { kind: "manual", table: "deals", conditions: [] }, actions: [{ kind: "notify", title: "Review", body: "Review" }] });
+    const before = authority.inspectAuthority().target;
+    await expect(Promise.resolve().then(() => authority.executeMutation({ requestId: authority.createRequestId(), route: "automation.command", payload: {
+      authorityTarget: before, command: { route: "saveAutomationDraft", payload: { expectedRevision: null,
+        input: { ...input, actions: [{ ...input.actions[0], unsupported: true }] } } } } }))).rejects.toThrow(/invalid|closed/);
+    expect(authority.inspectAuthority().target).toEqual(before);
+    expect(authority.readStore().listAutomations()).toEqual([]);
+  } finally { authority.close(); }
+});
 const legacyInventory = {
   state: "complete" as const,
   catalogPresent: false,

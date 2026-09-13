@@ -21,6 +21,7 @@ import { WorkerClient, type BootInfo, type RecoveryRecordCandidate } from "./wor
 import { productionWorkerRouteAvailable } from "../worker/mutation-route-census";
 import { beginAppSetup, readAppSetup, saveAppSetup, finishAppSetup } from "./app-setup-intent";
 import { ManualDownloadRecovery, type ManualDownloadIntent } from "./manual-download-recovery";
+import { runRetainedAutomationTick } from "./automation-tick";
 import {
   LatestRequestGate, beginLazySession, createRetryingLoader, runLatestRequest,
 } from "./async-lifecycle";
@@ -320,6 +321,8 @@ export function App(): React.JSX.Element {
   const [phase, setPhase] = useState<Phase>("loading");
   const [apps, setApps] = useState<AppEntry[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
+  const [automationStorageAvailable, setAutomationStorageAvailable] = useState(false);
+  const [automationWaitReason, setAutomationWaitReason] = useState<string | null>(null);
   const currentIdRef = useRef(currentId);
   const recoveryRefreshGate = useRef(new LatestRequestGate()).current;
   useLayoutEffect(() => {
@@ -553,7 +556,7 @@ export function App(): React.JSX.Element {
   const refreshFirstRunEvidence = useCallback(async (wc: WorkerClient): Promise<void> => {
     const evidence = await wc.firstRunEvidence();
     setFirstRunEvidence(evidence);
-    if (evidence.provenanceValid && evidence.realRecordCount > 0) {
+    if (evidence.provenanceValid && evidence.realRecordCount > 0 && await wc.mayRecordPresentationSideEffects()) {
       await updateFirstSuccess({
         type: "real_record", source: "create", changed: evidence.realRecordCount, sample: false,
       }, wc);
@@ -581,18 +584,19 @@ export function App(): React.JSX.Element {
   }, [phase, firstSuccess, refreshFirstRunEvidence]);
 
   useEffect(() => {
-    if (phase !== "main" || !workerRef.current) return;
+    if (phase !== "main" || !workerRef.current || !currentId) return;
+    const worker = workerRef.current; const app = currentId;
+    setAutomationStorageAvailable(false); setAutomationWaitReason(null);
     let live = true;
     let running = false;
     const tick = async (): Promise<void> => {
-      if (running || !workerRef.current) return;
+      if (running || !live || workerRef.current !== worker || currentIdRef.current !== app) return;
       running = true;
       try {
-        const [runs, inbox] = await Promise.all([
-          workerRef.current.runAutomations(workerRef.current.createMutationContext()),
-          workerRef.current.notifications(),
-        ]);
+        const tick = await runRetainedAutomationTick(sessionStorage, worker, app);
+        const { runs, notifications: inbox } = tick;
         if (!live) return;
+        setAutomationStorageAvailable(tick.available); setAutomationWaitReason(tick.reason);
         const signature = JSON.stringify(inbox.map(notification => [
           notification.id, notification.at, notification.read,
         ]));
@@ -614,7 +618,7 @@ export function App(): React.JSX.Element {
     void tick();
     const timer = window.setInterval(() => void tick(), 15_000);
     return () => { live = false; window.clearInterval(timer); };
-  }, [phase, liveBridge, registryTables, pushToast]);
+  }, [phase, currentId, liveBridge, registryTables, pushToast]);
 
   // Styled in-app confirmation (native dialogs read as unfinished and
   // can't be themed). One dialog serves the shell AND sandboxed panels
@@ -2685,11 +2689,9 @@ export function App(): React.JSX.Element {
               onQuickCapture={() => openCommandPalette(true)}
               onSetup={() => openData()}
               onCreateRecurring={() => openAutomations("recurring_record")}
-              automationMutationsAvailable={false}
-              onToggleFavorite={async (tableId, rowId) => {
-                await client().toggleDailyFavorite(tableId, rowId);
-                invalidateDailyHome();
-              }}
+              automationMutationsAvailable={automationStorageAvailable}
+              dailyHomeMutationsAvailable
+              onWrite={table => { liveBridge?.notifyWrite(table); invalidateDailyHome(); }}
               onError={message => pushToast(message, "danger")}
             />
           </Suspense>
@@ -2771,7 +2773,8 @@ export function App(): React.JSX.Element {
               notifications={notifications}
               initialRecipe={automationRecipe}
               initialAutomationId={automationTargetId}
-              mutationsAvailable={false}
+              appInstanceId={currentId}
+              schedulerWaitReason={automationWaitReason}
               onNotifications={setNotifications}
               onClose={() => {
                 setShowAutomations(false);

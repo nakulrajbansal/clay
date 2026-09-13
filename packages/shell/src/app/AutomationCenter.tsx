@@ -1,4 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { AutomationCommandPayloadV1, AutomationWorkspaceV1, TargetEvidenceV1 } from "@clay/schema/catalog";
+import { beginPresentationIntent, readPresentationIntent, finishPresentationIntent, cancelPresentationIntent, type PresentationIntent } from "./presentation-intent";
+import { clearAutomationWorkspace, editableAutomation, executeAutomationIntent, readAutomationWorkspace, writeAutomationWorkspace } from "./automation-presentation";
 import type {
   AutomationDefinitionAny, AutomationDefinitionV2, AutomationDraftInputV2,
   AutomationLegacyDefinitionV1,
@@ -22,18 +25,21 @@ type Draft = {
   action: ActionKind; actionField: string; actionValue: string;
   targetTable: string; relationField: string; targetField: string;
   noticeTitle: string; noticeBody: string;
+  timeZone: string;
 };
 
-const DEFAULT_RUNTIME_STATUS: AutomationRuntimeStatusV1 = {
+const DEFAULT_RUNTIME_STATUS: Omit<AutomationRuntimeStatusV1, "sessionActive" | "headline" | "detail"> & {
+  sessionActive: boolean; headline: string; detail: string;
+} = {
   v: 1,
   engine: "local_worker_session",
-  sessionActive: true,
+  sessionActive: false,
   backgroundExecution: false,
   offDeviceExecution: false,
   modelAccess: false,
   networkAccess: false,
-  headline: "Automations run on this device while Clay is open.",
-  detail: "If Clay is closed or this device sleeps, scheduled work waits until a Clay session is available.",
+  headline: "Checking local automation runtime…",
+  detail: "Runtime availability has not been read. No background or off-device execution is promised.",
   enabledDefinitions: 0,
   disabledDefinitions: 0,
   needsRepairDefinitions: 0,
@@ -52,8 +58,15 @@ const isV2 = (rule: AutomationDefinitionAny): rule is AutomationDefinitionV2 =>
 
 function scalar(column: RegColumn | undefined, value: string): string | number | boolean | null {
   if (value === "") return null;
-  if (column?.type === "number" || column?.type === "integer") return Number(value);
-  if (column?.type === "boolean") return value === "true";
+  if (column?.type === "number" || column?.type === "integer") {
+    const number = Number(value);
+    if (!Number.isFinite(number)) throw new Error("Enter a finite numeric automation value");
+    return number;
+  }
+  if (column?.type === "boolean") {
+    if (value !== "true" && value !== "false") throw new Error("Choose Yes or No for the automation value");
+    return value === "true";
+  }
   return value;
 }
 
@@ -70,6 +83,7 @@ function defaultDraft(tables: RegTable[]): Draft {
     actionField: fields[0]?.name ?? "", actionValue: "",
     targetTable: target?.name ?? "", relationField: "", targetField: writable(target)[0]?.name ?? "",
     noticeTitle: "Reminder", noticeBody: "A record needs your attention.",
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
   };
 }
 
@@ -168,30 +182,41 @@ function draftSentence(draft: Draft): string {
 function RecipeSetup(props: {
   recipe: AutomationRecipeCardV1;
   busy: boolean;
+  mutationsAvailable: boolean;
+  fields: Record<string, string>;
+  onField: (name: string, value: string) => void;
   onCancel: () => void;
   onSave: (request: AutomationRecipeDraftRequestV1) => Promise<void>;
 }): React.JSX.Element {
-  const [optionIndex, setOptionIndex] = useState(0);
-  const [dateFieldId, setDateFieldId] = useState("");
-  const [conditionFieldId, setConditionFieldId] = useState("");
-  const [conditionValue, setConditionValue] = useState("");
-  const [daysBefore, setDaysBefore] = useState("0");
-  const [titleFieldId, setTitleFieldId] = useState("");
-  const [title, setTitle] = useState("");
-  const [weekday, setWeekday] = useState("1");
-  const [localTime, setLocalTime] = useState("09:00");
-  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-  const option = props.recipe.options[Math.min(optionIndex, props.recipe.options.length - 1)];
+  const field = (name: string, fallback = ""): [string, (value: string) => void] => [props.fields[name] ?? fallback, value => props.onField(name, value)];
+  const [optionValue, setOptionValue] = field("optionIndex", "0"); const optionIndex = Number(optionValue);
+  const setOptionIndex = (value: number) => { setOptionValue(String(value)); setDateFieldId(""); setConditionFieldId(""); setTitleFieldId(""); };
+  const [dateFieldId, setDateFieldId] = field("dateFieldId");
+  const [conditionFieldId, setConditionFieldId] = field("conditionFieldId");
+  const [conditionValue, setConditionValue] = field("conditionValue");
+  const [daysBefore, setDaysBefore] = field("daysBefore", "0");
+  const [titleFieldId, setTitleFieldId] = field("titleFieldId");
+  const [title, setTitle] = field("title");
+  const [weekday, setWeekday] = field("weekday", "1");
+  const [localTime, setLocalTime] = field("localTime", "09:00");
+  const [timeZone, setTimeZone] = field("timeZone", "UTC");
+  const optionKey = (option: AutomationRecipeCardV1["options"][number]): string => JSON.stringify([option.kind,
+    "source" in option ? option.source.tableId : null, "target" in option ? option.target.tableId : null,
+    "relationField" in option ? option.relationField.fieldId : null]);
+  const selectedKey = props.fields.optionKey;
+  const option = selectedKey ? props.recipe.options.find(candidate => optionKey(candidate) === selectedKey)
+    : props.recipe.options[Math.min(optionIndex, props.recipe.options.length - 1)];
 
   useEffect(() => {
     if (!option) return;
+    if (!selectedKey) props.onField("optionKey", optionKey(option));
     if (option.kind === "overdue_invoice_reminder") {
-      setDateFieldId(option.dateFields[0]?.fieldId ?? "");
-      setConditionFieldId(option.conditionFields[0]?.fieldId ?? "");
+      if (!dateFieldId) setDateFieldId(option.dateFields[0]?.fieldId ?? "");
+      if (!conditionFieldId) setConditionFieldId(option.conditionFields[0]?.fieldId ?? "");
     } else {
-      setTitleFieldId(option.writableFields[0]?.fieldId ?? "");
+      if (!titleFieldId) setTitleFieldId(option.writableFields[0]?.fieldId ?? "");
     }
-  }, [option]);
+  }, [option, dateFieldId, conditionFieldId, titleFieldId]);
 
   const save = async (): Promise<void> => {
     if (!option) return;
@@ -204,6 +229,7 @@ function RecipeSetup(props: {
           conditionFieldId: conditionFieldId as typeof option.conditionFields[number]["fieldId"],
           conditionValue,
           daysBefore: Number(daysBefore),
+          timeZone,
         },
       });
     } else if (option.kind === "weekly_checklist") {
@@ -227,6 +253,7 @@ function RecipeSetup(props: {
           relationFieldId: option.relationField.fieldId,
           titleFieldId: titleFieldId as typeof option.writableFields[number]["fieldId"],
           title,
+          timeZone,
         },
       });
     }
@@ -236,12 +263,15 @@ function RecipeSetup(props: {
     ? Boolean(dateFieldId && conditionFieldId && conditionValue.trim())
     : Boolean(titleFieldId && title.trim());
   return <section className="automation-recipe-setup" aria-labelledby="recipe-setup-title">
+    <label>Rule timezone<input value={timeZone} disabled={props.busy} onChange={event => setTimeZone(event.target.value)} /></label>
     <div className="automation-builder-title">
       <button className="link" onClick={props.onCancel}>← Recipes</button>
       <div><strong id="recipe-setup-title">{props.recipe.title}</strong>
         <span>This first saves a disabled draft. Nothing runs yet.</span></div>
     </div>
-    <label>Use with<select value={optionIndex} onChange={event => setOptionIndex(Number(event.target.value))}>
+    <label>Use with<select value={option ? props.recipe.options.indexOf(option) : ""} disabled={props.busy}
+      onChange={event => { const next = props.recipe.options[Number(event.target.value)]; if (next) props.onField("optionKey", optionKey(next)); setOptionIndex(Number(event.target.value)); }}>
+      {!option ? <option value="">The original semantic source is unavailable</option> : null}
       {props.recipe.options.map((candidate, index) => <option value={index} key={`${candidate.kind}-${index}`}>
         {candidate.kind === "weekly_checklist" ? candidate.target.lastKnownName
           : candidate.kind === "overdue_invoice_reminder" ? candidate.source.lastKnownName
@@ -276,18 +306,20 @@ function RecipeSetup(props: {
       <span>{props.recipe.runtimeFact}</span><span>{props.recipe.undoFact}</span>
     </div>
     <footer className="automation-builder-actions"><button onClick={props.onCancel}>Cancel</button>
-      <button className="primary" disabled={props.busy || !canSave} onClick={() => void save()}>
+      <button className="primary" disabled={props.busy || !props.mutationsAvailable || !canSave} onClick={() => void save()}>
         {props.busy ? "Saving…" : "Save disabled draft"}</button></footer>
   </section>;
 }
 
 export function AutomationCenter(props: {
   worker: WorkerClient;
+  appInstanceId?: string | null;
   tables: RegTable[];
   notifications: ClayNotification[];
   initialRecipe?: "recurring_record";
   initialAutomationId?: string;
   mutationsAvailable?: boolean;
+  schedulerWaitReason?: string | null;
   onNotifications: (notifications: ClayNotification[]) => void;
   onClose: () => void;
   onOpenRecord: (table: string, id: string) => void;
@@ -296,7 +328,13 @@ export function AutomationCenter(props: {
   onInfo: (message: string) => void;
   onConfirm?: (message: string) => Promise<boolean>;
 }): React.JSX.Element {
-  const mutationsAvailable = props.mutationsAvailable ?? true;
+  const [reviewed, setReviewed] = useState<Awaited<ReturnType<WorkerClient["automationPresentation"]>> | null>(null);
+  const [pending, setPending] = useState<PresentationIntent | null>(null);
+  const pendingRef = useRef<PresentationIntent | null>(null);
+  const workspaceRef = useRef<AutomationWorkspaceV1 | null>(null);
+  const [workspace, setWorkspace] = useState<AutomationWorkspaceV1 | null>(null);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const mutationsAvailable = props.mutationsAvailable !== false && reviewed?.availability.available === true && !pending && !recoveryError;
   const [tab, setTab] = useState<"rules" | "inbox" | "history">("rules");
   const [rules, setRules] = useState<AutomationDefinitionAny[]>([]);
   const [recipes, setRecipes] = useState<AutomationRecipeCardV1[]>([]);
@@ -305,12 +343,12 @@ export function AutomationCenter(props: {
   const [trace, setTrace] = useState<SemanticSchemaTraceV1 | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [runs, setRuns] = useState<AutomationRun[]>([]);
-  const [draft, setDraft] = useState<Draft>(() => props.initialRecipe === "recurring_record"
+  const [draft, setDraftState] = useState<Draft>(() => props.initialRecipe === "recurring_record"
     ? recurringRecordDraft(props.tables) : defaultDraft(props.tables));
   const [building, setBuilding] = useState(
     props.initialRecipe === "recurring_record" && mutationsAvailable,
   );
-  const [repairing, setRepairing] = useState<{ id: string; revision: 0 } | null>(null);
+  const [repairing, setRepairing] = useState<{ id: string; revision: number } | null>(null);
   const [recipeSetup, setRecipeSetup] = useState<AutomationRecipeCardV1 | null>(null);
   const [busy, setBusy] = useState(false);
   const [lastRequestId, setLastRequestId] = useState<string | null>(null);
@@ -323,6 +361,36 @@ export function AutomationCenter(props: {
   const [pendingRun, setPendingRun] = useState<{
     rule: AutomationDefinitionV2; simulation: AutomationSimulationProofV1;
   } | null>(null);
+  const persistWorkspace = (next: AutomationWorkspaceV1): void => {
+    writeAutomationWorkspace(sessionStorage, next); workspaceRef.current = next; setWorkspace(next);
+  };
+  const setDraft = (update: Draft | ((value: Draft) => Draft)): void => {
+    try {
+      const next = typeof update === "function" ? update(draft) : update;
+      if (workspaceRef.current) persistWorkspace({ ...workspaceRef.current, fields: { ...next } });
+      setDraftState(next); setSimulation(null); setSimulatedRule(null); setSimulatedDraft(null);
+    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+  };
+  const beginWorkspace = (kind: AutomationWorkspaceV1["kind"], fields: Record<string, string>,
+    definition: AutomationDraftInputV2 | null = null, expectedRevision: number | null = null,
+    recipeId: AutomationWorkspaceV1["recipeId"] = null): void => {
+    if (!reviewed || pendingRef.current || workspaceRef.current) throw new Error("Resume or discard the retained draft first");
+    persistWorkspace({ schema: 1, draftId: props.worker.createMutationContext().requestId, authorityTarget: reviewed.authorityTarget,
+      kind, fields, definition: definition ? JSON.parse(JSON.stringify(definition)) : null, expectedRevision, recipeId });
+  };
+  const finishCommand = (): void => {
+    const intent = pendingRef.current; if (!intent) return;
+    finishPresentationIntent(sessionStorage, intent.appInstanceId, intent.slot, intent.requestId);
+    pendingRef.current = null; setPending(null);
+  };
+  const runCommand = async <T,>(route: AutomationCommandPayloadV1["command"]["route"], payload: unknown,
+    source: TargetEvidenceV1 | undefined = reviewed?.authorityTarget): Promise<T> => {
+    if (!source || (props.appInstanceId && props.appInstanceId !== source.appInstanceId)) throw new Error("Original automation source is unavailable");
+    const intent = beginPresentationIntent(sessionStorage, source.appInstanceId, "automation", "automation.command",
+      { authorityTarget: source, command: { route, payload } }, () => props.worker.createMutationContext());
+    pendingRef.current = intent; setPending(intent); setLastRequestId(intent.requestId);
+    return executeAutomationIntent<T>(props.worker, intent);
+  };
   const source = props.tables.find(table => table.name === draft.table);
   const sourceFields = writable(source);
   const dateFields = (source?.columns ?? []).filter(column => column.type === "date");
@@ -348,21 +416,33 @@ export function AutomationCenter(props: {
       : column?.type === "number" || column?.type === "integer" ? "number" : "text"}
     value={value} onChange={event => change(event.target.value)} />;
 
-  const refresh = async (): Promise<void> => {
-    const [nextRules, nextRuns, nextNotifications, nextRecipes, nextRuntime, nextOverview, nextTrace]
-      = await Promise.all([
-      props.worker.listAutomations(), props.worker.automationRuns(undefined, 100),
-      props.worker.notifications(), props.worker.automationRecipes(),
-      props.worker.automationRuntimeStatus(), props.worker.automationRuntimeOverview(100),
-      props.worker.semanticTrace(),
-    ]);
-    setRules(nextRules); setRuns(nextRuns); props.onNotifications(nextNotifications);
-    setRecipes(nextRecipes); setRuntimeStatus(nextRuntime); setRuntimeOverview(nextOverview);
-    setTrace(nextTrace); setLoaded(true);
+  const refresh = async () => {
+    const read = await props.worker.automationPresentation();
+    if (props.appInstanceId && read.authorityTarget.appInstanceId !== props.appInstanceId) throw new Error("Automation view belongs to another app");
+    setReviewed(read); setRules(read.rules); setRuns(read.runs); props.onNotifications(read.notifications);
+    setRecipes(read.recipes); setRuntimeStatus(read.runtime); setRuntimeOverview(read.overview);
+    setTrace(read.trace); setLoaded(true); return read;
   };
-  useEffect(() => { void refresh().catch(error => {
+  useEffect(() => { void (async () => {
+    const read = await refresh(); const app = read.authorityTarget.appInstanceId;
+    const retry = readPresentationIntent(sessionStorage, app, "automation"); pendingRef.current = retry; setPending(retry);
+    const saved = readAutomationWorkspace(sessionStorage, app);
+    workspaceRef.current = saved; setWorkspace(saved);
+    if (saved) {
+      if (saved.kind === "custom" || saved.kind === "legacy") {
+        setDraftState({ ...defaultDraft(props.tables), ...saved.fields } as Draft); setBuilding(true);
+        if (saved.definition?.id) setRepairing({ id: String(saved.definition.id), revision: saved.expectedRevision ?? 0 });
+      } else if (saved.kind === "edit") setBuilding(true);
+      else setRecipeSetup(read.recipes.find(recipe => recipe.id === saved.recipeId) ?? null);
+    } else if (props.initialRecipe === "recurring_record") {
+      const fields = recurringRecordDraft(props.tables);
+      const next: AutomationWorkspaceV1 = { schema: 1, draftId: props.worker.createMutationContext().requestId,
+        authorityTarget: read.authorityTarget, kind: "custom", fields, definition: null, expectedRevision: null, recipeId: null };
+      persistWorkspace(next); setDraftState(fields); setBuilding(true);
+    }
+  })().catch(error => {
     setLoaded(true);
-    props.onError(error instanceof Error ? error.message : String(error));
+    const message = error instanceof Error ? error.message : String(error); setRecoveryError(message); props.onError(message);
   });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -381,6 +461,13 @@ export function AutomationCenter(props: {
   };
 
   const definition = (): AutomationDraftInputV2 => {
+    if (workspaceRef.current?.kind === "edit") {
+      const parsed = JSON.parse(workspaceRef.current.fields.document ?? "null");
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || parsed.id !== workspaceRef.current.definition?.id
+          || parsed.v !== 2 || !Array.isArray(parsed.actions) || !parsed.actions.length)
+        throw new Error("Keep the original V2 rule identity and at least one explicit action");
+      return parsed as AutomationDraftInputV2;
+    }
     const conditionColumn = source?.columns.find(column => column.name === draft.conditionField);
     const conditions = draft.conditionField && draft.conditionValue !== ""
       ? [{ field: stableField(draft.table, draft.conditionField), op: "eq" as const,
@@ -424,7 +511,7 @@ export function AutomationCenter(props: {
         value: { source: "literal", value: scalar(field, draft.actionValue) },
       }] };
     }
-    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    const timeZone = draft.timeZone;
     return { v: 2, ...(repairing ? { id: repairing.id } : {}), name: draft.name, trigger, actions: [action],
       runtime: { mode: "local", timeZone, missedPolicy: "run_once_when_available" } };
   };
@@ -432,14 +519,17 @@ export function AutomationCenter(props: {
   const saveAndSimulate = async (): Promise<void> => {
     setBusy(true);
     try {
-      const operation = props.worker.saveAutomationDraft(definition(), repairing?.revision);
-      setLastRequestId(operation.requestId ?? null);
-      const saved = await operation;
+      const saved = await runCommand<AutomationDefinitionV2>("saveAutomationDraft", { input: definition(),
+        expectedRevision: workspaceRef.current?.expectedRevision ?? repairing?.revision ?? null }, workspaceRef.current?.authorityTarget);
       const nextSimulation = await props.worker.simulateAutomation(
         saved.id, saved.definitionRevision, "enable");
       setSimulation(nextSimulation); setSimulatedRule(saved);
       setSimulatedDraft(JSON.stringify(draft));
-      await refresh();
+      const read = await refresh(); finishCommand();
+      const current = workspaceRef.current;
+      if (current) persistWorkspace({ ...current, authorityTarget: read.authorityTarget,
+        definition: JSON.parse(JSON.stringify(editableAutomation(saved))), expectedRevision: saved.definitionRevision });
+      setRepairing({ id: saved.id, revision: saved.definitionRevision });
     } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   };
@@ -447,12 +537,13 @@ export function AutomationCenter(props: {
   const saveRecipe = async (request: AutomationRecipeDraftRequestV1): Promise<void> => {
     setBusy(true);
     try {
-      const operation = props.worker.saveAutomationRecipeDraft(request);
-      setLastRequestId(operation.requestId ?? null);
-      const saved = await operation;
+      const saved = await runCommand<AutomationDefinitionV2>("saveAutomationRecipeDraft", { request }, workspaceRef.current?.authorityTarget);
       props.onInfo(`Saved “${saved.name}” as a disabled draft. Review and simulate it before enabling.`);
       setRecipeSetup(null);
       await refresh();
+      finishCommand();
+      if (workspaceRef.current) clearAutomationWorkspace(sessionStorage, workspaceRef.current);
+      workspaceRef.current = null; setWorkspace(null);
     } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   };
@@ -466,14 +557,13 @@ export function AutomationCenter(props: {
     }
     setBusy(true);
     try {
-      const operation = props.worker.enableAutomation(
-        simulatedRule.id, simulatedRule.definitionRevision, simulation);
-      setLastRequestId(operation.requestId ?? null);
-      await operation;
+      await runCommand("enableAutomation", { id: simulatedRule.id, expectedRevision: simulatedRule.definitionRevision, simulation });
       props.onInfo(`Enabled “${simulatedRule.name}”. It runs on this device while Clay is open.`);
       setBuilding(false); setRepairing(null); setSimulation(null); setSimulatedRule(null); setSimulatedDraft(null);
-      setDraft(defaultDraft(props.tables));
       await refresh();
+      finishCommand();
+      if (workspaceRef.current) clearAutomationWorkspace(sessionStorage, workspaceRef.current);
+      workspaceRef.current = null; setWorkspace(null); setDraftState(defaultDraft(props.tables));
     } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   };
@@ -490,11 +580,10 @@ export function AutomationCenter(props: {
         setPendingEnable({ rule, simulation: preview });
         return;
       }
-      const operation = props.worker.pauseAutomation(rule.id, rule.definitionRevision);
-      setLastRequestId(operation.requestId ?? null);
-      await operation;
+      await runCommand("pauseAutomation", { id: rule.id, expectedRevision: rule.definitionRevision });
       props.onInfo(`Paused “${rule.name}”.`);
       await refresh();
+      finishCommand();
     } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   };
@@ -503,13 +592,12 @@ export function AutomationCenter(props: {
     if (!pendingEnable) return;
     setBusy(true);
     try {
-      const operation = props.worker.enableAutomation(
-        pendingEnable.rule.id, pendingEnable.rule.definitionRevision, pendingEnable.simulation);
-      setLastRequestId(operation.requestId ?? null);
-      await operation;
+      await runCommand("enableAutomation", { id: pendingEnable.rule.id, expectedRevision: pendingEnable.rule.definitionRevision,
+        simulation: pendingEnable.simulation });
       props.onInfo(`Enabled “${pendingEnable.rule.name}”. It runs on this device while Clay is open.`);
       setPendingEnable(null);
       await refresh();
+      finishCommand();
     } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   };
@@ -531,10 +619,8 @@ export function AutomationCenter(props: {
     if (!pendingRun) return;
     setBusy(true);
     try {
-      const operation = props.worker.runAutomationNow(
-        pendingRun.rule.id, pendingRun.rule.definitionRevision, pendingRun.simulation);
-      setLastRequestId(operation.requestId ?? null);
-      const result = await operation;
+      const result = await runCommand<import("@clay/kernel").AutomationExecutionResultV1>("runAutomationNow", {
+        id: pendingRun.rule.id, expectedRevision: pendingRun.rule.definitionRevision, simulation: pendingRun.simulation });
       if (result.kind === "committed") {
         const affected = new Set<string>();
         const trigger = pendingRun.rule.trigger;
@@ -546,7 +632,7 @@ export function AutomationCenter(props: {
         props.onInfo(`Ran “${pendingRun.rule.name}”. ${result.receipt.changed} record changes were committed.`);
       } else props.onInfo(`“${pendingRun.rule.name}” was already up to date. Nothing was written.`);
       setPendingRun(null);
-      await refresh(); setTab("history");
+      await refresh(); setTab("history"); finishCommand();
     } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   };
@@ -554,12 +640,11 @@ export function AutomationCenter(props: {
   const undoRun = async (run: AutomationRun): Promise<void> => {
     setBusy(true);
     try {
-      const operation = props.worker.undoAutomationRun(run.id);
-      setLastRequestId(operation.requestId ?? null);
-      await operation;
+      await runCommand("undoAutomationRun", { id: run.id });
       props.onInfo("Automation changes were undone.");
       await refresh();
       for (const table of props.tables) props.onWrite(table.name);
+      finishCommand();
     } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   };
@@ -575,7 +660,112 @@ export function AutomationCenter(props: {
     setSimulation(null); setSimulatedRule(null); setSimulatedDraft(null);
   };
 
+  const recoverCommand = async (cancel: boolean): Promise<void> => {
+    const intent = pendingRef.current; if (!intent || busy) return;
+    setBusy(true);
+    try {
+      if (cancel) {
+        if (!await cancelPresentationIntent(sessionStorage, props.worker, intent))
+          throw new Error("This automation change is already recorded. Retry it to acknowledge the result.");
+        pendingRef.current = null; setPending(null);
+      } else {
+        await executeAutomationIntent(props.worker, intent);
+        await refresh(); for (const table of props.tables) props.onWrite(table.name);
+        props.onInfo("The original automation result is recorded. The list shows the current state; no effect was repeated.");
+        finishCommand();
+        if (workspaceRef.current) clearAutomationWorkspace(sessionStorage, workspaceRef.current);
+        workspaceRef.current = null; setWorkspace(null); setBuilding(false); setRecipeSetup(null); setRepairing(null);
+      }
+    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    finally { setBusy(false); }
+  };
+  const closeDraft = (): void => {
+    try {
+      if (workspaceRef.current) clearAutomationWorkspace(sessionStorage, workspaceRef.current);
+      workspaceRef.current = null; setWorkspace(null); setBuilding(false); setRecipeSetup(null); setRepairing(null); setSimulation(null);
+    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+  };
+  const reviewDraftSource = async (): Promise<void> => {
+    if (!workspaceRef.current || pendingRef.current) return;
+    setBusy(true);
+    try {
+      const original = workspaceRef.current; const read = await refresh();
+      if (original.authorityTarget.appInstanceId !== read.authorityTarget.appInstanceId
+          || original.authorityTarget.activeGenerationId !== read.authorityTarget.activeGenerationId
+          || original.authorityTarget.lineageEpoch !== read.authorityTarget.lineageEpoch)
+        throw new Error("This draft belongs to a different original app or generation. It cannot be rebound.");
+      persistWorkspace({ ...original, authorityTarget: read.authorityTarget });
+      setSimulation(null); setSimulatedRule(null); setPendingEnable(null); setPendingRun(null);
+      props.onInfo("Review every field against this source before saving. The old request was not reused.");
+    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    finally { setBusy(false); }
+  };
+  const startCustom = (): void => {
+    try { const next = defaultDraft(props.tables); beginWorkspace("custom", next);
+      setRepairing(null); setDraftState(next); setBuilding(true);
+    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+  };
+  const editRule = (rule: AutomationDefinitionV2): void => {
+    try {
+      const input = editableAutomation(rule);
+      beginWorkspace("edit", { document: JSON.stringify(input, null, 2) }, input, rule.definitionRevision);
+      setRepairing(null); setBuilding(true); setSimulation(null);
+    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+  };
+  const updateDocument = (raw: string): void => {
+    try { if (!workspaceRef.current) return;
+      persistWorkspace({ ...workspaceRef.current, fields: { document: raw } }); setSimulation(null); setSimulatedRule(null);
+    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+  };
+  const documentField = (key: "name" | "timeZone"): string => {
+    try { const value = JSON.parse(workspace?.fields.document ?? "{}"); return key === "name" ? String(value.name ?? "") : String(value.runtime?.timeZone ?? ""); }
+    catch { return ""; }
+  };
+  const setDocumentField = (key: "name" | "timeZone", value: string): void => {
+    try { const input = definition(); if (key === "name") input.name = value; else input.runtime.timeZone = value;
+      updateDocument(JSON.stringify(input, null, 2));
+    } catch { props.onError("Correct the full rule definition before editing its name or timezone."); }
+  };
+  const runDue = async (): Promise<void> => {
+    setBusy(true);
+    try {
+      const results = await runCommand<AutomationRun[]>("runDueAutomations", {});
+      await refresh(); for (const table of props.tables) props.onWrite(table.name);
+      props.onInfo(`Checked due schedules on this device. ${results.length} run receipts returned.`); setTab("history"); finishCommand();
+    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    finally { setBusy(false); }
+  };
+  const markRead = async (id: string): Promise<void> => {
+    setBusy(true);
+    try { await runCommand("markNotificationRead", { id }); await refresh(); finishCommand(); }
+    catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    finally { setBusy(false); }
+  };
+  const deleteRule = async (rule: AutomationDefinitionAny): Promise<void> => {
+    const source = reviewed?.authorityTarget; setBusy(true);
+    try {
+      if (!props.onConfirm || !await props.onConfirm(`Delete “${rule.name}”? Existing run history remains visible.`)) return;
+      await runCommand("deleteAutomation", { id: rule.id }, source); await refresh(); finishCommand();
+    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    finally { setBusy(false); }
+  };
+  const v2Editor = <section className="automation-builder">
+    <h3>Edit the complete V2 rule</h3>
+    <p>All conditions and actions are retained. Saving pauses the rule as a disabled draft; inspect the simulation before enabling.</p>
+    <label>Rule name<input disabled={busy || !!pending} value={documentField("name")} onChange={event => setDocumentField("name", event.target.value)} /></label>
+    <label>Rule timezone<input disabled={busy || !!pending} value={documentField("timeZone")} onChange={event => setDocumentField("timeZone", event.target.value)} placeholder="America/New_York" /></label>
+    <label>Full rule definition<textarea rows={20} disabled={busy || !!pending} spellCheck={false}
+      value={workspace?.fields.document ?? ""} onChange={event => updateDocument(event.target.value)} /></label>
+    <p>Structured data only. The worker validates every stable field, trigger, value, action and bound before committing.</p>
+    {simulation ? <p>{simulation.matchedRecords} matches · {simulation.plannedMutations} changes · {simulation.plannedNotifications} notices. Local execution only.</p> : null}
+    <button disabled={busy || !!pending} onClick={closeDraft}>Close draft</button>
+    <button className="primary" disabled={busy || !mutationsAvailable} onClick={() => void (simulation ? enableSimulated() : saveAndSimulate())}>
+      {simulation ? "Enable rule" : "Save and simulate"}</button>
+  </section>;
+
   const customBuilder = <section className="automation-builder">
+    <label>Rule timezone<input value={draft.timeZone} disabled={busy || !!pending}
+      onChange={event => setDraft(current => ({ ...current, timeZone: event.target.value }))} placeholder="America/New_York" /></label>
     <div className="automation-builder-title"><button className="link"
       onClick={() => { setBuilding(false); setRepairing(null); setSimulation(null); }}>← Automations</button>
       <div><strong>{repairing ? "Repair this older rule in place" : props.initialRecipe === "recurring_record" ? "Create a recurring record" : "Build a custom local rule"}</strong>
@@ -735,14 +925,32 @@ export function AutomationCenter(props: {
           onClick={() => setTab("history")}>Run history <span>{runs.length}</span></button>
       </nav>
 
-      {!mutationsAvailable ? <div className="automation-unavailable" role="status">
+      {reviewed && !reviewed.availability.available ? <div className="automation-unavailable" role="status">
         <strong>Automation changes are unavailable.</strong>
-        <span>You can review exact rules, reminders, and history. Creating, running, marking read, and undo stay disabled until their worker authority routes are certified.</span>
+        <span>This storage adapter lacks the required physical-transaction certificate. Draft preparation and readback are available; durable automation actions stay closed. No off-device runtime is implied.</span>
       </div> : null}
+      {recoveryError ? <p role="alert">Automation recovery is unavailable: {recoveryError}. The retained state was kept.</p> : null}
+      {props.schedulerWaitReason && props.schedulerWaitReason !== "physical_transaction_uncertified" ?
+        <p role="status">Scheduled checks are waiting for a retained review, draft, or Undo to be reconciled. Nothing runs off-device.</p> : null}
+      {pending ? <section className="automation-unavailable" role="status"><strong>An immutable automation request needs reconciliation.</strong>
+        <small>Request {pending.requestId}</small>
+        <button disabled={busy} onClick={() => void recoverCommand(false)}>Retry original automation change</button>
+        <button disabled={busy} onClick={() => void recoverCommand(true)}>Cancel original automation change</button>
+      </section> : null}
+      {workspace ? <section className="automation-unavailable"><span>Draft retained on this tab across reload. Closing this window does not discard it.</span>
+        <button disabled={busy || !!pending} onClick={() => { if (workspace.kind === "recipe") setRecipeSetup(recipes.find(recipe => recipe.id === workspace.recipeId) ?? null); else setBuilding(true); }}>Resume draft</button>
+        <button disabled={busy || !!pending} onClick={closeDraft}>Discard retained draft</button>
+        {JSON.stringify(workspace.authorityTarget) !== JSON.stringify(reviewed?.authorityTarget) ?
+          <button disabled={busy || !!pending} onClick={() => void reviewDraftSource()}>Review current source for this draft</button> : null}
+      </section> : null}
 
       <div className="automation-body">
-        {tab === "rules" ? building ? customBuilder : recipeSetup ? (
-          <RecipeSetup recipe={recipeSetup} busy={busy} onCancel={() => setRecipeSetup(null)}
+        {tab === "rules" ? building ? workspace?.kind === "edit" ? v2Editor : customBuilder : recipeSetup ? (
+          <RecipeSetup recipe={recipeSetup} busy={busy} mutationsAvailable={mutationsAvailable} fields={workspace?.fields ?? {}}
+            onField={(name, value) => {
+              try { if (workspaceRef.current) persistWorkspace({ ...workspaceRef.current, fields: { ...workspaceRef.current.fields, [name]: value } }); }
+              catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+            }} onCancel={() => setRecipeSetup(null)}
             onSave={saveRecipe} />
         ) : <section className="automation-rule-list">
           <section className="automation-recipes" aria-labelledby="automation-recipes-title">
@@ -754,20 +962,22 @@ export function AutomationCenter(props: {
                 <h3>{recipe.title}</h3><p>{recipe.result}</p>
                 <ul>{recipe.requiredMappings.map(mapping => <li key={mapping}>{mapping}</li>)}</ul>
                 <small>{recipe.runtimeFact}</small>
-                <button className="primary" disabled={!mutationsAvailable} title={!mutationsAvailable ? "Unavailable until automation authority is certified" : undefined} onClick={() => setRecipeSetup(recipe)}>Set up recipe</button>
+                <button className="primary" disabled={!reviewed || !!workspace || !!pending || !!recoveryError} onClick={() => {
+                  try { beginWorkspace("recipe", { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC" }, null, null, recipe.id); setRecipeSetup(recipe); }
+                  catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+                }}>Set up recipe</button>
               </article>)}
             </div>
           </section>
           <div className="automation-custom-entry">
             <div><strong>Need something different?</strong>
               <span>The custom builder uses exact table and field identities.</span></div>
-            <button disabled={!mutationsAvailable} title={!mutationsAvailable ? "Unavailable until automation authority is certified" : undefined} onClick={() => {
-              setRepairing(null); setDraft(defaultDraft(props.tables)); setBuilding(true);
-            }}>
+            <button disabled={!reviewed || !!workspace || !!pending || !!recoveryError} onClick={startCustom}>
               Build a custom rule</button>
           </div>
           <div className="automation-list-head"><div><strong>Your rules</strong>
             <span>{runtimeStatus.enabledDefinitions} enabled · {runtimeStatus.needsRepairDefinitions} need review</span></div></div>
+          <button disabled={busy || !mutationsAvailable} onClick={() => void runDue()}>Run due schedules now</button>
           {pendingEnable ? <div className="automation-enable-preview" aria-live="polite">
             <div><span>Target-bound simulation</span><strong>{pendingEnable.rule.name}</strong>
               <p>{pendingEnable.simulation.matchedRecords} match · {pendingEnable.simulation.plannedMutations} data changes · {pendingEnable.simulation.plannedNotifications} reminders</p>
@@ -816,24 +1026,22 @@ export function AutomationCenter(props: {
                     {lastRuntime ? <small>Undo: {lastRuntime.undo.detail}</small> : null}
                   </div>
                 </div>
-                {rule.needsRepair ? <button onClick={() => {
+                {rule.needsRepair ? <button disabled={busy || !!workspace || !!pending || !!recoveryError} onClick={() => {
                   const repairDraft = legacyRepairDraft(rule, props.tables);
                   if (!repairDraft) {
                     props.onError("This older rule has multiple or unsupported steps. Rebuild it as a new rule so no behavior is silently dropped.");
                     return;
                   }
-                  setDraft(repairDraft); setRepairing({ id: rule.id, revision: 0 }); setBuilding(true);
+                  try {
+                    beginWorkspace("legacy", repairDraft, { ...editableAutomation(rule as unknown as AutomationDefinitionV2), id: rule.id }, 0);
+                    setDraftState(repairDraft); setRepairing({ id: rule.id, revision: 0 }); setBuilding(true);
+                  } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
                 }}>Review &amp; rebuild</button>
-                  : <button onClick={() => void previewRun(rule)} disabled={busy || !mutationsAvailable}>Preview run</button>}
+                  : <><button disabled={busy || !!workspace || !!pending || !!recoveryError} onClick={() => editRule(rule)}>Edit rule</button>
+                    <button onClick={() => void previewRun(rule)} disabled={busy || !mutationsAvailable}>Preview run</button></>}
                 <button className="link danger" aria-label={`Delete ${rule.name}`}
-                  disabled={!mutationsAvailable}
-                  onClick={() => void (async () => {
-                    if (props.onConfirm && !await props.onConfirm(
-                      `Delete “${rule.name}”? Existing run history remains visible.`)) return;
-                    const operation = props.worker.deleteAutomation(rule.id);
-                    setLastRequestId(operation.requestId ?? null);
-                    await operation; await refresh();
-                  })()}>Delete</button>
+                  disabled={busy || !mutationsAvailable || !props.onConfirm}
+                  onClick={() => void deleteRule(rule)}>Delete</button>
               </article>;
             })}
         </section> : tab === "inbox" ? <section className="automation-inbox">
@@ -844,20 +1052,12 @@ export function AutomationCenter(props: {
               <div><strong>{notification.title}</strong><p>{notification.body}</p>
                 <small>{notification.at.slice(0,16).replace("T"," ")}</small></div>
               {notification.table && notification.recordId ? <button onClick={() => {
-                if (mutationsAvailable) {
-                  const operation = props.worker.markNotificationRead(notification.id);
-                  setLastRequestId(operation.requestId ?? null);
-                  void operation.then(refresh);
-                }
                 props.onClose(); props.onOpenRecord(notification.table!, notification.recordId!);
-              }}>Open record</button> : <button disabled={!mutationsAvailable}
+              }}>Open record</button> : null}
+              {!notification.read ? <button disabled={busy || !mutationsAvailable}
                 title={!mutationsAvailable ? "Unavailable until notification authority is certified" : undefined}
-                onClick={() => {
-                  const operation = props.worker.markNotificationRead(notification.id);
-                  setLastRequestId(operation.requestId ?? null);
-                  void operation.then(refresh);
-                }}>
-                Mark read</button>}
+                onClick={() => void markRead(notification.id)}>
+                Mark read</button> : null}
             </article>)}
         </section> : <section className="automation-history">
           {runs.length === 0 ? <div className="automation-empty"><span aria-hidden="true">◷</span>

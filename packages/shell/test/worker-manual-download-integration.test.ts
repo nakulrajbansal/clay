@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { WorkerClient } from "../src/app/worker-client";
+import { dailyCasReview } from "../src/app/daily-intent";
 import { ownedBrowserStorage } from "../../kernel/test/helpers/owned-browser-storage";
 vi.mock("../src/app/backup-trust-store.browser", async () => {
   const vault = new (await import("./helpers/memory-backup-trust")).MemoryBackupTrustStore();
@@ -46,6 +47,20 @@ it("recovers download records after worker loss with private authentication and 
     const first = await client.boot({ requestedAppId: null, appCache: [] });
     const second = await client.createApp("Roundtrip", "blank", client.createMutationContext());
     await client.seed("tracker", client.createMutationContext());
+    const task = (await client.registryTables()).find(table => table.name === "items")!;
+    const field = (name: string) => task.columns.find(column => column.name === name)!.semantic!.fieldId;
+    await client.quickCapture("items", { name: "Owned archive task", due: "2026-01-01", status: "todo" },
+      task.semantic!.tableId, client.createMutationContext(), second.selectedAppInstanceId);
+    const sourceRead = await client.dailyPresentation();
+    await client.compareAndSetDailySource(0, { schema: 1, revision: 1, profiles: [{ schema: 1,
+      profileId: `dsp_${"p".repeat(26)}`, tableId: task.semantic!.tableId, enabled: true,
+      labelFieldId: field("name"), dueFieldId: field("due"), completion: { kind: "enum", fieldId: field("status"), completeValue: "done", terminalValues: ["done"] } }] },
+      client.createMutationContext(), dailyCasReview(sourceRead));
+    const inboxRead = await client.dailyPresentation();
+    const item = inboxRead.snapshot.sources.find(source => source.sourceId === "due_record")!.page.items.find(row => row.title === "Owned archive task")!;
+    if (item.kind !== "due_record") throw new Error("Owned due item missing");
+    const dismissed = await client.dailyInboxAction({ review: dailyCasReview(inboxRead), item, action: "dismiss" }, client.createMutationContext());
+    expect(dismissed.disposition.state).toBe("dismissed");
     const fork = await client.forkApp(client.createMutationContext());
     await client.switchApp(second.selectedAppInstanceId, client.createMutationContext());
     await client.deleteApp(second.selectedAppInstanceId, client.createMutationContext());
@@ -57,6 +72,7 @@ it("recovers download records after worker loss with private authentication and 
     expect(restored.apps).toHaveLength(3); // original, independent fork, restored-as-new
     expect(restored.apps.some(app => app.id === second.selectedAppInstanceId)).toBe(false);
     expect(await client.panels()).toEqual(panels); expect(await client.history()).toEqual(history);
+    expect(Number((await client.dailyPresentation()).snapshot.basis.dispositionWatermark)).toBeGreaterThan(0);
     await reload("multi-app-roundtrip");
     expect(await client.panels()).toEqual(panels);
     await client.switchApp(first.selectedAppInstanceId, client.createMutationContext());

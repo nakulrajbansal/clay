@@ -17,6 +17,9 @@ import type {
 } from "@clay/schema/daily-home";
 import type { RegTable } from "@clay/kernel/registry";
 import type { WorkerClient } from "./worker-client";
+import type { DailyPresentationV1 } from "@clay/schema/catalog";
+import { beginDailyCas, executeDailyCas, favoriteValue, reviewedSourceStorage, dailyCasReview, executeInboxIntent } from "./daily-intent";
+import { beginPresentationIntent, cancelPresentationIntent, finishPresentationIntent, readPresentationIntent, type PresentationIntent } from "./presentation-intent";
 import "./TodayView.css";
 
 const SECTION_COPY = {
@@ -39,8 +42,8 @@ type TodayViewProps = {
   onCreateRecurring: () => void;
   automationMutationsAvailable?: boolean;
   dailyHomeMutationsAvailable?: boolean;
-  onToggleFavorite?: (tableId: string, rowId: string) => Promise<void> | void;
   onError: (message: string) => void;
+  onWrite?: (table: string) => void;
 };
 
 function minimum(count: DailyHomeSnapshot["aggregateCounts"]["renderedUnique"]): number {
@@ -123,6 +126,20 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
   const setupGate = useRef(new LatestRequestGate());
   const mutationsAvailable = props.dailyHomeMutationsAvailable === true;
   const [snapshot, setSnapshot] = useState<DailyHomeSnapshot | null>(null);
+  const [reviewed, setReviewed] = useState<DailyPresentationV1 | null>(null);
+  const [setupReviewed, setSetupReviewed] = useState<DailyPresentationV1 | null>(null);
+  const [pending, setPending] = useState<PresentationIntent[]>([]);
+  const [recoveryError, setRecoveryError] = useState("");
+  const [inbox, setInbox] = useState(false);
+  const [snoozeDates, setSnoozeDates] = useState<Record<string, string>>({});
+  const working = useRef(false);
+  const pendingChange = useRef<PresentationIntent | null>(null);
+  const loadPending = (app: string): void => {
+    try { setPending([readPresentationIntent(sessionStorage, app, "dailySource"), readPresentationIntent(sessionStorage, app, "dailyNavigation"),
+      readPresentationIntent(sessionStorage, app, "dailyInbox"), readPresentationIntent(sessionStorage, app, "dailyInboxUndo")]
+      .filter((intent): intent is PresentationIntent => intent !== null)); setRecoveryError(""); }
+    catch { setRecoveryError("Stored Daily request needs recovery; no new change can replace it."); }
+  };
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showSetup, setShowSetup] = useState(false);
@@ -197,8 +214,10 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
     setLoading(true);
     setError(null);
     try {
-      const next = await props.worker.dailyHome();
-      if (projectionGate.current.isCurrent(request)) setSnapshot(next);
+      const next = await props.worker.dailyPresentation();
+      if (projectionGate.current.isCurrent(request)) {
+        setSnapshot(next.snapshot); setReviewed(next); loadPending(next.authorityTarget.appInstanceId);
+      }
     } catch (cause) {
       if (!projectionGate.current.isCurrent(request)) return;
       const message = cause instanceof Error ? cause.message : String(cause);
@@ -212,8 +231,11 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
   const loadSetup = useCallback(async (): Promise<void> => {
     const request = setupGate.current.begin();
     try {
-      const raw = await props.worker.getSetting<unknown>(DAILY_SOURCE_LIBRARY_SETTING);
+      const read = await props.worker.dailyPresentation();
+      const raw = read.sourceLibrary;
       if (!setupGate.current.isCurrent(request)) return;
+      if (snapshot && read.authorityTarget.appInstanceId !== snapshot.basis.appInstanceId) throw new Error("Today source changed; reopen setup in the original app");
+      setSetupReviewed(read);
       try {
         const library = loadDailySourceLibrary(raw);
         setSourceLibrary(library);
@@ -226,7 +248,7 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
       if (!setupGate.current.isCurrent(request)) return;
       props.onError(cause instanceof Error ? cause.message : String(cause));
     }
-  }, [props.worker, props.onError]);
+  }, [props.worker, props.onError, snapshot?.basis.appInstanceId]);
 
   const openSetup = (): void => {
     if (!setupTableId && setupOptions[0]) {
@@ -238,7 +260,7 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
 
   const saveSetup = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault();
-    if (savingSetup || !mutationsAvailable) return;
+    if (working.current || savingSetup || !mutationsAvailable || !setupReviewed || pending.length || recoveryError) return;
     const option = setupOptions.find(candidate =>
       String(candidate.table.semantic?.tableId) === setupTableId);
     const label = option?.labels.find(candidate =>
@@ -267,9 +289,11 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
         kind: "enum", fieldId, completeValue: setupEnumValue, terminalValues: [setupEnumValue],
       };
     }
-    setSavingSetup(true);
+    working.current = true; setSavingSetup(true);
     try {
-      const library = await upsertReviewedDailySource(props.worker, {
+      const library = await upsertReviewedDailySource(reviewedSourceStorage(sessionStorage, props.worker, setupReviewed, intent => {
+        pendingChange.current = intent; loadPending(intent.appInstanceId);
+      }), {
         tableId: setupTableId,
         labelFieldId: setupLabelId,
         dueFieldId: setupDueId,
@@ -281,36 +305,96 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
       setSourceMalformed(false);
       setShowSetup(false);
       await refresh();
+      finishChange();
     } catch (cause) {
       props.onError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setSavingSetup(false);
+      working.current = false; setSavingSetup(false);
     }
   };
 
   const removeSource = async (profileId: string): Promise<void> => {
-    if (savingSetup || !mutationsAvailable) return;
-    setSavingSetup(true);
+    if (working.current || savingSetup || !mutationsAvailable || !setupReviewed || pending.length || recoveryError) return;
+    working.current = true; setSavingSetup(true);
     try {
-      const library = await removeReviewedDailySource(props.worker, profileId);
+      const library = await removeReviewedDailySource(reviewedSourceStorage(sessionStorage, props.worker, setupReviewed, intent => {
+        pendingChange.current = intent; loadPending(intent.appInstanceId);
+      }), profileId);
       setSourceLibrary(library);
       await refresh();
+      await loadSetup(); finishChange();
     } catch (cause) {
       props.onError(cause instanceof Error ? cause.message : String(cause));
-    } finally { setSavingSetup(false); }
+    } finally { working.current = false; setSavingSetup(false); }
   };
 
   const resetSources = async (): Promise<void> => {
-    if (savingSetup || !mutationsAvailable) return;
-    setSavingSetup(true);
+    if (working.current || savingSetup || !mutationsAvailable || !setupReviewed || pending.length || recoveryError) return;
+    working.current = true; setSavingSetup(true);
     try {
-      const library = await resetDailySourceLibrary(props.worker);
+      const library = await resetDailySourceLibrary(reviewedSourceStorage(sessionStorage, props.worker, setupReviewed, intent => {
+        pendingChange.current = intent; loadPending(intent.appInstanceId);
+      }));
       setSourceLibrary(library);
       setSourceMalformed(false);
       await refresh();
+      await loadSetup(); finishChange();
     } catch (cause) {
       props.onError(cause instanceof Error ? cause.message : String(cause));
-    } finally { setSavingSetup(false); }
+    } finally { working.current = false; setSavingSetup(false); }
+  };
+
+  const finishChange = (): void => {
+    const intent = pendingChange.current;
+    if (intent) {
+      finishPresentationIntent(sessionStorage, intent.appInstanceId, intent.slot, intent.requestId);
+      pendingChange.current = null; loadPending(intent.appInstanceId);
+    }
+  };
+  const recoverChange = async (intent: PresentationIntent, cancel: boolean): Promise<void> => {
+    if (working.current || intent.appInstanceId !== snapshot?.basis.appInstanceId) return;
+    working.current = true; setSavingSetup(true);
+    try {
+      if (cancel) {
+        if (!await cancelPresentationIntent(sessionStorage, props.worker, intent))
+          throw new Error("Change already recorded. Retry the original change to read its outcome.");
+        if (pendingChange.current?.requestId === intent.requestId) pendingChange.current = null;
+      } else {
+        if (intent.slot === "dailyInbox" || intent.slot === "dailyInboxUndo") {
+          await executeInboxIntent(sessionStorage, props.worker, intent);
+          reportInboxWrite(intent);
+        } else await executeDailyCas(props.worker, intent);
+        pendingChange.current = intent;
+      }
+      await refresh(); if (showSetup) await loadSetup();
+      if (!cancel) finishChange();
+      loadPending(intent.appInstanceId);
+    } catch (cause) { props.onError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { working.current = false; setSavingSetup(false); }
+  };
+
+  const reportInboxWrite = (intent: PresentationIntent): void => {
+    const payload = intent.slot === "dailyInboxUndo" ? intent.payload.actionPayload as Record<string, unknown> : intent.payload;
+    const item = payload.item as DailyHomeItem;
+    if (item.route.kind === "record") {
+      const table = tableNames.get(item.route.tableId);
+      if (table) props.onWrite?.(table);
+    }
+  };
+  const actOnInbox = async (item: DailyHomeItem, action: "complete" | "snooze" | "dismiss"): Promise<void> => {
+    if (!reviewed || working.current || pending.length || recoveryError || !mutationsAvailable) return;
+    working.current = true; setSavingSetup(true);
+    try {
+      const tomorrow = new Date(Date.parse(`${reviewed.snapshot.basis.localDate}T00:00:00.000Z`) + 86_400_000).toISOString().slice(0, 10);
+      const intent = beginPresentationIntent(sessionStorage, reviewed.authorityTarget.appInstanceId, "dailyInbox", "daily.inbox",
+        { review: dailyCasReview(reviewed), item, action, ...(action === "snooze" ? { untilLocalDate: snoozeDates[item.sourceKey] ?? tomorrow } : {}) },
+        () => props.worker.createMutationContext());
+      pendingChange.current = intent; loadPending(intent.appInstanceId);
+      await executeInboxIntent(sessionStorage, props.worker, intent);
+      loadPending(intent.appInstanceId); reportInboxWrite(intent);
+      await refresh(); finishChange();
+    } catch (cause) { props.onError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { working.current = false; setSavingSetup(false); }
   };
 
   useEffect(() => {
@@ -386,13 +470,19 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
     : undefined;
 
   const toggleFavorite = async (item: DailyHomeItem): Promise<void> => {
-    if (item.route.kind !== "record" || !props.onToggleFavorite || !mutationsAvailable) return;
+    if (item.route.kind !== "record" || !reviewed || !mutationsAvailable || working.current || pending.length || recoveryError) return;
+    working.current = true; setSavingSetup(true);
     try {
-      await props.onToggleFavorite(item.route.tableId, item.route.rowId);
+      const value = favoriteValue(reviewed, item.route.tableId, item.route.rowId, !favoriteTargets.has(recordTarget(item)!));
+      const intent = beginDailyCas(sessionStorage, props.worker, reviewed, "dailyNavigation", value.revision - 1, value);
+      pendingChange.current = intent; loadPending(intent.appInstanceId);
+      const result = await executeDailyCas(props.worker, intent);
+      if (!result.ok) throw new Error("Reviewed navigation CAS did not win; recover its original request");
       await refresh();
+      finishChange();
     } catch (cause) {
       props.onError(cause instanceof Error ? cause.message : String(cause));
-    }
+    } finally { working.current = false; setSavingSetup(false); }
   };
   const cards = (items: DailyHomeItem[]): React.JSX.Element[] => items.map(item => {
     const target = recordTarget(item);
@@ -410,18 +500,40 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
         </span>
         <span className="today-item-open" aria-hidden="true">›</span>
       </button>
-      {item.route.kind === "record" && props.onToggleFavorite && mutationsAvailable ? <button className="today-pin"
+      {item.route.kind === "record" && mutationsAvailable ? <button className="today-pin" disabled={savingSetup || !!pending.length || !!recoveryError}
         aria-label={`${favorite ? "Unpin" : "Pin"} ${item.title}`}
         title={favorite ? "Remove from favorites" : "Add to favorites"}
         onClick={() => void toggleFavorite(item)}>{favorite ? "★" : "☆"}</button> : null}
+      {(item.kind === "due_record" || item.kind === "automation_notification") && mutationsAvailable ? <div className="today-inbox-actions">
+        {item.actions.includes("complete") ? <button disabled={savingSetup || !!pending.length || !!recoveryError} onClick={() => void actOnInbox(item, "complete")}>Complete</button> : null}
+        {item.actions.includes("snooze") ? <>
+          <input type="date" aria-label={`Snooze ${item.title} until local date`} disabled={savingSetup || !!pending.length || !!recoveryError}
+            value={snoozeDates[item.sourceKey] ?? new Date(Date.parse(`${snapshot.basis.localDate}T00:00:00.000Z`) + 86_400_000).toISOString().slice(0, 10)}
+            onChange={event => setSnoozeDates(value => ({ ...value, [item.sourceKey]: event.target.value }))} />
+          <button disabled={savingSetup || !!pending.length || !!recoveryError} onClick={() => void actOnInbox(item, "snooze")}>Snooze</button>
+        </> : null}
+        {item.actions.includes("dismiss") ? <button disabled={savingSetup || !!pending.length || !!recoveryError} onClick={() => void actOnInbox(item, "dismiss")}>Dismiss</button> : null}
+      </div> : null}
     </article>;
   });
 
   return <main className="today-home" aria-labelledby="today-title">
+    {recoveryError ? <p role="alert">{recoveryError}</p> : null}
+    {pending.map(intent => intent.slot === "dailyInboxUndo" ? <section key={intent.requestId} aria-label="Inbox Undo recovery">
+      <p>Undo this Inbox change while its original app is unchanged. Keep closes the pending Undo without reverting the change.</p>
+      <button disabled={savingSetup || pending.some(row => row.slot === "dailyInbox")} onClick={() => void recoverChange(intent, false)}>Undo Inbox change</button>
+      <button disabled={savingSetup || pending.some(row => row.slot === "dailyInbox")} onClick={() => void recoverChange(intent, true)}>Keep Inbox change</button>
+    </section> : <section key={intent.requestId} aria-label="Daily change recovery">
+      <p>A {intent.slot === "dailySource" ? "source setup" : "navigation"} change needs reconciliation. Its original app, projection and desired value were kept.</p>
+      <button disabled={savingSetup} onClick={() => void recoverChange(intent, false)}>Retry original Daily change</button>
+      <button disabled={savingSetup} onClick={() => void recoverChange(intent, true)}>Cancel original Daily change</button>
+    </section>)}
     <header className="today-hero">
-      <div><span className="today-kicker">Your local daily view</span><h1 id="today-title">Today</h1>
+      <div><span className="today-kicker">Your local daily view</span><h1 id="today-title">{inbox ? "Inbox" : "Today"}</h1>
         <p>{snapshot.basis.localDate} · projected live from canonical records</p></div>
       <div className="today-actions">
+        <button aria-pressed={!inbox} onClick={() => setInbox(false)}>Today</button>
+        <button aria-pressed={inbox} onClick={() => setInbox(true)}>Inbox</button>
         <button className="today-secondary" onClick={props.onCreateRecurring}
           disabled={props.automationMutationsAvailable === false}
           title={props.automationMutationsAvailable === false
@@ -453,7 +565,7 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
         <strong>Today source settings are malformed.</strong>
         <p>Reset only the Today source list; canonical records are not changed.</p>
         <button type="button" aria-label="Reset Today sources"
-          disabled={savingSetup || !mutationsAvailable}
+          disabled={savingSetup || !mutationsAvailable || !!pending.length || !!recoveryError}
           onClick={() => void resetSources()}>Reset Today sources</button>
       </div> : null}
       {sourceLibrary && sourceLibrary.profiles.length > 0 ? <section className="today-configured-sources"
@@ -482,7 +594,7 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
                 aria-label={`Repair schema for ${label}`}
                 onClick={props.onSetup}>Open Data to repair schema</button> : null}
               <button type="button" className="link danger"
-                aria-label={`Remove source ${label}`} disabled={savingSetup || !mutationsAvailable}
+                aria-label={`Remove source ${label}`} disabled={savingSetup || !mutationsAvailable || !!pending.length || !!recoveryError}
                 title={!mutationsAvailable
                   ? "Unavailable until Daily Home changes are certified" : undefined}
                 onClick={() => void removeSource(profile.profileId)}>Remove</button>
@@ -554,7 +666,7 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
         <p>Clay includes records due today or earlier and excludes only the completion rule reviewed here.</p>
         <div className="today-source-actions">
           <button className="today-primary" type="submit"
-            disabled={savingSetup || !mutationsAvailable}>
+            disabled={savingSetup || !mutationsAvailable || !setupReviewed || !!pending.length || !!recoveryError}>
             {savingSetup ? "Saving…" : mutationsAvailable ? "Use this source" : "Changes unavailable"}
           </button>
           <button className="today-secondary" type="button" disabled={savingSetup}
@@ -567,6 +679,15 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
     </section> : null}
 
     <div className="today-grid">
+      {inbox ? <section className="today-section" aria-label="Local Inbox">
+        <header><h2>Local Inbox</h2></header>
+        <p>Due work and local automation notices. Snooze uses this app’s calendar; no off-device reminder delivery is implied.</p>
+        {snapshot.sources.filter(source => source.sourceId === "due_record" || source.sourceId === "automation_notification").map(source => <section key={source.sourceId}>
+          <h3>{source.sourceId === "due_record" ? "Due records" : "Automation notices"} · {countLabel(source.page.counts.renderedUnique)}</h3>
+          <div className="today-list">{cards(source.page.items)}</div>
+          {!source.page.items.length ? <p>{source.page.counts.renderedUnique.kind === "exact" ? "No current items in this source." : "This source is partial or unavailable; more work may exist."}</p> : null}
+        </section>)}
+      </section> : <>
       <section className="today-section today-section-due_today" aria-labelledby="today-due">
         <header><h2 id="today-due">Due today &amp; overdue</h2>
           <span>{countLabel(due.page.counts.renderedUnique)}</span></header>
@@ -587,6 +708,7 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
               ? copy.empty : `${copy.title} results are partial; more work may exist.`}</p>}</div>
         </section>;
       })}
+      </>}
     </div>
     {snapshot.aggregateCounts.renderedUnique.kind === "partial" ? <p className="today-completeness">
       Counts ending in + are partial. Clay never calls a loaded page “all”.

@@ -1,5 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { WorkerClient } from "../src/app/worker-client";
+import { beginDailyCas, executeDailyCas, dailyCasReview, recentValue, favoriteValue, executeInboxIntent } from "../src/app/daily-intent";
+import { beginPresentationIntent, finishPresentationIntent, readPresentationIntent } from "../src/app/presentation-intent";
 import { ClayStore, deriveInverse, openMemoryDriver, type ForwardOpT } from "../../kernel/src/index";
 import { ProductionStoreAuthority } from "../../kernel/src/production-authority";
 import { inspectAuthenticatedArchiveV5Header } from "../../kernel/src/archive-authentication";
@@ -20,14 +22,14 @@ it("executes Daily Home and relation Preview/Keep/replay through the production 
     { op: "create_table", table: "people", columns: [{ name: "name", type: "text", required: true }] },
     { op: "create_table", table: "tasks", columns: [
       { name: "title", type: "text", required: true }, { name: "person", type: "text", required: false },
-      { name: "due", type: "date", required: false },
+      { name: "due", type: "date", required: false }, { name: "done", type: "boolean", required: false },
     ] },
   ];
   store.commit({ intent: "Fixture", summary: "Fixture", migration: {
     operations, inverse: deriveInverse(operations, store.registrySnapshot()),
   } });
   store.insert("people", { name: "Alex" });
-  const existing = store.insert("tasks", { title: "Call", person: "Alex", due: "2026-01-01" });
+  const existing = store.insert("tasks", { title: "Call", person: "Alex", due: "2026-01-01", done: false });
   store.recordSampleRowProvenance([]);
   const id = (prefix: string, char: string) => `${prefix}_${char.repeat(26)}`;
   const authority = ProductionStoreAuthority.adoptLegacy(driver, {
@@ -66,17 +68,29 @@ it("executes Daily Home and relation Preview/Keep/replay through the production 
     await client.initializeDailyHomeTimeZone("America/New_York", client.createMutationContext());
     const library = { schema: 1 as const, revision: 1, profiles: [{ schema: 1 as const, enabled: true,
       profileId: id("dsp", "p"), tableId, labelFieldId: field("title"), dueFieldId: field("due"),
-      labelSnapshot: "Tasks", dueLabelSnapshot: "Due", completion: { kind: "none" as const } }] };
-    expect(await client.compareAndSetDailySource(0, library, client.createMutationContext())).toMatchObject({ ok: true });
-    await client.rememberDailyRecordOpened(tableId, String(existing.id));
-    await client.toggleDailyFavorite(tableId, String(existing.id));
+      labelSnapshot: "Tasks", dueLabelSnapshot: "Due", completion: { kind: "boolean" as const, fieldId: field("done"), completeValue: true as const } }] };
+    const cacheRows = new Map<string, string>(); const cache = { getItem: (key: string) => cacheRows.get(key) ?? null,
+      setItem: (key: string, value: string) => { cacheRows.set(key, value); }, removeItem: (key: string) => { cacheRows.delete(key); } };
+    const source = beginDailyCas(cache, client, await client.dailyPresentation(), "dailySource", 0, library);
+    drop = "dailyHomeSourceCompareAndSet";
+    const lostSource = executeDailyCas(client, source).catch(error => error);
+    await vi.waitFor(() => expect(dropped).toBe(true));
+    client = new WorkerClient(transport as unknown as Worker);
+    expect(await lostSource).toMatchObject({ message: expect.stringContaining("outcome is unknown") });
+    await client.boot({ requestedAppId: null, appCache: [] });
+    expect(await executeDailyCas(client, readPresentationIntent(cache, id("app", "a"), "dailySource")!)).toMatchObject({ ok: true });
+    finishPresentationIntent(cache, source.appInstanceId, source.slot, source.requestId);
+    let navRead = await client.dailyPresentation();
+    await client.compareAndSetDailyNavigation(0, recentValue(navRead, tableId, String(existing.id)), client.createMutationContext(), dailyCasReview(navRead));
+    navRead = await client.dailyPresentation();
+    await client.compareAndSetDailyNavigation(1, favoriteValue(navRead, tableId, String(existing.id), true), client.createMutationContext(), dailyCasReview(navRead));
     const home = await client.dailyHome();
     expect(JSON.stringify(home)).toContain("Call");
     expect(await client.getSetting("daily_time_zone_v1")).toBe("America/New_York");
     expect(await client.getSetting("daily_navigation_v1")).toMatchObject({ revision: 2 });
 
     const capture = client.createMutationContext();
-    drop = "dailyHomeQuickCapture";
+    drop = "dailyHomeQuickCapture"; dropped = false;
     const lostCapture = client.quickCapture("tasks", { title: "Captured" }, tableId, capture, id("app", "a")).catch(error => error);
     await vi.waitFor(() => expect(dropped).toBe(true));
     client = new WorkerClient(transport as unknown as Worker);
@@ -85,8 +99,19 @@ it("executes Daily Home and relation Preview/Keep/replay through the production 
     const receipt = await client.quickCapture("tasks", { title: "Captured" }, tableId, capture, id("app", "a"));
     expect(authority.query({ from: "tasks" })).toHaveLength(2);
     const undo = client.createMutationContext();
-    expect(await client.undoQuickCapture(receipt.id, undo)).toMatchObject({ undone: true });
-    expect(await client.undoQuickCapture(receipt.id, undo)).toMatchObject({ undone: true });
+    const capturePayload = { appInstanceId: id("app", "a"), table: "tasks", row: { title: "Captured" }, tableId };
+    const original = await client.mutationOutcome("daily.capture", capturePayload, capture);
+    if (original.status !== "recorded") throw new Error("Capture receipt missing");
+    const undoPayload = { batchId: receipt.id, captureRequestId: capture.requestId, capturePayload, authorityTarget: original.target };
+    drop = "dailyHomeUndoCapture"; dropped = false;
+    const lostUndo = client.undoQuickCapture(undoPayload, undo).catch(error => error);
+    await vi.waitFor(() => expect(dropped).toBe(true));
+    client = new WorkerClient(transport as unknown as Worker);
+    expect(await lostUndo).toMatchObject({ message: expect.stringContaining("outcome is unknown") });
+    await client.boot({ requestedAppId: null, appCache: [] });
+    expect(await client.undoQuickCapture(undoPayload, undo)).toMatchObject({ undone: true });
+    expect(await client.mutationOutcome("daily.undoCapture", undoPayload, undo)).toMatchObject({ status: "recorded", current: true });
+    await expect(client.undoQuickCapture({ ...undoPayload, authorityTarget: { ...original.target, appInstanceId: id("app", "z") } }, client.createMutationContext())).rejects.toThrow();
     expect(authority.query({ from: "tasks" })).toHaveLength(1);
     const capturedOutcome = await client.mutationOutcome("daily.capture", { appInstanceId: id("app", "a"), table: "tasks", row: { title: "Captured" }, tableId }, capture);
     expect(capturedOutcome).toMatchObject({ status: "recorded", current: false, result: { id: receipt.id } });
@@ -105,6 +130,32 @@ it("executes Daily Home and relation Preview/Keep/replay through the production 
     await expect(client.quickCapture("tasks", cancellationPayload.row, tableId, cancelled, id("app", "a"))).rejects.toThrow(/cancelled/);
     expect(await client.mutationOutcome("daily.capture", cancellationPayload, cancelled)).toEqual({ status: "cancelled" });
     expect(authority.query({ from: "tasks" })).toHaveLength(1);
+
+    const inboxRead = await client.dailyPresentation();
+    const inboxItem = inboxRead.snapshot.sources.find(source => source.sourceId === "due_record")!.page.items[0]!;
+    const inboxIntent = beginPresentationIntent(cache, id("app", "a"), "dailyInbox", "daily.inbox",
+      { review: dailyCasReview(inboxRead), item: inboxItem, action: "complete" }, () => client.createMutationContext());
+    drop = "dailyInboxAction"; dropped = false;
+    const lostComplete = executeInboxIntent(cache, client, inboxIntent).catch(error => error);
+    await vi.waitFor(() => expect(dropped).toBe(true));
+    client = new WorkerClient(transport as unknown as Worker);
+    expect(await lostComplete).toMatchObject({ message: expect.stringContaining("outcome is unknown") });
+    await client.boot({ requestedAppId: null, appCache: [] });
+    await executeInboxIntent(cache, client, readPresentationIntent(cache, id("app", "a"), "dailyInbox")!);
+    expect(authority.query({ from: "tasks" })[0]?.done).toBe(true);
+    const inboxUndo = readPresentationIntent(cache, id("app", "a"), "dailyInboxUndo")!;
+    finishPresentationIntent(cache, id("app", "a"), "dailyInbox", inboxIntent.requestId);
+    drop = "dailyInboxUndo"; dropped = false;
+    const lostInboxUndo = executeInboxIntent(cache, client, inboxUndo).catch(error => error);
+    await vi.waitFor(() => expect(dropped).toBe(true));
+    client = new WorkerClient(transport as unknown as Worker);
+    expect(await lostInboxUndo).toMatchObject({ message: expect.stringContaining("outcome is unknown") });
+    await client.boot({ requestedAppId: null, appCache: [] });
+    expect(await executeInboxIntent(cache, client, readPresentationIntent(cache, id("app", "a"), "dailyInboxUndo")!)).toMatchObject({ undone: true });
+    finishPresentationIntent(cache, id("app", "a"), "dailyInboxUndo", inboxUndo.requestId);
+    expect(authority.query({ from: "tasks" })[0]?.done).toBe(false);
+    expect(requests.filter(request => request.op === "dailyInboxAction")).toHaveLength(1);
+    expect(requests.filter(request => request.op === "dailyInboxUndo")).toHaveLength(1);
 
     const preview = await client.previewRelationConversion({ sourceTable: "tasks", sourceField: "person", targetTable: "people", displayField: "name" });
     expect(preview.authorityTarget).toEqual(authority.inspectAuthority().target);

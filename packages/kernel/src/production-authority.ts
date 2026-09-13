@@ -20,6 +20,7 @@ import {
   browserDurableFileNames,
   openBrowserCatalogProbe,
   openBrowserProductionTarget,
+  automationPhysicalTransactionCapability,
   type DbDriver,
 } from "./db";
 import { DeviceCatalog, type LegacyBootstrapEntry } from "./device-catalog";
@@ -1464,27 +1465,14 @@ export class ProductionStoreAuthority {
   }
 
   async dailyHome() {
+    return (await this.dailyPresentation()).snapshot;
+  }
+
+  async dailyPresentation() {
     return this.#coordinator.serializeRead(async () => {
-      const { projectDailyHome } = await import("./daily-home-projection");
+      const { productionDailyPresentation } = await import("./production-daily-projection");
       const target = this.inspectAuthority().target;
-      const timeZone = this.#reader.getSetting<unknown>("daily_time_zone_v1");
-      if (typeof timeZone !== "string") throw invalid("Daily Home calendar is not initialized");
-      const registry = this.activeSemanticRegistry();
-      // The projection's legacy-shaped read adapter is derived only from the
-      // validated authority ledger. A legacy cache is never trusted as evidence.
-      let samples: { format: 1; tables: Record<string, readonly string[]> } | undefined;
-      try {
-        const { readSampleRowProvenance } = await import("./production-samples");
-        samples = { format: 1, tables: Object.fromEntries(Object.entries(readSampleRowProvenance(this.#store))
-          .filter(([table]) => registry.has(table))) };
-      } catch { /* The projection truthfully reports an invalid/partial source. */ }
-      return projectDailyHome({ ...this.#reader, registrySnapshot: () => registry,
-        getSetting: <T>(key: string): T | undefined => key === "sample_rows"
-          ? samples as T | undefined : this.#reader.getSetting<T>(key),
-      }, {
-        appInstanceId: target.appInstanceId, activeGenerationId: target.activeGenerationId,
-        now: new Date(Date.now()).toISOString(), timeZone,
-      });
+      return productionDailyPresentation(this.#store, target, new Date(Date.now()).toISOString());
     });
   }
 
@@ -1602,6 +1590,19 @@ export class ProductionStoreAuthority {
   mutationOutcome(input: unknown) { return this.#coordinator.mutationOutcome(input); }
   cancelPresentation(input: unknown) { return this.#coordinator.cancelPresentation(input); }
   presentationSource() { return this.#coordinator.serializeRead(async () => this.inspectAuthority().target); }
+  automationPresentation() {
+    return this.#coordinator.serializeRead(async () => {
+      const reader = this.readStore();
+      const capability = automationPhysicalTransactionCapability(this.#driver);
+      const target = this.currentAutomationTarget();
+      const available = capability.kind === "test_memory" && capability.releaseCertificate;
+      return { authorityTarget: this.inspectAuthority().target,
+        availability: { available, reason: available ? null : "physical_transaction_uncertified" as const },
+        rules: reader.listAutomations(target), runs: reader.automationRuns(target, undefined, 100),
+        notifications: reader.listNotifications(100), recipes: reader.automationRecipes(),
+        runtime: reader.automationRuntimeStatus(target), overview: reader.automationRuntimeOverview(target, 100), trace: reader.semanticSchemaTrace() };
+    });
+  }
 
   manualBackupDownloadOutcome(record: unknown, requestId: string) {
     return this.#coordinator.serializeRead(async () => {

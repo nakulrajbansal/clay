@@ -1,4 +1,4 @@
-import { PresentationIntentV1 } from "@clay/schema/catalog";
+import { DailyCaptureUndoPayloadV1, PresentationIntentV1 } from "@clay/schema/catalog";
 import type { WorkerMutationContext } from "./worker-client";
 import type { WorkerClient } from "./worker-client";
 type Storage = Pick<globalThis.Storage, "getItem" | "setItem" | "removeItem">;
@@ -58,4 +58,26 @@ export async function reconcilePresentation<T>(worker: Pick<WorkerClient, "mutat
     throw new Error("This request is terminal without effects. Cancel the pending request before editing or re-previewing.");
   if (outcome.status !== "not_invoked") throw new Error("Unrecognized recovery outcome; request kept");
   return invoke();
+}
+
+export async function retainCaptureUndo(storage: Storage, worker: Pick<WorkerClient, "mutationOutcome" | "createMutationContext">,
+  capture: PresentationIntent, batchId: string): Promise<PresentationIntent> {
+  if (capture.slot !== "capture") throw new Error("Original capture intent required");
+  const previous = readPresentationIntent(storage, capture.appInstanceId, "captureUndo");
+  if (previous) {
+    const payload = DailyCaptureUndoPayloadV1.parse(previous.payload);
+    if (payload.captureRequestId !== capture.requestId || payload.batchId !== batchId
+        || JSON.stringify(payload.capturePayload) !== JSON.stringify(capture.payload))
+      throw new Error("Previous capture Undo must be reconciled before another capture");
+    return previous;
+  }
+  // Never obtain the current target after a response loss and rebase Undo onto it.
+  // Only the authority's exact original receipt can supply this result fingerprint.
+  const outcome = await worker.mutationOutcome(capture.route, capture.payload, { requestId: capture.requestId });
+  if (outcome.status !== "recorded" || !outcome.result || typeof outcome.result !== "object"
+      || Array.isArray(outcome.result) || outcome.result.id !== batchId)
+    throw new Error("Capture receipt needs reconciliation before presenting Undo; original request kept");
+  return beginPresentationIntent(storage, capture.appInstanceId, "captureUndo", "daily.undoCapture",
+    { batchId, captureRequestId: capture.requestId, capturePayload: capture.payload, authorityTarget: outcome.target },
+    () => worker.createMutationContext());
 }

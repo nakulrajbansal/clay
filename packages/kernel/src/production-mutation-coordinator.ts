@@ -2,6 +2,7 @@ import { OperationId, RequestId } from "@clay/schema";
 import {
   TargetEvidenceV1,
   RecoverablePresentationRouteV1,
+  AutomationCommandPayloadV1,
   type PresentationMutationOutcomeV1,
   type ProductionRequestReceiptV1 as ProductionRequestReceipt,
   type TargetEvidenceV1 as TargetEvidence,
@@ -42,6 +43,7 @@ import {
 } from "./first-success";
 import type { LiveWriteAuthority } from "./live-write-guard";
 import { executeAutomationObserverAuthorityRoute } from "./production-automation-observer-routes";
+import { assertClosedAutomationDraftInput } from "./production-automation-input";
 import {
   copyPrivateMetricOperationalState,
   executePrivateMetricAuthorityRoute,
@@ -107,7 +109,7 @@ import {
   executeCapturedSampleRemoval,
   type CapturedSampleFill,
 } from "./production-samples";
-import { stableJson } from "./stable-json";
+import { productionJsonRequestFingerprint, originalPresentationResult } from "./production-presentation-proof";
 import {
   captureStrictJson,
   UTF8_ENCODER,
@@ -218,6 +220,7 @@ type CapturedProductionMutation = CapturedCoreMutation | Readonly<{
     payload: Readonly<{ action: "open"; table: string; rowId: string }>;
   }
   | { route: "upsertAutomation"; payload: Readonly<{ input: Readonly<JsonRecord> }> }
+  | { route: "automation.command"; payload: AutomationCommandPayloadV1 }
   | {
     route: "saveAutomationDraft";
     payload: Readonly<{ input: Readonly<JsonRecord>; expectedRevision: number | null }>;
@@ -664,6 +667,13 @@ function captureMutation(input: unknown): CapturedProductionMutation {
     const done = (captured: unknown): CapturedProductionMutation =>
       capturedProductionMutation(requestId, route, captured);
     switch (route) {
+      case "automation.command": {
+        const captured = AutomationCommandPayloadV1.parse(captureJsonRecord(payload));
+        // The closed inner route enumeration excludes this envelope.
+        const inner = captureMutation({ requestId, route: captured.command.route, payload: captured.command.payload });
+        if (inner.route === "saveAutomationDraft") assertClosedAutomationDraftInput(inner.payload.input);
+        return done(captureJsonRecord({ ...captured, command: { route: inner.route, payload: inner.payload } }));
+      }
       case "planner.begin": return done(capturePlannerAttemptStart(payload));
       case "planner.finalize": return done(capturePlannerAttemptFinalization(payload));
       case "planner.discard":
@@ -679,6 +689,8 @@ function captureMutation(input: unknown): CapturedProductionMutation {
       case "daily.timeZone":
       case "daily.capture":
       case "daily.undoCapture":
+      case "daily.inbox":
+      case "daily.undoInbox":
       case "timeline.makeLatest":
       case "panel.revert":
       case "panel.rename":
@@ -942,19 +954,7 @@ function requestFingerprint(expected: TargetEvidence, request: CapturedProductio
       },
     }
     : request as unknown as JsonValue;
-  const payload: JsonValue = {
-    schema: 1,
-    expectedTarget: {
-      appInstanceId: expected.appInstanceId,
-      activeGenerationId: expected.activeGenerationId,
-      lineageEpoch: expected.lineageEpoch,
-      protectionRevision: expected.protectionRevision,
-      digestSchema: expected.digestSchema,
-      stateSha256: expected.stateSha256,
-    },
-    request: fingerprintRequest,
-  };
-  return `sha256:${sha256HexSync(new TextEncoder().encode(stableJson(payload)))}`;
+  return productionJsonRequestFingerprint(expected, fingerprintRequest);
 }
 
 type AuthorityIdPrefix = "app" | "gen" | "ns" | "op" | "rel" | "req";
@@ -1121,9 +1121,16 @@ function executeCapturedMutation(
 ): CapturedMutationExecution {
   if (request.route === "archive.restore.samples" || request.route === "app.fork.samples")
     throw invalid("sample re-attestation requires the fresh-install capability");
+  if (request.route === "automation.command") {
+    if (!sameTarget(request.payload.authorityTarget, expectedTarget))
+      throw invalid("Reviewed automation source changed; reconcile the original request before reviewing again");
+    return executeCapturedMutation(store, captureMutation({ requestId: request.requestId,
+      route: request.payload.command.route, payload: request.payload.command.payload }),
+      executionInstant, operationId, expectedTarget, transactionCapability, driver);
+  }
   if (isCapturedCoreMutation(request))
     return capturedExecution(captureJsonValue(
-      executeCapturedCoreMutation(store, request, expectedTarget, driver), new WeakSet(),
+      executeCapturedCoreMutation(store, request, expectedTarget, driver, executionInstant ?? undefined), new WeakSet(),
     ));
   switch (request.route) {
     case "store.insert":
@@ -1728,14 +1735,27 @@ export class ProductionMutationCoordinator {
    * ID even if its non-cancelling browser timeout can still deliver it later. */
   cancelPresentation(input: unknown): Promise<PresentationMutationOutcomeV1> {
     const captured = captureMutation(input);
-    if (captured.route !== "daily.capture" && captured.route !== "schema.convertTextToRelation")
-      throw invalid("Only a bound Capture or conversion Keep can be cancelled here");
+    if (captured.route !== "daily.capture" && captured.route !== "schema.convertTextToRelation"
+        && captured.route !== "daily.undoCapture" && captured.route !== "schema.undoRelationConversion"
+        && captured.route !== "daily.source" && captured.route !== "daily.navigation"
+        && captured.route !== "daily.inbox" && captured.route !== "daily.undoInbox"
+        && captured.route !== "automation.command")
+      throw invalid("Only explicitly enumerated source-bound presentation commands can be cancelled here");
     return this.serializeRead(async () => {
       this.#ensureWriteFence();
-      const source = captured.route === "daily.capture" ? captured.payload.appInstanceId : captured.payload.authorityTarget.appInstanceId;
-      if (source !== this.#target.appInstanceId) throw invalid("Cancellation belongs to another app");
       const outcome = this.#presentationOutcome(captured);
       if (outcome.status !== "not_invoked") return outcome;
+      const source = captured.route === "daily.source" || captured.route === "daily.navigation" || captured.route === "daily.inbox"
+        ? captured.payload.review.authorityTarget.appInstanceId
+        : captured.route === "daily.capture" ? captured.payload.appInstanceId
+        : captured.route === "schema.undoRelationConversion" ? originalPresentationResult(this.#driver, this.#target,
+          captured.payload.conversionRequestId, "schema.convertTextToRelation").target.appInstanceId
+        : captured.payload.authorityTarget.appInstanceId;
+      if (source !== this.#target.appInstanceId) throw invalid("Cancellation belongs to another app");
+      if (captured.route === "daily.undoCapture") originalPresentationResult(this.#driver, this.#target,
+        captured.payload.captureRequestId, "daily.capture", captured.payload.capturePayload);
+      if (captured.route === "daily.undoInbox") originalPresentationResult(this.#driver, this.#target,
+        captured.payload.actionRequestId, "daily.inbox", captured.payload.actionPayload);
       this.#executeNoOp(captured, this.#target, this.#catalogGeneration, { kind: "clay-presentation-cancelled-v1" });
       const readback = this.#presentationOutcome(captured);
       if (readback.status !== "cancelled") throw invalid("Presentation cancellation failed terminal readback");
@@ -1957,6 +1977,8 @@ export class ProductionMutationCoordinator {
     this.#supersedeFenceForTest();
     this.#ensureWriteFence();
     const executionInstant = request.route === "starter.seed"
+        || request.route.startsWith("daily.")
+        || request.route === "automation.command"
         || request.route === "attachment.purge"
         || request.route === "saveAutomationDraft"
         || request.route === "saveAutomationRecipeDraft"

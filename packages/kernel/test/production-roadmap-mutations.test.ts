@@ -60,7 +60,10 @@ it("previews, keeps, replays and rewinds source-bound text conversion through au
 
 it("initializes a durable timezone, validates source selection, and uses navigation CAS", async () => {
   const { authority, row } = await fixture();
-  const mutate = (route: string, payload: unknown) => authority.executeMutation({ requestId: authority.createRequestId(), route, payload });
+  const mutate = (route: string, payload: unknown) => route === "daily.source" || route === "daily.navigation"
+    ? authority.dailyPresentation().then(read => authority.executeMutation({ requestId: authority.createRequestId(), route,
+      payload: { ...(payload as object), review: { authorityTarget: read.authorityTarget, basis: read.snapshot.basis, snapshotDigest: read.snapshot.snapshotDigest } } }))
+    : authority.executeMutation({ requestId: authority.createRequestId(), route, payload });
   try {
     const zoneRequest = { requestId: authority.createRequestId(), route: "daily.timeZone", payload: { timeZone: "America/New_York" } };
     expect((await authority.executeMutation(zoneRequest)).result).toBe("America/New_York");
@@ -120,13 +123,16 @@ it("captures once through authority and bounds Undo to the unchanged captured re
     expect((await authority.executeMutation(request)).replayed).toBe(true);
     expect(authority.query({ from: "tasks" })).toHaveLength(2);
     expect(authority.readSetting("quick_capture_last_table_v1")).toBe(tableId);
-    const undo = { requestId: authority.createRequestId(), route: "daily.undoCapture", payload: { batchId: receipt.id } };
+    const undo = { requestId: authority.createRequestId(), route: "daily.undoCapture", payload: { batchId: receipt.id,
+      captureRequestId: request.requestId, capturePayload: request.payload, authorityTarget: authority.inspectAuthority().target } };
     expect((await authority.executeMutation(undo)).result).toMatchObject({ undone: true });
     expect((await authority.executeMutation(undo)).replayed).toBe(true);
     expect(authority.query({ from: "tasks" })).toHaveLength(1);
-    const second = (await authority.executeMutation({ ...request, requestId: authority.createRequestId() })).result as typeof receipt;
+    const secondRequest = { ...request, requestId: authority.createRequestId() };
+    const second = (await authority.executeMutation(secondRequest)).result as typeof receipt;
+    const secondUndo = { ...undo.payload, batchId: second.id, captureRequestId: secondRequest.requestId, authorityTarget: authority.inspectAuthority().target };
     await authority.asyncStore().update("tasks", second.created[0]!.id, { title: "Edited" }, { requestId: authority.createRequestId() });
-    await expect(authority.executeMutation({ ...undo, requestId: authority.createRequestId(), payload: { batchId: second.id } })).rejects.toThrow();
+    await expect(authority.executeMutation({ ...undo, requestId: authority.createRequestId(), payload: secondUndo })).rejects.toThrow();
     expect(authority.query({ from: "tasks" }).some(record => record.title === "Edited")).toBe(true);
     await expect(authority.executeMutation({ ...request, requestId: authority.createRequestId(),
       payload: { ...request.payload, tableId: authority.activeSemanticRegistry().get("people")!.semantic!.tableId },
@@ -149,6 +155,42 @@ it("terminalizes a never-invoked Capture before a delayed invocation can execute
     await expect(authority.cancelPresentation({ ...request, payload: { ...request.payload, row: { title: "Changed payload" } } })).rejects.toThrow(/identity|payload/);
     expect(authority.inspectAuthority().target).toEqual(before);
     expect(authority.query({ from: "tasks" })).toHaveLength(1);
+    expect((await authority.collectArchiveSnapshot()).format).toBe(5);
+  } finally { authority.close(); }
+});
+
+it("requires Capture Undo's exact original request, payload, batch and source, and rejects intervening writes", async () => {
+  const { authority, row } = await fixture();
+  try {
+    const request = { requestId: authority.createRequestId(), route: "daily.capture", payload: {
+      appInstanceId: authority.inspectAuthority().target.appInstanceId, table: "tasks",
+      tableId: authority.activeSemanticRegistry().get("tasks")!.semantic!.tableId, row: { title: "Bound capture" },
+    } };
+    const receipt = (await authority.executeMutation(request)).result as { id: string };
+    const authorityTarget = authority.inspectAuthority().target;
+    const payload = { captureRequestId: request.requestId, capturePayload: request.payload, batchId: receipt.id, authorityTarget };
+    const undo = { requestId: authority.createRequestId(), route: "daily.undoCapture", payload };
+    await expect(Promise.resolve().then(() => authority.executeMutation({ ...undo, payload: { batchId: receipt.id } }))).rejects.toThrow();
+    expect(authority.query({ from: "tasks" })).toHaveLength(2);
+    for (const wrong of [
+      { ...payload, captureRequestId: authority.createRequestId() },
+      { ...payload, batchId: "018f4c2a-7b31-7001-8000-000000000099" },
+      { ...payload, capturePayload: { ...request.payload, row: { title: "Rebound" } } },
+      { ...payload, authorityTarget: { ...authorityTarget, appInstanceId: opaque("app", "z") } },
+      { ...payload, authorityTarget: { ...authorityTarget, activeGenerationId: opaque("gen", "z") } },
+    ]) await expect(Promise.resolve().then(() => authority.executeMutation({ ...undo, payload: wrong }))).rejects.toThrow();
+    expect((await authority.executeMutation(undo)).result).toMatchObject({ undone: true });
+    expect((await authority.executeMutation(undo)).replayed).toBe(true);
+    const next = { ...request, requestId: authority.createRequestId() };
+    const second = (await authority.executeMutation(next)).result as { id: string };
+    const stale = { ...undo, requestId: authority.createRequestId(), payload: { ...payload,
+      captureRequestId: next.requestId, batchId: second.id, authorityTarget: authority.inspectAuthority().target } };
+    // Even an edit to a DIFFERENT row closes this exact bounded Undo window.
+    await authority.asyncStore().update("tasks", String(row.id), { title: "Later unrelated edit" }, { requestId: authority.createRequestId() });
+    await expect(authority.executeMutation(stale)).rejects.toThrow(/bounded|intervening|source/);
+    expect(authority.query({ from: "tasks" })).toHaveLength(2);
+    expect(await authority.cancelPresentation(stale)).toEqual({ status: "cancelled" });
+    await expect(authority.executeMutation(stale)).rejects.toThrow(/cancelled/);
     expect((await authority.collectArchiveSnapshot()).format).toBe(5);
   } finally { authority.close(); }
 });
@@ -195,10 +237,44 @@ it("terminalizes a stale never-invoked Keep so re-preview cannot race its old re
 it("repairs a malformed source library only through an explicit empty-library CAS", async () => {
   const { authority } = await fixture(store => store.setSetting("daily_source_library_v1", { revision: 7, damaged: true }));
   try {
+    await authority.executeMutation({ requestId: authority.createRequestId(), route: "daily.timeZone", payload: { timeZone: "UTC" } });
+    const read = await authority.dailyPresentation();
     const clear = { requestId: authority.createRequestId(), route: "daily.source",
-      payload: { expectedRevision: 7, value: { schema: 1, revision: 8, profiles: [] } } };
+      payload: { expectedRevision: 7, value: { schema: 1, revision: 8, profiles: [] },
+        review: { authorityTarget: read.authorityTarget, basis: read.snapshot.basis, snapshotDigest: read.snapshot.snapshotDigest } } };
     expect((await authority.executeMutation(clear)).result).toMatchObject({ ok: true, current: clear.payload.value });
     expect(authority.readSetting("daily_source_library_v1")).toEqual(clear.payload.value);
+  } finally { authority.close(); }
+});
+
+it("requires the original reviewed source and projection for Daily source/navigation CAS, including cancellation and replay", async () => {
+  const { authority, row } = await fixture();
+  try {
+    await authority.executeMutation({ requestId: authority.createRequestId(), route: "daily.timeZone", payload: { timeZone: "UTC" } });
+    const request = { requestId: authority.createRequestId(), route: "daily.source",
+      payload: { expectedRevision: 0, value: { schema: 1, revision: 1, profiles: [] } } };
+    await expect(Promise.resolve().then(() => authority.executeMutation(request))).rejects.toThrow();
+    const reviewed = await authority.dailyPresentation();
+    const review = { authorityTarget: reviewed.authorityTarget, basis: reviewed.snapshot.basis, snapshotDigest: reviewed.snapshot.snapshotDigest };
+    const bound = { ...request, payload: { ...request.payload, review } };
+    const badBasis = { ...review, snapshotDigest: `sha256:${"0".repeat(64)}` };
+    await expect(authority.executeMutation({ ...bound, payload: { ...bound.payload, review: badBasis } })).rejects.toThrow(/projection/);
+    expect((await authority.executeMutation(bound)).result).toMatchObject({ ok: true });
+    expect((await authority.executeMutation(bound)).replayed).toBe(true);
+    const next = await authority.dailyPresentation();
+    const nav = { requestId: authority.createRequestId(), route: "daily.navigation", payload: { expectedRevision: 0,
+      value: { schema: 1, revision: 1, favorites: [{ tableId: authority.activeSemanticRegistry().get("tasks")!.semantic!.tableId,
+        rowId: String(row.id), pinnedAt: "2026-09-13T01:00:00.000Z" }], recents: [] },
+      review: { authorityTarget: next.authorityTarget, basis: next.snapshot.basis, snapshotDigest: next.snapshot.snapshotDigest } } };
+    await authority.asyncStore().update("tasks", String(row.id), { title: "Intervening" }, { requestId: authority.createRequestId() });
+    await expect(authority.executeMutation(nav)).rejects.toThrow(/source|intervening/);
+    expect(await authority.cancelPresentation(nav)).toEqual({ status: "cancelled" });
+    await expect(authority.executeMutation(nav)).rejects.toThrow(/cancelled/);
+    await expect(authority.cancelPresentation({ ...nav, requestId: authority.createRequestId(), payload: { ...nav.payload,
+      review: { ...nav.payload.review, authorityTarget: { ...nav.payload.review.authorityTarget, appInstanceId: opaque("app", "z") },
+        basis: { ...nav.payload.review.basis, appInstanceId: opaque("app", "z") } } } })).rejects.toThrow(/another app/);
+    expect(authority.readSetting("daily_navigation_v1")).toBeUndefined();
+    expect((await authority.collectArchiveSnapshot()).format).toBe(5);
   } finally { authority.close(); }
 });
 

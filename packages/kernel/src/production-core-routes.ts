@@ -189,6 +189,8 @@ export function captureCoreMutation(
     case "daily.timeZone":
     case "daily.capture":
     case "daily.undoCapture":
+    case "daily.inbox":
+    case "daily.undoInbox":
       return captureDaily(requestId, route, input);
     case "schema.convertTextToRelation":
       return { requestId, route, payload: RelationKeepRequest.parse(input) };
@@ -260,6 +262,8 @@ export function isCapturedCoreMutation(
     case "daily.timeZone":
     case "daily.capture":
     case "daily.undoCapture":
+    case "daily.inbox":
+    case "daily.undoInbox":
     case "schema.convertTextToRelation":
     case "timeline.setCheckpoint":
     case "schema.undoRelationConversion":
@@ -360,6 +364,7 @@ export function executeCapturedCoreMutation(
   request: CapturedCoreMutation,
   target?: TargetEvidenceV1,
   driver?: DbDriver,
+  now?: string,
 ): unknown {
     switch (request.route) {
     case "backup.manualDownload":
@@ -370,7 +375,9 @@ export function executeCapturedCoreMutation(
     case "daily.timeZone":
     case "daily.capture":
     case "daily.undoCapture":
-      return executeDaily(store, request, target);
+    case "daily.inbox":
+    case "daily.undoInbox":
+      return executeDaily(store, request, target, driver, now);
     case "schema.convertTextToRelation":
       if (!target) throw new ClayError("E_CONFLICT", "conversion requires an authority target");
       return keepRelation(store, request.payload, target);

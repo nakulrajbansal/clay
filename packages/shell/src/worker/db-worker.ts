@@ -647,6 +647,7 @@ function authorityRequestId(req: Request): string {
 }
 
 const DIRECT_AUTHORITY_ROUTES = Object.freeze({
+  automationCommand: { route: "automation.command" },
   setCheckpoint: { route: "timeline.setCheckpoint" },
   makeLatest: { route: "timeline.makeLatest" },
   revertPanel: { route: "panel.revert" },
@@ -661,6 +662,8 @@ const DIRECT_AUTHORITY_ROUTES = Object.freeze({
   dailyHomeInitializeTimeZone: { route: "daily.timeZone" },
   dailyHomeQuickCapture: { route: "daily.capture" },
   dailyHomeUndoCapture: { route: "daily.undoCapture" },
+  dailyInboxAction: { route: "daily.inbox" },
+  dailyInboxUndo: { route: "daily.undoInbox" },
   renameColumn: { route: "schema.renameColumn" },
   setSetting: { route: "setting.set" },
   deleteSetting: { route: "setting.delete" },
@@ -1329,6 +1332,8 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     }
     case "dailyHome":
       return mustAuthority().dailyHome();
+    case "dailyPresentation":
+      return mustAuthority().dailyPresentation();
     case "dailyHomeResolveDate": {
       const storedZone = mustStore().getSetting<unknown>("daily_time_zone_v1");
       const timeZone = typeof storedZone === "string"
@@ -1347,6 +1352,14 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       return runAuthorityMutation("dailyHomeQuickCapture", rawPayload, req);
     case "dailyHomeUndoCapture":
       return runAuthorityMutation("dailyHomeUndoCapture", rawPayload, req);
+    case "automationCommand":
+      return runAuthorityMutation("automationCommand", rawPayload, req);
+    case "automationPresentation":
+      return mustAuthority().automationPresentation();
+    case "dailyInboxAction":
+      return runAuthorityMutation("dailyInboxAction", rawPayload, req);
+    case "dailyInboxUndo":
+      return runAuthorityMutation("dailyInboxUndo", rawPayload, req);
     case "storePort": {
       const port = ports[0];
       if (!port) throw new Error("storePort needs a transferred port");

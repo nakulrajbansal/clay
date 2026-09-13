@@ -1,10 +1,25 @@
 /** @vitest-environment jsdom */
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { type DailyHomeSnapshot, type RegTable } from "@clay/kernel";
 import { TodayView } from "../src/app/TodayView";
-import type { WorkerClient } from "../src/app/worker-client";
+import { createWorkerMutationContext, type WorkerClient } from "../src/app/worker-client";
+import { DAILY_HOME_SOURCE_IDS_V1 } from "@clay/schema/daily-home";
+import { readPresentationIntent } from "../src/app/presentation-intent";
+
+afterEach(() => sessionStorage.clear());
+function fixtureWorker(input: Record<string, any>): WorkerClient {
+  const worker = { createMutationContext: createWorkerMutationContext,
+    mutationOutcome: async () => ({ status: "not_invoked" }),
+    compareAndSetDailyNavigation: vi.fn(async (_revision: number, value: unknown) => ({ ok: true, current: value })), ...input };
+  return { ...worker, dailyPresentation: async () => {
+    const snap = await input.dailyHome();
+    return { snapshot: snap, authorityTarget: { appInstanceId: snap.basis.appInstanceId,
+      activeGenerationId: snap.basis.activeGenerationId, lineageEpoch: "0", protectionRevision: "1", digestSchema: 1,
+      stateSha256: `sha256:${"a".repeat(64)}` }, sourceLibrary: await input.getSetting?.() ?? null, navigation: null };
+  } } as unknown as WorkerClient;
+}
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -60,7 +75,8 @@ function snapshot(): DailyHomeSnapshot {
       profileResolution: { readyProfileIds: [`dsp_${"d".repeat(26)}`], issueProfileIds: [] },
       libraryRevision: 1,
       dispositionWatermark: "0",
-      sourceWatermarks: [],
+      sourceWatermarks: DAILY_HOME_SOURCE_IDS_V1.map(sourceId => ({ sourceId,
+        watermark: sourceId === "recovery_notice" ? null : "0", status: sourceId === "recovery_notice" ? "unavailable" : "ready", statusEpoch: "1" })),
       localDate: "2026-09-06",
       timeZone: "UTC",
       rankingVersion: "daily-rank-v1",
@@ -109,11 +125,57 @@ function snapshot(): DailyHomeSnapshot {
 }
 
 describe("Today home", () => {
+  it("offers local Inbox actions and persists their original Undo before presentation, recovering both across reload", async () => {
+    const view = snapshot();
+    const item = view.sections[1]!.page.items[0]!;
+    if (item.kind !== "due_record") throw new Error("due fixture required");
+    item.actions = ["open", "complete", "snooze", "dismiss"];
+    view.sources.push({ sourceId: "due_record", watermark: "1", status: "ready", statusEpoch: "1", page: view.sections[1]!.page });
+    let receipt: unknown = null; let undone = false; let presentationFails = true;
+    const actionCalls: unknown[][] = []; const undoCalls: unknown[][] = [];
+    const worker = fixtureWorker({ dailyHome: async () => view,
+      dailyInboxAction: async (...args: any[]) => {
+        actionCalls.push(structuredClone(args)); receipt = { previous: null, batchId: null, disposition: { schema: 1,
+          sourceKey: item.sourceKey, sourceGeneration: item.sourceGeneration, revision: 1, requestId: args[1].requestId,
+          state: "active", until: null, localDate: null, timeZone: null } }; return receipt;
+      },
+      dailyInboxUndo: async (...args: unknown[]) => { undoCalls.push(structuredClone(args)); undone = true; throw new Error("Undo response lost"); },
+      mutationOutcome: async (route: string) => route === "daily.inbox" && receipt || route === "daily.undoInbox" && undone
+        ? { status: "recorded", current: false, result: route === "daily.inbox" ? receipt : { undone: true },
+          target: { appInstanceId: view.basis.appInstanceId, activeGenerationId, lineageEpoch: "0", protectionRevision: "2", digestSchema: 1,
+            stateSha256: `sha256:${"a".repeat(64)}` } } : { status: "not_invoked" },
+      cancelPresentation: async () => ({ status: "uncertain" }),
+    });
+    const host = document.createElement("div"); document.body.replaceChildren(host); let root = createRoot(host);
+    const render = () => root.render(<TodayView worker={worker} tables={[{ name: "tasks", semantic: { tableId }, columns: [] } as unknown as RegTable]}
+      dailyHomeMutationsAvailable onOpenRecord={() => {}} onOpenAutomation={() => {}} onOpenSavedView={() => {}} onQuickCapture={() => {}}
+      onSetup={() => {}} onCreateRecurring={() => {}} onError={() => {}} onWrite={() => {
+        expect(readPresentationIntent(sessionStorage, view.basis.appInstanceId, "dailyInboxUndo")).not.toBeNull();
+        if (presentationFails) throw new Error("Panel refresh failed");
+      }} />);
+    const click = async (label: string) => act(async () => {
+      const button = [...document.querySelectorAll("button")].find(button => button.textContent === label);
+      expect(button, label).toBeDefined(); button!.click();
+    });
+    const remount = async () => { await act(async () => root.unmount()); root = createRoot(host); await act(async () => render()); };
+    try {
+      await act(async () => render()); await click("Inbox"); await click("Complete");
+      const retained = readPresentationIntent(sessionStorage, view.basis.appInstanceId, "dailyInboxUndo");
+      expect(retained).not.toBeNull();
+      await remount(); presentationFails = false; await click("Retry original Daily change");
+      expect(actionCalls).toHaveLength(1);
+      await click("Undo Inbox change"); expect(readPresentationIntent(sessionStorage, view.basis.appInstanceId, "dailyInboxUndo")).toEqual(retained);
+      await click("Keep Inbox change"); expect(readPresentationIntent(sessionStorage, view.basis.appInstanceId, "dailyInboxUndo")).toEqual(retained);
+      await remount(); await click("Undo Inbox change");
+      expect(undoCalls).toEqual([[retained!.payload, { requestId: retained!.requestId }]]);
+      expect(readPresentationIntent(sessionStorage, view.basis.appInstanceId, "dailyInboxUndo")).toBeNull();
+    } finally { await act(async () => root.unmount()); }
+  });
   it("never replaces a newer projection with a late result from an earlier refresh", async () => {
     let release!: (value: DailyHomeSnapshot) => void;
     const old = new Promise<DailyHomeSnapshot>(resolve => { release = resolve; });
     const latest = snapshot(); latest.sections[1]!.page.items[0]!.title = "Current work";
-    const worker = { dailyHome: vi.fn().mockReturnValueOnce(old).mockResolvedValue(latest) } as unknown as WorkerClient;
+    const worker = fixtureWorker({ dailyHome: vi.fn().mockReturnValueOnce(old).mockResolvedValue(latest) });
     const props = { worker, tables: [] as RegTable[], onOpenRecord: () => {}, onOpenAutomation: () => {},
       onOpenSavedView: () => {}, onQuickCapture: () => {}, onSetup: () => {}, onCreateRecurring: () => {}, onError: () => {} };
     const host = document.createElement("div"); document.body.replaceChildren(host); const root = createRoot(host);
@@ -128,8 +190,7 @@ describe("Today home", () => {
   });
   it("opens a projected due record through its stable table route", async () => {
     const opened: Array<{ table: string; id: string }> = [];
-    const toggled: Array<{ tableId: string; rowId: string }> = [];
-    const worker = { dailyHome: async () => snapshot() } as unknown as WorkerClient;
+    const worker = fixtureWorker({ dailyHome: async () => snapshot() });
     const tables = [{ name: "tasks", semantic: { tableId }, columns: [] }] as unknown as RegTable[];
     const host = document.createElement("div");
     document.body.replaceChildren(host);
@@ -145,9 +206,6 @@ describe("Today home", () => {
       onSetup={() => undefined}
       onCreateRecurring={() => undefined}
       dailyHomeMutationsAvailable
-      onToggleFavorite={async (targetTableId, targetRowId) => {
-        toggled.push({ tableId: targetTableId, rowId: targetRowId });
-      }}
       onError={message => { throw new Error(message); }}
     />));
     await waitFor(() => document.body.textContent?.includes("Overdue tax") ?? false);
@@ -158,7 +216,8 @@ describe("Today home", () => {
     expect(document.body.textContent).toContain("Opened recently");
     const pin = document.querySelector<HTMLButtonElement>('button[aria-label="Unpin Overdue tax"]')!;
     await act(async () => { pin.click(); await Promise.resolve(); });
-    expect(toggled).toEqual([{ tableId, rowId }]);
+    expect(worker.compareAndSetDailyNavigation).toHaveBeenCalledWith(0, expect.objectContaining({ favorites: [] }),
+      expect.objectContaining({ requestId: expect.stringMatching(/^req_/) }), expect.objectContaining({ authorityTarget: expect.objectContaining({ appInstanceId: snapshot().basis.appInstanceId }) }));
     expect(opened).toEqual([]);
 
     const open = [...document.querySelectorAll<HTMLButtonElement>(".today-item-main")]
@@ -188,7 +247,7 @@ describe("Today home", () => {
         },
       },
     } : section) as DailyHomeSnapshot["sections"];
-    const worker = { dailyHome: async () => ({ ...partial, sections }) } as unknown as WorkerClient;
+    const worker = fixtureWorker({ dailyHome: async () => ({ ...partial, sections }) });
     const host = document.createElement("div");
     document.body.replaceChildren(host);
     const root = createRoot(host);
@@ -226,7 +285,7 @@ describe("Today home", () => {
     }] as unknown as RegTable[];
     let projected = 0;
     const writes: Array<{ expected: number; value: unknown }> = [];
-    const worker = {
+    const worker = fixtureWorker({
       dailyHome: async () => {
         projected++;
         return { ...snapshot(), configurationStatus: projected === 1 ? "needs_setup" : "partial" };
@@ -236,7 +295,7 @@ describe("Today home", () => {
         writes.push({ expected, value });
         return { ok: true, current: value };
       },
-    } as unknown as WorkerClient;
+    });
     const host = document.createElement("div");
     document.body.replaceChildren(host);
     const root = createRoot(host);
@@ -256,7 +315,7 @@ describe("Today home", () => {
     expect(document.querySelector<HTMLSelectElement>('select[aria-label="Due date field"]')?.value).toBe(dueFieldId);
     const form = document.querySelector<HTMLFormElement>("form.today-source-form")!;
     await act(async () => form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
-    await waitFor(() => projected === 2);
+    await waitFor(() => projected >= 3);
 
     expect(writes).toHaveLength(1);
     expect(writes[0]).toMatchObject({
@@ -306,7 +365,7 @@ describe("Today home", () => {
       }],
     };
     const writes: unknown[] = [];
-    const worker = {
+    const worker = fixtureWorker({
       dailyHome: async () => ({ ...snapshot(), configurationStatus: "partial" }),
       getSetting: async () => current,
       compareAndSetDailySource: async (expectedRevision: number, value: unknown) => {
@@ -316,7 +375,7 @@ describe("Today home", () => {
         if (expectedRevision !== revision) return { ok: false, current };
         current = value; writes.push(value); return { ok: true, current };
       },
-    } as unknown as WorkerClient;
+    });
     const host = document.createElement("div");
     document.body.replaceChildren(host);
     const root = createRoot(host);
@@ -396,10 +455,10 @@ describe("Today home", () => {
         labelSnapshot: "Tasks", dueLabelSnapshot: "Due",
       }],
     };
-    const worker = {
+    const worker = fixtureWorker({
       dailyHome: async () => ({ ...snapshot(), configurationStatus: "partial" }),
       getSetting: async () => library,
-    } as unknown as WorkerClient;
+    });
     let openedData = 0;
     const host = document.createElement("div");
     document.body.replaceChildren(host);
@@ -438,7 +497,7 @@ describe("Today home", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-06T12:00:00.000Z"));
     let projected = 0;
-    const worker = {
+    const worker = fixtureWorker({
       dailyHome: async () => {
         projected++;
         return {
@@ -450,7 +509,7 @@ describe("Today home", () => {
           },
         };
       },
-    } as unknown as WorkerClient;
+    });
     const host = document.createElement("div");
     document.body.replaceChildren(host);
     const root = createRoot(host);

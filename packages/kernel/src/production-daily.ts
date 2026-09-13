@@ -1,11 +1,15 @@
 import { z } from "zod";
-import { DailyCapturePayloadV1, DailyCaptureUndoPayloadV1, type TargetEvidenceV1 } from "@clay/schema/catalog";
+import { DailyCapturePayloadV1, DailyCaptureUndoPayloadV1, DailySourceCasPayloadV1, DailyNavigationCasPayloadV1, DailyInboxActionPayloadV1, DailyInboxUndoPayloadV1, type TargetEvidenceV1 } from "@clay/schema/catalog";
 import { DailySourceLibraryV1 } from "@clay/schema/daily-home";
 import { ClayError } from "./errors";
 import { DAILY_TIME_ZONE_SETTING, localCalendarContext } from "./daily-calendar";
 import { DAILY_NAVIGATION_SETTING, loadDailyNavigationState } from "./daily-navigation";
 import { DAILY_SOURCE_LIBRARY_SETTING, loadDailySourceLibrary, recoverableDailySourceRevision, resolveDailySourceProfiles } from "./daily-source-profile";
 import { PRODUCTION_STORE_PRIMITIVES as storeOps, type ClayStore } from "./store";
+import type { DbDriver } from "./db";
+import { assertExactPresentationTarget, originalPresentationResult } from "./production-presentation-proof";
+import { assertReviewedDailyProjection } from "./production-daily-projection";
+import { executeInboxAction, undoInboxAction } from "./production-inbox";
 
 export const DAILY_CAPTURE_LEDGER = "daily_capture_receipts_v1";
 const lastTable = "quick_capture_last_table_v1";
@@ -17,11 +21,13 @@ const captureLedger = z.object({ schema: z.literal(1), entries: z.array(z.object
   id: rowId, tableId, table: name,
 }).strict()).max(200) }).strict();
 const dailyRequest = z.discriminatedUnion("route", [
-  z.object({ route: z.literal("daily.source"), payload: z.object({ expectedRevision: revision, value: DailySourceLibraryV1 }).strict() }),
-  z.object({ route: z.literal("daily.navigation"), payload: z.object({ expectedRevision: revision, value: z.unknown() }).strict() }),
+  z.object({ route: z.literal("daily.source"), payload: DailySourceCasPayloadV1 }),
+  z.object({ route: z.literal("daily.navigation"), payload: DailyNavigationCasPayloadV1 }),
   z.object({ route: z.literal("daily.timeZone"), payload: z.object({ timeZone: z.string().min(1).max(128) }).strict() }),
   z.object({ route: z.literal("daily.capture"), payload: DailyCapturePayloadV1 }),
   z.object({ route: z.literal("daily.undoCapture"), payload: DailyCaptureUndoPayloadV1 }),
+  z.object({ route: z.literal("daily.inbox"), payload: DailyInboxActionPayloadV1 }),
+  z.object({ route: z.literal("daily.undoInbox"), payload: DailyInboxUndoPayloadV1 }),
 ]);
 export type CapturedDaily = z.infer<typeof dailyRequest> & { requestId: string };
 
@@ -37,9 +43,19 @@ function conflict(message: string): never { throw new ClayError("E_CONFLICT", me
 function read(store: ClayStore, key: string): unknown { return storeOps.getSetting.call(store, key); }
 function write(store: ClayStore, key: string, value: unknown): void { storeOps.setSetting.call(store, key, value); }
 
-export function executeDaily(store: ClayStore, request: CapturedDaily, target?: TargetEvidenceV1): unknown {
+export function executeDaily(store: ClayStore, request: CapturedDaily, target?: TargetEvidenceV1, driver?: DbDriver, now?: string): unknown {
   const registry = storeOps.validationRegistrySnapshot.call(store);
+  if (request.route === "daily.source" || request.route === "daily.navigation") {
+    if (!target || !now) conflict("Daily review requires worker authority and time");
+    assertReviewedDailyProjection(store, target, request.payload.review, now);
+  }
   switch (request.route) {
+    case "daily.inbox":
+      if (!target || !now) conflict("Inbox action requires worker source and time");
+      return executeInboxAction(store, request.requestId, request.payload, target, now);
+    case "daily.undoInbox":
+      if (!target || !driver) conflict("Inbox Undo requires its original authority");
+      return undoInboxAction(store, driver, request.requestId, request.payload, target);
     case "daily.timeZone": {
       const current = read(store, DAILY_TIME_ZONE_SETTING);
       if (current !== undefined) {
@@ -103,9 +119,17 @@ export function executeDaily(store: ClayStore, request: CapturedDaily, target?: 
       return receipt;
     }
     case "daily.undoCapture": {
+      if (!target || !driver) conflict("Capture Undo requires its original authority");
+      assertExactPresentationTarget(request.payload.authorityTarget, target);
+      const proof = originalPresentationResult(driver, target, request.payload.captureRequestId, "daily.capture", request.payload.capturePayload);
+      assertExactPresentationTarget(proof.target, request.payload.authorityTarget);
+      const result = z.object({ id: rowId, created: z.array(z.object({ table: name, id: rowId }).strict()).length(1) }).passthrough().parse(proof.result);
+      if (result.id !== request.payload.batchId || result.created[0]!.table !== request.payload.capturePayload.table)
+        conflict("capture Undo receipt differs from its original batch");
       const ledger = captureLedger.parse(read(store, DAILY_CAPTURE_LEDGER) ?? { schema: 1, entries: [] });
       const entry = ledger.entries.find(item => item.id === request.payload.batchId);
-      if (!entry || registry.get(entry.table)?.semantic?.tableId !== entry.tableId)
+      if (!entry || registry.get(entry.table)?.inactive || registry.get(entry.table)?.semantic?.tableId !== entry.tableId
+          || entry.tableId !== request.payload.capturePayload.tableId || entry.table !== request.payload.capturePayload.table)
         conflict("capture Undo is outside its retained recovery window or record type changed");
       return storeOps.undoBatch.call(store, request.payload.batchId);
     }

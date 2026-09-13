@@ -1,4 +1,5 @@
-import { SYSTEM_TABLES, type DbDriver, type SqlRow } from "./db";
+import { SYSTEM_TABLES, presentSystemTables, type DbDriver, type SqlRow } from "./db";
+import { readInboxDispositions } from "./inbox-dispositions";
 import { isLegacyCredentialSettingKey } from "./credential-policy";
 import { ClayError } from "./errors";
 import { userIndexAuthorities } from "./index-authority";
@@ -375,7 +376,7 @@ function enumerateTableSchemas(driver: DbDriver, registry: Registry): CanonicalS
     if (!table.semantic || !isTableId(table.semantic.tableId)) throw invalid();
     leaves.push(tableSchemaLeaf(driver, "main", table.name, table.semantic.tableId));
   }
-  for (const table of [...SYSTEM_TABLES, "sqlite_sequence"].sort())
+  for (const table of [...presentSystemTables(driver), "sqlite_sequence"].sort())
     leaves.push(tableSchemaLeaf(driver, "sys", table, table));
   return leaves;
 }
@@ -388,7 +389,7 @@ function validateSystemObjectInventory(driver: DbDriver): void {
   if (rows.some(row => row.type !== "table" || typeof row.name !== "string"))
     throw invalid("system object inventory is ambiguous");
   const actual = new Set(rows.map(row => String(row.name)));
-  const required = new Set<string>([...SYSTEM_TABLES, ...EXCLUDED_SYSTEM_TABLES]);
+  const required = new Set<string>([...presentSystemTables(driver), ...EXCLUDED_SYSTEM_TABLES]);
   const merkleCount = MERKLE_SYSTEM_TABLES.filter(table => actual.has(table)).length;
   if (merkleCount !== 0 && merkleCount !== MERKLE_SYSTEM_TABLES.length)
     throw invalid("system object inventory is ambiguous");
@@ -438,6 +439,8 @@ function systemRowKey(table: string, row: SqlRow, registry: Registry): string {
       return `system/${table}/${textKey(row, "id")}`;
     case "settings":
       return `system/settings/${textKey(row, "key")}`;
+    case "inbox_dispositions":
+      return `system/inbox_dispositions/${textKey(row, "source_key")}`;
     case "automation_matches":
       return `system/automation_matches/${textKey(row, "automation_id")}`
         + `/${textKey(row, "target_json")}/${integerKey(row, "definition_revision")}`
@@ -582,6 +585,7 @@ export function enumerateCanonicalStateV1(
 ): CanonicalStateEnumerationV1 {
   try {
     validateSystemObjectInventory(driver);
+    readInboxDispositions(driver); // Every physical row, closed state and cardinality.
     const expectedMain = new Set(["row_history", "__clay_attachments", ...registry.keys()]);
     const mainObjects = driver.select(
       `SELECT type, name FROM main.sqlite_master
@@ -603,7 +607,7 @@ export function enumerateCanonicalStateV1(
     leaves.push(...enumerateMainIndexes(driver, registry));
     leaves.push(...enumerateSystemIndexes(driver));
     leaves.push(...enumerateTableSchemas(driver, registry));
-    for (const table of [...SYSTEM_TABLES].sort()) {
+    for (const table of [...presentSystemTables(driver)].sort()) {
       const result = enumerateSystemTable(driver, table, registry);
       coverage.push(result.coverage);
       leaves.push(...result.leaves);

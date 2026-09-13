@@ -1558,6 +1558,7 @@ export function DataView(props: {
       {detail && detailTable ? (
         <Suspense fallback={<div className="record-detail-loading" role="status">Loading record…</div>}>
         <RecordDetail
+          appInstanceId={props.appInstanceId}
           table={detailTable}
           recordId={detail.id}
           tables={tables}

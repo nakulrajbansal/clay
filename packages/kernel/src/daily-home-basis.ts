@@ -463,7 +463,7 @@ function compareDescending(left: string, right: string): number {
   return compareCanonicalStrings(right, left);
 }
 
-function compareCanonicalItems(left: DailyItem, right: DailyItem): number {
+export function compareCanonicalItems(left: DailyItem, right: DailyItem): number {
   const leftSection = sectionForSource(itemSourceId(left));
   const rightSection = sectionForSource(itemSourceId(right));
   const sectionOrder = DAILY_HOME_SECTION_IDS_V1.indexOf(leftSection)

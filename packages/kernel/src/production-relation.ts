@@ -9,6 +9,7 @@ import { productionOperationIdV2 } from "./production-operation-id";
 import { DeviceCatalog } from "./device-catalog";
 import { TargetAuthorityStore } from "./target-authority";
 import { assertCommittedReceiptReservationBinding } from "./sample-provenance-proof";
+import { assertExactPresentationTarget } from "./production-presentation-proof";
 
 const name = z.string().regex(/^[a-z][a-z0-9_]{0,40}$/);
 export const RelationPreviewRequest = RelationPreviewPayloadV1;
@@ -19,6 +20,7 @@ export const RelationUndoRequest = RelationUndoPayloadV1;
 export type CapturedRelationUndo = z.infer<typeof RelationUndoRequest>;
 
 export function undoRelation(store: ClayStore, driver: DbDriver, input: CapturedRelationUndo, target: TargetEvidenceV1) {
+  if (input.authorityTarget) assertExactPresentationTarget(input.authorityTarget, target);
   const receipt = readProductionRequestReceipt(driver, input.conversionRequestId);
   if (!receipt || receipt.state !== "committed" || receipt.responseJson === null
       || receipt.appInstanceId !== target.appInstanceId || receipt.activeGenerationId !== target.activeGenerationId

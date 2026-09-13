@@ -30,6 +30,8 @@ const route = (
 ): MutationRouteClassification => ({ enforcement, mutates });
 
 export const DB_WORKER_ROUTE_CENSUS = Object.freeze({
+  automationCommand: route("authority", "live"),
+  automationPresentation: route("read", "none"),
   boot: route("boot", "lifecycle"),
   shutdown: route("lifecycle-control", "lifecycle"),
   createApp: route("lifecycle-authority", "lifecycle"),
@@ -70,12 +72,15 @@ export const DB_WORKER_ROUTE_CENSUS = Object.freeze({
   projectPlaintextV1: route("read", "none"),
   cancelProjectionV1: route("ephemeral", "none"),
   dailyHome: route("read", "none"),
+  dailyPresentation: route("read", "none"),
   dailyHomeResolveDate: route("read", "none"),
   dailyHomeSourceCompareAndSet: route("authority", "live"),
   dailyHomeNavigationCompareAndSet: route("authority", "live"),
   dailyHomeInitializeTimeZone: route("authority", "live"),
   dailyHomeQuickCapture: route("authority", "live"),
   dailyHomeUndoCapture: route("authority", "live"),
+  dailyInboxAction: route("authority", "live"),
+  dailyInboxUndo: route("authority", "live"),
   storePort: route("authority-store-port", "live"),
   intent: route("planner-authority", "live"),
   repairPanel: route("planner-authority", "live"),
@@ -264,6 +269,7 @@ export const CLAY_STORE_WRITER_CENSUS = Object.freeze({
   markNotificationRead: "authority",
   applyBatch: "authority",
   undoBatch: "authority",
+  writeInboxDisposition: "authority",
   restoreRow: "authority",
   saveIntakeForm: "authority",
   markIntakeFormPublished: "authority",

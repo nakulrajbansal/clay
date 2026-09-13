@@ -1,7 +1,9 @@
 /** @vitest-environment jsdom */
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { automationUiFixture } from "./helpers/automation-ui-fixture";
+beforeEach(() => sessionStorage.clear());
 import type {
   AutomationDefinitionV2, AutomationSimulationProofV1, FieldId, RegTable,
   SemanticSchemaTraceV1, TableId,
@@ -73,7 +75,7 @@ it("shows an exact simulation before re-enabling an existing V2 rule", async () 
       state: "visible", createdVersion: 1, lastChangedVersion: 1, events: [] }],
     relationships: [], opBindings: [],
   } as unknown as SemanticSchemaTraceV1;
-  const worker = {
+  const worker = automationUiFixture({
     listAutomations: async () => [rule],
     automationRuns: async () => [],
     notifications: async () => [],
@@ -93,7 +95,7 @@ it("shows an exact simulation before re-enabling an existing V2 rule", async () 
       rule = { ...rule, state: "enabled", enabled: true } as AutomationDefinitionV2;
       return rule;
     },
-  } as unknown as WorkerClient;
+  });
   const host = document.createElement("div"); document.body.replaceChildren(host);
   const root = createRoot(host);
   await act(async () => root.render(<AutomationCenter worker={worker} tables={[table]} notifications={[]}

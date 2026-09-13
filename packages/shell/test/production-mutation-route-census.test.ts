@@ -49,7 +49,7 @@ function clayStorePublicWriterNames(text: string): Set<string> {
   const writerNames = new Set<string>();
   const directExternalWriters = new Set([
     "record", "setCollectionEnabled", "clear", "markShown", "dismiss", "accept",
-    "copyDatabase",
+    "copyDatabase", "writeInboxDisposition",
   ]);
   const calls = new Map<string, Set<string>>();
   for (const [name, method] of methods) {
@@ -93,6 +93,12 @@ function clayStorePublicWriterNames(text: string): Set<string> {
 }
 
 describe("production mutation route census", () => {
+  it("recognizes a delegated physical Inbox writer without classifying its paired read as a write", () => {
+    expect([...clayStorePublicWriterNames(`class ClayStore {
+      writeInboxDisposition(input) { return writeInboxDisposition(this.driver, input); }
+      inboxDispositions() { return readInboxDispositions(this.driver); }
+    }`)]).toEqual(["writeInboxDisposition"]);
+  });
   it("keeps retired compatibility commands closed and without WorkerClient transport callers", () => {
     const client = source("packages/shell/src/app/worker-client.ts");
     for (const name of Object.keys(RETIRED_DB_WORKER_ROUTES) as Array<keyof typeof RETIRED_DB_WORKER_ROUTES>) {

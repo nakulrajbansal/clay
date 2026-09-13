@@ -321,6 +321,7 @@ export type AutomationRecipeDraftRequestV1 =
         conditionFieldId: FieldId;
         conditionValue: string | number | boolean;
         daysBefore: number;
+        timeZone?: string;
       }>;
     }>
   | Readonly<{
@@ -346,6 +347,7 @@ export type AutomationRecipeDraftRequestV1 =
         relationFieldId: FieldId;
         titleFieldId: FieldId;
         title: string;
+        timeZone?: string;
       }>;
     }>;
 
@@ -1058,7 +1060,7 @@ export function compileAutomationRecipeDraft(
         title: "Invoice needs attention",
         body: "An invoice reached its chosen due date.",
       }],
-      runtime: { mode: "local" },
+      runtime: { mode: "local", ...(request.mapping.timeZone ? { timeZone: request.mapping.timeZone } : {}) },
     }).stored;
   }
   if (request.recipeId === "weekly_checklist") {
@@ -1114,7 +1116,7 @@ export function compileAutomationRecipeDraft(
           value: { source: "literal", value: request.mapping.title },
         }],
       }],
-      runtime: { mode: "local" },
+      runtime: { mode: "local", ...(request.mapping.timeZone ? { timeZone: request.mapping.timeZone } : {}) },
     }).stored;
   }
   return invalid("automation recipe is unsupported");

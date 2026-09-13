@@ -13,6 +13,8 @@ import { beginPresentationIntent, readPresentationIntent } from "../src/app/pres
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(() => sessionStorage.clear()); // Owned jsdom storage only.
 const appInstanceId = `app_${"a".repeat(26)}`;
+const captureTarget = { appInstanceId, activeGenerationId: `gen_${"b".repeat(26)}`, lineageEpoch: "0", protectionRevision: "2",
+  digestSchema: 1 as const, stateSha256: `sha256:${"c".repeat(64)}` };
 
 async function settle(): Promise<void> {
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
@@ -26,6 +28,53 @@ function typeInto(input: HTMLInputElement, value: string): void {
 }
 
 describe("quick capture", () => {
+  it("persists source-bound Undo before presentation and recovers the same invocation after teardown and response loss", async () => {
+    const tableId = "tbl_018f4c2a-7b31-7001-8000-000000000001";
+    const tables = [{ name: "tasks", semantic: { tableId }, columns: [{ name: "title", type: "text", required: true }] }] as unknown as RegTable[];
+    const target = { appInstanceId, activeGenerationId: `gen_${"b".repeat(26)}`, lineageEpoch: "0", protectionRevision: "2",
+      digestSchema: 1, stateSha256: `sha256:${"c".repeat(64)}` };
+    const receipt = { id: "018f4c2a-7b31-7001-8000-000000000091", created: [{ table: "tasks", id: "018f4c2a-7b31-7001-8000-000000000092" }] };
+    let captured = false; let undone = false; let presentationFails = true; const undoCalls: unknown[][] = [];
+    const worker = { createMutationContext: createWorkerMutationContext, globalSearch: async () => [], getSetting: async () => tableId,
+      quickCapture: async () => { captured = true; return receipt; },
+      mutationOutcome: async (route: string) => route === "daily.capture" && captured
+        ? { status: "recorded", current: true, result: receipt, target }
+        : route === "daily.undoCapture" && undone ? { status: "recorded", current: false, result: { ...receipt, undone: true }, target }
+        : { status: "not_invoked" },
+      undoQuickCapture: async (...args: unknown[]) => { undoCalls.push(structuredClone(args)); undone = true; throw new Error("Undo response lost"); },
+      cancelPresentation: async () => ({ status: "uncertain" }),
+    } as unknown as WorkerClient;
+    const host = document.createElement("div"); document.body.replaceChildren(host); let root = createRoot(host);
+    const render = () => root.render(<CommandPalette worker={worker} appInstanceId={appInstanceId} tables={tables} captureMode
+      onClose={() => {}} onOpenRecord={() => {}} onOpenData={() => {}} onError={() => {}} onInfo={() => {}}
+      onWrite={() => { if (presentationFails) {
+        expect(readPresentationIntent(sessionStorage, appInstanceId, "captureUndo")).not.toBeNull();
+        throw new Error("Presentation failed");
+      } }} />);
+    const remount = async () => { await act(async () => root.unmount()); root = createRoot(host); await act(async () => render()); await settle(); };
+    const click = async (label: string) => act(async () => {
+      const button = [...document.querySelectorAll("button")].find(button => button.textContent === label);
+      expect(button, label).toBeDefined(); button!.click();
+    });
+    try {
+      await act(async () => render()); await settle();
+      await act(async () => typeInto(document.querySelector<HTMLInputElement>('input[aria-label="Title"]')!, "Original"));
+      await act(async () => document.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+      const kept = readPresentationIntent(sessionStorage, appInstanceId, "captureUndo");
+      expect(kept).not.toBeNull();
+      expect(kept!.payload).toMatchObject({ authorityTarget: target, batchId: receipt.id,
+        capturePayload: { appInstanceId, table: "tasks", tableId, row: { title: "Original" } } });
+      await remount(); presentationFails = false;
+      await click("Retry capture"); await remount();
+      await click("Undo previous capture");
+      expect(readPresentationIntent(sessionStorage, appInstanceId, "captureUndo")).toEqual(kept);
+      await click("Keep previous capture"); // Must not clear an ambiguous Undo to permit another capture.
+      expect(readPresentationIntent(sessionStorage, appInstanceId, "captureUndo")).toEqual(kept);
+      await remount(); await click("Undo previous capture");
+      expect(undoCalls).toEqual([[kept!.payload, { requestId: kept!.requestId }]]);
+      expect(readPresentationIntent(sessionStorage, appInstanceId, "captureUndo")).toBeNull();
+    } finally { await act(async () => root.unmount()); }
+  });
   it("unlocks a retained draft only after exact terminal cancellation, never when a commit won", async () => {
     const tableId = "tbl_018f4c2a-7b31-7001-8000-000000000001";
     const intent = beginPresentationIntent(sessionStorage, appInstanceId, "capture", "daily.capture",
@@ -55,15 +104,16 @@ describe("quick capture", () => {
       { name: "due", type: "date", required: true },
     ] }] as unknown as RegTable[];
     const calls: unknown[][] = [];
-    let resolutions = 0;
+    let resolutions = 0; let recorded = false;
+    const receipt = { id: "018f4c2a-7b31-7001-8000-000000000091", created: [{ table: "tasks", id: "row" }] };
     const worker = {
       createMutationContext: createWorkerMutationContext, globalSearch: async () => [], getSetting: async () => tableId,
-      mutationOutcome: async () => ({ status: "not_invoked" }),
+      mutationOutcome: async () => recorded ? { status: "recorded", current: true, result: receipt, target: captureTarget } : { status: "not_invoked" },
       resolveDailyHomeDate: async () => ++resolutions === 1 ? "2026-09-13" : "2026-09-14",
       quickCapture: async (...args: unknown[]) => {
         calls.push(structuredClone(args));
         if (calls.length === 1) throw new Error("response lost after commit");
-        return { id: "018f4c2a-7b31-7001-8000-000000000091", created: [{ table: "tasks", id: "row" }] };
+        recorded = true; return receipt;
       },
     } as unknown as WorkerClient;
     const host = document.createElement("div"); document.body.replaceChildren(host);
@@ -111,18 +161,20 @@ describe("quick capture", () => {
       created: [{ table: "tasks", id: "018f4c2a-7b31-7001-8000-000000000011" }],
       undone: false,
     };
+    let recorded = false;
     const worker = {
       createMutationContext: createWorkerMutationContext,
-      mutationOutcome: async () => ({ status: "not_invoked" }),
+      mutationOutcome: async (route: string) => recorded && route === "daily.capture"
+        ? { status: "recorded", current: true, result: receipt, target: captureTarget } : { status: "not_invoked" },
       globalSearch: async () => [],
       getSetting: async (key: string) => key === QUICK_CAPTURE_LAST_TABLE_SETTING ? taskTableId : null,
       resolveDailyHomeDate: async (value: string) => value === "tomorrow" ? "2026-09-07" : value,
       quickCapture: async (table: string, row: Record<string, unknown>, tableId: string) => {
         captures.push({ table, row, tableId });
-        return receipt;
+        recorded = true; return receipt;
       },
-      undoQuickCapture: async (batchId: string) => {
-        undone.push(batchId);
+      undoQuickCapture: async (payload: { batchId: string }) => {
+        undone.push(payload.batchId);
         return { ...receipt, undone: true };
       },
     } as unknown as WorkerClient;

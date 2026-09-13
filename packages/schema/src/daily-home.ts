@@ -400,7 +400,7 @@ export const TrustedRouteV1 = z.discriminatedUnion("kind", [
 ]);
 export type TrustedRouteV1 = z.infer<typeof TrustedRouteV1>;
 
-const InboxActionV1 = z.enum(["open", "setup", "fix"]);
+const InboxActionV1 = z.enum(["open", "setup", "fix", "complete", "snooze", "dismiss"]);
 export const InboxItemV1 = z.object({
   sourceKey: InboxSourceKeyV1,
   sourceGeneration: SourceGenerationV1,
@@ -414,7 +414,7 @@ export const InboxItemV1 = z.object({
     .refine(isUInt64Decimal, "canonical uint64 revision required").optional(),
   dispositionRevision: safeCount,
   route: TrustedRouteV1,
-  actions: z.array(InboxActionV1).min(1).max(2),
+  actions: z.array(InboxActionV1).min(1).max(4),
 }).strict().superRefine((value, ctx) => {
   if (!hasUniqueStrings(value.actions)) {
     ctx.addIssue({ code: "custom", path: ["actions"], message: "Inbox actions must be unique" });
@@ -429,8 +429,9 @@ export const InboxItemV1 = z.object({
       ctx.addIssue({ code: "custom", path: ["route"], message: "setup route must match source kind" });
     }
   }
-  if (!setupRoute && (value.actions.length !== 1 || value.actions[0] !== "open")) {
-    ctx.addIssue({ code: "custom", path: ["actions"], message: "D1 source items are open-only" });
+  if (!setupRoute && (value.actions[0] !== "open" || value.actions.includes("setup") || value.actions.includes("fix")
+      || (value.kind !== "due_record" && value.actions.includes("complete")))) {
+    ctx.addIssue({ code: "custom", path: ["actions"], message: "actions must match the canonical source capability" });
   }
   const expectedRoute = value.kind === "due_record" ? "record" : "automation";
   if (!setupRoute && value.route.kind !== expectedRoute) {
@@ -438,6 +439,18 @@ export const InboxItemV1 = z.object({
   }
 });
 export type InboxItemV1 = z.infer<typeof InboxItemV1>;
+
+/** App-owned local presentation, not a second work queue or remote runtime. */
+export const InboxDispositionV1 = z.object({ schema: z.literal(1), sourceKey: InboxSourceKeyV1,
+  sourceGeneration: SourceGenerationV1, revision: safeCount.positive(), requestId: lowerBase32Id("req"),
+  state: z.enum(["active", "snoozed", "dismissed"]), until: CanonicalUtcInstantV1.nullable(),
+  localDate: CanonicalLocalDateV1.nullable(), timeZone: CanonicalTimeZoneV1.nullable(),
+}).strict().superRefine((value, context) => {
+  const snoozed = value.state === "snoozed";
+  if (snoozed !== (value.until !== null) || snoozed !== (value.localDate !== null) || snoozed !== (value.timeZone !== null))
+    context.addIssue({ code: "custom", message: "Snooze requires an exact local-calendar boundary; other dispositions have none" });
+});
+export type InboxDispositionV1 = z.infer<typeof InboxDispositionV1>;
 
 export const DailyHomeRecordProjectionV1 = z.object({
   kind: z.literal("record_projection"),

@@ -70,8 +70,15 @@ export function RelationConversionDialog(props: {
         let historical = false;
         const result = await reconcilePresentation(props.worker, intent, () => props.worker.convertTextToRelation(
           intent.payload as unknown as RelationConversionPreview & { cardinality: "one" }, { requestId: intent.requestId }), current => { historical = !current; });
-        const undo = beginPresentationIntent(sessionStorage, intent.appInstanceId, "conversionUndo", "schema.undoRelationConversion",
-          { conversionRequestId: intent.requestId, beforeVersion: intent.payload.atVersion }, () => props.worker.createMutationContext());
+        let undo = readPresentationIntent(sessionStorage, intent.appInstanceId, "conversionUndo");
+        if (undo && (undo.payload.conversionRequestId !== intent.requestId || undo.payload.beforeVersion !== intent.payload.atVersion))
+          throw new Error("Previous conversion Undo needs reconciliation first");
+        if (!undo) {
+          const outcome = await props.worker.mutationOutcome(intent.route, intent.payload, { requestId: intent.requestId });
+          if (outcome.status !== "recorded") throw new Error("Original conversion receipt needs recovery before presenting Undo");
+          undo = beginPresentationIntent(sessionStorage, intent.appInstanceId, "conversionUndo", "schema.undoRelationConversion",
+            { conversionRequestId: intent.requestId, beforeVersion: intent.payload.atVersion, authorityTarget: outcome.target }, () => props.worker.createMutationContext());
+        }
         setUndoIntent(undo);
         await props.onCommitted({ ...result, historical });
         finishPresentationIntent(sessionStorage, intent.appInstanceId, "relation", intent.requestId);
@@ -88,7 +95,8 @@ export function RelationConversionDialog(props: {
     try {
       let historical = false;
       await props.runWrite(() => reconcilePresentation(props.worker, undoIntent, () => props.worker.undoRelationConversion(
-        String(undoIntent.payload.conversionRequestId), Number(undoIntent.payload.beforeVersion), { requestId: undoIntent.requestId }), current => { historical = !current; }));
+        String(undoIntent.payload.conversionRequestId), Number(undoIntent.payload.beforeVersion), { requestId: undoIntent.requestId },
+        undoIntent.payload.authorityTarget as import("@clay/schema/catalog").TargetEvidenceV1 | undefined), current => { historical = !current; }));
       await props.onCommitted({ relationField: "", convertedRows: 0, historical });
       finishPresentationIntent(sessionStorage, undoIntent.appInstanceId, "conversionUndo", undoIntent.requestId);
       setUndoIntent(null); setCompleted(false); setPreview(null);
@@ -104,6 +112,16 @@ export function RelationConversionDialog(props: {
         pendingKeep.current = null; setNeedsReconciliation(false); setPreview(null);
       } else props.onError("Keep already committed. Retry Keep to read its exact result; it cannot be cancelled.");
     } catch (error) { props.onError(error instanceof Error ? error.message : "Cancellation needs recovery"); }
+    finally { working.current = false; setBusy(false); }
+  };
+  const keepLinkedRecords = async (): Promise<void> => {
+    if (!undoIntent || working.current || undoIntent.appInstanceId !== props.appInstanceId) return;
+    working.current = true; setBusy(true);
+    try {
+      if (await cancelPresentationIntent(sessionStorage, props.worker, undoIntent)) {
+        setUndoIntent(null); props.onClose();
+      } else props.onError("Undo already committed. Retry Undo to acknowledge the result; the request was kept.");
+    } catch (error) { props.onError(error instanceof Error ? error.message : "Undo needs recovery"); }
     finally { working.current = false; setBusy(false); }
   };
 
@@ -180,10 +198,7 @@ export function RelationConversionDialog(props: {
         <button disabled={busy} onClick={props.onClose}>{needsReconciliation ? "Close" : preview ? "Discard preview" : "Cancel"}</button>
         {completed && undoIntent ? <>
           <button disabled={busy} onClick={() => void undo()}>Undo this conversion</button>
-          <button disabled={busy} onClick={() => {
-            try { finishPresentationIntent(sessionStorage, undoIntent.appInstanceId, "conversionUndo", undoIntent.requestId);
-              setUndoIntent(null); props.onClose(); } catch (error) { props.onError(error instanceof Error ? error.message : "Cleanup needs retry"); }
-          }}>Keep linked records</button>
+          <button disabled={busy} onClick={() => void keepLinkedRecords()}>Keep linked records</button>
         </> : !preview ? (
           <button className="primary" disabled={busy || !!recovery.error || !props.appInstanceId || !sourceField || !targetTable || !effectiveDisplay}
             onClick={() => void analyze()}>{busy ? "Checking…" : "Preview matches"}</button>

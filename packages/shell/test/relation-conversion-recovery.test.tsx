@@ -9,6 +9,20 @@ import { beginPresentationIntent, readPresentationIntent } from "../src/app/pres
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(() => sessionStorage.clear());
 const appInstanceId = `app_${"a".repeat(26)}`;
+it("does not forget an ambiguous conversion Undo when Keep linked records is clicked", async () => {
+  const intent = beginPresentationIntent(sessionStorage, appInstanceId, "conversionUndo", "schema.undoRelationConversion",
+    { conversionRequestId: createWorkerMutationContext().requestId, beforeVersion: 1 }, createWorkerMutationContext);
+  const worker = { cancelPresentation: vi.fn().mockResolvedValueOnce({ status: "uncertain" }).mockResolvedValue({ status: "cancelled" }) } as unknown as WorkerClient;
+  const host = document.createElement("div"); document.body.replaceChildren(host); const root = createRoot(host);
+  try {
+    await act(async () => root.render(<RelationConversionDialog appInstanceId={appInstanceId} sourceTable={{ name: "tasks", columns: [] } as unknown as RegTable}
+      tables={[]} worker={worker} runWrite={fn => fn()} onCommitted={() => {}} onClose={() => {}} onError={() => {}} />));
+    const click = async () => act(async () => { [...document.querySelectorAll("button")].find(button => button.textContent === "Keep linked records")!.click(); });
+    await click(); expect(readPresentationIntent(sessionStorage, appInstanceId, "conversionUndo")).toEqual(intent);
+    await click(); expect(readPresentationIntent(sessionStorage, appInstanceId, "conversionUndo")).toBeNull();
+    expect(worker.cancelPresentation).toHaveBeenCalledWith(intent.route, intent.payload, { requestId: intent.requestId });
+  } finally { await act(async () => root.unmount()); }
+});
 it("requires terminal cancellation before a stale Keep can be re-previewed", async () => {
   const preview = { sourceTable: "tasks", sourceField: "person", targetTable: "people", displayField: "name",
     atVersion: 1, fingerprint: `sha256:${"b".repeat(64)}`, matchedRows: 1, unmatchedRows: 0, ambiguousRows: 0,

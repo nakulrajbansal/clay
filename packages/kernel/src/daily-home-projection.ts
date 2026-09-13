@@ -7,10 +7,11 @@ import {
   type DailyHomeSnapshotV1,
   type DailyHomeSourceIdV1,
   type DailyHomeSourceSnapshotV1,
+  type InboxDispositionV1,
 } from "@clay/schema/daily-home";
 import type { Query } from "@clay/schema";
 import type { ClayNotification } from "./automation";
-import { buildDailyHomeSnapshot, deriveDailyHomeSections } from "./daily-home-basis";
+import { buildDailyHomeSnapshot, deriveDailyHomeSections, compareCanonicalItems } from "./daily-home-basis";
 import { localCalendarContext, parseDailyTemporal, resolveLocalDateTime } from "./daily-calendar";
 import {
   DAILY_SOURCE_LIBRARY_SETTING,
@@ -108,6 +109,7 @@ export type DailyHomeRecordRevisionSnapshot = Readonly<{
 }>;
 
 export type DailyHomeProjectionReader = Readonly<{
+  inboxDispositions?(): InboxDispositionV1[];
   registrySnapshot(): Registry;
   query(query: Query): QueryRow[];
   listNotifications(limit?: number): ClayNotification[];
@@ -360,6 +362,20 @@ function complete(
   return typeof value === "string" && completion.terminalValues.includes(value);
 }
 
+function applyDispositions(items: DailyItem[], dispositions: readonly InboxDispositionV1[], now: string): void {
+  const byKey = new Map(dispositions.map(row => [row.sourceKey, row]));
+  if (byKey.size !== dispositions.length) throw new TypeError("Duplicate Inbox disposition identity");
+  let visible = 0;
+  for (const item of items) {
+    if (item.kind !== "due_record" && item.kind !== "automation_notification") throw new TypeError("Invalid Inbox source item");
+    const disposition = byKey.get(item.sourceKey);
+    if (disposition?.sourceGeneration === item.sourceGeneration && (disposition.state === "dismissed"
+        || (disposition.state === "snoozed" && disposition.until! > now))) continue;
+    items[visible++] = { ...item, dispositionRevision: disposition?.revision ?? 0 };
+  }
+  items.length = visible;
+}
+
 function dueSource(
   reader: DailyHomeProjectionReader,
   resolution: ReturnType<typeof resolveDailySourceProfiles>,
@@ -367,6 +383,7 @@ function dueSource(
   localDate: string,
   revisions: RecordRevisionIndex,
   samples: SampleProvenance,
+  dispositions: readonly InboxDispositionV1[],
 ): SourceSnapshot {
   const items: DailyItem[] = [];
   let truncated = false;
@@ -412,15 +429,11 @@ function dueSource(
         dueAt,
         dispositionRevision: 0,
         route: { kind: "record", tableId: profile.tableId, rowId },
-        actions: ["open"],
+        actions: profile.completion.kind === "none" ? ["open", "snooze", "dismiss"] : ["open", "complete", "snooze", "dismiss"],
       });
     }
   }
-  items.sort((left, right) => {
-    if (left.kind !== "due_record" || right.kind !== "due_record") return 0;
-    return compare(left.dueAt ?? left.attentionAt, right.dueAt ?? right.attentionAt)
-      || compare(left.sourceKey, right.sourceKey);
-  });
+  applyDispositions(items, dispositions, context.now);
 
   if (resolution.ready.length === 0) {
     return sourceSnapshot("due_record", [], {
@@ -430,6 +443,7 @@ function dueSource(
       retryable: false,
     });
   }
+  items.sort(compareCanonicalItems);
   const limited = items.length > PAGE_SIZE;
   const visible = items.slice(0, PAGE_SIZE);
   if (resolution.issues.length > 0 || invalidSource || truncated || limited) {
@@ -512,6 +526,7 @@ function navigationRecordSource(
       route: { kind: "record", tableId: reference.tableId, rowId: reference.rowId },
     });
   }
+  items.sort(compareCanonicalItems);
   const limited = items.length > PAGE_SIZE;
   const visible = items.slice(0, PAGE_SIZE);
   if (invalidSource || limited) {
@@ -583,11 +598,7 @@ function recentlyChangedSource(
       }
     }
   }
-  items.sort((left, right) => {
-    if (left.kind !== "record_projection" || right.kind !== "record_projection") return 0;
-    return compare(right.updatedAt, left.updatedAt)
-      || compare(`${left.tableId}:${left.rowId}`, `${right.tableId}:${right.rowId}`);
-  });
+  items.sort(compareCanonicalItems);
   const limited = items.length > PAGE_SIZE;
   const visible = items.slice(0, PAGE_SIZE);
   if (invalidSource || truncated || limited) {
@@ -604,6 +615,7 @@ function recentlyChangedSource(
 
 function automationNotificationSource(
   reader: DailyHomeProjectionReader,
+  dispositions: readonly InboxDispositionV1[], now: string,
 ): SourceSnapshot {
   const unreadPage = reader.dailyHomeUnreadNotifications(500);
   const notifications = unreadPage.notifications;
@@ -640,17 +652,15 @@ function automationNotificationSource(
       attentionAt,
       dispositionRevision: 0,
       route: { kind: "automation", automationId: notification.automationId },
-      actions: ["open"],
+      actions: ["open", "snooze", "dismiss"],
     });
     if (nativeWatermark === undefined) {
       const candidateWatermark = `notifications:${attentionAt}:${notification.id}`;
       if (candidateWatermark > watermark) watermark = candidateWatermark.slice(0, 256);
     }
   }
-  items.sort((left, right) => {
-    if (left.kind !== "automation_notification" || right.kind !== "automation_notification") return 0;
-    return compare(left.attentionAt, right.attentionAt) || compare(left.sourceKey, right.sourceKey);
-  });
+  applyDispositions(items, dispositions, now);
+  items.sort(compareCanonicalItems);
   const limited = items.length > PAGE_SIZE;
   const visible = items.slice(0, PAGE_SIZE);
   if (invalidSource || unreadPage.truncated || limited) {
@@ -724,6 +734,7 @@ function savedViewSource(
       title: view.name,
       route: { kind: "saved_view", savedViewId: view.id },
     }));
+  items.sort(compareCanonicalItems);
   const limited = items.length > PAGE_SIZE;
   const visible = items.slice(0, PAGE_SIZE);
   if (invalidViews > 0 || limited) {
@@ -752,8 +763,9 @@ export function projectDailyHome(
   const resolution = resolveDailySourceProfiles(registry, sourceLibrary);
   const revisions = recordRevisionIndex(reader);
   const samples = sampleProvenance(reader, registry);
-  const due = dueSource(reader, resolution, context, calendar.localDate, revisions, samples);
-  const notifications = automationNotificationSource(reader);
+  const dispositions = reader.inboxDispositions?.() ?? [];
+  const due = dueSource(reader, resolution, context, calendar.localDate, revisions, samples, dispositions);
+  const notifications = automationNotificationSource(reader, dispositions, context.now);
   const changed = recentlyChangedSource(reader, revisions, samples);
   const savedViews = savedViewSource(reader);
   const navigation = navigationState(reader);
@@ -798,7 +810,7 @@ export function projectDailyHome(
       readyProfileIds: resolution.ready.map(profile => profile.profileId).sort(compare),
       issueProfileIds: resolution.issues.map(issue => issue.profileId).sort(compare),
     },
-    dispositionWatermark: "0",
+    dispositionWatermark: String(Math.max(0, ...dispositions.map(row => row.revision))),
     sourceWatermarks: sources.map(source => ({
       sourceId: source.sourceId,
       watermark: source.watermark,
@@ -807,7 +819,8 @@ export function projectDailyHome(
     })),
     localDate: calendar.localDate,
     timeZone: context.timeZone,
-    projectionValidUntil: calendar.nextLocalMidnight,
+    projectionValidUntil: dispositions.reduce((next, row) => row.state === "snoozed" && row.until! > context.now && row.until! < next
+      ? row.until! : next, calendar.nextLocalMidnight),
   };
   const draft = {
     generatedAt: context.now,
