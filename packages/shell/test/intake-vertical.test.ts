@@ -1,3 +1,4 @@
+import { ownedRelayApp } from "../../backend/test/helpers/owned-relay-app";
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../../backend/src/app";
@@ -62,10 +63,12 @@ describe("F2 intake vertical", () => {
         relayBaseUrl: "https://relay.example.test", publishedAt: "2026-09-07T12:00:00.000Z",
         revokedAt: null,
       };
-      store.saveIntakeForm(localForm);
+      store.saveIntakeForm({ schema: 2, publicForm: { ...form, delivery: { expiresAt: form.delivery.expiresAt } },
+        ownerSource: { appInstanceId: `app_${"a".repeat(26)}`, activeGenerationId: `gen_${"b".repeat(26)}`, lineageEpoch: "0" },
+        relayBaseUrl: localForm.relayBaseUrl, publishedAt: localForm.publishedAt, revokedAt: null, terminalReason: null });
 
       const relayStore = new MemoryIntakeRelayStore({ now: () => Date.parse("2026-09-07T12:00:00.000Z") });
-      const app = createApp({ intakeRelay: relayStore });
+      const app = ownedRelayApp({ intakeRelay: relayStore });
       expect((await app.request("/intake/forms", {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({

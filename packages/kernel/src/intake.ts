@@ -5,10 +5,10 @@ import {
   IntakeSubmissionPlaintextV1,
   IntakeSubmissionValueV1,
   IntakeUploadedFileV1,
-  LocalIntakeFormV1,
+  LocalIntakeFormV2,
   type IntakeUploadedFileV1 as IntakeUploadedFile,
   type PublicFileRequestV1,
-  type PublicIntakeFormV1,
+  type IntakeFormDefinitionV1,
 } from "@clay/schema/intake";
 import { ClayError } from "./errors";
 import type { RegColumn, RegTable, Registry } from "./registry";
@@ -90,9 +90,9 @@ export type IntakeDeliveryFailure = {
   updatedAt: string;
 };
 
-export type IntakeLocalStateV1 = {
-  schema: 1;
-  forms: LocalIntakeFormV1[];
+export type IntakeLocalStateV2 = {
+  schema: 2;
+  forms: LocalIntakeFormV2[];
   submissions: StoredIntakeSubmissionV1[];
   deliveryFailures: IntakeDeliveryFailure[];
   rules: IntakeAutoAcceptRuleV1[];
@@ -201,8 +201,8 @@ const DeliveryFailureSchema = z.object({
 }).strict();
 
 const LocalStateSchema = z.object({
-  schema: z.literal(1),
-  forms: z.array(LocalIntakeFormV1).max(100),
+  schema: z.literal(2),
+  forms: z.array(LocalIntakeFormV2).max(100),
   submissions: z.array(StoredSubmissionSchema).max(500),
   deliveryFailures: z.array(DeliveryFailureSchema).max(500).default([]),
   rules: z.array(IntakeAutoAcceptRuleV1).max(100),
@@ -222,70 +222,25 @@ const LocalStateSchema = z.object({
   }
 });
 
-export function emptyIntakeState(): IntakeLocalStateV1 {
+export function emptyIntakeState(): IntakeLocalStateV2 {
   return {
-    schema: 1, forms: [], submissions: [], deliveryFailures: [],
+    schema: 2, forms: [], submissions: [], deliveryFailures: [],
     rules: [], simulations: [], receipts: [],
   };
 }
 
-function migrateLegacyIntakeState(input: unknown): unknown {
-  if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
-  const source = input as Record<string, unknown>;
-  const submissions = Array.isArray(source.submissions)
-    ? source.submissions.map(entry => {
-      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return entry;
-      const stored = entry as Record<string, unknown>;
-      const rawSubmission = stored.submission;
-      if (typeof rawSubmission !== "object" || rawSubmission === null
-          || Array.isArray(rawSubmission)) return entry;
-      const body = rawSubmission as Record<string, unknown>;
-      const rawFiles = Array.isArray(body.files) ? body.files : [];
-      const reviews = Array.isArray(stored.files) ? stored.files : [];
-      const quarantineIds = new Set(reviews.flatMap(review =>
-        typeof review === "object" && review !== null && !Array.isArray(review)
-          && (review as Record<string, unknown>).status === "quarantined"
-          && typeof (review as Record<string, unknown>).uploadId === "string"
-          ? [(review as Record<string, unknown>).uploadId as string] : []));
-      const legacyBytes = rawFiles.flatMap(file => {
-        if (typeof file !== "object" || file === null || Array.isArray(file)) return [];
-        const value = file as Record<string, unknown>;
-        return typeof value.uploadId === "string" && typeof value.bytes === "string"
-          && quarantineIds.has(value.uploadId)
-          ? [{ uploadId: value.uploadId, bytes: value.bytes }] : [];
-      });
-      const files = rawFiles.map(file => {
-        if (typeof file !== "object" || file === null || Array.isArray(file)) return file;
-        const { bytes: _released, ...metadata } = file as Record<string, unknown>;
-        return metadata;
-      });
-      const terminal = stored.status === "accepted" || stored.status === "rejected";
-      return {
-        ...stored,
-        submission: { ...body, files },
-        quarantinedFiles: Array.isArray(stored.quarantinedFiles)
-          ? stored.quarantinedFiles : (terminal ? [] : legacyBytes),
-        terminalAt: typeof stored.terminalAt === "string" || stored.terminalAt === null
-          ? stored.terminalAt : (terminal ? stored.stagedAt : null),
-      };
-    }) : source.submissions;
-  return {
-    ...source,
-    submissions,
-    deliveryFailures: Array.isArray(source.deliveryFailures) ? source.deliveryFailures : [],
-  };
-}
-
-export function parseIntakeState(input: unknown): IntakeLocalStateV1 {
+export function parseIntakeState(input: unknown): IntakeLocalStateV2 {
   if (input === undefined) return emptyIntakeState();
-  const parsed = LocalStateSchema.safeParse(migrateLegacyIntakeState(input));
+  // V2 is a closed physical contract, not an implicit legacy migration. Original
+  // V1 state remains quarantined separately; malformed V2 is never normalized.
+  const parsed = LocalStateSchema.safeParse(input);
   if (!parsed.success)
     throw new ClayError("E_VALIDATION", "local intake state is invalid", parsed.error.issues.map(issue => issue.message));
   return parsed.data;
 }
 
-export function parseLocalIntakeForm(input: unknown): LocalIntakeFormV1 {
-  const parsed = LocalIntakeFormV1.safeParse(input);
+export function parseLocalIntakeForm(input: unknown): LocalIntakeFormV2 {
+  const parsed = LocalIntakeFormV2.safeParse(input);
   if (!parsed.success)
     throw new ClayError("E_VALIDATION", "local intake form is invalid", parsed.error.issues.map(issue => issue.message));
   return parsed.data;
@@ -339,7 +294,7 @@ export type ResolvedIntakeForm = {
 };
 
 export function resolveIntakeForm(
-  form: PublicIntakeFormV1,
+  form: IntakeFormDefinitionV1,
   registry: Registry,
   currentVersion: number,
 ): ResolvedIntakeForm {
@@ -487,7 +442,7 @@ export function inspectIntakeFile(
 }
 
 function scalarValueIssue(
-  field: PublicIntakeFormV1["fields"][number],
+  field: IntakeFormDefinitionV1["fields"][number],
   value: string | number | boolean,
 ): string | null {
   switch (field.type) {
@@ -515,7 +470,7 @@ function scalarValueIssue(
 }
 
 export function validateSubmissionForForm(
-  form: PublicIntakeFormV1,
+  form: IntakeFormDefinitionV1,
   submission: IntakeSubmissionPlaintextV1,
   resolved: ResolvedIntakeForm,
 ): {
@@ -582,7 +537,7 @@ function stableJson(input: unknown): string {
 }
 
 export function autoAcceptFingerprint(
-  form: PublicIntakeFormV1,
+  form: IntakeFormDefinitionV1,
   draft: IntakeAutoAcceptDraftV1,
 ): string {
   return sha256HexSync(new TextEncoder().encode(stableJson({ schema: 1, form, draft })));
@@ -621,7 +576,7 @@ export function mintIntakeReceiptId(): string {
 
 export function intakeInboxItem(
   stored: StoredIntakeSubmissionV1,
-  form: LocalIntakeFormV1,
+  form: LocalIntakeFormV2,
 ): IntakeInboxItem {
   return {
     formId: stored.submission.formId,

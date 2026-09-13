@@ -24,7 +24,8 @@ import {
   buildCurrentViewProjectionScopeV1, buildRecordProjectionScopeV1, localDateAnchorV1,
   type LocalProjectionScopeV1,
 } from "./projection-scope";
-import { getBackendUrl, getSessionToken } from "./settings";
+import { getSessionToken } from "./settings";
+import { getRelayOwnerUrl } from "../intake/relay-owner-configuration";
 import { BrowserShareRelayClient } from "../share/relay-client";
 import type { ShareAttachmentChoiceV1 } from "../share/ShareDialog";
 export { loadAllTableRows } from "./paged-query";
@@ -398,8 +399,9 @@ export function DataView(props: {
     return coordinator.runProjection(session, operation);
   }, [coordinator]);
   const shareRelay = useMemo(() => {
-    const relayUrl = getBackendUrl() ?? window.location.origin;
-    return new BrowserShareRelayClient(relayUrl, getSessionToken(relayUrl));
+    const relayUrl = getRelayOwnerUrl();
+    if (!relayUrl) return null;
+    try { return new BrowserShareRelayClient(relayUrl, getSessionToken(relayUrl)); } catch { return null; }
   }, []);
 
   const openRecordDetail = (table: string, id: string, append = false): void => {
@@ -1526,6 +1528,11 @@ export function DataView(props: {
         /></Suspense> : null}
       {shareScope ? <Suspense fallback={null}><ShareDialog
           worker={{
+            presentationSource: async () => {
+              const source = await worker.presentationSource();
+              if (source.appInstanceId !== props.appInstanceId) throw new Error("Original sharing app changed");
+              return source;
+            },
             projectExport: (request, signal) => runProjection(() => worker.projectExport(request, signal)),
             attachmentsForRecord: (table, rowId, field) =>
               worker.attachmentsForRecord(table, rowId, field),

@@ -1,9 +1,6 @@
 import { ShareIdV1, ShareRevokeTokenV1 } from "@clay/schema/share";
 import { parseRecipientShareLocationV1 } from "./crypto";
 
-const OWNER_SHARES_KEY_V1 = "clay_owner_share_receipts_v1";
-const MAX_OWNER_RECEIPTS_V1 = 100;
-
 export type OwnerShareReceiptV1 = Readonly<{
   schema: 1;
   shareId: string;
@@ -16,16 +13,13 @@ export type OwnerShareReceiptV1 = Readonly<{
   revokedAt: string | null;
 }>;
 
-type StorageReader = Pick<Storage, "getItem">;
-type StorageWriter = Pick<Storage, "getItem" | "setItem">;
-
 function instant(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const time = Date.parse(value);
   return Number.isFinite(time) && new Date(time).toISOString() === value ? value : null;
 }
 
-function parseReceipt(value: unknown): OwnerShareReceiptV1 | null {
+export function parseOwnerShareReceiptV1(value: unknown): OwnerShareReceiptV1 | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
   const keys = [
@@ -47,38 +41,5 @@ function parseReceipt(value: unknown): OwnerShareReceiptV1 | null {
   return raw as OwnerShareReceiptV1;
 }
 
-export function loadOwnerShareReceiptsV1(storage: StorageReader): OwnerShareReceiptV1[] {
-  try {
-    const parsed = JSON.parse(storage.getItem(OWNER_SHARES_KEY_V1) ?? "[]") as unknown;
-    if (!Array.isArray(parsed) || parsed.length > MAX_OWNER_RECEIPTS_V1) return [];
-    const receipts = parsed.map(parseReceipt);
-    if (receipts.some(receipt => receipt === null)) return [];
-    return receipts as OwnerShareReceiptV1[];
-  } catch { return []; }
-}
-
-export function saveOwnerShareReceiptV1(
-  storage: StorageWriter, receiptInput: OwnerShareReceiptV1,
-): OwnerShareReceiptV1[] {
-  const receipt = parseReceipt(receiptInput);
-  if (!receipt) throw new Error("invalid owner share receipt");
-  const without = loadOwnerShareReceiptsV1(storage)
-    .filter(item => item.shareId !== receipt.shareId);
-  const next = [receipt, ...without].slice(0, MAX_OWNER_RECEIPTS_V1);
-  storage.setItem(OWNER_SHARES_KEY_V1, JSON.stringify(next));
-  return next;
-}
-
-export function markOwnerShareRevokedV1(
-  storage: StorageWriter, shareId: string, revokedAt: string,
-): OwnerShareReceiptV1[] {
-  ShareIdV1.parse(shareId);
-  if (!instant(revokedAt)) throw new Error("invalid revocation instant");
-  const current = loadOwnerShareReceiptsV1(storage);
-  const found = current.find(receipt => receipt.shareId === shareId);
-  if (!found) throw new Error("owner share receipt not found");
-  const next = current.map(receipt => receipt.shareId === shareId
-    ? { ...receipt, revokedAt } : receipt);
-  storage.setItem(OWNER_SHARES_KEY_V1, JSON.stringify(next));
-  return next;
-}
+// The legacy localStorage load/replace/revoke writers are retired. Existing
+// receipts stay untouched; new owner workflows use the source-bound V2 vault.

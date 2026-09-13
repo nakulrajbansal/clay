@@ -3,6 +3,7 @@ import {
   TargetEvidenceV1,
   RecoverablePresentationRouteV1,
   AutomationCommandPayloadV1,
+  IntakeCommandPayloadV1,
   type PresentationMutationOutcomeV1,
   type ProductionRequestReceiptV1 as ProductionRequestReceipt,
   type TargetEvidenceV1 as TargetEvidence,
@@ -44,6 +45,8 @@ import {
 import type { LiveWriteAuthority } from "./live-write-guard";
 import { executeAutomationObserverAuthorityRoute } from "./production-automation-observer-routes";
 import { assertClosedAutomationDraftInput } from "./production-automation-input";
+import { LocalIntakeFormV2 } from "@clay/schema/intake";
+import { assertIntakeCommandSource, assertIntakeResponsePublic } from "./production-intake-boundary";
 import {
   copyPrivateMetricOperationalState,
   executePrivateMetricAuthorityRoute,
@@ -135,6 +138,8 @@ import { TargetAuthorityStore } from "./target-authority";
 
 const QUICK_CAPTURE_LAST_TABLE_SETTING = "quick_capture_last_table_v1";
 const RESERVED_SETTING_OWNERS = new Map<string, string>([
+  ["intake_v1", "legacy intake custody quarantine"],
+  ["intake_v2", "intake authority"],
   ["shell_id", "starter activation"],
   [DAILY_SOURCE_LIBRARY_SETTING, "Daily Home source authority"],
   [DAILY_NAVIGATION_SETTING, "Daily Home navigation authority"],
@@ -221,6 +226,7 @@ type CapturedProductionMutation = CapturedCoreMutation | Readonly<{
   }
   | { route: "upsertAutomation"; payload: Readonly<{ input: Readonly<JsonRecord> }> }
   | { route: "automation.command"; payload: AutomationCommandPayloadV1 }
+  | { route: "intake.command"; payload: IntakeCommandPayloadV1 }
   | {
     route: "saveAutomationDraft";
     payload: Readonly<{ input: Readonly<JsonRecord>; expectedRevision: number | null }>;
@@ -667,6 +673,11 @@ function captureMutation(input: unknown): CapturedProductionMutation {
     const done = (captured: unknown): CapturedProductionMutation =>
       capturedProductionMutation(requestId, route, captured);
     switch (route) {
+      case "intake.command": {
+        const captured = IntakeCommandPayloadV1.parse(captureJsonRecord(payload));
+        const inner = captureMutation({ requestId, route: captured.command.route, payload: captured.command.payload });
+        return done(captureJsonRecord({ ...captured, command: { route: inner.route, payload: inner.payload } }));
+      }
       case "automation.command": {
         const captured = AutomationCommandPayloadV1.parse(captureJsonRecord(payload));
         // The closed inner route enumeration excludes this envelope.
@@ -851,7 +862,7 @@ function captureMutation(input: unknown): CapturedProductionMutation {
           "regroup_board", "make_workflow", "chart_metric",
         ].includes(captured.kind as string)) throw new Error();
         break;
-      case "intake.saveForm": capturedJsonRecord(captured.form); break;
+      case "intake.saveForm": LocalIntakeFormV2.parse(capturedJsonRecord(captured.form)); break;
       case "intake.markPublished": strings("formId", "publishedAt"); break;
       case "intake.revokeForm": strings("formId", "revokedAt"); break;
       case "intake.markExpired": strings("formId", "expiredAt"); break;
@@ -1121,13 +1132,14 @@ function executeCapturedMutation(
 ): CapturedMutationExecution {
   if (request.route === "archive.restore.samples" || request.route === "app.fork.samples")
     throw invalid("sample re-attestation requires the fresh-install capability");
-  if (request.route === "automation.command") {
+  if (request.route === "automation.command" || request.route === "intake.command") {
     if (!sameTarget(request.payload.authorityTarget, expectedTarget))
-      throw invalid("Reviewed automation source changed; reconcile the original request before reviewing again");
+      throw invalid("Reviewed command source changed; reconcile the original request before reviewing again");
     return executeCapturedMutation(store, captureMutation({ requestId: request.requestId,
       route: request.payload.command.route, payload: request.payload.command.payload }),
       executionInstant, operationId, expectedTarget, transactionCapability, driver);
   }
+  if (request.route.startsWith("intake.")) assertIntakeCommandSource(store, request.route, request.payload, expectedTarget);
   if (isCapturedCoreMutation(request))
     return capturedExecution(captureJsonValue(
       executeCapturedCoreMutation(store, request, expectedTarget, driver, executionInstant ?? undefined), new WeakSet(),
@@ -1644,7 +1656,7 @@ export class ProductionMutationCoordinator {
       return this.#executeCaptured(captured);
     });
     this.#tail = run.then(() => undefined, () => undefined);
-    return run;
+    return run.then(result => { assertIntakeResponsePublic(captured.route, result.result); return result; });
   }
 
   /** Serialize an authority-owned read behind prior writes and ahead of later writes. */
@@ -1739,7 +1751,7 @@ export class ProductionMutationCoordinator {
         && captured.route !== "daily.undoCapture" && captured.route !== "schema.undoRelationConversion"
         && captured.route !== "daily.source" && captured.route !== "daily.navigation"
         && captured.route !== "daily.inbox" && captured.route !== "daily.undoInbox"
-        && captured.route !== "automation.command")
+        && captured.route !== "automation.command" && captured.route !== "intake.command")
       throw invalid("Only explicitly enumerated source-bound presentation commands can be cancelled here");
     return this.serializeRead(async () => {
       this.#ensureWriteFence();
@@ -1782,6 +1794,7 @@ export class ProductionMutationCoordinator {
       if (receipt.responseJson === null || receipt.resultingProtectionRevision === null || receipt.resultingStateSha256 === null)
         throw invalid("Presentation receipt is incomplete");
       const decoded = decodeProductionResponse(receipt.responseJson);
+      assertIntakeResponsePublic(captured.route, decoded.result);
       if (decoded.kind !== "envelope" || decoded.route !== captured.route) throw invalid("Presentation receipt route differs");
       if (receipt.state === "failed") {
         const physical = TargetAuthorityStore.open(this.#driver).reservations().find(row => row.operationId === receipt.operationId);
@@ -1979,6 +1992,7 @@ export class ProductionMutationCoordinator {
     const executionInstant = request.route === "starter.seed"
         || request.route.startsWith("daily.")
         || request.route === "automation.command"
+        || request.route.startsWith("intake.")
         || request.route === "attachment.purge"
         || request.route === "saveAutomationDraft"
         || request.route === "saveAutomationRecipeDraft"

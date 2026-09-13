@@ -93,6 +93,13 @@ function clayStorePublicWriterNames(text: string): Set<string> {
 }
 
 describe("production mutation route census", () => {
+  it("retires direct intake writers; the public UI uses one explicitly source-bound command", () => {
+    for (const name of ["saveIntakeForm", "markIntakeFormPublished", "revokeIntakeForm", "markIntakeFormExpired", "stageIntakeSubmission", "recordIntakeDeliveryFailure",
+      "authorizeIntakeDeliveryDiscard", "resolveIntakeDeliveryFailure", "rejectIntakeSubmission", "simulateIntakeAutoAccept", "enableIntakeAutoAccept", "disableIntakeAutoAccept", "processIntakeAutoAccept", "acceptIntakeSubmission", "undoIntakeReceipt"] as const)
+      expect(DB_WORKER_ROUTE_CENSUS[name].enforcement).toBe("unavailable");
+    expect(DB_WORKER_ROUTE_CENSUS.intakeCommand.enforcement).toBe("authority");
+    expect(source("packages/shell/src/app/IntakeCenter.tsx")).not.toContain("props.worker.saveIntakeForm");
+  });
   it("recognizes a delegated physical Inbox writer without classifying its paired read as a write", () => {
     expect([...clayStorePublicWriterNames(`class ClayStore {
       writeInboxDisposition(input) { return writeInboxDisposition(this.driver, input); }

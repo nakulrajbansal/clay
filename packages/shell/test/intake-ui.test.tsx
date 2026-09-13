@@ -1,12 +1,13 @@
 /** @vitest-environment jsdom */
+/** @vitest-environment-options {"url":"https://app.example.test"} */
 import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   IntakeDeliveryFailure, IntakeInboxItem, RegTable, SemanticSchemaTraceV1,
 } from "@clay/kernel";
 import type {
-  IntakeSubmissionPlaintextV1, LocalIntakeFormV1, PublicIntakeLinkPayloadV1,
+  IntakeSubmissionPlaintextV1, LocalIntakeFormV2, PublicIntakeLinkPayloadV1,
 } from "@clay/schema/intake";
 import { IntakeCenter } from "../src/app/IntakeCenter";
 import { PublicIntakeForm } from "../src/intake/PublicIntakeForm";
@@ -14,12 +15,49 @@ import {
   decryptIntakeSubmission, encryptIntakeSubmission, generateIntakeOwnerKeyPair,
 } from "../src/intake/crypto";
 import type { WorkerClient } from "../src/app/worker-client";
+import { hydrateIntakeOwnerForm, type IntakeOwnerCustody, type IntakeOwnerVault } from "../src/intake/owner-custody";
+import { mintIntakeToken } from "../src/intake/client";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const tableId = "tbl_018f0000-0000-7000-8000-000000000001";
 const nameFieldId = "fld_018f0000-0000-7000-8000-000000000002";
 const fileFieldId = "fld_018f0000-0000-7000-8000-000000000003";
+const appInstanceId = `app_${"a".repeat(26)}`;
+const target = { appInstanceId, activeGenerationId: `gen_${"b".repeat(26)}`, lineageEpoch: "0", protectionRevision: "1", digestSchema: 1 as const, stateSha256: `sha256:${"c".repeat(64)}` };
+const ownerSource = { appInstanceId, activeGenerationId: target.activeGenerationId, lineageEpoch: target.lineageEpoch };
+const custody = new Map<string, IntakeOwnerCustody>();
+const vault: IntakeOwnerVault = { read: async key => custody.get(key) ?? null, insert: async row => { custody.set(row.key, structuredClone(row)); } };
+beforeEach(() => { custody.clear(); sessionStorage.clear(); }); // Owned jsdom only.
+
+// The UI protocol fixture transports public V2 metadata only; generated private
+// fixture material lives in the separate owned vault, just as at the shell boundary.
+function protocol(methods: Record<string, (...args: any[]) => Promise<any>>): WorkerClient {
+  let serial = 0; let current = structuredClone(target); const outcomes = new Map<string, unknown>();
+  const handlers: Record<string, (p: any) => Promise<unknown>> = {
+    "intake.saveForm": p => methods.saveIntakeForm!(p.form),
+    "intake.markPublished": p => methods.markIntakeFormPublished!(p.formId, p.publishedAt),
+    "intake.markExpired": p => methods.markIntakeFormExpired!(p.formId, p.expiredAt),
+    "intake.revokeForm": p => methods.revokeIntakeForm!(p.formId, p.revokedAt),
+    "intake.stageSubmission": p => methods.stageIntakeSubmission!(p.submission),
+    "intake.recordDeliveryFailure": p => methods.recordIntakeDeliveryFailure!(p.failure),
+    "intake.authorizeDeliveryDiscard": p => methods.authorizeIntakeDeliveryDiscard!(p.formId, p.submissionId, p.authorizedAt),
+    "intake.resolveDeliveryFailure": p => methods.resolveIntakeDeliveryFailure!(p.formId, p.submissionId, p.resolution, p.resolvedAt),
+  };
+  return {
+    createMutationContext: () => ({ requestId: `req_${String.fromCharCode(97 + ++serial).repeat(26)}` }),
+    intakePresentation: async () => ({ authorityTarget: current, legacyCustody: "none", forms: await methods.listIntakeForms!(), rules: [],
+      inbox: await methods.intakeInbox!(), receipts: await methods.intakeReceipts!(), deliveryFailures: await methods.intakeDeliveryFailures!(), tables, trace: semanticTrace }),
+    mutationOutcome: async (_route: string, _payload: unknown, context: { requestId: string }) => outcomes.get(context.requestId) ?? { status: "not_invoked" },
+    intakeCommand: async (payload: any, context: { requestId: string }) => {
+      expect(JSON.stringify(payload).match(/ownerPrivateKey|ownerToken|submitToken/)).toBeNull();
+      expect(payload.authorityTarget).toEqual(current);
+      const result = await handlers[payload.command.route]!(payload.command.payload);
+      current = { ...current, protectionRevision: String(Number(current.protectionRevision) + 1) };
+      outcomes.set(context.requestId, { status: "recorded", current: true, result, target: current }); return result;
+    },
+  } as unknown as WorkerClient;
+}
 const tables = [{
   name: "requests",
   columns: [
@@ -52,9 +90,9 @@ function publishedForm(input: {
   submitToken: string;
   ownerToken: string;
   expiresAt: string;
-}): LocalIntakeFormV1 {
-  return {
-    schema: 1,
+}): LocalIntakeFormV2 {
+  const form: LocalIntakeFormV2 = {
+    schema: 2, ownerSource, terminalReason: null,
     publicForm: {
       schema: 1,
       formId: input.formId,
@@ -71,29 +109,94 @@ function publishedForm(input: {
         algorithm: "ECDH-P256-HKDF-SHA256-AES-256-GCM",
         ownerPublicKey: input.publicKey,
       },
-      delivery: { submitToken: input.submitToken, expiresAt: input.expiresAt },
+      delivery: { expiresAt: input.expiresAt },
     },
-    ownerPrivateKey: input.privateKey,
-    ownerToken: input.ownerToken,
     relayBaseUrl: "https://relay.example.test/",
     publishedAt: new Date(Date.parse(input.expiresAt) - 86_400_000).toISOString(),
     revokedAt: null,
   };
+  const key = JSON.stringify([1, "https://app.example.test", appInstanceId, target.activeGenerationId, target.lineageEpoch, "https://relay.example.test", form.publicForm.formId]);
+  custody.set(key, { schema: 1, key, shellOrigin: "https://app.example.test", form,
+    ownerPrivateKey: input.privateKey, ownerToken: mintIntakeToken(), submitToken: mintIntakeToken() });
+  return form;
 }
 
 describe("public intake UI", () => {
+  it("binds auto-accept enable to the exact simulation receipt, not a later presentation read", async () => {
+    const keys = await generateIntakeOwnerKeyPair();
+    const form = publishedForm({ publicKey: keys.publicKey, privateKey: keys.privateKey,
+      formId: `form_${"p".repeat(26)}`, title: "Reviewed rule", submitToken: "unused", ownerToken: "unused", expiresAt: "2099-10-01T00:00:00.000Z" });
+    const simulatedTarget = { ...target, protectionRevision: "2" };
+    const newerTarget = { ...target, protectionRevision: "3" };
+    let simulated = false; let serial = 0; const calls: any[] = [];
+    const results = new Map<string, unknown>();
+    const worker = {
+      createMutationContext: () => ({ requestId: `req_${String.fromCharCode(97 + ++serial).repeat(26)}` }),
+      intakePresentation: async () => ({ authorityTarget: simulated ? newerTarget : target, legacyCustody: "none", forms: [form], rules: [], inbox: [], receipts: [], deliveryFailures: [], tables, trace: semanticTrace }),
+      mutationOutcome: async (_route: string, _payload: unknown, context: { requestId: string }) => results.get(context.requestId) ?? { status: "not_invoked" },
+      intakeCommand: async (payload: any, context: { requestId: string }) => {
+        calls.push(structuredClone(payload));
+        if (payload.command.route === "intake.enableAutoAccept") throw new Error("Owned intervening-write rejection");
+        simulated = true;
+        const result = { fingerprint: "d".repeat(64), pendingCount: 1, matchedSubmissionIds: [`sub_${"q".repeat(26)}`] };
+        results.set(context.requestId, { status: "recorded", current: false, result, target: simulatedTarget }); return result;
+      },
+    } as unknown as WorkerClient;
+    const host = document.createElement("div"); document.body.replaceChildren(host); const root = createRoot(host);
+    const button = (text: string) => [...document.body.querySelectorAll<HTMLButtonElement>("button")].find(row => row.textContent === text)!;
+    try {
+      await act(async () => root.render(<IntakeCenter appInstanceId={appInstanceId} ownerVault={vault} worker={worker} tables={tables} semanticTrace={semanticTrace}
+        relayBaseUrl="https://relay.example.test" publicBaseUrl="https://app.example.test" onClose={() => {}} onError={() => {}} onInfo={() => {}} />));
+      await flush(); await act(async () => button("Preview auto-accept").click()); await flush();
+      await act(async () => button("Enable this exact rule").click()); await flush();
+      expect(calls).toHaveLength(2);
+      expect(calls[1].authorityTarget).toEqual(simulatedTarget);
+      expect(calls[1].command.payload.draft).toEqual(calls[0].command.payload.draft);
+    } finally { await act(async () => root.unmount()); }
+  });
+
+  it("keeps retained publication recovery visible when relay configuration disappears", async () => {
+    const retained = "owned opaque incomplete intent";
+    sessionStorage.setItem(`clay_intake_publication_v1:${appInstanceId}`, retained);
+    const worker = protocol({ listIntakeForms: async () => [], intakeInbox: async () => [], intakeReceipts: async () => [], intakeDeliveryFailures: async () => [] });
+    const host = document.createElement("div"); document.body.replaceChildren(host); const root = createRoot(host);
+    try {
+      await act(async () => root.render(<IntakeCenter appInstanceId={appInstanceId} ownerVault={vault} worker={worker} tables={tables} semanticTrace={semanticTrace}
+        relayBaseUrl={null} publicBaseUrl="https://app.example.test" onClose={() => {}} onError={() => {}} onInfo={() => {}} />));
+      await flush();
+      expect(document.body.textContent).toContain("Retained intake work needs its original source and configuration");
+      expect(sessionStorage.getItem(`clay_intake_publication_v1:${appInstanceId}`)).toBe(retained);
+    } finally { await act(async () => root.unmount()); }
+  });
+
+  it("presents copied owner metadata as read-only instead of advertising another app's capabilities", async () => {
+    const keys = await generateIntakeOwnerKeyPair();
+    const original = publishedForm({ publicKey: keys.publicKey, privateKey: keys.privateKey,
+      formId: `form_${"r".repeat(26)}`, title: "Copied form", submitToken: "unused", ownerToken: "unused", expiresAt: "2099-10-01T00:00:00.000Z" });
+    const copied = { ...original, ownerSource: { ...original.ownerSource, appInstanceId: `app_${"z".repeat(26)}` } };
+    const worker = protocol({ listIntakeForms: async () => [copied], intakeInbox: async () => [], intakeReceipts: async () => [], intakeDeliveryFailures: async () => [] });
+    const host = document.createElement("div"); document.body.replaceChildren(host); const root = createRoot(host);
+    try {
+      await act(async () => root.render(<IntakeCenter appInstanceId={appInstanceId} ownerVault={vault} worker={worker} tables={tables} semanticTrace={semanticTrace}
+        relayBaseUrl="https://relay.example.test" publicBaseUrl="https://app.example.test" onClose={() => {}} onError={() => {}} onInfo={() => {}} />));
+      await flush();
+      expect(document.body.textContent).toContain("Copied form metadata is read-only");
+      expect([...document.body.querySelectorAll<HTMLButtonElement>("button")].some(row => ["Show public link", "Revoke", "Preview auto-accept"].includes(row.textContent ?? "") && !row.disabled)).toBe(false);
+    } finally { await act(async () => root.unmount()); }
+  });
+
   it("uses the shared modal contract for portal isolation, focus containment, Escape, and restoration", async () => {
     const visibleRects = vi.spyOn(HTMLElement.prototype, "getClientRects")
       .mockReturnValue({ length: 1, item: () => null, [Symbol.iterator]: function* () { /* visible */ } } as DOMRectList);
-    const worker = {
+    const worker = protocol({
       listIntakeForms: async () => [], intakeInbox: async () => [],
       intakeReceipts: async () => [], intakeDeliveryFailures: async () => [],
-    } as unknown as WorkerClient;
+    });
     function Probe(): React.JSX.Element {
       const [open, setOpen] = useState(false);
       return <div className="app">
         <button onClick={() => setOpen(true)}>Open public intake</button>
-        {open ? <IntakeCenter worker={worker} tables={tables} semanticTrace={semanticTrace}
+        {open ? <IntakeCenter appInstanceId={appInstanceId} ownerVault={vault} worker={worker} tables={tables} semanticTrace={semanticTrace}
           relayBaseUrl="https://relay.example.test" publicBaseUrl="https://app.example.test"
           onClose={() => setOpen(false)} onError={() => undefined} onInfo={() => undefined} /> : null}
       </div>;
@@ -157,7 +260,7 @@ describe("public intake UI", () => {
     ];
     const events: string[] = [];
     const errors: string[] = [];
-    const worker = {
+    const worker = protocol({
       listIntakeForms: async () => forms,
       intakeInbox: async () => [], intakeReceipts: async () => [], intakeDeliveryFailures: async () => [],
       markIntakeFormExpired: async (formId: string, at: string) => {
@@ -168,7 +271,7 @@ describe("public intake UI", () => {
         return forms[index]!;
       },
       processIntakeAutoAccept: async () => [],
-    } as unknown as WorkerClient;
+    });
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input); events.push(`fetch:${url}`);
       if (url.includes("form_aaaaaaaaaaaaaaaaaaaaaaaaaa"))
@@ -179,7 +282,7 @@ describe("public intake UI", () => {
     });
     const host = document.createElement("div"); document.body.replaceChildren(host);
     const root = createRoot(host);
-    await act(async () => root.render(<IntakeCenter worker={worker} tables={tables}
+    await act(async () => root.render(<IntakeCenter appInstanceId={appInstanceId} ownerVault={vault} worker={worker} tables={tables}
       semanticTrace={semanticTrace} relayBaseUrl="https://relay.example.test"
       publicBaseUrl="https://app.example.test" fetchImpl={fetchImpl}
       onClose={() => undefined} onError={message => errors.push(message)} onInfo={() => undefined} />));
@@ -206,7 +309,7 @@ describe("public intake UI", () => {
     let forms = [form];
     const revoked: string[] = [];
     const errors: string[] = [];
-    const worker = {
+    const worker = protocol({
       listIntakeForms: async () => forms,
       intakeInbox: async () => [], intakeReceipts: async () => [], intakeDeliveryFailures: async () => [],
       revokeIntakeForm: async (formId: string, at: string) => {
@@ -214,17 +317,19 @@ describe("public intake UI", () => {
         forms = [{ ...form, revokedAt: at, terminalReason: "revoked" }];
         return forms[0]!;
       },
-    } as unknown as WorkerClient;
+    });
     const fetchImpl = vi.fn(async () => new Response("gone", { status: 410 }));
     const host = document.createElement("div"); document.body.replaceChildren(host);
     const root = createRoot(host);
-    await act(async () => root.render(<IntakeCenter worker={worker} tables={tables}
+    await act(async () => root.render(<IntakeCenter appInstanceId={appInstanceId} ownerVault={vault} worker={worker} tables={tables}
       semanticTrace={semanticTrace} relayBaseUrl="https://relay.example.test"
       publicBaseUrl="https://app.example.test" fetchImpl={fetchImpl}
       onClose={() => undefined} onError={message => errors.push(message)} onInfo={() => undefined} />));
     await flush();
     await act(async () => [...document.body.querySelectorAll<HTMLButtonElement>("button")]
       .find(button => button.textContent === "Revoke")!.click());
+    await act(async () => [...document.body.querySelectorAll<HTMLButtonElement>("button")]
+      .find(button => button.textContent === "Confirm revocation")!.click());
     await flush();
     expect(revoked).toEqual([form.publicForm.formId]);
     expect(errors).toEqual([]);
@@ -250,9 +355,9 @@ describe("public intake UI", () => {
       submissionId: retryId, submittedAt: "2026-09-08T12:00:00.000Z",
       values: [{ fieldId: nameFieldId, value: "Ada Lovelace" }], files: [],
     };
-    const encrypted = await encryptIntakeSubmission(form.publicForm, plaintext);
+    const encrypted = await encryptIntakeSubmission((await hydrateIntakeOwnerForm(form, target, "https://app.example.test", vault)).publicForm, plaintext);
     const events: string[] = [];
-    const worker = {
+    const worker = protocol({
       listIntakeForms: async () => [form], intakeInbox: async () => [], intakeReceipts: async () => [],
       intakeDeliveryFailures: async () => failures,
       recordIntakeDeliveryFailure: async () => { throw new Error("unexpected decrypt failure"); },
@@ -273,7 +378,7 @@ describe("public intake UI", () => {
         failures = failures.filter(failure => failure.submissionId !== submissionId);
         return null;
       },
-    } as unknown as WorkerClient;
+    });
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (init?.method === "DELETE") {
@@ -288,7 +393,7 @@ describe("public intake UI", () => {
     });
     const host = document.createElement("div"); document.body.replaceChildren(host);
     const root = createRoot(host);
-    await act(async () => root.render(<IntakeCenter worker={worker} tables={tables}
+    await act(async () => root.render(<IntakeCenter appInstanceId={appInstanceId} ownerVault={vault} worker={worker} tables={tables}
       semanticTrace={semanticTrace} relayBaseUrl="https://relay.example.test"
       publicBaseUrl="https://app.example.test" fetchImpl={fetchImpl}
       onClose={() => undefined} onError={message => { throw new Error(message); }} onInfo={() => undefined} />));
@@ -320,26 +425,26 @@ describe("public intake UI", () => {
 
   it("previews a stable-id form before registering the relay and saving publication authority", async () => {
     const events: string[] = [];
-    const saved: LocalIntakeFormV1[] = [];
-    const worker = {
-      listIntakeForms: async () => [], intakeInbox: async () => [], intakeReceipts: async () => [],
+    const saved: LocalIntakeFormV2[] = [];
+    const worker = protocol({
+      listIntakeForms: async () => saved, intakeInbox: async () => [], intakeReceipts: async () => [],
       intakeDeliveryFailures: async () => [],
-      saveIntakeForm: async (form: LocalIntakeFormV1) => {
+      saveIntakeForm: async (form: LocalIntakeFormV2) => {
         events.push("local-draft"); saved[0] = form; return form;
       },
       markIntakeFormPublished: async (_id: string, at: string) => {
         events.push("local-published"); saved[0] = { ...saved[0]!, publishedAt: at }; return saved[0]!;
       },
-    } as unknown as WorkerClient;
+    });
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       events.push("ciphertext-relay-registration");
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       expect(body).not.toHaveProperty("ownerPrivateKey");
-      return new Response(JSON.stringify({ formId: body.formId }), { status: 201 });
+      return new Response(JSON.stringify({ formId: body.formId, expiresAt: body.expiresAt }), { status: 201 });
     });
     const host = document.createElement("div"); document.body.replaceChildren(host);
     const root = createRoot(host);
-    await act(async () => root.render(<IntakeCenter
+    await act(async () => root.render(<IntakeCenter appInstanceId={appInstanceId} ownerVault={vault}
       worker={worker}
       tables={tables}
       semanticTrace={semanticTrace}
@@ -368,7 +473,7 @@ describe("public intake UI", () => {
     expect(saved[0]?.publicForm.fields.map(item => item.fieldId)).toEqual([nameFieldId]);
     expect(saved[0]?.publicForm.fileRequests).toEqual([expect.objectContaining({
       fieldId: fileFieldId,
-      maxBytes: 5 * 1024 * 1024,
+      maxBytes: 200_000,
       allowedMimeTypes: ["image/png", "image/jpeg", "text/plain"],
     })]);
     const link = document.body.querySelector<HTMLInputElement>("input[readonly]")!.value;

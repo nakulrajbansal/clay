@@ -4,17 +4,17 @@ import {
 import type { AttachmentFile, AttachmentMetadata } from "@clay/kernel";
 import type { ProjectionArtifactV1, ProjectionRequestV1 } from "@clay/kernel/projection";
 import type { ShareApprovedScopeV1 } from "@clay/schema/share";
+import type { TargetEvidenceV1 } from "@clay/schema/catalog";
 import { ModalDialog } from "../app/ModalDialog";
 import type { LocalAttachmentAuthorityV1 } from "../app/projection-scope";
 import {
-  approveShareScopeV1, buildRecipientShareUrlV1, encryptApprovedShareV1,
+  approveShareScopeV1, encryptApprovedShareV1,
   shareScopeRequiresReapprovalV1,
   type ShareAttachmentApprovalV1,
 } from "./crypto";
-import {
-  loadOwnerShareReceiptsV1, markOwnerShareRevokedV1, saveOwnerShareReceiptV1,
-  type OwnerShareReceiptV1,
-} from "./owner-receipts";
+import type { OwnerShareReceiptV1 } from "./owner-receipts";
+import { ShareOwnerSession, type ShareOwnerRecord, type ShareOwnerVault } from "./owner-custody";
+import { IndexedDbShareOwnerVault } from "./owner-custody.browser";
 import type { ShareRelayClient } from "./relay-client";
 import "./ShareDialog.css";
 
@@ -22,6 +22,7 @@ export type ShareFieldChoiceV1 = Readonly<{ fieldId: string; label: string }>;
 export type ShareAttachmentChoiceV1 = ShareAttachmentApprovalV1
   & Readonly<Pick<LocalAttachmentAuthorityV1, "tableName" | "fieldName">>;
 type ShareWorkerV1 = Readonly<{
+  presentationSource(): Promise<TargetEvidenceV1>;
   projectExport(request: ProjectionRequestV1, signal?: AbortSignal): Promise<ProjectionArtifactV1>;
   attachmentsForRecord(
     table: string, rowId: string, field: string,
@@ -30,6 +31,7 @@ type ShareWorkerV1 = Readonly<{
 }>;
 
 type ApprovalState = Readonly<{
+  source: TargetEvidenceV1;
   scope: ShareApprovedScopeV1;
   expiresAt: string;
 }>;
@@ -77,30 +79,46 @@ export function ShareDialog(props: Readonly<{
   request: ProjectionRequestV1;
   fieldChoices: readonly ShareFieldChoiceV1[];
   attachmentChoices: readonly ShareAttachmentChoiceV1[];
-  relay: ShareRelayClient;
+  relay: ShareRelayClient | null;
   viewerOrigin: string;
   now?: () => Date;
   storage?: Storage;
+  ownerVault?: ShareOwnerVault;
   onClose: () => void;
   returnFocusRef?: RefObject<HTMLElement | null>;
 }>): React.JSX.Element {
   const clock = props.now ?? (() => new Date());
   const storage = props.storage ?? window.localStorage;
+  const vault = useMemo(() => props.ownerVault ?? new IndexedDbShareOwnerVault(), [props.ownerVault]);
+  const owner = useMemo(() => {
+    try { return props.relay ? new ShareOwnerSession(vault, props.relay, location.origin, props.viewerOrigin,
+      () => props.worker.presentationSource(), props.now) : null; } catch { return null; }
+  }, [vault, props.relay, props.viewerOrigin, props.worker, props.now]);
   const initialFields = props.request.fieldIds.filter(id =>
     props.fieldChoices.some(choice => choice.fieldId === id));
   const [fieldIds, setFieldIds] = useState<readonly string[]>(initialFields);
   const [attachmentIds, setAttachmentIds] = useState<readonly string[]>([]);
   const [duration, setDuration] = useState("7");
   const [previewResult, setPreviewResult] = useState<Readonly<{
-    requestKey: string; artifact: ProjectionArtifactV1;
+    requestKey: string; artifact: ProjectionArtifactV1; source: TargetEvidenceV1;
   }> | null>(null);
   const [approval, setApproval] = useState<ApprovalState | null>(null);
   const [needsReapproval, setNeedsReapproval] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<OwnerShareReceiptV1 | null>(null);
-  const [receipts, setReceipts] = useState<OwnerShareReceiptV1[]>(() =>
-    loadOwnerShareReceiptsV1(storage));
+  const [records, setRecords] = useState<ShareOwnerRecord[]>([]);
+  const [custodyReady, setCustodyReady] = useState(false);
+  const receipts = records.map(row => row.receipt);
+  const historicalReceipts = records.filter(row => row.state === "published" || row.state === "revoked").map(row => row.receipt);
+  const createdState = records.find(row => row.request.shareId === created?.shareId)?.state;
+  const pending = records.filter(row => row.state === "prepared" || row.state === "invoked" || row.state === "revoke_pending");
+  const refreshCustody = async (): Promise<void> => {
+    if (!owner) { setCustodyReady(false); return; }
+    try { setRecords(await owner.list()); setCustodyReady(true); }
+    catch { setCustodyReady(false); throw new Error("Owner custody needs recovery; existing encrypted links were kept"); }
+  };
+  useEffect(() => { void refreshCustody().catch(reason => setError(reason.message)); }, [owner]);
 
   const currentRequest = useMemo(() => ({
     ...props.request,
@@ -122,8 +140,13 @@ export function ShareDialog(props: Readonly<{
       setError("Choose at least one field to share.");
       return () => controller.abort();
     }
-    void props.worker.projectExport(currentRequest, controller.signal).then(next => {
-      if (active) setPreviewResult({ requestKey, artifact: next });
+    void (async () => {
+      const source = await props.worker.presentationSource();
+      const next = await props.worker.projectExport(currentRequest, controller.signal);
+      if (JSON.stringify(await props.worker.presentationSource()) !== JSON.stringify(source)) throw new Error("Sharing source changed during preview");
+      return { next, source };
+    })().then(({ next, source }) => {
+      if (active) setPreviewResult({ requestKey, artifact: next, source });
     }).catch(reason => {
       if (active) setError(reason instanceof Error ? reason.message : "Share preview failed.");
     });
@@ -160,6 +183,7 @@ export function ShareDialog(props: Readonly<{
         props.attachmentChoices, attachmentIds,
       );
       setApproval({
+        source: previewResult!.source,
         scope: await approveShareScopeV1(currentRequest, selectedAttachments, artifact, at),
         expiresAt: expiration(at, duration),
       });
@@ -170,10 +194,13 @@ export function ShareDialog(props: Readonly<{
   };
 
   const create = async (): Promise<void> => {
-    if (!approval || !artifact || busy) return;
+    if (!approval || !artifact || busy || !owner || !custodyReady || pending.length) return;
     setBusy(true);
     setError(null);
     try {
+      if (JSON.stringify(await props.worker.presentationSource()) !== JSON.stringify(approval.source)) {
+        invalidateApproval(); throw new Error("Original sharing source changed; preview and approve again");
+      }
       const selectedAttachments = selectedAttachmentChoices(
         props.attachmentChoices, attachmentIds,
       );
@@ -222,44 +249,31 @@ export function ShareDialog(props: Readonly<{
         attachments: selectedFiles,
         expiresAt: approval.expiresAt,
       });
-      const accepted = await props.relay.create(encrypted.request);
-      const link = buildRecipientShareUrlV1({
-        viewerOrigin: props.viewerOrigin,
-        relayBaseUrl: props.relay.baseUrl,
-        shareId: accepted.shareId,
-        key: encrypted.key,
-      });
-      const receipt: OwnerShareReceiptV1 = {
-        schema: 1,
-        shareId: accepted.shareId,
-        title: artifact.projection.manifest.title,
-        url: link,
-        relayBaseUrl: props.relay.baseUrl,
-        expiresAt: accepted.expiresAt,
-        createdAt: clock().toISOString(),
-        revokeToken: encrypted.revokeToken,
-        revokedAt: null,
-      };
-      setReceipts(saveOwnerShareReceiptV1(storage, receipt));
-      setCreated(receipt);
+      const retained = await owner.prepare({ encrypted, source: approval.source, approval: approval.scope, title: artifact.projection.manifest.title });
+      const published = await owner.publish(retained.request.shareId);
+      setCreated(published.receipt); setApproval(null);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not create the encrypted link.");
-    } finally { setBusy(false); }
+    } finally { setBusy(false); await refreshCustody().catch(reason => setError(reason.message)); }
   };
 
   const revoke = async (receipt: OwnerShareReceiptV1): Promise<void> => {
     setBusy(true);
     setError(null);
     try {
-      await props.relay.revoke(receipt.shareId, receipt.revokeToken);
-      const revokedAt = clock().toISOString();
-      const next = markOwnerShareRevokedV1(storage, receipt.shareId, revokedAt);
-      setReceipts(next);
-      if (created?.shareId === receipt.shareId)
-        setCreated(next.find(item => item.shareId === receipt.shareId) ?? null);
+      if (!owner) throw new Error("Original sharing configuration is required");
+      const next = await owner.revoke(receipt.shareId);
+      if (created?.shareId === receipt.shareId) setCreated(next.receipt);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not revoke the link.");
-    } finally { setBusy(false); }
+    } finally { setBusy(false); await refreshCustody().catch(reason => setError(reason.message)); }
+  };
+  const resume = async (row: ShareOwnerRecord): Promise<void> => {
+    if (!owner || busy) return;
+    setBusy(true); setError(null);
+    try { setCreated((row.state === "revoke_pending" ? await owner.revoke(row.request.shareId) : await owner.publish(row.request.shareId)).receipt); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Original share needs recovery"); }
+    finally { setBusy(false); await refreshCustody().catch(reason => setError(reason.message)); }
   };
 
   const copy = async (): Promise<void> => {
@@ -287,9 +301,15 @@ export function ShareDialog(props: Readonly<{
       </div>
       <button type="button" aria-label="Close share dialog" onClick={props.onClose}>×</button>
     </header>
+    {!owner ? <p role="status">Encrypted sharing requires explicit relay configuration bound to this origin. Local Print and CSV remain available.</p> : null}
+    {storage.getItem("clay_owner_share_receipts_v1") !== null ? <p>Legacy share receipts remain untouched on this device. They are not rebound to this app.</p> : null}
+    {pending.map(row => <section key={row.request.shareId} role="status"><p>{row.receipt.title}: {row.state === "revoke_pending" ? "revocation acknowledgement pending" : "original encrypted snapshot retained"}.</p>
+      <button disabled={busy} onClick={() => void resume(row)}>Retry original {row.state === "revoke_pending" ? "revocation" : "share"}</button>
+      {row.state !== "revoke_pending" ? <button disabled={busy} onClick={() => void revoke(row.receipt)}>Revoke retained snapshot</button> : null}
+    </section>)}
 
     <section className="share-scope" aria-label="Share scope">
-      <fieldset>
+      <fieldset disabled={busy || pending.length > 0}>
         <legend>Fields included (stable-ID allowlist)</legend>
         {props.fieldChoices.map(field => <label key={field.fieldId}>
           <input type="checkbox" data-field-id={field.fieldId}
@@ -299,7 +319,7 @@ export function ShareDialog(props: Readonly<{
         </label>)}
         <small>Hidden and unselected fields are excluded structurally.</small>
       </fieldset>
-      <fieldset>
+      <fieldset disabled={busy || pending.length > 0}>
         <legend>Files included (separate approval)</legend>
         {props.attachmentChoices.length === 0
           ? <p>No attached files are available for this snapshot.</p>
@@ -312,7 +332,7 @@ export function ShareDialog(props: Readonly<{
         <small>Files are excluded unless checked separately.</small>
       </fieldset>
       <label className="share-expiry">Link expires
-        <select value={duration} onChange={event => {
+        <select disabled={busy || pending.length > 0} value={duration} onChange={event => {
           invalidateApproval();
           setDuration(event.currentTarget.value);
         }}>
@@ -342,30 +362,30 @@ export function ShareDialog(props: Readonly<{
     </section> : null}
 
     {created ? <section className="share-created" aria-live="polite">
-      <h3>{created.revokedAt ? "Link revoked" : "Encrypted link ready"}</h3>
+      <h3>{createdState === "revoke_pending" ? "Revocation acknowledgement pending" : created.revokedAt ? "Link revoked" : Date.parse(created.expiresAt) <= clock().getTime() ? "Link expired" : "Encrypted link ready"}</h3>
       <input data-share-link readOnly value={created.url} aria-label="Encrypted share link" />
-      {!created.revokedAt ? <>
+      {createdState === "published" && !created.revokedAt && Date.parse(created.expiresAt) > clock().getTime() ? <>
         <button type="button" onClick={() => void copy()}>Copy link</button>
         <button type="button" disabled={busy} onClick={() => void revoke(created)}>Revoke link</button>
-      </> : <p>Recipients can no longer load this ciphertext.</p>}
+      </> : <p>Revocation or expiry stops future relay retrieval. Copies already downloaded cannot be recalled.</p>}
     </section> : null}
 
-    {receipts.some(receipt => receipt.shareId !== created?.shareId) ?
+    {historicalReceipts.some(receipt => receipt.shareId !== created?.shareId) ?
       <details className="share-history"><summary>Earlier links</summary>
-        {receipts.filter(receipt => receipt.shareId !== created?.shareId).map(receipt =>
+        {historicalReceipts.filter(receipt => receipt.shareId !== created?.shareId).map(receipt =>
           <article key={receipt.shareId}>
             <span>{receipt.title} · expires {new Date(receipt.expiresAt).toLocaleDateString()}</span>
             {receipt.revokedAt ? <strong>Revoked</strong>
-              : <button type="button" disabled={busy}
-                  onClick={() => void revoke(receipt)}>Revoke</button>}
+              : <><button disabled={busy || pending.length > 0} onClick={() => setCreated(receipt)}>Show retained link</button><button type="button" disabled={busy}
+                  onClick={() => void revoke(receipt)}>Revoke</button></>}
           </article>)}
       </details> : null}
 
     <footer className="share-dialog-actions">
       <button type="button" onClick={props.onClose}>Cancel</button>
-      <button type="button" disabled={!artifact || busy}
+      <button type="button" disabled={!artifact || busy || !owner || !custodyReady || pending.length > 0}
         onClick={() => void approve()}>Approve this exact scope</button>
-      <button type="button" className="primary" disabled={!approval || !artifact || busy}
+      <button type="button" className="primary" disabled={!approval || !artifact || busy || !owner || !custodyReady || pending.length > 0}
         onClick={() => void create()}>{busy ? "Creating…" : "Create encrypted link"}</button>
     </footer>
   </ModalDialog>;

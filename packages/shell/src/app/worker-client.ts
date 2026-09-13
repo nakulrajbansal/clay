@@ -36,7 +36,7 @@ import { ClayError } from "@clay/kernel/errors";
 import { parseClosedBlueprintDirective } from "@clay/kernel/blueprint-contract";
 import type {
   IntakeAutoAcceptDraftV1, IntakeAutoAcceptRuleV1,
-  IntakeSubmissionPlaintextV1, LocalIntakeFormV1,
+  IntakeSubmissionPlaintextV1, LocalIntakeFormV2,
 } from "@clay/schema/intake";
 import { TargetEvidenceV1 } from "@clay/schema/catalog";
 import { BackupRetentionPlanV1, BackupRetentionHistoryV1, BackupRemovalAuthorizationV1, BackupRetentionReceiptV1,
@@ -1589,35 +1589,14 @@ export class WorkerClient {
   ): Promise<{ files: number; bytes: number }> {
     return this.mutationCall("purgeDeletedAttachments", {}, context);
   }
-  listIntakeForms(): Promise<LocalIntakeFormV1[]> {
+  intakeCommand<T>(payload: import("@clay/schema/catalog").IntakeCommandPayloadV1, context: WorkerMutationContext): Promise<T> {
+    return this.mutationCall("intakeCommand", structuredClone(payload), captureWorkerMutationContext(context));
+  }
+  intakePresentation(): Promise<{ authorityTarget: import("@clay/schema/catalog").TargetEvidenceV1; legacyCustody: "none" | "quarantined";
+    forms: LocalIntakeFormV2[]; rules: IntakeAutoAcceptRuleV1[]; inbox: IntakeInboxItem[]; receipts: IntakeAcceptanceReceipt[]; deliveryFailures: IntakeDeliveryFailure[];
+    tables: RegTable[]; trace: SemanticSchemaTraceV1 }> { return this.ephemeralCall("intakePresentation", {}); }
+  listIntakeForms(): Promise<LocalIntakeFormV2[]> {
     return this.ephemeralCall("listIntakeForms", {});
-  }
-  saveIntakeForm(
-    form: LocalIntakeFormV1,
-    context: WorkerMutationContext = createWorkerMutationContext(),
-  ): Promise<LocalIntakeFormV1> {
-    return this.mutationCall("saveIntakeForm", { form }, context);
-  }
-  markIntakeFormPublished(
-    formId: string,
-    publishedAt: string,
-    context: WorkerMutationContext = createWorkerMutationContext(),
-  ): Promise<LocalIntakeFormV1> {
-    return this.mutationCall("markIntakeFormPublished", { formId, publishedAt }, context);
-  }
-  revokeIntakeForm(
-    formId: string,
-    revokedAt: string,
-    context: WorkerMutationContext = createWorkerMutationContext(),
-  ): Promise<LocalIntakeFormV1> {
-    return this.mutationCall("revokeIntakeForm", { formId, revokedAt }, context);
-  }
-  markIntakeFormExpired(
-    formId: string,
-    expiredAt: string,
-    context: WorkerMutationContext = createWorkerMutationContext(),
-  ): Promise<LocalIntakeFormV1> {
-    return this.mutationCall("markIntakeFormExpired", { formId, expiredAt }, context);
   }
   intakeInbox(): Promise<IntakeInboxItem[]> {
     return this.ephemeralCall("intakeInbox", {});
@@ -1627,85 +1606,6 @@ export class WorkerClient {
   }
   intakeDeliveryFailures(): Promise<IntakeDeliveryFailure[]> {
     return this.ephemeralCall("intakeDeliveryFailures", {});
-  }
-  recordIntakeDeliveryFailure(
-    input: { formId: string; submissionId: string; envelopeSha256: string; failedAt: string },
-    context: WorkerMutationContext = createWorkerMutationContext(),
-  ): Promise<IntakeDeliveryFailure> {
-    return this.mutationCall("recordIntakeDeliveryFailure", { failure: input }, context);
-  }
-  authorizeIntakeDeliveryDiscard(
-    formId: string,
-    submissionId: string,
-    authorizedAt: string,
-    context: WorkerMutationContext = createWorkerMutationContext(),
-  ): Promise<IntakeDeliveryFailure> {
-    return this.mutationCall(
-      "authorizeIntakeDeliveryDiscard", { formId, submissionId, authorizedAt }, context,
-    );
-  }
-  resolveIntakeDeliveryFailure(
-    formId: string,
-    submissionId: string,
-    resolution: "staged" | "discarded",
-    resolvedAt: string,
-    context: WorkerMutationContext = createWorkerMutationContext(),
-  ): Promise<IntakeDeliveryFailure | null> {
-    return this.mutationCall("resolveIntakeDeliveryFailure", {
-      formId, submissionId, resolution, resolvedAt,
-    }, context);
-  }
-  stageIntakeSubmission(
-    submission: IntakeSubmissionPlaintextV1,
-    context: WorkerMutationContext = createWorkerMutationContext(),
-  ): Promise<IntakeInboxItem> {
-    return this.mutationCall("stageIntakeSubmission", { submission }, context);
-  }
-  rejectIntakeSubmission(
-    submissionId: string,
-    context: WorkerMutationContext = createWorkerMutationContext(),
-  ): Promise<IntakeInboxItem> {
-    return this.mutationCall("rejectIntakeSubmission", { submissionId }, context);
-  }
-  simulateIntakeAutoAccept(
-    draft: IntakeAutoAcceptDraftV1,
-    context: WorkerMutationContext = createWorkerMutationContext(),
-  ): Promise<IntakeAutoAcceptSimulation> {
-    return this.mutationCall("simulateIntakeAutoAccept", { draft }, context);
-  }
-  enableIntakeAutoAccept(
-    draft: IntakeAutoAcceptDraftV1,
-    simulationFingerprint: string,
-    context: WorkerMutationContext = createWorkerMutationContext(),
-  ): Promise<IntakeAutoAcceptRuleV1> {
-    return this.mutationCall("enableIntakeAutoAccept", { draft, simulationFingerprint }, context);
-  }
-  disableIntakeAutoAccept(
-    formId: string,
-    context: WorkerMutationContext = createWorkerMutationContext(),
-  ): Promise<null> {
-    return this.mutationCall("disableIntakeAutoAccept", { formId }, context);
-  }
-  processIntakeAutoAccept(
-    formId: string,
-    context: WorkerMutationContext = createWorkerMutationContext(),
-  ): Promise<IntakeAcceptanceReceipt[]> {
-    return this.mutationCall("processIntakeAutoAccept", { formId }, context);
-  }
-  acceptIntakeSubmission(
-    submissionId: string,
-    approvedFileIds: string[],
-    context: WorkerMutationContext = createWorkerMutationContext(),
-  ): Promise<IntakeAcceptanceReceipt> {
-    return this.mutationCall("acceptIntakeSubmission", {
-      submissionId, mode: "manual", approvedFileIds,
-    }, context);
-  }
-  undoIntakeReceipt(
-    receiptId: string,
-    context: WorkerMutationContext = createWorkerMutationContext(),
-  ): Promise<IntakeAcceptanceReceipt> {
-    return this.mutationCall("undoIntakeReceipt", { receiptId }, context);
   }
   automationRecipes(): Promise<AutomationRecipeCardV1[]> {
     return this.ephemeralCall("automationRecipes", {});
@@ -1848,8 +1748,10 @@ export class WorkerClient {
     // A cache can suppress incidental UI writes, never authorize a durable one.
     // Missing/unreadable browser storage is not permission to close an Undo window.
     if (typeof sessionStorage === "undefined") return false;
-    for (const slot of ["capture", "captureUndo", "relation", "conversionUndo", "dailySource", "dailyNavigation", "dailyInbox", "dailyInboxUndo", "automation"] as const)
+    for (const slot of ["capture", "captureUndo", "relation", "conversionUndo", "dailySource", "dailyNavigation", "dailyInbox", "dailyInboxUndo", "automation", "intake"] as const)
       if (readPresentationIntent(sessionStorage, source.appInstanceId, slot)) return false;
+    if (sessionStorage.getItem(`clay_intake_publication_v1:${source.appInstanceId}`)
+        || sessionStorage.getItem(`clay_intake_revocation_v1:${source.appInstanceId}`)) return false;
     return true;
   }
   async cancelPresentation(route: string, payload: unknown, context: WorkerMutationContext): Promise<import("@clay/schema/catalog").PresentationMutationOutcomeV1> {

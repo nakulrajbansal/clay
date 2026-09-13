@@ -1338,3 +1338,56 @@ ADR-062 (2026-09-13) Secret-free intake metadata and trusted-shell custody bound
   explicit source-bound request recovery, safe handling of old secret-bearing
   state, delivery and sharing integration remain required. No real vault, credential,
   production configuration or user data was inspected or migrated by this change.
+
+ADR-063 (2026-09-13) Production intake V2 and source-bound owner publication.
+  CONTEXT: The ADR-062 custody foundation was not the production UI path. Direct
+  intake writers transported legacy private form state, and unbound sharing
+  receipts could lose the original ciphertext or owner identity after a timeout.
+  DECISION: New intake state uses a distinct intake_v2 setting and closed V2
+  metadata. One intake.command envelope enumerates the fifteen supported writers;
+  WorkerClient requires an explicit immutable request context. The worker and
+  production coordinator validate original app/generation/lineage, exact source
+  target, semantic IDs, input bounds, journal and canonical receipts. The former
+  direct worker writers are callerless retired routes, not alternative authority.
+  Paired intakePresentation supplies the source with public forms, staged review,
+  rules, receipts and delivery failures. Undo receipts remain bounded but are not
+  erased merely because their submission returned to pending after the inverse.
+  A V2 physical row is validated without the legacy attachment normalizer.
+  Legacy intake_v1 state is not opened through ordinary settings/intake RPCs,
+  rewritten, stripped, deleted or rebound. Legacy secret-bearing historical
+  responses are not replayed as redacted responses under the old request ID.
+  Archive collection at Store and production boundaries rejects legacy custody,
+  malformed V2 and secret-bearing historical receipts. Capability property-name
+  checks, including escaped JSON keys, precede selecting values for an archive;
+  closed public V2 state is validated afterwards. Safe legacy adoption remains
+  separate required work. A copied form retains its original owner binding and
+  is explicitly read-only in intake UI; a fork does not acquire owner capability.
+  IntakeCenter uses trusted-shell custody commit/readback and key-pair proof
+  before publication. Public-only retained jobs bind original form, proposal,
+  source, save/publish/revoke requests, transition flags and exact acknowledgements.
+  Replay keeps the same form ID and vault material after a lost commit, worker
+  response or HTTP response. Private hydration, encryption/decryption and HTTP
+  stay outside WorkerClient, the DB worker and panels. Local revocation precedes
+  relay deletion; uncertain remote outcomes remain retained and visible. Review,
+  simulation and auto-accept enable retain their exact result/source targets, not
+  a newer presentation read. Missing configuration does not hide retained work.
+  Owner delivery parsing is bounded and errors cannot echo remote bodies. Foreign
+  form labels, duplicate delivery identities and redirects reject; unsuccessful
+  acknowledgement is reported after durable staging rather than claiming sync.
+  Sharing uses an independent trusted-shell IndexedDB custody CAS. It commits
+  original source/origin, approved projection/attachments, immutable encrypted
+  request and owner receipt before delivery. Invoked retries reuse that ciphertext;
+  they never reproject a changed source into the same share. Revoke intent and its
+  timestamp are retained before HTTP. Old localStorage receipt writers are removed;
+  existing legacy records are left untouched. Unbound legacy receipt adoption and
+  stale/expired prepared-intent recovery remain required, not implicit replacement.
+  Backend intake/share publication requires authentication plus an explicit exact
+  allowed shell Origin. No-auth/local-open owner publication and implicit same-
+  origin relay fallback are retired. Account credentials are hydrated only at the
+  trusted-shell HTTP boundary; public recipient capabilities remain scoped to
+  their immutable form/share, with expiry/revocation and redirect restrictions.
+  CONSEQUENCE: New production source/UI paths and owned real-worker journeys are
+  connected. This is development work, not physical browser/OPFS certification.
+  Legacy adoption, stale publication recovery and E's actual OPFS transaction
+  capability remain open. No production values, deployment, old private records,
+  hosted account or user-owned browser storage were inspected or changed.

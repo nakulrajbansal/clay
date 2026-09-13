@@ -388,8 +388,10 @@ export function createApp(opts: BackendOptions): Hono {
     app.post("/intake/forms", async (c) => {
       c.header("Cache-Control", "no-store");
       if (!jsonContent(c)) return c.json({ error: "content-type must be application/json" }, 415);
-      const publisherId = auth ? await sessionUser(c) : "local-open-intake";
+      const publisherId = auth ? await sessionUser(c) : null;
       if (!publisherId) return c.json({ error: "sign in before publishing a form" }, 401);
+      const origin = c.req.header("origin");
+      if (!origin || !origins.has(origin)) return c.json({ error: "intake publisher origin is not configured" }, 403);
       let raw: unknown;
       try { raw = await readBody(c, 8 * 1024); }
       catch (error) {
@@ -623,8 +625,11 @@ export function createApp(opts: BackendOptions): Hono {
     if (!jsonRequest(c))
       return c.json({ schema: 1 as const, error: "bad_request" as const }, 415);
     const ownerId = auth ? await sessionUser(c) : null;
-    if (auth && !ownerId)
+    if (!ownerId)
       return c.json({ schema: 1 as const, error: "unauthorized" as const }, 401);
+    const origin = c.req.header("origin");
+    if (!origin || !origins.has(origin))
+      return c.json({ schema: 1 as const, error: "forbidden" as const }, 403);
     let unknown: unknown;
     try { unknown = await readBody(c, SHARE_CREATE_BODY_BYTES_V1); }
     catch (error) {

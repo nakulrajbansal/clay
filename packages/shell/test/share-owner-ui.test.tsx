@@ -1,4 +1,5 @@
 /** @vitest-environment jsdom */
+/** @vitest-environment-options {"url":"https://clay.example"} */
 import { createHash } from "node:crypto";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -9,13 +10,22 @@ import {
 } from "@clay/kernel/projection";
 import type { AttachmentFile, AttachmentMetadata } from "@clay/kernel";
 import { decryptShareSnapshotV1, parseRecipientShareLocationV1 } from "../src/share/crypto";
-import { loadOwnerShareReceiptsV1 } from "../src/share/owner-receipts";
+import { assertShareOwnerTransition, validateShareOwnerRecord, type ShareOwnerRecord, type ShareOwnerVault } from "../src/share/owner-custody";
 import { ShareDialog, type ShareAttachmentChoiceV1 } from "../src/share/ShareDialog";
 import type { ShareRelayClient } from "../src/share/relay-client";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const fieldA = "fld_018f0000-0000-7000-8000-000000000002";
+const source = { appInstanceId: `app_${"a".repeat(26)}`, activeGenerationId: `gen_${"b".repeat(26)}`, lineageEpoch: "0", protectionRevision: "1", digestSchema: 1 as const, stateSha256: `sha256:${"c".repeat(64)}` };
+const presentationSource = async () => structuredClone(source);
+const ownerRows = new Map<string, ShareOwnerRecord>();
+const vault: ShareOwnerVault = { list: async () => [...ownerRows.values()].map(row => structuredClone(row)), compareAndSet: async (before, after) => {
+  assertShareOwnerTransition(before, after); const existing = ownerRows.get(after.request.shareId) ?? null;
+  if (JSON.stringify(existing) === JSON.stringify(after)) return;
+  if (JSON.stringify(existing) !== JSON.stringify(before)) throw new Error("Owned custody conflict");
+  ownerRows.set(after.request.shareId, validateShareOwnerRecord(after));
+} };
 const fieldB = "fld_018f0000-0000-7000-8000-000000000003";
 const approvedId = "file_018f0000000070008000000000000004";
 const privateId = "file_018f0000000070008000000000000005";
@@ -115,12 +125,38 @@ function button(label: string): HTMLButtonElement {
 }
 
 afterEach(() => {
+  ownerRows.clear();
   document.body.replaceChildren();
   localStorage.clear();
   vi.restoreAllMocks();
 });
 
 describe("F1 owner share preview and creation", () => {
+  it("recovers the original encrypted delivery after UI teardown without reprojecting or minting another link", async () => {
+    let lose = true; let original: string | null = null;
+    const create = vi.fn(async (request: Parameters<ShareRelayClient["create"]>[0]) => {
+      const bytes = JSON.stringify(request);
+      if (original !== null) expect(bytes === original).toBe(true); else original = bytes;
+      if (lose) { lose = false; throw new Error("Owned lost delivery"); }
+      return { schema: 1 as const, shareId: request.shareId, expiresAt: request.expiresAt };
+    });
+    const relay: ShareRelayClient = { baseUrl: "https://relay.example", create, read: vi.fn(), revoke: vi.fn() };
+    const projectExport = vi.fn(async (scope: ProjectionRequestV1) => artifactFor(scope));
+    const props = { ownerVault: vault, worker: { presentationSource, projectExport, attachmentsForRecord: vi.fn(), readAttachment: vi.fn() },
+      request, fieldChoices: choices, attachmentChoices: [], relay, viewerOrigin: "https://clay.example", now: () => new Date("2026-09-07T12:00:00.000Z"), onClose: () => {} };
+    let host = document.createElement("div"); document.body.append(host); let root = createRoot(host);
+    await act(async () => root.render(<ShareDialog {...props} />)); await flush();
+    await act(async () => button("Approve this exact scope").click()); await flush();
+    await act(async () => button("Create encrypted link").click()); await flush();
+    expect((await vault.list())[0]?.state).toBe("invoked"); expect(button("Create encrypted link").disabled).toBe(true);
+    await act(async () => root.unmount()); host.remove(); host = document.createElement("div"); document.body.append(host); root = createRoot(host);
+    await act(async () => root.render(<ShareDialog {...props} />)); await flush();
+    const before = projectExport.mock.calls.length;
+    await act(async () => button("Retry original share").click()); await flush();
+    expect(projectExport).toHaveBeenCalledTimes(before); expect(create).toHaveBeenCalledTimes(2); expect(await vault.list()).toHaveLength(1);
+    expect((await vault.list())[0]?.state).toBe("published"); expect(document.body.textContent).toContain("Encrypted link ready");
+    await act(async () => root.unmount());
+  });
   it("requires exact reapproval and reads/packages only separately checked files", async () => {
     const projectExport = vi.fn(async (scope: ProjectionRequestV1) => artifactFor(scope));
     const readAttachment = vi.fn(async (id: string) => id === approvedId
@@ -141,8 +177,8 @@ describe("F1 owner share preview and creation", () => {
     const host = document.createElement("div");
     document.body.append(host);
     const root = createRoot(host);
-    await act(async () => root.render(<ShareDialog
-      worker={{ projectExport, attachmentsForRecord, readAttachment }}
+    await act(async () => root.render(<ShareDialog ownerVault={vault}
+      worker={{ presentationSource, projectExport, attachmentsForRecord, readAttachment }}
       request={request}
       fieldChoices={choices}
       attachmentChoices={[approvedChoice, privateChoice]}
@@ -215,14 +251,14 @@ describe("F1 owner share preview and creation", () => {
     });
     expect(JSON.stringify(decrypted)).not.toContain("UNAPPROVED_FILE_SECRET");
 
-    const receipts = loadOwnerShareReceiptsV1(localStorage);
+    const receipts = (await vault.list()).map(row => ({ shareId: row.receipt.shareId, revokedAt: row.receipt.revokedAt }));
     expect(receipts).toHaveLength(1);
     expect(receipts[0]).toMatchObject({ shareId: sent!.shareId, revokedAt: null });
 
     await act(async () => button("Revoke link").click());
     await flush();
     expect(relay.revoke).toHaveBeenCalledWith(sent!.shareId, expect.stringMatching(/^[A-Za-z0-9_-]{43}$/));
-    expect(loadOwnerShareReceiptsV1(localStorage)[0]?.revokedAt).toBe(
+    expect((await vault.list())[0]?.receipt.revokedAt).toBe(
       "2026-09-07T12:00:00.000Z",
     );
     await act(async () => root.unmount());
@@ -246,8 +282,8 @@ describe("F1 owner share preview and creation", () => {
     };
     const host = document.createElement("div"); document.body.append(host);
     const root = createRoot(host);
-    await act(async () => root.render(<ShareDialog
-      worker={{ projectExport, attachmentsForRecord, readAttachment }}
+    await act(async () => root.render(<ShareDialog ownerVault={vault}
+      worker={{ presentationSource, projectExport, attachmentsForRecord, readAttachment }}
       request={request}
       fieldChoices={choices}
       attachmentChoices={[approvedChoice]}
@@ -287,8 +323,8 @@ describe("F1 owner share preview and creation", () => {
     };
     const host = document.createElement("div"); document.body.append(host);
     const root = createRoot(host);
-    await act(async () => root.render(<ShareDialog
-      worker={{ projectExport, attachmentsForRecord: vi.fn(), readAttachment: vi.fn() }} request={request}
+    await act(async () => root.render(<ShareDialog ownerVault={vault}
+      worker={{ presentationSource, projectExport, attachmentsForRecord: vi.fn(), readAttachment: vi.fn() }} request={request}
       fieldChoices={choices} attachmentChoices={[]} relay={relay}
       viewerOrigin="https://clay.example" onClose={() => root.unmount()}
     />));

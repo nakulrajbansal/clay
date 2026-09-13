@@ -1,6 +1,6 @@
 import type { AutomationRun } from "@clay/kernel";
 import type { WorkerClient } from "./worker-client";
-import { beginPresentationIntent, finishPresentationIntent, readPresentationIntent } from "./presentation-intent";
+import { beginPresentationIntent, cancelPresentationIntent, finishPresentationIntent, readPresentationIntent } from "./presentation-intent";
 import { executeAutomationIntent, readAutomationWorkspace } from "./automation-presentation";
 
 type Cache = Pick<Storage, "getItem" | "setItem" | "removeItem">;
@@ -13,9 +13,19 @@ export async function runRetainedAutomationTick(cache: Cache, worker: WorkerClie
   if (!read.availability.available) return idle("physical_transaction_uncertified");
   let intent = readPresentationIntent(cache, app, "automation");
   if (intent && (intent.payload.command as { route: string }).route !== "runDueAutomations") return idle("pending_automation_request");
+  if (intent) {
+    const outcome = await worker.mutationOutcome(intent.route, intent.payload, { requestId: intent.requestId });
+    if (outcome.status === "uncertain") throw new Error("Scheduled outcome is uncertain; original request was kept");
+    if (outcome.status === "failed" || outcome.status === "cancelled" || (outcome.status === "not_invoked"
+        && JSON.stringify(intent.payload.authorityTarget) !== JSON.stringify(read.authorityTarget))) {
+      if (await cancelPresentationIntent(cache, worker, intent)) return idle("scheduled_request_terminalized");
+      // A racing invocation won. Read its original result below; never retarget.
+    }
+  }
   if (!intent) {
-    for (const slot of ["capture", "captureUndo", "relation", "conversionUndo", "dailySource", "dailyNavigation", "dailyInbox", "dailyInboxUndo"] as const)
+    for (const slot of ["capture", "captureUndo", "relation", "conversionUndo", "dailySource", "dailyNavigation", "dailyInbox", "dailyInboxUndo", "intake"] as const)
       if (readPresentationIntent(cache, app, slot)) return idle("pending_review_or_undo");
+    if (cache.getItem(`clay_intake_publication_v1:${app}`) || cache.getItem(`clay_intake_revocation_v1:${app}`)) return idle("pending_intake_delivery");
     if (readAutomationWorkspace(cache, app)) return idle("retained_automation_draft");
     if (!read.rules.some(rule => rule.enabled)) return idle(null);
     intent = beginPresentationIntent(cache, app, "automation", "automation.command", {

@@ -120,7 +120,7 @@ export {
   submissionMatchesAutoRule, validateSubmissionForForm,
   type IntakeAcceptanceReceipt, type IntakeAutoAcceptSimulation, type IntakeDeliveryFailure,
   type IntakeDeliveryFailureStatus, type IntakeFileReview,
-  type IntakeFileReviewStatus, type IntakeInboxItem, type IntakeLocalStateV1,
+  type IntakeFileReviewStatus, type IntakeInboxItem, type IntakeLocalStateV2,
   type QuarantinedIntakeFileV1, type StoredIntakeSubmissionBodyV1,
   type StoredIntakeSubmissionV1, type StoredIntakeUploadedFileV1,
   type IntakeSubmissionStatus,

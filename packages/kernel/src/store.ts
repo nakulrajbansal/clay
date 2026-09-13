@@ -73,8 +73,10 @@ import { sha256HexSync } from "./state-digest";
 import type {
   IntakeAutoAcceptDraftV1,
   IntakeSubmissionPlaintextV1,
-  LocalIntakeFormV1,
+  LocalIntakeFormV2,
 } from "@clay/schema/intake";
+import { IntakeAutoAcceptRuleV1 } from "@clay/schema/intake";
+import { assertNoLegacyIntakeArchive } from "./intake-archive-boundary";
 import {
   autoAcceptFingerprint, encodeIntakeFileBytes, hydrateStoredIntakeSubmission,
   intakeInboxItem, mintIntakeReceiptId,
@@ -83,7 +85,7 @@ import {
   submissionMatchesAutoRule, validateSubmissionForForm,
   type IntakeAcceptanceReceipt, type IntakeAutoAcceptSimulation,
   type IntakeDeliveryFailure, type IntakeDeliveryFailureStatus,
-  type IntakeInboxItem, type IntakeLocalStateV1,
+  type IntakeInboxItem, type IntakeLocalStateV2,
 } from "./intake";
 
 type QueryT = import("@clay/schema").Query;
@@ -2708,11 +2710,14 @@ export class ClayStore {
   }
 
   // ---------- Release F public intake: untrusted staging -> trusted receipt ----------
-  private intakeState(): IntakeLocalStateV1 {
-    return parseIntakeState(this.getSetting<unknown>("intake_v1"));
+  private intakeState(): IntakeLocalStateV2 {
+    const active = this.getSetting<unknown>("intake_v2");
+    if (active === undefined && this.#driver.select("SELECT key FROM sys.settings WHERE key = 'intake_v1'").length)
+      throw new ClayError("E_CONFLICT", "Legacy intake custody requires adoption; original state was kept");
+    return parseIntakeState(active);
   }
 
-  private writeIntakeState(state: IntakeLocalStateV1): void {
+  private writeIntakeState(state: IntakeLocalStateV2): void {
     const live = state.submissions.filter(item =>
       item.status === "pending" || item.status === "blocked");
     const terminal = state.submissions.filter(item =>
@@ -2721,11 +2726,14 @@ export class ClayStore {
         || left.submission.submissionId.localeCompare(right.submission.submissionId))
       .slice(0, 200);
     state.submissions = [...live, ...terminal];
-    const retainedSubmissionIds = new Set(terminal.map(item => item.submission.submissionId));
-    state.receipts = state.receipts
-      .filter(receipt => retainedSubmissionIds.has(receipt.submissionId))
-      .sort((left, right) => right.acceptedAt.localeCompare(left.acceptedAt))
-      .slice(0, 200);
+    const retainedSubmissionIds = new Set(state.submissions.map(item => item.submission.submissionId));
+    const activeReceiptIds = new Set(terminal.flatMap(item => item.receiptId === null ? [] : [item.receiptId]));
+    // Undo moves its submission back to pending. Keep the bounded historical
+    // receipt instead of erasing the only explanation of that inverse on write.
+    const activeReceipts = state.receipts.filter(receipt => activeReceiptIds.has(receipt.id));
+    const historicalReceipts = state.receipts.filter(receipt => receipt.undone && retainedSubmissionIds.has(receipt.submissionId))
+      .sort((left, right) => right.acceptedAt.localeCompare(left.acceptedAt) || right.id.localeCompare(left.id)).slice(0, 200);
+    state.receipts = [...activeReceipts, ...historicalReceipts];
     const activeFailures = state.deliveryFailures.filter(item =>
       item.status === "failed" || item.status === "discard_authorized");
     const terminalFailures = state.deliveryFailures.filter(item =>
@@ -2733,14 +2741,17 @@ export class ClayStore {
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
       .slice(0, 200);
     state.deliveryFailures = [...activeFailures, ...terminalFailures];
-    this.setSetting("intake_v1", parseIntakeState(state));
+    this.setSetting("intake_v2", parseIntakeState(state));
   }
 
-  listIntakeForms(): LocalIntakeFormV1[] {
+  listIntakeForms(): LocalIntakeFormV2[] {
     return this.intakeState().forms.map(form => parseLocalIntakeForm(form));
   }
+  listIntakeAutoAcceptRules(): IntakeAutoAcceptRuleV1[] {
+    return this.intakeState().rules.map(rule => IntakeAutoAcceptRuleV1.parse(rule));
+  }
 
-  saveIntakeForm(input: LocalIntakeFormV1): LocalIntakeFormV1 {
+  saveIntakeForm(input: LocalIntakeFormV2): LocalIntakeFormV2 {
     const form = parseLocalIntakeForm(input);
     resolveIntakeForm(form.publicForm, this.validationRegistrySnapshot(), this.currentVersion());
     const state = this.intakeState();
@@ -2750,7 +2761,9 @@ export class ClayStore {
       const prior = state.forms[index]!;
       if (JSON.stringify(prior) === JSON.stringify(form)) return parseLocalIntakeForm(prior);
       if (form.publicForm.revision <= prior.publicForm.revision
-          || form.ownerPrivateKey !== prior.ownerPrivateKey || form.ownerToken !== prior.ownerToken)
+          || JSON.stringify(form.ownerSource) !== JSON.stringify(prior.ownerSource)
+          || form.publicForm.encryption.ownerPublicKey !== prior.publicForm.encryption.ownerPublicKey
+          || form.relayBaseUrl !== prior.relayBaseUrl)
         throw new ClayError("E_CONFLICT", "intake form revision or owner authority is stale");
       state.forms[index] = form;
       state.rules = state.rules.filter(rule => rule.formId !== form.publicForm.formId);
@@ -2764,7 +2777,7 @@ export class ClayStore {
     return parseLocalIntakeForm(form);
   }
 
-  markIntakeFormPublished(formId: string, publishedAt = nowIso()): LocalIntakeFormV1 {
+  markIntakeFormPublished(formId: string, publishedAt = nowIso()): LocalIntakeFormV2 {
     const state = this.intakeState();
     const form = state.forms.find(candidate => candidate.publicForm.formId === formId);
     if (!form) throw new ClayError("E_VALIDATION", "unknown intake form");
@@ -2775,7 +2788,7 @@ export class ClayStore {
     return parseLocalIntakeForm(next);
   }
 
-  revokeIntakeForm(formId: string, revokedAt = nowIso()): LocalIntakeFormV1 {
+  revokeIntakeForm(formId: string, revokedAt = nowIso()): LocalIntakeFormV2 {
     const state = this.intakeState();
     const form = state.forms.find(candidate => candidate.publicForm.formId === formId);
     if (!form) throw new ClayError("E_VALIDATION", "unknown intake form");
@@ -2788,7 +2801,7 @@ export class ClayStore {
     return parseLocalIntakeForm(next);
   }
 
-  markIntakeFormExpired(formId: string, expiredAt = nowIso()): LocalIntakeFormV1 {
+  markIntakeFormExpired(formId: string, expiredAt = nowIso()): LocalIntakeFormV2 {
     const state = this.intakeState();
     const form = state.forms.find(candidate => candidate.publicForm.formId === formId);
     if (!form) throw new ClayError("E_VALIDATION", "unknown intake form");
@@ -3016,7 +3029,7 @@ export class ClayStore {
   enableIntakeAutoAccept(input: {
     draft: IntakeAutoAcceptDraftV1;
     simulationFingerprint: string;
-  }): IntakeLocalStateV1["rules"][number] {
+  }): IntakeLocalStateV2["rules"][number] {
     if (typeof input !== "object" || input === null || Array.isArray(input)
         || Reflect.getPrototypeOf(input) !== Object.prototype
         || Reflect.ownKeys(input).length !== 2
@@ -3040,7 +3053,7 @@ export class ClayStore {
         || input.simulationFingerprint !== fingerprint)
       throw new ClayError("E_CONFLICT", "run and review this exact auto-accept simulation first");
     const enabledAt = nowIso();
-    const rule: IntakeLocalStateV1["rules"][number] = {
+    const rule: IntakeLocalStateV2["rules"][number] = {
       ...draft,
       enabled: true,
       simulationFingerprint: fingerprint,
@@ -5692,6 +5705,7 @@ export class ClayStore {
   /** zip{ manifest.json, user.db, system.db } — the backup story and a
    * trust artifact: the whole app in one file. */
   async exportArchive(appName: string): Promise<Uint8Array> {
+    assertNoLegacyIntakeArchive(this.#driver);
     this.scrubLegacyCredentialSettings();
     return this.#buildArchive(appName);
   }
@@ -5704,6 +5718,7 @@ export class ClayStore {
   }
 
   async #buildArchive(appName: string): Promise<Uint8Array> {
+    assertNoLegacyIntakeArchive(this.#driver);
     const attachmentIssues = await this.attachmentIntegrityIssues();
     if (attachmentIssues.length > 0)
       throw new ClayError("E_VALIDATION",

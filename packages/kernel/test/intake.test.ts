@@ -3,14 +3,14 @@ import { deflateSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import type {
   IntakeSubmissionPlaintextV1,
-  LocalIntakeFormV1,
-  PublicIntakeFormV1,
+  LocalIntakeFormV2,
+  IntakeFormDefinitionV1,
 } from "@clay/schema/intake";
 import { ClayStore, deriveInverse, type ForwardOpT } from "../src/index";
 
 async function intakeStore(): Promise<{
   store: ClayStore;
-  form: LocalIntakeFormV1;
+  form: LocalIntakeFormV2;
   nameFieldId: string;
   fileFieldId: string;
 }> {
@@ -33,7 +33,7 @@ async function intakeStore(): Promise<{
   const table = store.validationRegistrySnapshot().get("requests")!;
   const name = table.columns.find(column => column.name === "name")!;
   const files = table.columns.find(column => column.name === "files")!;
-  const publicForm: PublicIntakeFormV1 = {
+  const publicForm: IntakeFormDefinitionV1 = {
     schema: 1,
     formId: "form_abcdefghijklmnopqrstuvwxyz",
     revision: 1,
@@ -65,15 +65,14 @@ async function intakeStore(): Promise<{
       ownerPublicKey: "A".repeat(87),
     },
     delivery: {
-      submitToken: "s".repeat(43),
       expiresAt: "2026-10-01T00:00:00.000Z",
     },
   };
-  const form: LocalIntakeFormV1 = {
-    schema: 1,
+  const form: LocalIntakeFormV2 = {
+    schema: 2,
     publicForm,
-    ownerPrivateKey: "A".repeat(184),
-    ownerToken: "o".repeat(43),
+    ownerSource: { appInstanceId: `app_${"a".repeat(26)}`, activeGenerationId: `gen_${"b".repeat(26)}`, lineageEpoch: "0" },
+    terminalReason: null,
     relayBaseUrl: "https://relay.example.test",
     publishedAt: "2026-09-07T11:00:00.000Z",
     revokedAt: null,
@@ -108,6 +107,20 @@ function safeSubmission(nameFieldId: string): IntakeSubmissionPlaintextV1 {
 }
 
 describe("trusted local intake review and acceptance", () => {
+  it.each(["embedded_file_bytes", "missing_terminal_time", "invalid_failure_collection"])("rejects %s in physical V2 without normalizing or rewriting stored bytes", async fault => {
+    const { store, form, nameFieldId } = await intakeStore();
+    try {
+      store.saveIntakeForm(form); const submission = safeSubmission(nameFieldId); store.stageIntakeSubmission(submission);
+      const value = structuredClone(store.getSetting<any>("intake_v2"));
+      if (fault === "embedded_file_bytes") value.submissions[0].submission.files[0].bytes = submission.files[0]!.bytes;
+      if (fault === "missing_terminal_time") delete value.submissions[0].terminalAt;
+      if (fault === "invalid_failure_collection") value.deliveryFailures = "invalid";
+      store.setSetting("intake_v2", value); const before = JSON.stringify(store.getSetting("intake_v2"));
+      expect(() => store.intakeInbox()).toThrow(/local intake state is invalid/);
+      expect(JSON.stringify(store.getSetting("intake_v2")) === before).toBe(true);
+    } finally { store.close(); }
+  });
+
   it("stages without canonical writes, manually activates reviewed files atomically, and undoes the receipt", async () => {
     const { store, form, nameFieldId } = await intakeStore();
     try {
@@ -209,10 +222,10 @@ describe("trusted local intake review and acceptance", () => {
       const submission = safeSubmission(nameFieldId);
       const encodedBytes = submission.files[0]!.bytes;
       const staged = store.stageIntakeSubmission(submission);
-      expect(JSON.stringify(store.getSetting("intake_v1"))).toContain(encodedBytes);
+      expect(JSON.stringify(store.getSetting("intake_v2"))).toContain(encodedBytes);
       const rejected = store.rejectIntakeSubmission(staged.submissionId);
       expect(rejected.status).toBe("rejected");
-      const persisted = JSON.stringify(store.getSetting("intake_v1"));
+      const persisted = JSON.stringify(store.getSetting("intake_v2"));
       expect(persisted).not.toContain(encodedBytes);
       expect(persisted).toContain(submission.files[0]!.sha256);
     } finally { store.close(); }
@@ -234,7 +247,7 @@ describe("trusted local intake review and acceptance", () => {
         envelopeSha256: "a".repeat(64),
       }) as { status: string };
       expect(failure.status).toBe("failed");
-      expect(JSON.stringify(store.getSetting("intake_v1"))).not.toContain("ciphertext");
+      expect(JSON.stringify(store.getSetting("intake_v2"))).not.toContain("ciphertext");
       expect((authorizeDiscard!.call(
         store, form.publicForm.formId, "sub_abcdefghijklmnopqrstuvwxyz",
         "2026-09-07T12:00:00.000Z",
@@ -245,7 +258,7 @@ describe("trusted local intake review and acceptance", () => {
   it("requires a persisted deterministic simulation before separately enabling auto-accept", async () => {
     const { store, form, nameFieldId } = await intakeStore();
     try {
-      const noFiles: LocalIntakeFormV1 = {
+      const noFiles: LocalIntakeFormV2 = {
         ...form,
         publicForm: { ...form.publicForm, fileRequests: [] },
       };
@@ -303,7 +316,7 @@ describe("trusted local intake review and acceptance", () => {
       const original = store.setSetting.bind(store);
       const mutable = store as unknown as { setSetting(key: string, value: unknown): void };
       mutable.setSetting = (key, value): void => {
-        if (key === "intake_v1") throw new Error("injected receipt write failure");
+        if (key === "intake_v2") throw new Error("injected receipt write failure");
         original(key, value);
       };
       expect(() => store.acceptIntakeSubmission({

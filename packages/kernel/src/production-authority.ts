@@ -14,6 +14,7 @@ import {
   type AutomationTargetIdentityV1,
 } from "./automation-v2";
 import { enumerateCanonicalStateV1 } from "./canonical-state";
+import { assertNoLegacyIntakeArchive } from "./production-intake-boundary";
 import { removeLegacyCredentialSettingsForAuthorityBoot } from "./credential-policy";
 import {
   browserDurableInventory,
@@ -193,7 +194,7 @@ type ProductionStoreReaderMethod =
   | "dailyHomeNotificationWatermark" | "dailyHomeRecordRevisions"
   | "dailyHomeUnreadNotifications"
   | "fieldProvenance" | "getSetting" | "globalSearch" | "headVersion" | "history"
-  | "listAutomations" | "listNotifications" | "listIntakeForms" | "intakeInbox"
+  | "listAutomations" | "listNotifications" | "listIntakeForms" | "listIntakeAutoAcceptRules" | "intakeInbox"
   | "intakeDeliveryFailures" | "intakeReceipts" | "livePanels" | "operationBatches"
   | "panelProvenance" | "previewRelationConversion"
   | "privateMetricsSummary" | "query" | "queryBounded" | "readAttachment" | "registrySnapshot"
@@ -223,6 +224,7 @@ const PINNED_READS = Object.freeze({
   listAutomations: ClayStore.prototype.listAutomations,
   listNotifications: ClayStore.prototype.listNotifications,
   listIntakeForms: ClayStore.prototype.listIntakeForms,
+  listIntakeAutoAcceptRules: ClayStore.prototype.listIntakeAutoAcceptRules,
   intakeInbox: ClayStore.prototype.intakeInbox,
   intakeDeliveryFailures: ClayStore.prototype.intakeDeliveryFailures,
   intakeReceipts: ClayStore.prototype.intakeReceipts,
@@ -261,13 +263,17 @@ function createStoreReader(
     dailyHomeRecordRevisions: PINNED_READS.dailyHomeRecordRevisions.bind(store),
     dailyHomeUnreadNotifications: PINNED_READS.dailyHomeUnreadNotifications.bind(store),
     fieldProvenance: PINNED_READS.fieldProvenance.bind(store),
-    getSetting: PINNED_READS.getSetting.bind(store),
+    getSetting: <T>(key: string): T | undefined => {
+      if (key === "intake_v1") throw invalid("Legacy intake private custody cannot be read through ordinary worker settings");
+      return PINNED_READS.getSetting.call(store, key) as T | undefined;
+    },
     globalSearch: PINNED_READS.globalSearch.bind(store),
     headVersion: PINNED_READS.headVersion.bind(store),
     history: PINNED_READS.history.bind(store),
     listAutomations: PINNED_READS.listAutomations.bind(store),
     listNotifications: PINNED_READS.listNotifications.bind(store),
     listIntakeForms: PINNED_READS.listIntakeForms.bind(store),
+    listIntakeAutoAcceptRules: PINNED_READS.listIntakeAutoAcceptRules.bind(store),
     intakeInbox: PINNED_READS.intakeInbox.bind(store),
     intakeDeliveryFailures: PINNED_READS.intakeDeliveryFailures.bind(store),
     intakeReceipts: PINNED_READS.intakeReceipts.bind(store),
@@ -1590,6 +1596,21 @@ export class ProductionStoreAuthority {
   mutationOutcome(input: unknown) { return this.#coordinator.mutationOutcome(input); }
   cancelPresentation(input: unknown) { return this.#coordinator.cancelPresentation(input); }
   presentationSource() { return this.#coordinator.serializeRead(async () => this.inspectAuthority().target); }
+  intakePresentation() {
+    return this.#coordinator.serializeRead(async () => {
+      const authorityTarget = this.inspectAuthority().target;
+      const quarantined = this.#driver.select("SELECT key FROM sys.settings WHERE key='intake_v1'").length > 0;
+      const active = this.#driver.select("SELECT key FROM sys.settings WHERE key='intake_v2'").length > 0;
+      const reader = this.readStore();
+      return { authorityTarget, legacyCustody: quarantined ? "quarantined" as const : "none" as const,
+        forms: quarantined && !active ? [] : reader.listIntakeForms(),
+        rules: quarantined && !active ? [] : reader.listIntakeAutoAcceptRules(),
+        inbox: quarantined && !active ? [] : reader.intakeInbox(),
+        receipts: quarantined && !active ? [] : reader.intakeReceipts(),
+        deliveryFailures: quarantined && !active ? [] : reader.intakeDeliveryFailures(),
+        tables: [...reader.registrySnapshot().values()], trace: reader.semanticSchemaTrace() };
+    });
+  }
   automationPresentation() {
     return this.#coordinator.serializeRead(async () => {
       const reader = this.readStore();
@@ -1643,6 +1664,7 @@ export class ProductionStoreAuthority {
    * Backup Trust keys and Recovery Kit bytes must not enter this authority. */
   collectArchiveSnapshot(): Promise<ProductionArchiveExport & { metadata: ReturnType<ProductionStoreAuthority["backupMetadata"]> }> {
     return this.#coordinator.serializeRead(async () => {
+      assertNoLegacyIntakeArchive(this.#driver);
       const before = this.inspectAuthority();
       const metadata = this.backupMetadata();
       const { exportAuthorityArchiveV5 } = await import("./archive-authority");

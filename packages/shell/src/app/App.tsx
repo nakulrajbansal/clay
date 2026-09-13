@@ -18,6 +18,7 @@ import type {
   BackupFailureReasonCode,
 } from "@clay/kernel/recovery";
 import { WorkerClient, type BootInfo, type RecoveryRecordCandidate } from "./worker-client";
+import { getRelayOwnerUrl } from "../intake/relay-owner-configuration";
 import { productionWorkerRouteAvailable } from "../worker/mutation-route-census";
 import { beginAppSetup, readAppSetup, saveAppSetup, finishAppSetup } from "./app-setup-intent";
 import { ManualDownloadRecovery, type ManualDownloadIntent } from "./manual-download-recovery";
@@ -2790,16 +2791,15 @@ export function App(): React.JSX.Element {
           </Suspense>
         </LazySurfaceBoundary>
       ) : null}
-      {showIntake && workerRef.current && semanticTrace ? (
+      {showIntake && workerRef.current && semanticTrace && currentId ? (
         <LazySurfaceBoundary label="public intake" modal>
           <Suspense fallback={<SurfaceFallback label="public intake" modal />}>
             <IntakeCenter
               worker={workerRef.current}
+              appInstanceId={currentId}
               tables={registryTables}
               semanticTrace={semanticTrace}
-              relayBaseUrl={getBackendUrl() ?? (location.hostname === "localhost"
-                || location.hostname === "127.0.0.1" || location.hostname === "[::1]"
-                ? "http://127.0.0.1:8787" : location.origin)}
+              relayBaseUrl={getRelayOwnerUrl()}
               publicBaseUrl={location.origin}
               onClose={() => setShowIntake(false)}
               onWrite={() => {

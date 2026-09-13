@@ -647,6 +647,7 @@ function authorityRequestId(req: Request): string {
 }
 
 const DIRECT_AUTHORITY_ROUTES = Object.freeze({
+  intakeCommand: { route: "intake.command" },
   automationCommand: { route: "automation.command" },
   setCheckpoint: { route: "timeline.setCheckpoint" },
   makeLatest: { route: "timeline.makeLatest" },
@@ -1354,6 +1355,10 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       return runAuthorityMutation("dailyHomeUndoCapture", rawPayload, req);
     case "automationCommand":
       return runAuthorityMutation("automationCommand", rawPayload, req);
+    case "intakeCommand":
+      return runAuthorityMutation("intakeCommand", rawPayload, req);
+    case "intakePresentation":
+      return mustAuthority().intakePresentation();
     case "automationPresentation":
       return mustAuthority().automationPresentation();
     case "dailyInboxAction":
@@ -1410,35 +1415,35 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "intakeReceipts":
       return mustStore().intakeReceipts();
     case "saveIntakeForm":
-      return runAuthorityMutation("saveIntakeForm", p, req);
+      throw new ClayError("E_CONFLICT", "Direct intake writer retired; use source-bound intakeCommand");
     case "markIntakeFormPublished":
-      return runAuthorityMutation("markIntakeFormPublished", p, req);
+      throw new ClayError("E_CONFLICT", "Direct intake writer retired; use source-bound intakeCommand");
     case "revokeIntakeForm":
-      return runAuthorityMutation("revokeIntakeForm", p, req);
+      throw new ClayError("E_CONFLICT", "Direct intake writer retired; use source-bound intakeCommand");
     case "markIntakeFormExpired":
-      return runAuthorityMutation("markIntakeFormExpired", p, req);
+      throw new ClayError("E_CONFLICT", "Direct intake writer retired; use source-bound intakeCommand");
     case "stageIntakeSubmission":
-      return runAuthorityMutation("stageIntakeSubmission", p, req);
+      throw new ClayError("E_CONFLICT", "Direct intake writer retired; use source-bound intakeCommand");
     case "recordIntakeDeliveryFailure":
-      return runAuthorityMutation("recordIntakeDeliveryFailure", p, req);
+      throw new ClayError("E_CONFLICT", "Direct intake writer retired; use source-bound intakeCommand");
     case "authorizeIntakeDeliveryDiscard":
-      return runAuthorityMutation("authorizeIntakeDeliveryDiscard", p, req);
+      throw new ClayError("E_CONFLICT", "Direct intake writer retired; use source-bound intakeCommand");
     case "resolveIntakeDeliveryFailure":
-      return runAuthorityMutation("resolveIntakeDeliveryFailure", p, req);
+      throw new ClayError("E_CONFLICT", "Direct intake writer retired; use source-bound intakeCommand");
     case "rejectIntakeSubmission":
-      return runAuthorityMutation("rejectIntakeSubmission", p, req);
+      throw new ClayError("E_CONFLICT", "Direct intake writer retired; use source-bound intakeCommand");
     case "simulateIntakeAutoAccept":
-      return runAuthorityMutation("simulateIntakeAutoAccept", p, req);
+      throw new ClayError("E_CONFLICT", "Direct intake writer retired; use source-bound intakeCommand");
     case "enableIntakeAutoAccept":
-      return runAuthorityMutation("enableIntakeAutoAccept", p, req);
+      throw new ClayError("E_CONFLICT", "Direct intake writer retired; use source-bound intakeCommand");
     case "disableIntakeAutoAccept":
-      return runAuthorityMutation("disableIntakeAutoAccept", p, req);
+      throw new ClayError("E_CONFLICT", "Direct intake writer retired; use source-bound intakeCommand");
     case "processIntakeAutoAccept":
-      return runAuthorityMutation("processIntakeAutoAccept", p, req);
+      throw new ClayError("E_CONFLICT", "Direct intake writer retired; use source-bound intakeCommand");
     case "acceptIntakeSubmission":
-      return runAuthorityMutation("acceptIntakeSubmission", p, req);
+      throw new ClayError("E_CONFLICT", "Direct intake writer retired; use source-bound intakeCommand");
     case "undoIntakeReceipt":
-      return runAuthorityMutation("undoIntakeReceipt", p, req);
+      throw new ClayError("E_CONFLICT", "Direct intake writer retired; use source-bound intakeCommand");
     case "automationRecipes":
       return mustStore().automationRecipes();
     case "automationRuntimeStatus":

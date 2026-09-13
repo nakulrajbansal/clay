@@ -1,3 +1,4 @@
+import { ownedRelayApp } from "./helpers/owned-relay-app";
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { createApp, makeDevAuth } from "../src/app";
@@ -26,7 +27,7 @@ const fakeClient = { rawPlan: async () => "{}", rawRepair: async () => "{}" };
 const jsonHeaders: Record<string, string> = { "content-type": "application/json" };
 
 function app(store = new MemoryShareRelayStore(), now: () => number = () => NOW) {
-  return createApp({ apiKey: "sk-test", makeClient: () => fakeClient, shares: store, now });
+  return ownedRelayApp({ apiKey: "sk-test", makeClient: () => fakeClient, shares: store, now });
 }
 
 async function createShare(target = app(), body: unknown = request, headers = jsonHeaders) {
@@ -68,7 +69,7 @@ describe("bounded ciphertext-only F1 relay", () => {
       shareId,
       expiresAt: request.expiresAt,
       createdAt: "2026-09-07T12:00:00.000Z",
-      ownerId: null,
+      ownerId: expect.any(String),
       revokeTokenHash,
       envelope: request.envelope,
       ciphertextBytes: 64,
@@ -175,7 +176,7 @@ describe("bounded ciphertext-only F1 relay", () => {
   it("requires an authenticated owner for creation when hosted auth is enabled", async () => {
     const auth = makeDevAuth();
     const store = new MemoryShareRelayStore();
-    const target = createApp({
+    const target = ownedRelayApp({
       apiKey: "sk-test", makeClient: () => fakeClient, auth, shares: store, now: () => NOW,
     });
     expect((await createShare(target)).status).toBe(401);

@@ -24,6 +24,12 @@ function response(body: unknown, status = 200): Response {
 }
 
 describe("strict browser share relay client", () => {
+  it("rejects insecure remote origins and treats absent/expired ciphertext as terminal revocation", async () => {
+    expect(() => new BrowserShareRelayClient("http://remote.example", null)).toThrow(/HTTPS|secure/);
+    const fetcher = vi.fn(async () => response({ schema: 1, error: "expired" }, 410));
+    const client = new BrowserShareRelayClient("https://relay.example", null, fetcher);
+    await expect(client.revoke(shareId, token)).resolves.toMatchObject({ shareId, revoked: true });
+  });
   it("creates with ciphertext only and reads without sending cookies, keys, or fragments", async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);

@@ -2,26 +2,24 @@ import {
   IntakeRelayDeliveryItemV1,
   PublicIntakeLinkPayloadV1,
   type IntakeSubmissionPlaintextV1,
-  type LocalIntakeFormV1,
+  type LocalIntakeFormV2,
   type PublicIntakeFormV1,
 } from "@clay/schema/intake";
 import type { IntakeDeliveryFailure, IntakeInboxItem } from "@clay/kernel";
-import type { WorkerClient } from "../app/worker-client";
-import { decodeBase64Url, decryptIntakeSubmission, encodeBase64Url, encryptIntakeSubmission,
-  generateIntakeOwnerKeyPair } from "./crypto";
+import type { IntakeSession } from "./session";
+import type { hydrateIntakeOwnerForm } from "./owner-custody";
+/** Hydrated only inside trusted shell, never a DB/worker contract. */
+export type IntakeOwnerTransport = Pick<LocalIntakeFormV2, "relayBaseUrl" | "publishedAt" | "revokedAt"> & Awaited<ReturnType<typeof hydrateIntakeOwnerForm>>;
+import { decodeBase64Url, decryptIntakeSubmission, encodeBase64Url, encryptIntakeSubmission } from "./crypto";
+import { boundedRelayJson } from "../app/bounded-relay-response";
 
 const MAX_RELAY_BYTES = 12 * 1024 * 1024;
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
-type IntakeWorker = Pick<WorkerClient,
-  "saveIntakeForm" | "markIntakeFormPublished" | "stageIntakeSubmission">;
-type IntakeDeliveryWorker = Pick<WorkerClient,
+type IntakeDeliveryWorker = Pick<IntakeSession,
   "stageIntakeSubmission" | "intakeDeliveryFailures" | "recordIntakeDeliveryFailure"
   | "authorizeIntakeDeliveryDiscard" | "resolveIntakeDeliveryFailure">;
-type IntakeLifecycleWorker = IntakeDeliveryWorker & Pick<WorkerClient,
-  "markIntakeFormExpired" | "revokeIntakeForm">;
-
 export class IntakeRelayHttpError extends Error {
   readonly status: number;
   constructor(status: number, message: string) {
@@ -93,120 +91,22 @@ export function parsePublicIntakeLink(hash: string): PublicIntakeLinkPayloadV1 {
   return parsed.data;
 }
 
-export async function createLocalIntakeForm(input: {
-  title: string;
-  description: string;
-  target: PublicIntakeFormV1["target"];
-  fields: PublicIntakeFormV1["fields"];
-  fileRequests: PublicIntakeFormV1["fileRequests"];
-  relayBaseUrl: string;
-  expiresAt: string;
-}): Promise<LocalIntakeFormV1> {
-  const keys = await generateIntakeOwnerKeyPair();
-  const publicForm: PublicIntakeFormV1 = {
-    schema: 1,
-    formId: mintIntakeFormId(),
-    revision: 1,
-    title: input.title,
-    description: input.description,
-    target: input.target,
-    fields: input.fields,
-    fileRequests: input.fileRequests,
-    encryption: {
-      algorithm: "ECDH-P256-HKDF-SHA256-AES-256-GCM",
-      ownerPublicKey: keys.publicKey,
-    },
-    delivery: { submitToken: mintIntakeToken(), expiresAt: input.expiresAt },
-  };
-  const ownerToken = mintIntakeToken();
-  return {
-    schema: 1,
-    publicForm,
-    ownerPrivateKey: keys.privateKey,
-    ownerToken: ownerToken === publicForm.delivery.submitToken ? mintIntakeToken() : ownerToken,
-    relayBaseUrl: `${canonicalBaseUrl(input.relayBaseUrl)}/`,
-    publishedAt: null,
-    revokedAt: null,
-  };
-}
-
 async function responseError(response: Response): Promise<string> {
-  try {
-    const body = await response.json() as { error?: unknown };
-    if (typeof body.error === "string") return body.error;
-  } catch { /* use status below */ }
+  // A relay may echo credentials in an error body. Never present its body.
   return `relay returned ${response.status}`;
-}
-
-export async function publishIntakeForm(input: {
-  worker: IntakeWorker;
-  localForm: LocalIntakeFormV1;
-  publicBaseUrl: string;
-  fetchImpl?: FetchLike;
-  now?: () => Date;
-}): Promise<{ localForm: LocalIntakeFormV1; link: string }> {
-  const fetchImpl = input.fetchImpl ?? fetch;
-  const saved = await input.worker.saveIntakeForm({ ...input.localForm, publishedAt: null });
-  const response = await fetchImpl(`${canonicalBaseUrl(saved.relayBaseUrl)}/intake/forms`, {
-    method: "POST",
-    credentials: "include",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      schema: 1,
-      formId: saved.publicForm.formId,
-      ownerToken: saved.ownerToken,
-      submitToken: saved.publicForm.delivery.submitToken,
-      expiresAt: saved.publicForm.delivery.expiresAt,
-      maxCiphertextBytes: MAX_RELAY_BYTES,
-    }),
-  });
-  if (!response.ok) throw new Error(`Form was saved as a draft, but publication failed: ${await responseError(response)}`);
-  const publishedAt = (input.now?.() ?? new Date()).toISOString();
-  const published = await input.worker.markIntakeFormPublished(saved.publicForm.formId, publishedAt);
-  return {
-    localForm: published,
-    link: buildPublicIntakeLink(input.publicBaseUrl, published.relayBaseUrl, published.publicForm),
-  };
 }
 
 const MAX_DELIVERY_RESPONSE_BYTES = Math.ceil(MAX_RELAY_BYTES * 4 / 3) + 128 * 1024;
 
-async function boundedResponseJson(response: Response): Promise<unknown> {
-  const declared = response.headers.get("content-length");
-  if (declared !== null && (!/^\d+$/u.test(declared)
-      || Number(declared) > MAX_DELIVERY_RESPONSE_BYTES))
-    throw new Error("Relay delivery page exceeded the local byte limit.");
-  if (!response.body) return JSON.parse(await response.text()) as unknown;
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const part = await reader.read();
-      if (part.done) break;
-      total += part.value.byteLength;
-      if (total > MAX_DELIVERY_RESPONSE_BYTES) {
-        await reader.cancel();
-        throw new Error("Relay delivery page exceeded the local byte limit.");
-      }
-      chunks.push(part.value);
-    }
-  } finally { reader.releaseLock(); }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
-}
-
 async function acknowledgeDelivery(
   fetchImpl: FetchLike,
-  localForm: LocalIntakeFormV1,
+  localForm: IntakeOwnerTransport,
   submissionId: string,
 ): Promise<boolean> {
   const response = await fetchImpl(
     `${canonicalBaseUrl(localForm.relayBaseUrl)}/intake/forms/${
       localForm.publicForm.formId}/submissions/${submissionId}`,
-    { method: "DELETE", headers: { authorization: `Bearer ${localForm.ownerToken}` } },
+    { method: "DELETE", redirect: "error", credentials: "omit", headers: { authorization: `Bearer ${localForm.ownerToken}` } },
   );
   return response.ok || response.status === 404 || response.status === 410;
 }
@@ -219,7 +119,7 @@ function activeFailureMap(failures: IntakeDeliveryFailure[]): Map<string, Intake
 
 export async function fetchAndStageIntake(
   worker: IntakeDeliveryWorker,
-  localForm: LocalIntakeFormV1,
+  localForm: IntakeOwnerTransport,
   fetchImpl: FetchLike = fetch,
   options: Readonly<{ retrySubmissionIds?: readonly string[]; now?: () => Date }> = {},
 ): Promise<IntakeInboxItem[]> {
@@ -231,21 +131,30 @@ export async function fetchAndStageIntake(
     if (after) query.set("after", after);
     const response = await fetchImpl(
       `${base}/intake/forms/${localForm.publicForm.formId}/submissions?${query}`,
-      { headers: { authorization: `Bearer ${localForm.ownerToken}` } },
+      { redirect: "error", credentials: "omit", headers: { authorization: `Bearer ${localForm.ownerToken}` } },
     );
     if (!response.ok)
       throw new IntakeRelayHttpError(response.status,
         `Could not refresh intake: ${await responseError(response)}`);
-    const body = await boundedResponseJson(response) as { items?: unknown; hasMore?: unknown };
-    if (!Array.isArray(body.items) || typeof body.hasMore !== "boolean")
+    const body = await boundedRelayJson(response, MAX_DELIVERY_RESPONSE_BYTES) as { items?: unknown; hasMore?: unknown };
+    if (!body || typeof body !== "object" || Object.keys(body).some(key => !["items", "hasMore"].includes(key))
+        || !Array.isArray(body.items) || body.items.length > 50 || typeof body.hasMore !== "boolean")
       throw new Error("Relay returned an invalid bounded delivery page.");
-    const pageItems = body.items.map(item => IntakeRelayDeliveryItemV1.parse(item));
+    const pageItems = body.items.map(item => {
+      const parsed = IntakeRelayDeliveryItemV1.safeParse(item);
+      if (!parsed.success) throw new Error("Relay returned an invalid bounded delivery item.");
+      if (parsed.data.formId !== localForm.publicForm.formId)
+        throw new Error("Relay delivery does not belong to the original form.");
+      return parsed.data;
+    });
     delivered.push(...pageItems);
     if (!body.hasMore) break;
     if (pageItems.length === 0) throw new Error("Relay pagination did not make progress.");
     after = pageItems.at(-1)!.submissionId;
   }
   if (delivered.length > 100) throw new Error("Relay exceeded the local delivery limit.");
+  if (new Set(delivered.map(item => item.submissionId)).size !== delivered.length)
+    throw new Error("Relay repeated a delivery identity; no acknowledgement was sent.");
   const staged: IntakeInboxItem[] = [];
   const failures = activeFailureMap(await worker.intakeDeliveryFailures());
   const retries = new Set(options.retrySubmissionIds ?? []);
@@ -285,14 +194,15 @@ export async function fetchAndStageIntake(
     );
     // Plaintext is durable before acknowledgement. A failed acknowledgement is safe:
     // the idempotent stage will be retried on the next refresh.
-    await acknowledgeDelivery(fetchImpl, localForm, item.submissionId);
+    if (!await acknowledgeDelivery(fetchImpl, localForm, item.submissionId))
+      throw new Error("Submission is staged locally; relay acknowledgement needs retry.");
   }
   return staged;
 }
 
 export async function discardFailedIntakeDelivery(
   worker: IntakeDeliveryWorker,
-  localForm: LocalIntakeFormV1,
+  localForm: IntakeOwnerTransport,
   submissionId: string,
   fetchImpl: FetchLike = fetch,
   now: () => Date = () => new Date(),
@@ -315,58 +225,6 @@ export async function discardFailedIntakeDelivery(
   );
 }
 
-export async function refreshPublishedIntakeForms(
-  worker: IntakeLifecycleWorker,
-  forms: readonly LocalIntakeFormV1[],
-  fetchImpl: FetchLike = fetch,
-  now: () => Date = () => new Date(),
-): Promise<{
-  staged: IntakeInboxItem[];
-  errors: Array<{ formId: string; message: string }>;
-}> {
-  const staged: IntakeInboxItem[] = [];
-  const errors: Array<{ formId: string; message: string }> = [];
-  for (const form of forms) {
-    if (form.publishedAt === null || form.revokedAt !== null) continue;
-    const instant = now();
-    if (Date.parse(form.publicForm.delivery.expiresAt) <= instant.getTime()) {
-      await worker.markIntakeFormExpired(form.publicForm.formId, instant.toISOString());
-      continue;
-    }
-    try { staged.push(...await fetchAndStageIntake(worker, form, fetchImpl, { now })); }
-    catch (error) {
-      if (error instanceof IntakeRelayHttpError && (error.status === 404 || error.status === 410)) {
-        const expiredAt = new Date(Math.max(
-          instant.getTime(), Date.parse(form.publicForm.delivery.expiresAt),
-        )).toISOString();
-        await worker.markIntakeFormExpired(form.publicForm.formId, expiredAt);
-        continue;
-      }
-      errors.push({
-        formId: form.publicForm.formId,
-        message: error instanceof Error ? error.message : "Intake refresh failed.",
-      });
-    }
-  }
-  return { staged, errors };
-}
-
-export async function revokePublishedIntakeForm(
-  worker: Pick<WorkerClient, "revokeIntakeForm">,
-  localForm: LocalIntakeFormV1,
-  fetchImpl: FetchLike = fetch,
-  now: () => Date = () => new Date(),
-): Promise<LocalIntakeFormV1> {
-  const response = await fetchImpl(
-    `${canonicalBaseUrl(localForm.relayBaseUrl)}/intake/forms/${localForm.publicForm.formId}`,
-    { method: "DELETE", headers: { authorization: `Bearer ${localForm.ownerToken}` } },
-  );
-  if (!response.ok && response.status !== 404 && response.status !== 410)
-    throw new IntakeRelayHttpError(response.status,
-      `Could not revoke intake form: ${await responseError(response)}`);
-  return worker.revokeIntakeForm(localForm.publicForm.formId, now().toISOString());
-}
-
 export async function submitEncryptedIntake(
   payload: PublicIntakeLinkPayloadV1,
   submission: IntakeSubmissionPlaintextV1,
@@ -377,6 +235,7 @@ export async function submitEncryptedIntake(
     `${canonicalBaseUrl(payload.relayBaseUrl)}/intake/forms/${payload.form.formId}/submissions`,
     {
       method: "POST",
+      redirect: "error",
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${payload.form.delivery.submitToken}`,

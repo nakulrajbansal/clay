@@ -11,6 +11,7 @@ export const IntakeSha256 = z.string().regex(/^[0-9a-f]{64}$/);
 export const IntakeCanonicalInstant = z.string().datetime({ offset: true }).refine(value => {
   try { return new Date(value).toISOString() === value; } catch { return false; }
 }, "exact UTC millisecond instant required");
+export const IntakeRelayFormRegistrationResultV1 = z.object({ formId: IntakeFormId, expiresAt: IntakeCanonicalInstant }).strict();
 
 export const IntakeMimeType = z.enum([
   "application/pdf", "image/png", "image/jpeg", "text/plain",
@@ -99,6 +100,9 @@ export const IntakeFormDefinitionV1 = PublicIntakeFormShapeV1.extend({
   delivery: z.object({ expiresAt: IntakeCanonicalInstant }).strict(),
 }).strict().superRefine(validateIntakeFields);
 export type IntakeFormDefinitionV1 = z.infer<typeof IntakeFormDefinitionV1>;
+export const IntakePublicationProposalV1 = PublicIntakeFormShapeV1.pick({ title: true, description: true, target: true, fields: true, fileRequests: true })
+  .extend({ expiresAt: IntakeCanonicalInstant }).strict().superRefine(validateIntakeFields);
+export type IntakePublicationProposalV1 = z.infer<typeof IntakePublicationProposalV1>;
 
 export const MAX_INTAKE_CIPHERTEXT_BYTES = 12 * 1024 * 1024;
 const MAX_INTAKE_CIPHERTEXT_BASE64URL = Math.ceil(MAX_INTAKE_CIPHERTEXT_BYTES * 4 / 3);

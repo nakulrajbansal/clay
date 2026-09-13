@@ -7,6 +7,7 @@ import {
   type ShareRelaySnapshotV1 as ShareRelaySnapshot,
   type ShareRevokeResponseV1 as ShareRevokeResponse,
 } from "@clay/schema/share";
+import { boundedRelayJson } from "../app/bounded-relay-response";
 
 export type ShareRelayClient = Readonly<{
   baseUrl: string;
@@ -32,14 +33,14 @@ function normalizeBaseUrl(value: string): string {
   let url: URL;
   try { url = new URL(value); }
   catch { throw new Error("The share relay URL is invalid."); }
-  if ((url.protocol !== "https:" && url.protocol !== "http:")
+  if ((url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)))
       || url.username !== "" || url.password !== "" || url.search !== "" || url.hash !== "")
-    throw new Error("The share relay URL must be an HTTP(S) URL without credentials.");
+    throw new Error("The share relay URL must use HTTPS (or loopback HTTP) without credentials.");
   return `${url.origin}${url.pathname === "/" ? "" : url.pathname.replace(/\/+$/, "")}`;
 }
 
 async function jsonBody(response: Response): Promise<unknown> {
-  try { return await response.json(); }
+  try { return await boundedRelayJson(response, response.ok ? 12 * 1024 * 1024 : 8 * 1024); }
   catch { throw new ShareRelayClientError("invalid_response", response.status,
     "The share relay returned invalid JSON."); }
 }
@@ -83,6 +84,7 @@ export class BrowserShareRelayClient implements ShareRelayClient {
       headers,
       body: JSON.stringify(request),
       credentials: "include",
+      redirect: "error",
       cache: "no-store",
       referrerPolicy: "no-referrer",
     });
@@ -94,6 +96,7 @@ export class BrowserShareRelayClient implements ShareRelayClient {
     const response = await this.fetcher(`${this.baseUrl}/shares/${shareId}`, {
       method: "GET",
       credentials: "omit",
+      redirect: "error",
       cache: "no-store",
       referrerPolicy: "no-referrer",
     });
@@ -110,9 +113,11 @@ export class BrowserShareRelayClient implements ShareRelayClient {
       headers,
       body: JSON.stringify(request),
       credentials: "include",
+      redirect: "error",
       cache: "no-store",
       referrerPolicy: "no-referrer",
     });
+    if (response.status === 404 || response.status === 410) return { schema: 1, shareId, revoked: true };
     return checked(response, ShareRevokeResponseV1);
   }
 }

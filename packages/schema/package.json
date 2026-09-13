@@ -11,6 +11,7 @@
     "./catalog": "./src/catalog.ts",
     "./evidence": "./src/evidence.ts",
     "./intake": "./src/intake.ts",
+    "./intake-workflow": "./src/intake-workflow.ts",
     "./projection": "./src/projection.ts",
     "./share": "./src/share.ts",
     "./daily-home": "./src/daily-home.ts",

@@ -95,16 +95,24 @@ export const AutomationWorkspaceV1 = z.object({ schema: z.literal(1), draftId: R
 }).strict();
 export type AutomationWorkspaceV1 = z.infer<typeof AutomationWorkspaceV1>;
 
+export const IntakeCommandRouteV1 = z.enum(["intake.saveForm", "intake.markPublished", "intake.revokeForm", "intake.markExpired",
+  "intake.stageSubmission", "intake.recordDeliveryFailure", "intake.authorizeDeliveryDiscard", "intake.resolveDeliveryFailure",
+  "intake.rejectSubmission", "intake.simulateAutoAccept", "intake.enableAutoAccept", "intake.disableAutoAccept",
+  "intake.processAutoAccept", "intake.acceptSubmission", "intake.undoReceipt"]);
+export const IntakeCommandPayloadV1 = z.object({ authorityTarget: TargetEvidenceV1,
+  command: z.object({ route: IntakeCommandRouteV1, payload: z.record(JsonValue) }).strict() }).strict();
+export type IntakeCommandPayloadV1 = z.infer<typeof IntakeCommandPayloadV1>;
+
 /** Presentation retry metadata is not authority. The worker independently
  * captures the full payload and binds its hash to the mirrored request journal. */
 export const RecoverablePresentationRouteV1 = z.enum([
   "schema.convertTextToRelation", "schema.undoRelationConversion", "daily.capture", "daily.undoCapture", "batch.apply", "batch.undo",
   "daily.source", "daily.navigation",
   "daily.inbox", "daily.undoInbox",
-  "automation.command",
+  "automation.command", "intake.command",
 ]);
 export const PresentationIntentV1 = z.object({
-  schema: z.literal(1), appInstanceId: AppInstanceId, slot: z.enum(["relation", "capture", "conversionUndo", "captureUndo", "dailySource", "dailyNavigation", "dailyInbox", "dailyInboxUndo", "automation"]),
+  schema: z.literal(1), appInstanceId: AppInstanceId, slot: z.enum(["relation", "capture", "conversionUndo", "captureUndo", "dailySource", "dailyNavigation", "dailyInbox", "dailyInboxUndo", "automation", "intake"]),
   requestId: RequestId, route: RecoverablePresentationRouteV1, payload: z.record(JsonValue),
 }).strict().superRefine((value, context) => {
   const contract = {
@@ -117,6 +125,7 @@ export const PresentationIntentV1 = z.object({
     dailyInbox: { route: "daily.inbox", payload: DailyInboxActionPayloadV1 },
     dailyInboxUndo: { route: "daily.undoInbox", payload: DailyInboxUndoPayloadV1 },
     automation: { route: "automation.command", payload: AutomationCommandPayloadV1 },
+    intake: { route: "intake.command", payload: IntakeCommandPayloadV1 },
   }[value.slot];
   if (value.route !== contract.route || !contract.payload.safeParse(value.payload).success) {
     context.addIssue({ code: "custom", message: "Stored retry payload or route is invalid for its slot" });

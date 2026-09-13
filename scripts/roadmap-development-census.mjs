@@ -28,11 +28,11 @@ const entries = [
   ["D", "Quick Capture/date resolution/Undo", ["dailyHomeResolveDate", "dailyHomeQuickCapture", "dailyHomeUndoCapture", "mutationOutcome", "cancelPresentation"], ui("CommandPalette.tsx"), test("quick-capture.test.tsx"), "Connected: Undo identity persisted before presentation, original app/generation/source/table/batch/payload/receipt binding, exact unchanged-target inverse; original outcome reconciliation or terminal cancellation required before replacement"],
   ["D", "Inbox/Complete/Snooze/Dismiss/Undo", ["dailyPresentation", "dailyInboxAction", "dailyInboxUndo", "mutationOutcome", "cancelPresentation"], ui("TodayView.tsx"), "packages/kernel/test/daily-inbox-authority.test.ts", "Connected: closed physical disposition table and global CAS tokens, canonical/archive copy, exact item/action/projection CAS, local-day Snooze, original-target bounded Undo; real worker archive roundtrip covered"],
   ["E", "Recipes/custom create/edit/simulate/enable/pause/delete", ["automationPresentation", "automationCommand", "simulateAutomation"], ui("AutomationCenter.tsx"), test("automation-retained-ui.test.tsx"), "Conditional: lossless V2 editor, persisted recipe/custom draft and semantic mappings, per-rule timezone, immutable command/receipt/Retry/Cancel connected; actual OPFS transaction capability still unavailable"],
-  ["E", "Due/manual execution, runtime/history/notifications/Undo", ["automationPresentation", "automationCommand", "simulateAutomation"], ui("AutomationCenter.tsx"), test("worker-automation-integration.test.ts"), "Conditional: real worker owned-memory journey passes; source-bound retained due tick, manual preview/confirm, history, notifications and Undo connected. Local checks defer for retained review/Undo/draft. OPFS capability gate remains closed"],
+  ["E", "Due/manual execution, runtime/history/notifications/Undo", ["automationPresentation", "automationCommand", "simulateAutomation", "mutationOutcome", "cancelPresentation"], ui("AutomationCenter.tsx"), test("worker-automation-integration.test.ts"), "Conditional: real worker owned-memory journey; retained due requests reconcile/terminalize before another ID. Local checks defer for retained review/Undo/draft/intake. Manual preview/confirm, history, notifications and Undo connected. OPFS capability gate remains closed"],
   ["F", "Local Print/CSV and projection fencing", ["projectPlaintextV1", "cancelProjectionV1"], ui("ExportDialog.tsx"), test("export-dialog.test.tsx"), "Baseline preserved; integrated campaign deferred"],
-  ["F", "Encrypted immutable read-only sharing and revocation", ["projectPlaintextV1"], ui("App.tsx"), test("share-security-integration.test.ts"), "Trusted-shell/backend route audit and configuration boundary work remain"],
-  ["F", "Intake lifecycle/attachments/expiry/revoke/staging/review/delivery", ["saveIntakeForm", "markIntakeFormPublished", "revokeIntakeForm", "markIntakeFormExpired", "stageIntakeSubmission", "recordIntakeDeliveryFailure", "resolveIntakeDeliveryFailure", "acceptIntakeSubmission", "rejectIntakeSubmission"], ui("IntakeCenter.tsx"), test("intake-vertical.test.ts"), "Partial: secret-free V2 metadata and origin/source-bound shell custody foundation tested, but legacy private/token DB contracts and UI callers are NOT migrated. Do not claim new custody is the production path"],
-  ["F", "Intake auto-accept simulation/control/receipts/Undo", ["simulateIntakeAutoAccept", "enableIntakeAutoAccept", "disableIntakeAutoAccept", "processIntakeAutoAccept", "intakeReceipts", "undoIntakeReceipt"], ui("IntakeCenter.tsx"), test("intake-ui.test.tsx"), "Authority baseline exists; final journey not established"],
+  ["F", "Encrypted immutable read-only sharing and revocation", ["presentationSource", "projectPlaintextV1", "cancelProjectionV1", "attachmentsForRecord", "readAttachment"], "packages/shell/src/share/ShareDialog.tsx", test("share-custody.test.ts"), "Connected for new shares: exact reviewed worker projection/attachments, shell-only source/origin-bound IndexedDB custody before HTTP, immutable ciphertext/create/revoke intent, reload/retry, exact relay acknowledgement and expiry. Publication is authenticated and origin-allowlisted; no configured relay defaults. Legacy receipt adoption and stale prepared-intent recovery remain code work"],
+  ["F", "Intake lifecycle/attachments/expiry/revoke/staging/review/delivery", ["intakePresentation", "intakeCommand", "mutationOutcome", "cancelPresentation"], ui("IntakeCenter.tsx"), test("worker-intake-integration.test.ts"), "New V2 production path connected: secret-free metadata, closed original-source commands, shell-only custody/decryption/HTTP, retained form/save/publish/revoke IDs, bounded delivery/partial files, review, reload and readback. Legacy rows/secret-bearing receipts are quarantined/export-denied, never silently migrated. Explicit stale/expired publication recovery and legacy adoption remain"],
+  ["F", "Intake auto-accept simulation/control/receipts/Undo", ["intakePresentation", "intakeCommand", "mutationOutcome", "cancelPresentation"], ui("IntakeCenter.tsx"), test("intake-ui.test.tsx"), "Connected: exact simulation-receipt target and immutable draft bind enable; file forms require manual review; enabled rules run on local inbox refresh; authority receipts and bounded Undo survive reload. Copied/forked metadata is read-only; no off-device claim. Real worker journey covers manual/auto accept, reject, duplicate processing and Undo"],
 ];
 const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", windowsHide: true }).trim();
 const head = git("rev-parse", "HEAD");
@@ -40,7 +40,10 @@ const changed = git("status", "--porcelain=v1");
 const retiredBlock = source.slice(source.indexOf("export const RETIRED_DB_WORKER_ROUTES"), source.indexOf("export function productionWorkerRouteAvailable"));
 const retired = new Map([...retiredBlock.matchAll(/^  (\w+): "([^"]+)",$/gm)].map(match => [match[1], match[2]]));
 for (const [, capability, names, entry, focused] of entries) {
-  for (const name of names) if (!routes.has(name)) throw new Error(`${capability}: unknown route ${name}`);
+  for (const name of names) {
+    if (!routes.has(name)) throw new Error(`${capability}: unknown route ${name}`);
+    if (routes.get(name) === "unavailable") throw new Error(`${capability}: intended journey still names closed route ${name}`);
+  }
   for (const file of [entry, focused]) if (!existsSync(resolve(root, file))) throw new Error(`Missing census input ${file}`);
 }
 console.log(JSON.stringify({
@@ -50,11 +53,14 @@ console.log(JSON.stringify({
   developmentComplete: false,
   developmentBlockers: [
     { phase: "E", kind: "code", boundary: "Production OPFS physical automation transaction capability is unavailable; the test_memory certificate is not a production certificate. Preserve the guard." },
-    { phase: "F", kind: "code", boundary: "Integrate V2 secret-free intake metadata and trusted-shell custody with safe legacy state/receipt handling, exact immutable worker commands, publication/delivery/review/Undo UI and sharing source/configuration boundaries." },
+    { phase: "F", kind: "code", boundary: "Legacy intake custody/state/historical receipt adoption is not implemented; originals remain untouched, ordinary read/replay and archive export deny. V2 intake and new sharing UI are connected, but stale/expired prepared publication cancellation/review and legacy sharing receipt recovery still require explicit safe paths, not clearing ambiguous intent." },
   ],
-  partialFoundations: [{ phase: "F", source: "packages/shell/src/intake/owner-custody.browser.ts", productionUiCaller: false,
-    recovery: "Immutable origin/app/generation/lineage/form custody, commit/readback, key-pair proof, conflict and ambiguous commit recovery; legacy app data untouched",
-    focusedTests: [test("intake-owner-custody.test.ts"), test("intake-owner-vault.browser.test.ts")] }],
+  custodyBoundaries: [{ phase: "F", source: "packages/shell/src/intake/owner-custody.browser.ts", productionUiCaller: true,
+    recovery: "Immutable origin/app/generation/lineage/form custody, commit/readback and key proof precede publication; original IDs survive lost commit/worker/relay responses. Legacy material stays quarantined.",
+    focusedTests: [test("intake-owner-custody.test.ts"), test("intake-owner-vault.browser.test.ts"), test("intake-publication.test.ts"), test("worker-intake-integration.test.ts")] },
+  { phase: "F", source: "packages/shell/src/share/owner-custody.browser.ts", productionUiCaller: true,
+    recovery: "Atomic source/origin-bound custody CAS/readback before immutable ciphertext delivery, retained create/revoke retry; old localStorage receipt writers retired, original records untouched.",
+    focusedTests: [test("share-custody.test.ts"), test("share-owner-ui.test.tsx"), test("worker-intake-integration.test.ts")] }],
   disabledUiFlags: [...readFileSync(resolve(root, ui("App.tsx")), "utf8").matchAll(/(automationMutationsAvailable|dailyHomeMutationsAvailable|mutationsAvailable)=\{false\}/g)].map(match => match[1]),
   unavailableRoutes: [...routes].filter(([, enforcement]) => enforcement === "unavailable")
     .map(([name]) => ({ name, retiredReason: retired.get(name) ?? null })),

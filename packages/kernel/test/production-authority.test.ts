@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { LocalIntakeFormV1 as LocalIntakeFormSchema } from "@clay/schema/intake";
+import { LocalIntakeFormV2 as LocalIntakeFormSchema } from "@clay/schema/intake";
 import * as browserDb from "../src/db";
 import {
   Bridge, ClayStore, StoreRpcClient, deriveInverse, openMemoryDriver, serveStore,
@@ -3190,7 +3190,7 @@ describe("production Store authority", () => {
       const name = trace.fields.find(candidate =>
         candidate.tableId === table.tableId && candidate.fieldName === "name")!;
       const form = {
-        schema: 1 as const,
+        schema: 2 as const,
         publicForm: {
           schema: 1 as const,
           formId: "form_abcdefghijklmnopqrstuvwxyz",
@@ -3212,12 +3212,12 @@ describe("production Store authority", () => {
             ownerPublicKey: "A".repeat(87),
           },
           delivery: {
-            submitToken: "s".repeat(43),
             expiresAt: "2026-10-01T00:00:00.000Z",
           },
         },
-        ownerPrivateKey: "A".repeat(184),
-        ownerToken: "o".repeat(43),
+        ownerSource: { appInstanceId: authority.inspectAuthority().target.appInstanceId,
+          activeGenerationId: authority.inspectAuthority().target.activeGenerationId, lineageEpoch: authority.inspectAuthority().target.lineageEpoch },
+        terminalReason: null,
         relayBaseUrl: "https://relay.example.test",
         publishedAt: "2026-09-07T12:00:00.000Z",
         revokedAt: null,

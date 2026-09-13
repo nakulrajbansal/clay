@@ -1,3 +1,4 @@
+import { ownedRelayApp } from "../../backend/test/helpers/owned-relay-app";
 import { describe, expect, it, vi } from "vitest";
 import {
   ClayStore, deriveInverse, type ForwardOpT,
@@ -92,12 +93,12 @@ describe("F1 encrypted share security vertical", () => {
         expiresAt: "2026-09-08T12:00:00.000Z",
       });
       const relayStore = new MemoryShareRelayStore();
-      const app = createApp({
+      const app = ownedRelayApp({
         apiKey: "sk-test", makeClient: () => fakeClient,
         shares: relayStore, now: () => NOW,
       });
       const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
-        await app.fetch(new Request(input, init)));
+        await app.request(String(input), init));
       const relay = new BrowserShareRelayClient("https://relay.example", null, fetcher);
       await relay.create(encrypted.request);
 

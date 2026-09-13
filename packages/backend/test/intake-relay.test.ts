@@ -1,3 +1,4 @@
+import { ownedRelayApp } from "./helpers/owned-relay-app";
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { createApp, makeDevAuth } from "../src/app";
@@ -51,7 +52,7 @@ describe("ciphertext-only intake relay", () => {
   it("refuses unauthenticated form allocation when account auth is configured", async () => {
     const auth = makeDevAuth();
     const relay = new MemoryIntakeRelayStore({ now: () => now });
-    const app = createApp({ auth, intakeRelay: relay });
+    const app = ownedRelayApp({ auth, intakeRelay: relay });
 
     expect((await register(app)).status).toBe(401);
 
@@ -79,7 +80,7 @@ describe("ciphertext-only intake relay", () => {
       maxFormsPerSource: 1,
       maxRegistrationsPerSourceWindow: 10,
     } as unknown as ConstructorParameters<typeof MemoryIntakeRelayStore>[0]);
-    const app = createApp({ auth, intakeRelay: relay });
+    const app = ownedRelayApp({ auth, intakeRelay: relay });
     const sessionFor = async (email: string): Promise<string> => {
       const user = await auth.store.upsertUser(email);
       return auth.sessions.createSession(user.id);
@@ -110,7 +111,7 @@ describe("ciphertext-only intake relay", () => {
       maxFormsPerSource: 1,
       maxRegistrationsPerSourceWindow: 10,
     } as unknown as ConstructorParameters<typeof MemoryIntakeRelayStore>[0]);
-    const sourceApp = createApp({ auth, intakeRelay: sourceRelay });
+    const sourceApp = ownedRelayApp({ auth, intakeRelay: sourceRelay });
     const secondSession = await sessionFor("second@example.test");
     const sourceRegister = async (id: string, session: string): Promise<Response> => await sourceApp.request(
       "/intake/forms",
@@ -138,7 +139,7 @@ describe("ciphertext-only intake relay", () => {
       maxTotalCiphertextBytes: 32 * 1024 * 1024,
       maxCiphertextBytesPerForm: 32 * 1024 * 1024,
     });
-    const app = createApp({ intakeRelay: relay });
+    const app = ownedRelayApp({ intakeRelay: relay });
     expect((await register(app, 512 * 1024)).status).toBe(201);
 
     const malformed = await app.request(`/intake/forms/${formId}/submissions`, {
@@ -198,7 +199,7 @@ describe("ciphertext-only intake relay", () => {
   it("exposes cleanup only to the deployment scheduler capability", async () => {
     const relay = new MemoryIntakeRelayStore({ now: () => now });
     const cleanup = vi.spyOn(relay, "cleanupExpired");
-    const app = createApp({
+    const app = ownedRelayApp({
       intakeRelay: relay,
       intakeCleanupToken: "cleanup-capability",
     } as Parameters<typeof createApp>[0]);
@@ -213,7 +214,7 @@ describe("ciphertext-only intake relay", () => {
 
   it("registers separate capabilities and relays only a bounded encrypted envelope", async () => {
     const relay = new MemoryIntakeRelayStore({ now: () => now });
-    const app = createApp({ intakeRelay: relay });
+    const app = ownedRelayApp({ intakeRelay: relay });
     expect((await register(app)).status).toBe(201);
 
     const submissionId = "sub_abcdefghijklmnopqrstuvwxyz";
@@ -250,7 +251,7 @@ describe("ciphertext-only intake relay", () => {
 
   it("rejects plaintext, malformed capabilities, duplicate conflicts, item overflow, and queue overflow", async () => {
     const relay = new MemoryIntakeRelayStore({ now: () => now, maxPendingPerForm: 2 });
-    const app = createApp({ intakeRelay: relay });
+    const app = ownedRelayApp({ intakeRelay: relay });
     expect((await register(app, 1024)).status).toBe(201);
 
     const plaintext = await app.request(`/intake/forms/${formId}/submissions`, json({
@@ -290,7 +291,7 @@ describe("ciphertext-only intake relay", () => {
 
     const huge = { ...envelope, ciphertext: "A".repeat(1400) };
     const overflowRelay = new MemoryIntakeRelayStore({ now: () => now });
-    const overflowApp = createApp({ intakeRelay: overflowRelay });
+    const overflowApp = ownedRelayApp({ intakeRelay: overflowRelay });
     expect((await register(overflowApp, 1024)).status).toBe(201);
     expect((await overflowApp.request(`/intake/forms/${formId}/submissions`, json({
       schema: 1, submissionId: "sub_abcdefghijklmnopqrstuvwxyz", envelope: huge,

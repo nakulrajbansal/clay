@@ -199,65 +199,10 @@ describe("browser-side intake encryption", () => {
     expect(events).toEqual(["authorize", "delete", "delete", "resolve"]);
   });
 
-  it("reconciles expiry and terminal relay responses without letting one form block the rest", async () => {
-    const refresh = Reflect.get(intakeClient, "refreshPublishedIntakeForms") as
-      ((...args: unknown[]) => Promise<{ errors: unknown[] }>) | undefined;
-    const revoke = Reflect.get(intakeClient, "revokePublishedIntakeForm") as
-      ((...args: unknown[]) => Promise<unknown>) | undefined;
-    expect(typeof refresh).toBe("function");
-    expect(typeof revoke).toBe("function");
-
-    const keys = await generateIntakeOwnerKeyPair();
-    const ids = [
-      "form_aaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "form_bbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "form_cccccccccccccccccccccccccc",
-    ];
-    const forms = ids.map((formId, index): LocalIntakeFormV1 => ({
-      schema: 1,
-      publicForm: {
-        ...form(keys.publicKey), formId,
-        delivery: {
-          submitToken: String.fromCharCode(115 + index).repeat(43),
-          expiresAt: index === 1
-            ? "2026-09-01T00:00:00.000Z" : "2026-10-01T00:00:00.000Z",
-        },
-      },
-      ownerPrivateKey: keys.privateKey,
-      ownerToken: String.fromCharCode(111 + index).repeat(43),
-      relayBaseUrl: "https://relay.example.test/",
-      publishedAt: "2026-08-01T00:00:00.000Z",
-      revokedAt: null,
-    }));
-    const expired: string[] = [];
-    const revoked: string[] = [];
-    const worker = {
-      markIntakeFormExpired: async (formId: string) => { expired.push(formId); return forms[1]; },
-      revokeIntakeForm: async (formId: string) => { revoked.push(formId); return forms[0]; },
-      intakeDeliveryFailures: async () => [],
-      recordIntakeDeliveryFailure: async () => { throw new Error("unexpected"); },
-      authorizeIntakeDeliveryDiscard: async () => { throw new Error("unexpected"); },
-      resolveIntakeDeliveryFailure: async () => null,
-      stageIntakeSubmission: async () => { throw new Error("unexpected"); },
-    };
-    const fetched: string[] = [];
-    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-      const url = String(input);
-      fetched.push(url);
-      if (init?.method === "DELETE") return new Response("gone", { status: 404 });
-      if (url.includes(ids[0]!)) return new Response("down", { status: 503 });
-      return new Response(JSON.stringify({ items: [], hasMore: false }), {
-        status: 200, headers: { "content-type": "application/json" },
-      });
-    };
-    const refreshed = await refresh!(
-      worker, forms, fetchImpl, () => new Date("2026-09-08T12:00:00.000Z"),
-    );
-    expect(refreshed.errors).toHaveLength(1);
-    expect(expired).toEqual([ids[1]]);
-    expect(fetched.some(url => url.includes(ids[2]!))).toBe(true);
-
-    await revoke!(worker, forms[0], fetchImpl, () => new Date("2026-09-08T12:01:00.000Z"));
-    expect(revoked).toEqual([ids[0]]);
+  it("retires transport-only lifecycle writers; production expiry/revocation use source-bound owner custody", () => {
+    // Their former behavior is exercised through IntakeOwnerClient in the UI and
+    // real-worker packets, not a private-form-to-worker compatibility shortcut.
+    for (const name of ["createLocalIntakeForm", "publishIntakeForm", "refreshPublishedIntakeForms", "revokePublishedIntakeForm"])
+      expect(typeof Reflect.get(intakeClient, name)).toBe("undefined");
   });
 });
