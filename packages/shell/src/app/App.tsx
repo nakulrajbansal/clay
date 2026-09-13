@@ -67,6 +67,7 @@ import { ModalDialog, ModalScopedPortal } from "./ModalDialog";
 import type {
   RecoveryActionFailure,
   RecoveryBackupSummary,
+  RecoveryRetentionWork,
   RecoveryFailureSummary,
 } from "./RecoveryCenter";
 import type {
@@ -182,10 +183,12 @@ const RECOVERY_FAILURE_PREFIX = "clay_recovery_failures_v1:";
 function recoveryBackupSummaries(
   records: readonly BackupRecord[],
   appInstanceId: string,
+  retention?: import("@clay/schema/backup").BackupRetentionHistoryV1,
 ): RecoveryBackupSummary[] {
+  const attempts = new Map(retention?.events.map(event => [event.intent.backupId, event]));
   return records
     .filter(record => record.evidence.appInstanceId === appInstanceId
-      && record.state === "valid" && record.validationCode === "archive_valid")
+      && (record.state === "valid" || record.state === "deleted") && record.validationCode === "archive_valid")
     .sort((left, right) => right.validatedAt.localeCompare(left.validatedAt))
     .slice(0, 64)
     .map(record => ({
@@ -193,6 +196,10 @@ function recoveryBackupSummaries(
       fileName: record.fileName,
       verifiedAt: record.validatedAt,
       byteLength: record.byteLength,
+      targetId: record.targetId,
+      availability: record.state === "deleted" ? "absent" as const
+        : attempts.get(record.backupId)?.outcome === "failed" ? "removal_failed" as const : "unconfirmed" as const,
+      observedAt: attempts.get(record.backupId)?.completedAt,
     }));
 }
 
@@ -384,6 +391,7 @@ export function App(): React.JSX.Element {
   const [backupTargetHint, setBackupTargetHint] =
     useState<ProductionBackupTargetState | null>(null);
   const [backupHistory, setBackupHistory] = useState<RecoveryBackupSummary[]>([]);
+  const [backupRetentionWork, setBackupRetentionWork] = useState<RecoveryRetentionWork[]>([]);
   const [manualDownloads, setManualDownloads] = useState<import("@clay/schema/backup").ManualBackupDownloadV2[]>([]);
   const [pendingDownloadRecord, setPendingDownloadRecord] = useState<ManualDownloadIntent | null>(null);
   const downloadBusy = useRef(false);
@@ -1281,12 +1289,13 @@ export function App(): React.JSX.Element {
     const appId = currentId;
     await runLatestRequest(recoveryRefreshGate, async () => {
       const runtime = await loadProductionBackupRuntime();
-      const [trust, records, batches, candidates, downloads] = await Promise.all([
+      const [trust, records, batches, candidates, downloads, retention] = await Promise.all([
         client().backupTrustStatus(),
-        client().backupRecords(),
+        client().backupRecords(true),
         client().operationBatches(20),
         client().recoveryCandidates(),
         client().manualBackupDownloads(),
+        client().backupRetentionHistory(),
       ]);
       let storedTarget: ProductionBackupTargetState | null = null;
       try { storedTarget = runtime.loadProductionBackupTarget(localStorage, appId); }
@@ -1303,7 +1312,8 @@ export function App(): React.JSX.Element {
         pendingDownload: new ManualDownloadRecovery(sessionStorage, client()).pending(appId),
         storedTarget,
         authorizedTarget,
-        history: recoveryBackupSummaries(records, appId),
+        history: recoveryBackupSummaries(records, appId, retention),
+        retentionWork: runtime.productionRetentionWork(records, localStorage),
         batches,
         candidates,
         failures: loadRecoveryFailures(appId),
@@ -1316,6 +1326,7 @@ export function App(): React.JSX.Element {
       setBackupTargetHint(snapshot.storedTarget);
       setBackupTarget(snapshot.authorizedTarget);
       setBackupHistory(snapshot.history);
+      setBackupRetentionWork(snapshot.retentionWork);
       setRecoveryBatches(snapshot.batches);
       setRecoveryRecords(snapshot.candidates);
       setRecoveryActionFailures(snapshot.failures);
@@ -1329,6 +1340,19 @@ export function App(): React.JSX.Element {
       at: new Date().toISOString(),
       reasonCode,
     }, ...current].slice(0, 20));
+  };
+
+  const resumeBackupRetention = async (scope: RecoveryRetentionWork["scope"]): Promise<void> => {
+    const runtime = await loadProductionBackupRuntime();
+    const hint = runtime.loadProductionBackupTarget(localStorage, scope.appInstanceId, scope.targetId);
+    const adapter = backupAdapterRef.current;
+    if (!hint || !adapter || hint.target.adapterCertificationId !== scope.adapterCertificationId)
+      throw new Error("Original backup folder capability is unavailable. Work is quarantined; files are kept.");
+    const authorization = await adapter.reauthorizeFromUserGesture(hint.target);
+    if (authorization.status !== "authorized") throw new Error("Original folder permission needs renewal. No files were removed.");
+    if (!(await askConfirm(`Resume bounded retention in ${hint.folderName}? Only older receipt-bound backups are eligible; the newest 32 publications are kept.`))) return;
+    await runtime.runProductionBackupRetention(client(), adapter.directory(hint.target), scope);
+    await refreshRecoveryState();
   };
 
   const runAutomaticBackup = async (
@@ -1352,17 +1376,14 @@ export function App(): React.JSX.Element {
         return false;
       }
       setBackupFailures([]);
-      setBackupHistory(recoveryBackupSummaries(
-        await client().backupRecords(),
-        state.target.appInstanceId,
-      ));
+      await refreshRecoveryState();
       try { localStorage.setItem("clay_last_backup", String(Date.now())); }
       catch { /* private mode */ }
-      pushToast("Backup written and verified", "success");
+      pushToast(result.rotation.failed > 0 ? "Backup published; some older files need retention retry." : "Backup written and verified", "success");
       return true;
     } catch {
       recordBackupFailure("target_unreachable");
-      pushToast("Backup not verified; the earlier copy was kept.", "danger");
+      pushToast("Backup or retention needs recovery. Check the exact outcome in Recovery Center.", "danger");
       return false;
     }
   };
@@ -2600,9 +2621,12 @@ export function App(): React.JSX.Element {
                 targetId: backupTarget.target.targetId,
                 folderName: backupTarget.folderName,
               } : null}
-              lastVerifiedBackup={backupHistory[0] ?? null}
+              lastVerifiedBackup={backupHistory.find(record => record.availability !== "absent"
+                && record.targetId === backupTarget?.target.targetId) ?? null}
               failures={backupFailures}
               history={backupHistory}
+              retentionWork={backupRetentionWork}
+              onResumeRetention={resumeBackupRetention}
               structuralHistory={history}
               recentBatches={recoveryBatches}
               recordCandidates={recoveryRecords}

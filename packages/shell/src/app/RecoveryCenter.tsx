@@ -15,6 +15,16 @@ export type RecoveryBackupSummary = {
   fileName: string;
   verifiedAt: string;
   byteLength: number;
+  availability?: "unconfirmed" | "absent" | "removal_failed";
+  observedAt?: string;
+  targetId?: string;
+};
+
+export type RecoveryRetentionWork = {
+  scope: import("@clay/schema/backup").BackupRetentionScopeV1;
+  remaining: number;
+  folderName: string;
+  canResume: boolean;
 };
 
 export type RecoveryFailureSummary = {
@@ -46,6 +56,8 @@ export type RecoveryCenterProps = {
   lastVerifiedBackup: RecoveryBackupSummary | null;
   failures: RecoveryFailureSummary[];
   history: RecoveryBackupSummary[];
+  retentionWork?: RecoveryRetentionWork[];
+  onResumeRetention?: (scope: RecoveryRetentionWork["scope"]) => Promise<void>;
   manualDownloads?: import("@clay/schema/backup").ManualBackupDownloadV2[];
   pendingManualDownload?: import("./manual-download-recovery").ManualDownloadIntent | null;
   onResumeManualDownload?: (file?: File) => Promise<boolean>;
@@ -117,6 +129,7 @@ export function RecoveryCenter(props: RecoveryCenterProps): React.JSX.Element {
   const [restoreGrant, setRestoreGrant] = useState<AuthenticatedFormat5RestoreGrant | null>(null);
   const [kitBusy, setKitBusy] = useState(false);
   const [kitMessage, setKitMessage] = useState<string | null>(null);
+  const [retentionPage, setRetentionPage] = useState(0);
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null);
   const manualBusy = useRef(false);
@@ -323,7 +336,7 @@ export function RecoveryCenter(props: RecoveryCenterProps): React.JSX.Element {
           <dl>
             <div><dt>Current app</dt><dd>{props.opfsAvailable
               ? props.lastVerifiedBackup && props.backupTarget
-                ? `${props.appName} is saved in this browser and has a verified backup in ${props.backupTarget.folderName}.`
+                ? `${props.appName} is saved in this browser; a backup was validated at publication in ${props.backupTarget.folderName}. Check the file before relying on it.`
                 : `${props.appName} is saved in this browser’s private storage (OPFS) only.`
               : `${props.appName} is in a temporary session and is not saved.`}</dd></div>
             <div><dt>Backup folder</dt><dd>{props.backupTarget?.folderName ?? "Not chosen"}</dd></div>
@@ -385,16 +398,34 @@ export function RecoveryCenter(props: RecoveryCenterProps): React.JSX.Element {
 
         <section aria-labelledby="recovery-history-title">
           <h3 id="recovery-history-title">Backup history</h3>
+          <p>Validated at publication. Current file availability is not continuously monitored.</p>
           {props.history.length === 0 ? <p className="shape-evolution-empty">No verified backups yet.</p> : (
             <ol>
               {props.history.slice(0, 64).map(item => (
                 <li className="recovery-history-item" key={item.backupId}>
                   {formatDate(item.verifiedAt)}
+                  {item.availability === "absent" ? ` — Absence acknowledged${item.observedAt ? ` ${formatDate(item.observedAt)}` : ""}`
+                    : item.availability === "removal_failed" ? " — Retention attempt failed; file availability unconfirmed"
+                      : " — Current availability unconfirmed"}
                 </li>
               ))}
             </ol>
           )}
         </section>
+
+        {(props.retentionWork?.length ?? 0) > 0 ? <section aria-labelledby="recovery-retention-title">
+          <h3 id="recovery-retention-title">Unfinished folder retention</h3>
+          <p>Earlier folder or app work is kept separately. No file is removed until its exact folder, backup receipt, keeper and write lease are checked again.</p>
+          <ul>{props.retentionWork!.slice(retentionPage * 10, (retentionPage + 1) * 10).map(work => <li key={`${work.scope.appInstanceId}:${work.scope.targetId}:${work.scope.adapterCertificationId}`}>
+            {work.folderName}{work.scope.appInstanceId !== props.authoritativeAppInstanceId ? " (previous app)" : ""}: {work.remaining} remaining
+            {work.canResume && props.onResumeRetention ? <button disabled={kitBusy} onClick={() => void runKitAction(
+              async () => { await props.onResumeRetention!(structuredClone(work.scope)); setRetentionPage(0); }, "Retention checked. Any unfinished work remains available for retry.",
+            )}>Resume retention: {work.folderName}</button>
+              : <p>Quarantined: the original folder capability is unavailable. Files are kept; app data remains usable.</p>}
+          </li>)}</ul>
+          {retentionPage > 0 ? <button onClick={() => setRetentionPage(page => page - 1)}>Previous folders</button> : null}
+          {(retentionPage + 1) * 10 < props.retentionWork!.length ? <button onClick={() => setRetentionPage(page => page + 1)}>More folders</button> : null}
+        </section> : null}
 
         <section aria-labelledby="recovery-local-title">
           <h3 id="recovery-local-title">Recover recent changes</h3>

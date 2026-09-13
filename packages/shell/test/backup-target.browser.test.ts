@@ -649,6 +649,13 @@ describe("Chromium external-backup directory adapter", () => {
     directory.permissions.push("denied");
     await expect(subject.directory(target()).removeExact(fileName)).rejects.toMatchObject({ reasonCode: "permission_required" });
   });
+  it("distinguishes exact missing-file readback from permission loss for retention acknowledgement", async () => {
+    const directory = new FakeDirectory(); const store = new MemoryHandleStore(); await store.save(targetId, directory);
+    const subject = adapter(directory, store);
+    await expect(subject.directory(target()).readExact(fileName)).rejects.toMatchObject({ reasonCode: "file_missing" });
+    directory.permissions.push("denied");
+    await expect(subject.directory(target()).readExact(fileName)).rejects.toMatchObject({ reasonCode: "permission_required" });
+  });
 
   it("rejects an existing same-name file and caller path before any overwrite", async () => {
     const directory = new FakeDirectory();

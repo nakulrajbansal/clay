@@ -43,7 +43,7 @@ function nullableText(value: unknown): string | null {
   return value;
 }
 
-function parseReceipt(row: SqlRow): ProductionRequestReceipt {
+export function parseProductionRequestReceiptRow(row: SqlRow): ProductionRequestReceipt {
   try {
     return ProductionRequestReceiptV1.parse({
       schema: 1,
@@ -99,8 +99,8 @@ function persistedFromRows(
   targetRow: SqlRow,
   catalogRow: SqlRow,
 ): PersistedProductionRequestReceipt {
-  const target = parseReceipt(targetRow);
-  const catalog = parseReceipt(catalogRow);
+  const target = parseProductionRequestReceiptRow(targetRow);
+  const catalog = parseProductionRequestReceiptRow(catalogRow);
   if (common(target) !== common(catalog))
     throw invalid(PRODUCTION_REQUEST_PREFIX + "receipt mirrors diverged");
   const responseJson = nullableText(targetRow.response_json);
@@ -268,6 +268,10 @@ export function writeProductionRequestReceipt(
   const existing = readProductionRequestReceipt(driver, receipt.requestId);
   if (expectedState === null) {
     if (existing) throw invalid(PRODUCTION_REQUEST_PREFIX + "receipt already exists");
+    if (receipt.state === "no_op") driver.exec(
+      "INSERT INTO catalog.id_registry(id_value,id_kind,retained_at) VALUES (?,'operation',?)",
+      [receipt.operationId, receipt.preparedAt],
+    );
     const values = params(receipt);
     for (const table of RECEIPT_TABLES) {
       const target = table === TARGET_TABLE;

@@ -39,6 +39,8 @@ import type {
   IntakeSubmissionPlaintextV1, LocalIntakeFormV1,
 } from "@clay/schema/intake";
 import { TargetEvidenceV1 } from "@clay/schema/catalog";
+import { BackupRetentionPlanV1, BackupRetentionHistoryV1, BackupRemovalAuthorizationV1, BackupRetentionReceiptV1,
+  type BackupRemovalIntentV1, type BackupRetentionScopeV1 } from "@clay/schema/backup";
 import type { IntentOutcome } from "../worker/db-worker";
 import type { FirstSuccessState } from "./first-success-state";
 import { fetchModelHealth } from "./model-health";
@@ -1826,6 +1828,10 @@ export class WorkerClient {
     const result = await this.ephemeralCall("presentationSource");
     return (await import("@clay/schema/catalog")).TargetEvidenceV1.parse(result);
   }
+  async cancelPresentation(route: string, payload: unknown, context: WorkerMutationContext): Promise<import("@clay/schema/catalog").PresentationMutationOutcomeV1> {
+    const request = this.mutationCall("cancelPresentation", { route, payload: structuredClone(payload) }, captureWorkerMutationContext(context));
+    return (await import("@clay/schema/catalog")).PresentationMutationOutcomeV1.parse(await request);
+  }
   quickCapture(table: string, row: Record<string, unknown>, tableId: string, context: WorkerMutationContext, appInstanceId: string): Promise<BatchReceipt> {
     const captured = captureWorkerMutationContext(context); const capturedRow = structuredClone(row);
     return this.mutationCall("dailyHomeQuickCapture", { appInstanceId, table, row: capturedRow, tableId }, captured);
@@ -2046,8 +2052,21 @@ export class WorkerClient {
   backupSelection(context: WorkerMutationContext = createWorkerMutationContext()): Promise<ProductionBackupSelection> {
     return this.mutationCall("backupSelection", undefined, context);
   }
-  backupRecords(): Promise<BackupRecord[]> {
-    return this.ephemeralCall("backupRecords");
+  backupRecords(allApps = false): Promise<BackupRecord[]> {
+    return this.ephemeralCall("backupRecords", { allApps });
+  }
+  async backupRetentionPlan(scope: BackupRetentionScopeV1): Promise<BackupRetentionPlanV1> {
+    return BackupRetentionPlanV1.parse(await this.ephemeralCall("backupRetentionPlan", structuredClone(scope)));
+  }
+  async backupRetentionHistory(): Promise<BackupRetentionHistoryV1> {
+    return BackupRetentionHistoryV1.parse(await this.ephemeralCall("backupRetentionHistory"));
+  }
+  async authorizeBackupRemoval(intent: BackupRemovalIntentV1, context: WorkerMutationContext): Promise<BackupRemovalAuthorizationV1> {
+    return BackupRemovalAuthorizationV1.parse(await this.mutationCall("authorizeBackupRemoval", { intent }, context));
+  }
+  async acknowledgeBackupRemoval(intent: BackupRemovalIntentV1, outcome: "absent" | "failed",
+    fence: import("@clay/schema/catalog").WriteFenceV1, context: WorkerMutationContext): Promise<BackupRetentionReceiptV1> {
+    return BackupRetentionReceiptV1.parse(await this.mutationCall("acknowledgeBackupRemoval", { intent, outcome, fence }, context));
   }
   manualBackupDownloads(): Promise<import("@clay/schema/backup").ManualBackupDownloadV2[]> {
     return this.ephemeralCall("manualBackupDownloads");

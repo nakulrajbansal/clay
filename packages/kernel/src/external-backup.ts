@@ -50,6 +50,10 @@ export interface ExternalBackupDependencies {
   authority: ExternalBackupAuthority;
   validateArchiveStage: IsolatedArchiveStageValidator;
   now(): string;
+  /** Trusted-shell per-file authority/acknowledgement runner. Rotation hints alone never authorize unlink. */
+  retainPublished?(receipt: import("@clay/schema/backup").BackupPublicationReceiptV1): Promise<{
+    requested: number; deleted: number; failed: number;
+  }>;
   /** Internal trusted path: the caller transferred sole ownership of this buffer. */
   archiveBytesOwnership?: "transferred";
 }
@@ -400,26 +404,17 @@ export async function runExternalBackup(
       || !validRotation(receiptResult.data.rotate, receiptResult.data.record))
     return failed("publication_failed", artifact);
 
-  let deleted = 0;
-  let rotationFailed = 0;
-  for (const record of receiptResult.data.rotate) {
-    try {
-      await dependencies.directory.removeExact(record.fileName);
-      deleted++;
-    } catch {
-      rotationFailed++;
-    }
-  }
+  // The prior fire-and-forget loop could unlink without a durable receipt, then
+  // starve older work forever on reload. Only the fenced per-file runner removes.
+  const rotation = dependencies.retainPublished
+    ? await dependencies.retainPublished(receiptResult.data)
+    : { requested: receiptResult.data.rotate.length, deleted: 0, failed: receiptResult.data.rotate.length };
 
   return BackupResultV1.parse({
     schema: 1,
     status: "published",
     publication: receiptResult.data.publication,
     record: receiptResult.data.record,
-    rotation: {
-      requested: receiptResult.data.rotate.length,
-      deleted,
-      failed: rotationFailed,
-    },
+    rotation,
   });
 }

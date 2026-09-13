@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import type { RelationConversionPreview, RegTable } from "@clay/kernel";
 import type { WorkerClient } from "./worker-client";
 import { ModalDialog } from "./ModalDialog";
-import { beginPresentationIntent, finishPresentationIntent, readPresentationIntent, reconcilePresentation } from "./presentation-intent";
+import { beginPresentationIntent, cancelPresentationIntent, finishPresentationIntent, readPresentationIntent, reconcilePresentation } from "./presentation-intent";
 
 const label = (name: string): string => name.replace(/_/g, " ")
   .replace(/^./, character => character.toUpperCase());
@@ -95,6 +95,17 @@ export function RelationConversionDialog(props: {
     } catch (error) { props.onError(error instanceof Error ? error.message : "Undo needs recovery"); }
     finally { working.current = false; setBusy(false); }
   };
+  const cancelPending = async (): Promise<void> => {
+    const intent = pendingKeep.current;
+    if (!intent || working.current || intent.appInstanceId !== props.appInstanceId) return;
+    working.current = true; setBusy(true);
+    try {
+      if (await cancelPresentationIntent(sessionStorage, props.worker, intent)) {
+        pendingKeep.current = null; setNeedsReconciliation(false); setPreview(null);
+      } else props.onError("Keep already committed. Retry Keep to read its exact result; it cannot be cancelled.");
+    } catch (error) { props.onError(error instanceof Error ? error.message : "Cancellation needs recovery"); }
+    finally { working.current = false; setBusy(false); }
+  };
 
   return (
     <ModalDialog className="relation-dialog" backdropClassName="modal-backdrop relation-backdrop"
@@ -165,6 +176,7 @@ export function RelationConversionDialog(props: {
 
       <footer className="relation-dialog-actions">
         {needsReconciliation ? <p role="status">The Keep outcome needs checking. Retry the same request, or close and inspect History. No changes are discarded by closing.</p> : null}
+        {needsReconciliation ? <button disabled={busy || !!recovery.error} onClick={() => void cancelPending()}>Cancel pending Keep and re-preview</button> : null}
         <button disabled={busy} onClick={props.onClose}>{needsReconciliation ? "Close" : preview ? "Discard preview" : "Cancel"}</button>
         {completed && undoIntent ? <>
           <button disabled={busy} onClick={() => void undo()}>Undo this conversion</button>

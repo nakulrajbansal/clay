@@ -14,6 +14,8 @@ import {
 } from "@clay/kernel/backup";
 import type { ProductionBackupSelection } from "@clay/kernel/worker-authority";
 import type { WorkerClient } from "./worker-client";
+import { runProductionBackupRetention } from "./backup-retention.browser";
+export { runProductionBackupRetention } from "./backup-retention.browser";
 import {
   ChromiumBackupDirectoryAdapter,
   IndexedDbDirectoryHandleStore,
@@ -234,6 +236,11 @@ export function saveProductionBackupTarget(
       || folderName.length < 1 || folderName.length > 255
       || /[\u0000-\u001f\u007f]/.test(folderName))
     throw new Error("backup folder name is invalid");
+  const previous = loadProductionBackupTarget(storage, target.appInstanceId);
+  // Immutable authority IDs address old folder hints; never delete a handle on
+  // switch. Losing a presentation hint leaves catalog work quarantined, not lost.
+  if (previous) storage.setItem(`${TARGET_STORAGE_PREFIX}${target.appInstanceId}:${previous.target.targetId}`, JSON.stringify(previous));
+  storage.setItem(`${TARGET_STORAGE_PREFIX}${target.appInstanceId}:${target.targetId}`, JSON.stringify({ target, folderName }));
   storage.setItem(`${TARGET_STORAGE_PREFIX}${target.appInstanceId}`, JSON.stringify({
     target,
     folderName,
@@ -243,11 +250,12 @@ export function saveProductionBackupTarget(
 export function loadProductionBackupTarget(
   storage: ProductionBackupTargetStorage,
   appInstanceId: string,
+  targetId?: string,
 ): ProductionBackupTargetState | null {
   const key = targetStorageKey(appInstanceId);
-  if (!key) return null;
+  if (!key || (targetId !== undefined && !/^tgt_[a-z2-7]{26}$/.test(targetId))) return null;
   try {
-    const encoded = storage.getItem(key);
+    const encoded = (targetId === undefined ? null : storage.getItem(`${key}:${targetId}`)) ?? storage.getItem(key);
     if (encoded === null || encoded.length > 4_096) return null;
     const value: unknown = JSON.parse(encoded);
     if (!value || typeof value !== "object" || Array.isArray(value)
@@ -257,6 +265,7 @@ export function loadProductionBackupTarget(
         || !Object.hasOwn(record, "target") || !Object.hasOwn(record, "folderName")) return null;
     const target = BackupTargetV1.safeParse(record.target);
     if (!target.success || target.data.appInstanceId !== appInstanceId
+        || (targetId !== undefined && target.data.targetId !== targetId)
         || typeof record.folderName !== "string"
         || record.folderName !== record.folderName.trim()
         || record.folderName.length < 1 || record.folderName.length > 255
@@ -277,7 +286,28 @@ export type ProductionBackupWorker = Pick<
   | "validateBackupStage"
   | "publishBackup"
   | "completeAutomaticBackup"
+  | "backupRetentionPlan"
+  | "authorizeBackupRemoval"
+  | "acknowledgeBackupRemoval"
 >;
+
+/** Display inventory only. The worker recomputes eligibility before each effect. */
+export function productionRetentionWork(
+  records: readonly import("@clay/schema/backup").BackupRecordV1[], storage: ProductionBackupTargetStorage,
+): import("./RecoveryCenter").RecoveryRetentionWork[] {
+  const groups = new Map<string, { scope: import("@clay/schema/backup").BackupRetentionScopeV1; count: number }>();
+  for (const record of records) {
+    if (record.state !== "valid") continue;
+    const scope = { appInstanceId: record.evidence.appInstanceId, targetId: record.targetId, adapterCertificationId: record.adapterCertificationId };
+    const key = JSON.stringify(scope), group = groups.get(key);
+    if (group) group.count++; else groups.set(key, { scope, count: 1 });
+  }
+  return [...groups.values()].filter(group => group.count > 32).map(({ scope, count }) => {
+    const hint = loadProductionBackupTarget(storage, scope.appInstanceId, scope.targetId);
+    return { scope, remaining: count - 32, folderName: hint?.folderName ?? "Earlier folder",
+      canResume: hint?.target.adapterCertificationId === scope.adapterCertificationId };
+  });
+}
 
 export type ProductionBackupAdapter = Pick<
   ChromiumBackupDirectoryAdapter,
@@ -327,6 +357,7 @@ export async function runProductionAutomaticBackup(
 
   const archiveBytes = new Uint8Array(prepared.bytes);
   try {
+    let remainingRetention = 0;
     const result = await runExternalBackup(prepared.run, archiveBytes, {
       directory,
       authority: {
@@ -346,8 +377,16 @@ export async function runProductionAutomaticBackup(
       },
       now,
       archiveBytesOwnership: "transferred",
+      retainPublished: async () => {
+        const page = await runProductionBackupRetention(worker, directory, {
+          appInstanceId: target.appInstanceId, targetId: target.targetId,
+          adapterCertificationId: target.adapterCertificationId,
+        });
+        remainingRetention = page.remaining;
+        return { requested: page.requested, deleted: page.deleted, failed: page.failed };
+      },
     });
-    await worker.completeAutomaticBackup(result);
+    if (remainingRetention === 0) await worker.completeAutomaticBackup(result);
     return result;
   } finally {
     if (archiveBytes.byteLength > 0) archiveBytes.fill(0);

@@ -10,6 +10,8 @@ import {
 import {
   BackupPublicationRequestV1,
   BackupSelectedTargetV1,
+  BackupRemovalAcknowledgementV1,
+  BackupRemovalRequestV1,
   type BackupPublicationReceiptV1 as BackupPublicationReceipt,
   type BackupPublicationRequestV1 as BackupPublicationRequest,
   type BackupRecordV1 as BackupRecord,
@@ -1691,11 +1693,57 @@ export class ProductionMutationCoordinator {
     });
   }
 
+  backupRetentionPlan(input: unknown) {
+    const captured = structuredClone(input);
+    return this.serializeRead(async () => DeviceCatalog.openExisting(this.#driver).backupRetentionPlan(captured));
+  }
+  backupRetentionHistory() {
+    return this.serializeRead(async () => DeviceCatalog.openExisting(this.#driver).backupRetentionHistory());
+  }
+  authorizeBackupRemoval(input: unknown) {
+    const captured = BackupRemovalRequestV1.parse(input);
+    return this.serializeRead(async () => {
+      this.#ensureWriteFence();
+      return DeviceCatalog.openExisting(this.#driver).authorizeBackupRemoval(captured, this.#fence, trustedInstant(this.#clock).milliseconds);
+    });
+  }
+  acknowledgeBackupRemoval(input: unknown, fence: WriteFence) {
+    const captured = BackupRemovalAcknowledgementV1.parse(input); const requestedFence = { ...fence };
+    return this.serializeRead(async () => {
+      this.#ensureWriteFence();
+      const catalog = DeviceCatalog.openExisting(this.#driver);
+      return this.#writeAuthority.run(() => catalog.acknowledgeBackupRemoval({ ...captured,
+        fence: requestedFence, nowMs: trustedInstant(this.#clock).milliseconds }));
+    });
+  }
+
   /** Historical acknowledgement, NOT a mutation replay. It does not claim the
    * effect is still current or authorize an Undo across intervening writes. */
   mutationOutcome(input: unknown): Promise<PresentationMutationOutcomeV1> {
     const captured = captureMutation(input); RecoverablePresentationRouteV1.parse(captured.route);
+    return this.serializeRead(async () => this.#presentationOutcome(captured));
+  }
+
+  /** Serialized against invocation. A terminal no-effect receipt closes the old
+   * ID even if its non-cancelling browser timeout can still deliver it later. */
+  cancelPresentation(input: unknown): Promise<PresentationMutationOutcomeV1> {
+    const captured = captureMutation(input);
+    if (captured.route !== "daily.capture" && captured.route !== "schema.convertTextToRelation")
+      throw invalid("Only a bound Capture or conversion Keep can be cancelled here");
     return this.serializeRead(async () => {
+      this.#ensureWriteFence();
+      const source = captured.route === "daily.capture" ? captured.payload.appInstanceId : captured.payload.authorityTarget.appInstanceId;
+      if (source !== this.#target.appInstanceId) throw invalid("Cancellation belongs to another app");
+      const outcome = this.#presentationOutcome(captured);
+      if (outcome.status !== "not_invoked") return outcome;
+      this.#executeNoOp(captured, this.#target, this.#catalogGeneration, { kind: "clay-presentation-cancelled-v1" });
+      const readback = this.#presentationOutcome(captured);
+      if (readback.status !== "cancelled") throw invalid("Presentation cancellation failed terminal readback");
+      return readback;
+    });
+  }
+
+  #presentationOutcome(captured: CapturedProductionMutation): PresentationMutationOutcomeV1 {
       const catalog = DeviceCatalog.openExisting(this.#driver);
       const current = TargetAuthorityStore.open(this.#driver).evidence();
       if (!sameTarget(current, this.#target) || !sameTarget(catalog.selectedTargetStorage().target, current)
@@ -1711,16 +1759,29 @@ export class ProductionMutationCoordinator {
           || receipt.requestSha256 !== requestFingerprint(expected, captured))
         throw invalid("Presentation request identity or payload binding is invalid");
       if (receipt.state === "invoked" || receipt.state === "prepared") return { status: "uncertain" };
-      if (receipt.state === "failed") throw invalid("Presentation request failed previously; inspect recovery before a new request");
       if (receipt.responseJson === null || receipt.resultingProtectionRevision === null || receipt.resultingStateSha256 === null)
         throw invalid("Presentation receipt is incomplete");
       const decoded = decodeProductionResponse(receipt.responseJson);
       if (decoded.kind !== "envelope" || decoded.route !== captured.route) throw invalid("Presentation receipt route differs");
+      if (receipt.state === "failed") {
+        const physical = TargetAuthorityStore.open(this.#driver).reservations().find(row => row.operationId === receipt.operationId);
+        const mirrored = catalog.revisionReservations().find(row => row.operationId === receipt.operationId);
+        if (!physical || !mirrored || physical.state !== "abandoned" || mirrored.state !== "abandoned"
+            || physical.revision !== mirrored.revision || physical.requestSha256 !== receipt.requestSha256
+            || mirrored.requestSha256 !== receipt.requestSha256
+            || physical.expectedProtectionRevision !== receipt.expectedProtectionRevision
+            || mirrored.expectedProtectionRevision !== receipt.expectedProtectionRevision
+            || physical.expectedStateSha256 !== receipt.expectedStateSha256 || mirrored.expectedStateSha256 !== receipt.expectedStateSha256
+            || receipt.resultingProtectionRevision !== receipt.expectedProtectionRevision || receipt.resultingStateSha256 !== receipt.expectedStateSha256)
+          throw invalid("Failed presentation request lacks proven abandoned effects");
+        return { status: "failed" };
+      }
+      if (receipt.state === "no_op" && JSON.stringify(decoded.result) === '{"kind":"clay-presentation-cancelled-v1"}')
+        return { status: "cancelled" };
       if (receipt.state === "committed") assertCommittedReceiptReservationBinding(receipt,
         TargetAuthorityStore.open(this.#driver).reservations(), catalog.revisionReservations());
       const target = receiptTarget(receipt, true, current.digestSchema);
       return { status: "recorded", current: sameTarget(current, target), result: decoded.result, target };
-    });
   }
 
   publishBackup(input: BackupPublicationRequest): Promise<BackupPublicationReceipt> {
@@ -2092,7 +2153,9 @@ export class ProductionMutationCoordinator {
     } else if (expectedRequestSha256 === null || persisted.operationId !== expectedOperationV1) {
       throw invalid("legacy production response operation identity is invalid");
     }
-    const response = decodedResponse.result;
+      const response = decodedResponse.result;
+      if (persisted.state === "no_op" && JSON.stringify(response) === '{"kind":"clay-presentation-cancelled-v1"}')
+        throw invalid("Presentation request was cancelled; the old ID can never execute");
     const resulting = receiptTarget(persisted, true, this.#target.digestSchema);
     const catalog = DeviceCatalog.openExisting(this.#driver);
     const targetAuthority = TargetAuthorityStore.open(this.#driver);

@@ -38,11 +38,24 @@ export function finishPresentationIntent(storage: Storage, app: string, slot: Sl
   storage.removeItem(key(app, slot));
   if (storage.getItem(key(app, slot)) !== null) throw new Error("Retry cleanup failed read-back");
 }
+export async function cancelPresentationIntent(storage: Storage, worker: Pick<WorkerClient, "cancelPresentation">,
+  intent: PresentationIntent): Promise<boolean> {
+  if (JSON.stringify(readPresentationIntent(storage, intent.appInstanceId, intent.slot)) !== JSON.stringify(intent))
+    throw new Error("Original recovery request changed; nothing cancelled");
+  const outcome = await worker.cancelPresentation(intent.route, intent.payload, { requestId: intent.requestId });
+  if (outcome.status === "recorded") return false; // Reconcile the winning effect, never replace it.
+  if (outcome.status !== "cancelled" && outcome.status !== "failed")
+    throw new Error("Cancellation outcome is uncertain; reopen for recovery with the same request");
+  finishPresentationIntent(storage, intent.appInstanceId, intent.slot, intent.requestId);
+  return true;
+}
 export async function reconcilePresentation<T>(worker: Pick<WorkerClient, "mutationOutcome">,
   intent: PresentationIntent, invoke: () => Promise<T>, onRecorded?: (current: boolean) => void): Promise<T> {
   const outcome = await worker.mutationOutcome(intent.route, intent.payload, { requestId: intent.requestId });
   if (outcome.status === "uncertain") throw new Error("The durable outcome is uncertain. Reopen Clay for recovery; the original request was kept.");
   if (outcome.status === "recorded") { onRecorded?.(outcome.current); return outcome.result as T; }
+  if (outcome.status === "cancelled" || outcome.status === "failed")
+    throw new Error("This request is terminal without effects. Cancel the pending request before editing or re-previewing.");
   if (outcome.status !== "not_invoked") throw new Error("Unrecognized recovery outcome; request kept");
   return invoke();
 }

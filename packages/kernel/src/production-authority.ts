@@ -888,6 +888,7 @@ export class ProductionStoreAuthority {
 
   static async bootBrowser(input: unknown): Promise<ProductionStoreAuthority> {
     const bootInput = captureBrowserBootInput(input);
+    await (await import("./production-catalog-migration")).migrateBrowserCatalogRetention();
     await (await import("./production-restore")).reconcilePendingBrowserRestore();
     let inventory = await browserDurableInventory();
     if (inventory.state !== "complete") {
@@ -1594,7 +1595,12 @@ export class ProductionStoreAuthority {
   backupRecords(allApps = false) {
     return this.#coordinator.backupRecords(allApps);
   }
+  backupRetentionPlan(input: unknown) { return this.#coordinator.backupRetentionPlan(input); }
+  backupRetentionHistory() { return this.#coordinator.backupRetentionHistory(); }
+  authorizeBackupRemoval(input: unknown) { return this.#coordinator.authorizeBackupRemoval(input); }
+  acknowledgeBackupRemoval(input: unknown, fence: WriteFence) { return this.#coordinator.acknowledgeBackupRemoval(input, fence); }
   mutationOutcome(input: unknown) { return this.#coordinator.mutationOutcome(input); }
+  cancelPresentation(input: unknown) { return this.#coordinator.cancelPresentation(input); }
   presentationSource() { return this.#coordinator.serializeRead(async () => this.inspectAuthority().target); }
 
   manualBackupDownloadOutcome(record: unknown, requestId: string) {

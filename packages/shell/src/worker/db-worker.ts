@@ -673,7 +673,7 @@ type DirectAuthorityRoute = keyof typeof DIRECT_AUTHORITY_ROUTES;
 async function runAuthorityMutation(
   route:
     | DirectAuthorityRoute
-    | "backupSelection" | "publishBackup" | "recordManualBackupDownload"
+    | "backupSelection" | "publishBackup" | "recordManualBackupDownload" | "authorizeBackupRemoval" | "acknowledgeBackupRemoval" | "cancelPresentation"
     | "seed" | "importTable" | "removeSamples" | "fillSamples"
     | "setSetting" | "deleteSetting" | "compareAndSetSetting" | "completeEverydayAction"
     | "commitLayout"
@@ -698,6 +698,19 @@ async function runAuthorityMutation(
 ): Promise<unknown> {
   const target = mustAuthority();
   const requestId = authorityRequestId(req);
+  if (route === "cancelPresentation") {
+    const captured = captureLifecyclePayload(payload, ["route", "payload"]);
+    return target.cancelPresentation({ ...captured, requestId });
+  }
+  if (route === "authorizeBackupRemoval") {
+    const captured = captureLifecyclePayload(payload, ["intent"]);
+    return target.authorizeBackupRemoval({ requestId, intent: captured.intent });
+  }
+  if (route === "acknowledgeBackupRemoval") {
+    const captured = captureLifecyclePayload(payload, ["intent", "outcome", "fence"]);
+    return target.acknowledgeBackupRemoval({ requestId, intent: captured.intent, outcome: captured.outcome },
+      captured.fence as Parameters<ProductionStoreAuthority["acknowledgeBackupRemoval"]>[1]);
+  }
   if (route === "backupSelection") {
     const record = captureLifecyclePayload(payload ?? {}, payload && Object.keys(payload).length ? ["expected"] : []);
     return target.backupSelection(record.expected as Parameters<ProductionStoreAuthority["backupSelection"]>[0]);
@@ -1471,6 +1484,8 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       const input = captureLifecyclePayload(rawPayload, ["route", "payload"]);
       return mustAuthority().mutationOutcome({ ...input, requestId: authorityRequestId(req) });
     }
+    case "cancelPresentation":
+      return runAuthorityMutation("cancelPresentation", rawPayload, req);
     case "presentationSource":
       captureLifecyclePayload(rawPayload ?? {}, []);
       return mustAuthority().presentationSource();
@@ -1517,6 +1532,14 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "backupRecords":
       if (p.allApps !== undefined && typeof p.allApps !== "boolean") throw new ClayError("E_VALIDATION", "backup record scope is invalid");
       return mustAuthority().backupRecords(p.allApps === true);
+    case "backupRetentionPlan":
+      return mustAuthority().backupRetentionPlan(rawPayload);
+    case "backupRetentionHistory":
+      return mustAuthority().backupRetentionHistory();
+    case "authorizeBackupRemoval":
+      return runAuthorityMutation("authorizeBackupRemoval", rawPayload, req);
+    case "acknowledgeBackupRemoval":
+      return runAuthorityMutation("acknowledgeBackupRemoval", rawPayload, req);
     case "manualBackupDownloads":
       return mustAuthority().manualBackupDownloads();
     case "manualBackupDownloadOutcome":

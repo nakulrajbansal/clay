@@ -26,6 +26,8 @@ import { writeProductionRequestReceipt } from "../src/production-request-journal
 import { StateMerkleIndex } from "../src/state-merkle-index";
 import { TargetAuthorityStore } from "../src/target-authority";
 import { seededStoreWithDriver } from "./helpers";
+import { encodeAuthorityIdBytes } from "../src/production-operation-id";
+import { buildAutomaticBackupFileName } from "../src/backup";
 
 const id = (prefix: string, char: string): string => `${prefix}_${char.repeat(26)}`;
 const sha = (bytes: Uint8Array): string => `sha256:${sha256HexSync(bytes)}`;
@@ -325,6 +327,62 @@ async function expectRejectedBeforeReplacement(
 }
 
 describe("archive format 5 authority evidence", () => {
+  it("still imports exact pre-retention catalog evidence versions 1 and 2", async () => {
+    const source = await authoritativeArchiveSource();
+    try {
+      const archive = await exportAuthorityArchiveV5(await source.store.exportArchive("Field Service"), source.driver);
+      for (const version of [1, 2]) {
+        const legacy = rewriteAuthority(archive, evidence => {
+          Reflect.set(evidence.catalogAuthority, "schema", version);
+          Reflect.set(evidence.catalogAuthority, "schemaObjects", expectedCatalogSchemaObjects(false));
+          Reflect.deleteProperty(evidence.catalogAuthority, "retentionHistory");
+          if (version === 1) Reflect.deleteProperty(evidence.catalogAuthority, "lifecycleReceipts");
+        });
+        const imported = await importAuthorityArchive(legacy);
+        try { expect(imported.authority.evidence?.catalogAuthority.schema).toBe(version); }
+        finally { imported.store.close(); }
+      }
+    } finally { source.store.close(); }
+  });
+  it("seals retention receipts and rejects missing or rebound per-file accounting without weakening legacy archives", async () => {
+    const source = await authoritativeArchiveSource();
+    const scope = { appInstanceId: source.target.evidence().appInstanceId, targetId: id("tgt", "q"), adapterCertificationId: id("btc", "r") };
+    try {
+      for (let n = 10; n < 43; n++) {
+        const opaque = (prefix: string) => encodeAuthorityIdBytes(prefix, new Uint8Array(17).fill(n));
+        const snapshot = source.catalog.snapshot(); const at = `2026-09-05T20:01:${String(n).padStart(2, "0")}.000Z`;
+        source.catalog.publishBackup({ request: { schema: 1, fence: source.fence,
+          expected: { schema: 1, authorityIncarnationId: snapshot.authorityIncarnationId, catalogGeneration: snapshot.catalogGeneration,
+            writeEpoch: snapshot.writeEpoch, selectedAppInstanceId: scope.appInstanceId,
+            selectedActiveGenerationId: source.target.evidence().activeGenerationId, target: source.target.evidence() },
+          artifact: { schema: 1, backupId: opaque("bkp"), generationId: opaque("backupgen"), targetId: scope.targetId,
+            evidence: source.target.evidence(), adapterCertificationId: scope.adapterCertificationId,
+            fileName: buildAutomaticBackupFileName("Field Service", opaque("backupgen"), at), createdAt: at, validatedAt: at,
+            shapeHead: 1, shapeCurrent: 1, archiveFormat: 5, byteLength: 10, archiveSha256: `sha256:${"a".repeat(64)}`,
+            authentication: { schema: 1, kind: "cose_mac0_hmac_256_256", authenticationVersion: 1, keyId: "b".repeat(32),
+              seriesId: "c".repeat(32), generation: String(n) } } }, operationId: opaque("op"), nowMs: Date.parse(at) });
+      }
+      const entry = source.catalog.backupRetentionPlan(scope).entries[0]!;
+      const receipt = source.catalog.acknowledgeBackupRemoval({ requestId: entry.requestId, intent: entry.intent,
+        outcome: "absent", fence: source.fence, nowMs: Date.parse("2026-09-05T20:01:50.000Z") });
+      const archive = await exportAuthorityArchiveV5(await source.store.exportArchive("Field Service"), source.driver);
+      const imported = await importAuthorityArchive(archive);
+      try {
+        expect(imported.authority).toMatchObject({ evidence: { catalogAuthority: { schema: 3,
+          retentionHistory: { revision: "1", events: [receipt] }, backupRecords: expect.arrayContaining([expect.objectContaining({ backupId: entry.record.backupId, state: "valid" })]) } } });
+      } finally { imported.store.close(); }
+      const missing = rewriteAuthority(archive, evidence => {
+        if (evidence.catalogAuthority.schema !== 3) throw new Error("missing versioned retention evidence");
+        evidence.catalogAuthority.retentionHistory.events = [];
+      });
+      await expect(importAuthorityArchive(missing)).rejects.toThrow(/retention|authority/);
+      const rebound = rewriteAuthority(archive, evidence => {
+        if (evidence.catalogAuthority.schema !== 3) throw new Error("missing versioned retention evidence");
+        evidence.catalogAuthority.retentionHistory.events[0]!.intent.backupId = scope.targetId;
+      });
+      await expect(importAuthorityArchive(rebound)).rejects.toThrow();
+    } finally { source.store.close(); }
+  });
   it("retains terminal lifecycle receipts in authenticated catalog evidence and rejects omission or rebinding", async () => {
     const source = await authoritativeArchiveSource();
     try {
@@ -346,7 +404,7 @@ describe("archive format 5 authority evidence", () => {
       const archive = await exportAuthorityArchiveV5(await source.store.exportArchive("Field Service"), source.driver);
       const imported = await importAuthorityArchive(archive);
       expect(imported.authority.evidence?.catalogAuthority).toMatchObject({
-        schema: 2, lifecycleReceipts: [{ receipt }],
+        schema: 3, lifecycleReceipts: [{ receipt }],
       });
       imported.store.close();
       const omitted = rewriteAuthority(archive, evidence => {

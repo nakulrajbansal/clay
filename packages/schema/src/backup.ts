@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   AppInstanceId,
   AuthorityIncarnationId,
+  OperationId,
   ProtectionReasonCode,
   ReleaseId,
   RequestId,
@@ -312,6 +313,44 @@ export const BackupPublicationReceiptV1 = z.object({
   rotate: z.array(BackupRecordV1).max(MAX_BACKUP_ROTATION_RECORDS),
 }).strict();
 export type BackupPublicationReceiptV1 = z.infer<typeof BackupPublicationReceiptV1>;
+
+/** Catalog-owned external-file accounting. Publication records remain immutable. */
+export const BackupRetentionScopeV1 = z.object({ appInstanceId: AppInstanceId, targetId: BackupTargetId,
+  adapterCertificationId: BackupTargetAdapterCertificationId }).strict();
+export type BackupRetentionScopeV1 = z.infer<typeof BackupRetentionScopeV1>;
+export const BackupRemovalIntentV1 = z.object({ schema: z.literal(1), authorityIncarnationId: AuthorityIncarnationId,
+  planningRevision: UInt64Decimal, backupId: BackupId, keeperBackupId: BackupId }).strict();
+export type BackupRemovalIntentV1 = z.infer<typeof BackupRemovalIntentV1>;
+export const BackupRemovalAcknowledgementV1 = z.object({ requestId: RequestId, intent: BackupRemovalIntentV1,
+  outcome: z.enum(["absent", "failed"]) }).strict();
+export const BackupRetentionReceiptV1 = BackupRemovalAcknowledgementV1.extend({ schema: z.literal(1),
+  revision: UInt64Decimal, operationId: OperationId, requestSha256: Sha256, catalogGeneration: UInt64Decimal,
+  fence: WriteFenceV1, completedAt: CanonicalInstant }).strict();
+export type BackupRetentionReceiptV1 = z.infer<typeof BackupRetentionReceiptV1>;
+export const BackupRetentionHistoryV1 = z.object({ schema: z.literal(1), revision: UInt64Decimal,
+  events: z.array(BackupRetentionReceiptV1).max(100_000) }).strict();
+export type BackupRetentionHistoryV1 = z.infer<typeof BackupRetentionHistoryV1>;
+export const BackupRetentionPlanV1 = z.object({ schema: z.literal(1), keeper: BackupRecordV1.nullable(),
+  entries: z.array(z.object({ requestId: RequestId, intent: BackupRemovalIntentV1, record: BackupRecordV1 }).strict())
+    .max(MAX_BACKUP_ROTATION_RECORDS), remaining: z.number().int().nonnegative().safe() }).strict();
+export type BackupRetentionPlanV1 = z.infer<typeof BackupRetentionPlanV1>;
+export const BackupRemovalRequestV1 = z.object({ requestId: RequestId, intent: BackupRemovalIntentV1 }).strict();
+export const BackupRemovalAuthorizationV1 = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("recorded"), receipt: BackupRetentionReceiptV1 }).strict(),
+  z.object({ status: z.literal("ready"), requestId: RequestId, intent: BackupRemovalIntentV1,
+    record: BackupRecordV1, keeper: BackupRecordV1, fence: WriteFenceV1 }).strict(),
+]);
+export type BackupRemovalAuthorizationV1 = z.infer<typeof BackupRemovalAuthorizationV1>;
+
+/** Presentation retry metadata, never identity or permission to remove a file. */
+export const BackupRemovalPendingV1 = z.discriminatedUnion("phase", [
+  z.object({ schema: z.literal(1), scope: BackupRetentionScopeV1,
+    requestId: RequestId, intent: BackupRemovalIntentV1, phase: z.literal("removing") }).strict(),
+  z.object({ schema: z.literal(1), scope: BackupRetentionScopeV1,
+    requestId: RequestId, intent: BackupRemovalIntentV1, phase: z.literal("observed"),
+    outcome: z.enum(["absent", "failed"]) }).strict(),
+]);
+export type BackupRemovalPendingV1 = z.infer<typeof BackupRemovalPendingV1>;
 
 export const BackupStageValidationV1 = z.discriminatedUnion("status", [
   z.object({

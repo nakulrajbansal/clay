@@ -1205,3 +1205,57 @@ ADR-057 (2026-09-12) Receipt acknowledgement is distinct from mutation replay.
   CONSEQUENCE: These development recovery paths do not waive certification.
   Durable per-file retention accounting, full Inbox actions, automation and intake
   integration, and all integrated release gates remain required.
+
+ADR-058 (2026-09-13) Immutable backup publication and separate retention receipts.
+  CONTEXT: Updating publication JSON after external deletion destroys historical
+  validation evidence. Retrying a fixed 64-file window can starve older failures,
+  and dropping a candidate on folder/app switch loses ephemeral cleanup work.
+  DECISION: Keep publication records immutable. Add closed catalog retention-root
+  and retention-event tables with an independent contiguous revision. Each event
+  binds a deterministic request ID, immutable victim/keeper IDs, planning revision,
+  request hash, operation, catalog generation and current lease to one observed
+  absence or failed attempt. No paths, keys or Kit bytes enter this request. The
+  worker authorizes each file and fences acknowledgement. The trusted-shell runner
+  persists immutable retry metadata before unlink, validates the exact keeper and
+  victim bytes, rechecks authority, and uses the directory adapter's immediately
+  revalidated permission. Missing is distinct from denied or unreachable. Replaced
+  bytes are preserved. Unknown acknowledgements retain their original request;
+  reload resolves receipts before any new removal. No enumeration or blanket cleanup.
+  The newest 32 publications per exact app/folder/certification scope are protected.
+  Pages contain at most 64 unacknowledged files. A failed attempt moves behind
+  untouched/older attempts; acknowledged absence never consumes another page.
+  Eligibility is catalog-derived, so folder/source changes cannot erase work.
+  Original folder hints/handles remain separate; absent capabilities quarantine
+  work without blocking source data. UI distinguishes validation at publication
+  from current availability; absence receipts are historical observations too.
+  Catalog evidence schema 3 adds retention history and exact new physical DDL.
+  Evidence 1/2 remains readable with its exact old DDL. Format-5 authentication
+  and authentication-before-ZIP do not change. Existing catalogs migrate under
+  worker write authority, lifecycle exclusion and an atomic additive transaction;
+  unknown physical schemas/rows fail closed. The app catalog snapshot, canonical
+  source, selection, lease and original publications are not rewritten.
+  CONSEQUENCE: Retention is a development-integrated recovery path, not certified
+  browser/OS atomic conditional deletion. File System Access runtime certification,
+  frozen budgets and the final packaged test campaign remain mandatory.
+
+ADR-059 (2026-09-13) Terminal cancellation before replacing a presentation request.
+  CONTEXT: Read-only not-invoked is only a snapshot. A timed-out call can arrive
+  after a modal has opened again, making cache deletion or a new ID unsafe.
+  DECISION: Capture and conversion Keep may explicitly cancel through WorkerClient,
+  db-worker and ProductionStoreAuthority using the original immutable payload and
+  request ID. Cancellation serializes against execution, validates original app
+  binding and current canonical authority, then writes a mirrored no-op receipt
+  with the closed result marker kind=clay-presentation-cancelled-v1. That old ID
+  can never execute; ordinary mutation replay rejects it. A winning committed
+  receipt is acknowledged, never cancelled. A failed request is replaceable only
+  after exact mirrored abandoned reservations prove no effects. Prepared/invoked
+  or poisoned/ambiguous outcomes remain blocked for authority recovery.
+  The UI clears an intent only after terminal cancellation or proven failure.
+  Lost cancellation responses retain the same payload and ID. Re-preview/correction
+  is then a new explicit intent. This does not broaden cancellation to other routes.
+  No-op operations are retained in the catalog identity registry, including the
+  cancellation case. Guarded boot migration repairs missing IDs for exact parsed
+  legacy no-op receipts without rewriting a receipt, source or catalog generation.
+  CONSEQUENCE: Persistent Capture Undo invocation and original source/navigation
+  intent recovery remain separate required work; this decision does not waive them
+  or claim completed Inbox, automation, sharing, or release certification.

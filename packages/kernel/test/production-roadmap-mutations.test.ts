@@ -134,6 +134,64 @@ it("captures once through authority and bounds Undo to the unchanged captured re
   } finally { authority.close(); }
 });
 
+it("terminalizes a never-invoked Capture before a delayed invocation can execute, with exact replay and archive readback", async () => {
+  const { authority } = await fixture();
+  try {
+    const before = authority.inspectAuthority().target;
+    const request = { requestId: authority.createRequestId(), route: "daily.capture", payload: {
+      appInstanceId: before.appInstanceId, table: "tasks", tableId: authority.activeSemanticRegistry().get("tasks")!.semantic!.tableId,
+      row: { title: "Must never arrive late" },
+    } };
+    expect(await authority.cancelPresentation(request)).toEqual({ status: "cancelled" });
+    expect(await authority.cancelPresentation(request)).toEqual({ status: "cancelled" });
+    await expect(authority.executeMutation(request)).rejects.toThrow(/cancelled/);
+    expect(await authority.mutationOutcome(request)).toEqual({ status: "cancelled" });
+    await expect(authority.cancelPresentation({ ...request, payload: { ...request.payload, row: { title: "Changed payload" } } })).rejects.toThrow(/identity|payload/);
+    expect(authority.inspectAuthority().target).toEqual(before);
+    expect(authority.query({ from: "tasks" })).toHaveLength(1);
+    expect((await authority.collectArchiveSnapshot()).format).toBe(5);
+  } finally { authority.close(); }
+});
+
+it("never cancels a winning commit or an interrupted invocation, but acknowledges a proven abandoned failure", async () => {
+  const { authority } = await fixture();
+  try {
+    const request = { requestId: authority.createRequestId(), route: "daily.capture", payload: {
+      appInstanceId: authority.inspectAuthority().target.appInstanceId, table: "tasks",
+      tableId: authority.activeSemanticRegistry().get("tasks")!.semantic!.tableId, row: { title: "Winner" },
+    } };
+    const invoked = authority.executeMutation(request);
+    const cancelled = authority.cancelPresentation(request);
+    await invoked;
+    expect(await cancelled).toMatchObject({ status: "recorded", current: true });
+    expect(authority.query({ from: "tasks" })).toHaveLength(2);
+    const failed = { ...request, requestId: authority.createRequestId() };
+    armProductionAuthorityFailureForTest(authority);
+    await expect(authority.executeMutation(failed)).rejects.toThrow();
+    expect(await authority.cancelPresentation(failed)).toEqual({ status: "failed" });
+    await expect(authority.executeMutation(failed)).rejects.toThrow(/failed previously/);
+    armProductionAuthorityFailureForTest(authority, "crash_after_invocation");
+    const uncertain = { ...request, requestId: authority.createRequestId() };
+    await expect(authority.executeMutation(uncertain)).rejects.toThrow();
+    await expect(authority.cancelPresentation(uncertain)).rejects.toThrow(/poisoned|recovery/);
+  } finally { authority.close(); }
+});
+
+it("terminalizes a stale never-invoked Keep so re-preview cannot race its old request", async () => {
+  const { authority, row } = await fixture();
+  try {
+    const preview = await authority.previewRelationConversion({ sourceTable: "tasks", sourceField: "person", targetTable: "people", displayField: "name" });
+    const request = { requestId: authority.createRequestId(), route: "schema.convertTextToRelation", payload: { ...preview, cardinality: "one" } };
+    await authority.asyncStore().update("tasks", String(row.id), { title: "Later" }, { requestId: authority.createRequestId() });
+    await expect(authority.executeMutation(request)).rejects.toThrow(/changed|target/);
+    expect(await authority.cancelPresentation(request)).toEqual({ status: "cancelled" });
+    await expect(authority.executeMutation(request)).rejects.toThrow(/cancelled/);
+    expect(authority.query({ from: "tasks" })[0]?.person).toBe("Alex");
+    const fresh = await authority.previewRelationConversion({ sourceTable: "tasks", sourceField: "person", targetTable: "people", displayField: "name" });
+    expect((await authority.executeMutation({ ...request, requestId: authority.createRequestId(), payload: { ...fresh, cardinality: "one" } })).changed).toBe(true);
+  } finally { authority.close(); }
+});
+
 it("repairs a malformed source library only through an explicit empty-library CAS", async () => {
   const { authority } = await fixture(store => store.setSetting("daily_source_library_v1", { revision: 7, damaged: true }));
   try {

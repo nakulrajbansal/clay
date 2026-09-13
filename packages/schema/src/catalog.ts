@@ -67,6 +67,8 @@ export type PresentationIntentV1 = z.infer<typeof PresentationIntentV1>;
 export const PresentationMutationOutcomeV1 = z.discriminatedUnion("status", [
   z.object({ status: z.literal("not_invoked") }).strict(),
   z.object({ status: z.literal("uncertain") }).strict(),
+  z.object({ status: z.literal("cancelled") }).strict(),
+  z.object({ status: z.literal("failed") }).strict(),
   z.object({ status: z.literal("recorded"), current: z.boolean(), result: JsonValue, target: TargetEvidenceV1 }).strict(),
 ]);
 export type PresentationMutationOutcomeV1 = z.infer<typeof PresentationMutationOutcomeV1>;

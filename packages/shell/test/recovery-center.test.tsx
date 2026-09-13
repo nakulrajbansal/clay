@@ -93,6 +93,23 @@ const button = (name: string): HTMLButtonElement => {
   return match;
 };
 
+it("distinguishes publication validation from availability and exposes exact quarantined retention retry", async () => {
+  const retry = vi.fn(async () => {});
+  const scope = { appInstanceId: otherAppInstanceId, targetId: id("tgt", "g"), adapterCertificationId: id("btc", "h") };
+  const { root, container } = await mount({ ...baseProps(),
+    history: [{ ...verified, availability: "absent", observedAt: "2026-09-06T20:01:03.000Z" }],
+    retentionWork: [{ scope, remaining: 2, folderName: "Earlier folder", canResume: true }],
+    onResumeRetention: retry });
+  try {
+    expect(document.body.textContent).toContain("Validated at publication");
+    expect(document.body.textContent).toContain("Absence acknowledged");
+    expect(document.body.textContent).toContain("Current file availability is not continuously monitored");
+    await act(async () => button("Resume retention: Earlier folder").click());
+    expect(retry).toHaveBeenCalledWith(scope);
+    expect(document.body.textContent).toContain("Retention checked");
+  } finally { await act(async () => root.unmount()); }
+});
+
 const labelledFileInput = (labelText: string): HTMLInputElement => {
   const label = [...document.querySelectorAll<HTMLLabelElement>("label")]
     .find(candidate => candidate.textContent?.includes(labelText));
@@ -229,7 +246,7 @@ describe("Release B Recovery Center", () => {
     const text = document.body.textContent ?? "";
     expect(text).toContain("Backup folderClay backups");
     expect(text).toContain(
-      "Field Ops is saved in this browser and has a verified backup in Clay backups.",
+      "Field Ops is saved in this browser; a backup was validated at publication in Clay backups. Check the file before relying on it.",
     );
     expect(text).not.toContain("private storage (OPFS) only");
     expect(text).toContain("Last verified backup9/5/2026");

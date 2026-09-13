@@ -4,6 +4,7 @@ import {
   BackupTargetAdapterCertificationV1,
   BackupTargetId,
   BackupTargetV1,
+  MAX_BACKUP_ARCHIVE_BYTES,
   type BackupAdapterArtifactBinding,
   type BackupTarget,
   type BackupTargetAdapterCertification,
@@ -205,6 +206,7 @@ export type BackupDirectoryFailureReason =
   | "target_unconfigured"
   | "permission_required"
   | "target_unreachable"
+  | "file_missing"
   | "quota_exceeded"
   | "destination_collision"
   | "operation_interrupted";
@@ -388,11 +390,14 @@ class TargetDirectory implements BrowserBackupDirectory {
       const fileHandle = await handle.getFileHandle(fileName);
       await requireReadWritePermission(handle);
       const file = await fileHandle.getFile();
+      if (!Number.isSafeInteger(file.size) || file.size < 0 || file.size > MAX_BACKUP_ARCHIVE_BYTES)
+        throw new BackupDirectoryIoError("target_unreachable");
       await requireReadWritePermission(handle);
       const buffer = await file.arrayBuffer();
+      if (buffer.byteLength !== file.size) throw new BackupDirectoryIoError("target_unreachable");
       return new Uint8Array(buffer);
     } catch (error) {
-      throw mapIoFailure(error);
+      throw mapIoFailure(error, isNotFound(error) ? "file_missing" : "target_unreachable");
     }
   }
 

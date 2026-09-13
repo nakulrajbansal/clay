@@ -8,7 +8,7 @@ import {
   CatalogRevisionReservationV1, ImmutableAppGenerationV1,
   ProductionRequestReceiptV1, TargetAuthorityHeaderV1, TargetEvidenceV1, WriteFenceV1,
 } from "./catalog";
-import { BackupRecordV1 } from "./backup";
+import { BackupRecordV1, BackupRetentionHistoryV1 } from "./backup";
 import { AuthenticatedFormat5RestoreGrantV1 } from "./restore";
 
 const ArchiveCatalogDisplayName = z.string().min(1).max(40)
@@ -288,6 +288,9 @@ const ArchiveCatalogAuthorityV2 = ArchiveCatalogAuthorityV1.extend({
   schema: z.literal(2),
   lifecycleReceipts: z.array(ArchiveLifecycleReceiptV1).max(MAX_ARCHIVE_AUTHORITY_HISTORY_ENTRIES),
 }).strict();
+const ArchiveCatalogAuthorityV3 = ArchiveCatalogAuthorityV2.extend({
+  schema: z.literal(3), retentionHistory: BackupRetentionHistoryV1,
+}).strict();
 
 export const ArchiveAuthorityEvidenceV1 = z.object({
   schema: z.literal(1),
@@ -305,7 +308,7 @@ export const ArchiveAuthorityEvidenceV1 = z.object({
     revisions: z.array(ArchiveTargetRevisionV1).max(MAX_ARCHIVE_AUTHORITY_HISTORY_ENTRIES),
     requestReceipts: z.array(ArchiveTargetRequestReceiptV1).max(MAX_ARCHIVE_AUTHORITY_HISTORY_ENTRIES),
   }).strict(),
-  catalogAuthority: z.discriminatedUnion("schema", [ArchiveCatalogAuthorityV1, ArchiveCatalogAuthorityV2]),
+  catalogAuthority: z.discriminatedUnion("schema", [ArchiveCatalogAuthorityV1, ArchiveCatalogAuthorityV2, ArchiveCatalogAuthorityV3]),
 }).strict().superRefine((value, context) => {
   const authorityEntries = value.targetAuthority.revisions.length
     + value.targetAuthority.requestReceipts.length
@@ -320,7 +323,8 @@ export const ArchiveAuthorityEvidenceV1 = z.object({
     + value.catalogAuthority.lineageReservations.length
     + value.catalogAuthority.generationEvents.length
     + value.catalogAuthority.backupRecords.length
-    + (value.catalogAuthority.schema === 2 ? value.catalogAuthority.lifecycleReceipts.length : 0);
+    + (value.catalogAuthority.schema !== 1 ? value.catalogAuthority.lifecycleReceipts.length : 0)
+    + (value.catalogAuthority.schema === 3 ? value.catalogAuthority.retentionHistory.events.length : 0);
   if (authorityEntries > MAX_ARCHIVE_AUTHORITY_TOTAL_ENTRIES)
     context.addIssue({
       code: z.ZodIssueCode.custom,

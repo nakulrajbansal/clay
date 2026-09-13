@@ -5,9 +5,33 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { RegTable } from "@clay/kernel";
 import { RelationConversionDialog } from "../src/app/RelationConversionDialog";
 import { createWorkerMutationContext, type WorkerClient } from "../src/app/worker-client";
+import { beginPresentationIntent, readPresentationIntent } from "../src/app/presentation-intent";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(() => sessionStorage.clear());
 const appInstanceId = `app_${"a".repeat(26)}`;
+it("requires terminal cancellation before a stale Keep can be re-previewed", async () => {
+  const preview = { sourceTable: "tasks", sourceField: "person", targetTable: "people", displayField: "name",
+    atVersion: 1, fingerprint: `sha256:${"b".repeat(64)}`, matchedRows: 1, unmatchedRows: 0, ambiguousRows: 0,
+    duplicateSourceRows: 0, unmatchedSamples: [], ambiguousSamples: [], authorityTarget: { appInstanceId,
+      activeGenerationId: `gen_${"c".repeat(26)}`, lineageEpoch: "0", protectionRevision: "1", digestSchema: 1,
+      stateSha256: `sha256:${"d".repeat(64)}` } };
+  const intent = beginPresentationIntent(sessionStorage, appInstanceId, "relation", "schema.convertTextToRelation",
+    { ...preview, cardinality: "one" }, createWorkerMutationContext);
+  const worker = { cancelPresentation: vi.fn().mockRejectedValueOnce(new Error("response lost"))
+    .mockResolvedValue({ status: "cancelled" }) } as unknown as WorkerClient;
+  const tables = [{ name: "tasks", columns: [{ name: "person", type: "text" }] }, { name: "people", columns: [{ name: "name", type: "text" }] }] as RegTable[];
+  const host = document.createElement("div"); document.body.replaceChildren(host); const root = createRoot(host);
+  try {
+    await act(async () => root.render(<RelationConversionDialog appInstanceId={appInstanceId} sourceTable={tables[0]!}
+      tables={tables} worker={worker} runWrite={fn => fn()} onCommitted={() => {}} onClose={() => {}} onError={() => {}} />));
+    const click = async () => act(async () => { [...document.querySelectorAll("button")].find(button => button.textContent === "Cancel pending Keep and re-preview")!.click(); });
+    await click(); expect(readPresentationIntent(sessionStorage, appInstanceId, "relation")).toEqual(intent);
+    expect(document.querySelector("select")!.disabled).toBe(true);
+    await click(); expect(readPresentationIntent(sessionStorage, appInstanceId, "relation")).toBeNull();
+    expect(document.querySelector("select")!.disabled).toBe(false);
+    expect(document.body.textContent).toContain("Preview matches");
+  } finally { await act(async () => root.unmount()); }
+});
 it("reopens the exact Keep after presentation failure and exposes a persistent bounded Undo", async () => {
   const preview = { sourceTable: "tasks", sourceField: "person", targetTable: "people", displayField: "name",
     atVersion: 1, fingerprint: `sha256:${"b".repeat(64)}`, matchedRows: 1, unmatchedRows: 0, ambiguousRows: 0,

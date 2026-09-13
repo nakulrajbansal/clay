@@ -93,6 +93,19 @@ it("executes Daily Home and relation Preview/Keep/replay through the production 
     await expect(client.mutationOutcome("daily.capture", { appInstanceId: id("app", "a"), table: "tasks", row: { title: "Changed" }, tableId }, capture)).rejects.toThrow(/identity|payload/);
     await expect(client.quickCapture("tasks", { title: "Wrong app" }, tableId, client.createMutationContext(), id("app", "z"))).rejects.toThrow(/another app/);
 
+    const cancelled = client.createMutationContext();
+    const cancellationPayload = { appInstanceId: id("app", "a"), table: "tasks", tableId, row: { title: "Delayed cancelled capture" } };
+    drop = "cancelPresentation"; dropped = false;
+    const lostCancellation = client.cancelPresentation("daily.capture", cancellationPayload, cancelled).catch(error => error);
+    await vi.waitFor(() => expect(dropped).toBe(true));
+    client = new WorkerClient(transport as unknown as Worker);
+    expect(await lostCancellation).toMatchObject({ message: expect.stringContaining("outcome is unknown") });
+    await client.boot({ requestedAppId: null, appCache: [] });
+    expect(await client.cancelPresentation("daily.capture", cancellationPayload, cancelled)).toEqual({ status: "cancelled" });
+    await expect(client.quickCapture("tasks", cancellationPayload.row, tableId, cancelled, id("app", "a"))).rejects.toThrow(/cancelled/);
+    expect(await client.mutationOutcome("daily.capture", cancellationPayload, cancelled)).toEqual({ status: "cancelled" });
+    expect(authority.query({ from: "tasks" })).toHaveLength(1);
+
     const preview = await client.previewRelationConversion({ sourceTable: "tasks", sourceField: "person", targetTable: "people", displayField: "name" });
     expect(preview.authorityTarget).toEqual(authority.inspectAuthority().target);
     const keep = client.createMutationContext();

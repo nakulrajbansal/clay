@@ -8,6 +8,7 @@ import {
   QUICK_CAPTURE_LAST_TABLE_SETTING,
 } from "../src/app/CommandPalette";
 import { createWorkerMutationContext, type WorkerClient } from "../src/app/worker-client";
+import { beginPresentationIntent, readPresentationIntent } from "../src/app/presentation-intent";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(() => sessionStorage.clear()); // Owned jsdom storage only.
@@ -25,6 +26,29 @@ function typeInto(input: HTMLInputElement, value: string): void {
 }
 
 describe("quick capture", () => {
+  it("unlocks a retained draft only after exact terminal cancellation, never when a commit won", async () => {
+    const tableId = "tbl_018f4c2a-7b31-7001-8000-000000000001";
+    const intent = beginPresentationIntent(sessionStorage, appInstanceId, "capture", "daily.capture",
+      { appInstanceId, table: "tasks", tableId, row: { title: "Original" } }, createWorkerMutationContext);
+    const tables = [{ name: "tasks", semantic: { tableId }, columns: [{ name: "title", type: "text", required: true }] }] as unknown as RegTable[];
+    const calls: unknown[][] = []; let outcome = "recorded";
+    const worker = { createMutationContext: createWorkerMutationContext, globalSearch: async () => [], getSetting: async () => tableId,
+      cancelPresentation: async (...args: unknown[]) => { calls.push(args); return { status: outcome }; } } as unknown as WorkerClient;
+    const host = document.createElement("div"); document.body.replaceChildren(host); const root = createRoot(host);
+    try {
+      await act(async () => root.render(<CommandPalette worker={worker} appInstanceId={appInstanceId} tables={tables} captureMode
+        onClose={() => {}} onOpenRecord={() => {}} onOpenData={() => {}} onWrite={() => {}} onError={() => {}} onInfo={() => {}} />));
+      await settle();
+      const click = async () => act(async () => { [...document.querySelectorAll("button")].find(button => button.textContent === "Cancel pending capture and edit")!.click(); });
+      await click();
+      expect(readPresentationIntent(sessionStorage, appInstanceId, "capture")).toEqual(intent);
+      expect(document.querySelector<HTMLInputElement>('input[aria-label="Title"]')!.disabled).toBe(true);
+      outcome = "cancelled"; await click();
+      expect(readPresentationIntent(sessionStorage, appInstanceId, "capture")).toBeNull();
+      expect(document.querySelector<HTMLInputElement>('input[aria-label="Title"]')!.disabled).toBe(false);
+      expect(calls).toEqual([[intent.route, intent.payload, { requestId: intent.requestId }], [intent.route, intent.payload, { requestId: intent.requestId }]]);
+    } finally { await act(async () => root.unmount()); }
+  });
   it("retries the original payload and identity after a lost response, even across midnight", async () => {
     const tableId = "tbl_018f4c2a-7b31-7001-8000-000000000001";
     const tables = [{ name: "tasks", semantic: { tableId }, columns: [

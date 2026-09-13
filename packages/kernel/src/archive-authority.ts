@@ -1,4 +1,5 @@
 import { assertLifecycleReattestation } from "./lifecycle-reattestation-evidence";
+import { assertBackupRetentionHistory } from "./backup-retention";
 import {
   ArchiveAuthorityEvidenceV1,
   ArchiveBootstrapEntryV1,
@@ -88,6 +89,8 @@ export function assertArchiveAuthorityCardinality(input: unknown): void {
   const catalog = record.catalogAuthority;
   if (catalog && typeof catalog === "object" && !Array.isArray(catalog)) {
     const catalogRecord = catalog as Record<string, unknown>;
+    if (catalogRecord.retentionHistory && typeof catalogRecord.retentionHistory === "object")
+      histories.push(Reflect.get(catalogRecord.retentionHistory, "events"));
     histories.push(
       catalogRecord.entries,
       catalogRecord.generations,
@@ -390,7 +393,7 @@ function collectCatalogAuthority(
     throw invalid("catalog contains unsupported unfinished work");
 
   return {
-    schema: lifecycleReceipts.length ? 2 : 1,
+    schema: 3,
     schemaObjects: collectCatalogSchemaObjects(driver),
     authorityIncarnationId: snapshot.authorityIncarnationId,
     catalogGeneration: snapshot.catalogGeneration,
@@ -411,9 +414,10 @@ function collectCatalogAuthority(
     pendingJobs,
     lineageReservations,
     generationEvents,
-    backupRecords: catalog.backupRecords().sort((left, right) =>
+    backupRecords: catalog.backupPublicationRecords().sort((left, right) =>
       left.backupId.localeCompare(right.backupId)),
-    ...(lifecycleReceipts.length ? { lifecycleReceipts } : {}),
+    lifecycleReceipts,
+    retentionHistory: catalog.backupRetentionHistory(),
   } as ArchiveAuthorityEvidence["catalogAuthority"];
 }
 
@@ -784,7 +788,11 @@ function validateCatalogIdentityRegistry(evidence: ArchiveAuthorityEvidence): vo
     requireId(job.appInstanceId, "app");
     requireId(job.operationId, "operation");
   }
-  if (catalog.schema === 2) for (const row of catalog.lifecycleReceipts) {
+  if (catalog.schema === 3) for (const event of catalog.retentionHistory.events) {
+    requireId(event.operationId, "operation");
+    requireId(event.fence.leaseId, "lease");
+  }
+  if (catalog.schema !== 1) for (const row of catalog.lifecycleReceipts) {
     const receipt = row.receipt;
     requireId(receipt.jobId, "job");
     requireId(receipt.operationId, "operation");
@@ -806,9 +814,10 @@ function validateCatalogIdentityRegistry(evidence: ArchiveAuthorityEvidence): vo
 
 function validateLifecycleReceipts(evidence: ArchiveAuthorityEvidence): void {
   const catalog = evidence.catalogAuthority;
-  if (catalog.schema !== 2) return;
+  if (catalog.schema === 1) return;
   const jobs = new Set<string>(), operations = new Set<string>();
-  const requests = new Set(catalog.requestReceipts.map(row => row.requestId));
+  const requests = new Set([...catalog.requestReceipts.map(row => row.requestId),
+    ...(catalog.schema === 3 ? catalog.retentionHistory.events.map(row => row.requestId) : [])]);
   let previousJob = "";
   for (const row of catalog.lifecycleReceipts) {
     const receipt = row.receipt;
@@ -858,8 +867,8 @@ function validateAuthorityHistory(evidence: ArchiveAuthorityEvidence): void {
   const catalog = evidence.catalogAuthority;
   if (evidence.binding.app !== catalog.entry.displayName)
     throw invalid("archive display metadata does not match the selected catalog app");
-  if (!sameJson(catalog.schemaObjects, expectedCatalogSchemaObjects()))
-    throw invalid("catalog schema evidence is not the exact schema-1 allowlist");
+  if (!sameJson(catalog.schemaObjects, expectedCatalogSchemaObjects(catalog.schema === 3)))
+    throw invalid("catalog schema evidence is not the exact versioned allowlist");
   if (catalog.bootstrapManifest.length !== 0
       || catalog.pendingJobs.length !== 0
       || catalog.lineageReservations.length !== 0)
@@ -867,6 +876,13 @@ function validateAuthorityHistory(evidence: ArchiveAuthorityEvidence): void {
   validateRequestReceipts(evidence);
   validateCatalogIdentityRegistry(evidence);
   validateLifecycleReceipts(evidence);
+  if (catalog.schema === 3) {
+    assertBackupRetentionHistory(catalog.retentionHistory, catalog.backupRecords,
+      catalog.authorityIncarnationId, catalog.catalogGeneration, catalog.leases, catalog.generationEvents);
+    const requests = new Set(catalog.requestReceipts.map(row => row.requestId));
+    if (catalog.retentionHistory.events.some(row => requests.has(row.requestId)))
+      throw invalid("retention request identity overlaps an app mutation");
+  }
   const targetRevisions = evidence.targetAuthority.revisions;
   const highWater = BigInt(evidence.targetAuthority.header.protectionRevisionHighWater);
   if (BigInt(targetRevisions.length) !== highWater)

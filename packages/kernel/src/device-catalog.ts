@@ -27,6 +27,10 @@ import {
   BackupPublicationReceiptV1,
   BackupPublicationRequestV1,
   BackupRecordV1,
+  BackupRemovalAcknowledgementV1,
+  BackupRetentionReceiptV1,
+  BackupRemovalRequestV1,
+  BackupRemovalAuthorizationV1,
   type BackupPublicationReceiptV1 as BackupPublicationReceipt,
   type BackupPublicationRequestV1 as BackupPublicationRequest,
   type BackupRecordV1 as BackupRecord,
@@ -56,8 +60,12 @@ import {
 import { ClayError } from "./errors";
 import { assertLifecycleReattestation } from "./lifecycle-reattestation-evidence";
 import { readCatalogPendingRows, LIFECYCLE_PROVENANCE, LIFECYCLE_RECEIPT_PROVENANCE } from "./catalog-pending";
+import { BACKUP_RETENTION_DDL, assertBackupRetentionHistory, backupRemovalHash, backupRemovalRequestId,
+  planBackupRetention, readBackupRetentionHistory, retentionEligible } from "./backup-retention";
+import { productionOperationIdV2 } from "./production-operation-id";
+import { parseProductionRequestReceiptRow } from "./production-request-journal";
 
-const CATALOG_DDL = [
+const LEGACY_CATALOG_DDL = [
   `CREATE TABLE catalog.catalog_root(
     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
     schema_version INTEGER NOT NULL CHECK(schema_version = 1),
@@ -250,6 +258,7 @@ const CATALOG_DDL = [
   )`,
 ] as const;
 
+const CATALOG_DDL = [...LEGACY_CATALOG_DDL, ...BACKUP_RETENTION_DDL];
 function normalizeDdl(sql: string): string {
   return sql.replace(/\s+/g, " ").trim();
 }
@@ -287,7 +296,9 @@ function columnSignature(ddl: string): string {
 }
 
 const EXPECTED_DDL = new Map(CATALOG_DDL.map(ddlIdentity));
+const LEGACY_DDL = new Map(LEGACY_CATALOG_DDL.map(ddlIdentity));
 const EXPECTED_TABLES = Object.freeze([...EXPECTED_DDL.keys()].sort());
+const LEGACY_TABLES = Object.freeze([...LEGACY_DDL.keys()].sort());
 const EXPECTED_COLUMN_SIGNATURES = Object.fromEntries(
   CATALOG_DDL.map(ddl => [ddlIdentity(ddl)[0], columnSignature(ddl)]),
 ) as Readonly<Record<string, string>>;
@@ -301,8 +312,8 @@ export type CatalogSchemaObject = Readonly<{
 }>;
 
 /** Exact normalized catalog DDL allowlist for authenticated archive evidence. */
-export function expectedCatalogSchemaObjects(): CatalogSchemaObject[] {
-  return [...EXPECTED_DDL.entries()]
+export function expectedCatalogSchemaObjects(retention = true): CatalogSchemaObject[] {
+  return [...(retention ? EXPECTED_DDL : LEGACY_DDL).entries()]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([name, sql]) => ({ schema: 1, type: "table", name, tableName: name, sql }));
 }
@@ -637,26 +648,27 @@ function catalogTables(driver: DbDriver): string[] {
   }
 }
 
-function hasExactSchema(tables: string[]): boolean {
-  return tables.length === EXPECTED_TABLES.length
-    && tables.every((table, index) => table === EXPECTED_TABLES[index]);
+function hasExactSchema(tables: string[], legacy = false): boolean {
+  const expected = legacy ? LEGACY_TABLES : EXPECTED_TABLES;
+  return tables.length === expected.length && tables.every((table, index) => table === expected[index]);
 }
 
-function hasOnlyExpectedObjects(driver: DbDriver): boolean {
+function hasOnlyExpectedObjects(driver: DbDriver, legacy = false): boolean {
   try {
     const objects = driver.select(
       "SELECT type, name FROM catalog.sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name",
     );
-    return objects.length === EXPECTED_TABLES.length && objects.every((object, index) =>
-      String(object.type) === "table" && String(object.name) === EXPECTED_TABLES[index]);
+    const expected = legacy ? LEGACY_TABLES : EXPECTED_TABLES;
+    return objects.length === expected.length && objects.every((object, index) =>
+      String(object.type) === "table" && String(object.name) === expected[index]);
   } catch {
     return false;
   }
 }
 
-function hasExactTableShapes(driver: DbDriver): boolean {
+function hasExactTableShapes(driver: DbDriver, legacy = false): boolean {
   try {
-    return EXPECTED_TABLES.every(table => {
+    return (legacy ? LEGACY_TABLES : EXPECTED_TABLES).every(table => {
       const signature = driver.select(
         `SELECT name, type, "notnull" AS required, pk
          FROM pragma_table_info('${table}', 'catalog') ORDER BY cid`,
@@ -669,13 +681,14 @@ function hasExactTableShapes(driver: DbDriver): boolean {
   }
 }
 
-function hasExactTableDdl(driver: DbDriver): boolean {
+function hasExactTableDdl(driver: DbDriver, legacy = false): boolean {
   try {
     const rows = driver.select(
       "SELECT name, sql FROM catalog.sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
     );
-    return rows.length === EXPECTED_DDL.size && rows.every(row =>
-      EXPECTED_DDL.get(String(row.name)) === normalizeDdl(String(row.sql)));
+    const expected = legacy ? LEGACY_DDL : EXPECTED_DDL;
+    return rows.length === expected.size && rows.every(row =>
+      expected.get(String(row.name)) === normalizeDdl(String(row.sql)));
   } catch {
     return false;
   }
@@ -807,7 +820,7 @@ function storeAppLifecycleReceipt(
 
 function readValidatedCatalog(
   driver: DbDriver,
-  options: Readonly<{ allowPendingRestore?: boolean }> = {},
+  options: Readonly<{ allowPendingRestore?: boolean; legacyRetentionMigration?: boolean }> = {},
 ): AppCatalogSnapshot {
   const snapshot = readSnapshotClosed(driver);
   try {
@@ -1345,6 +1358,23 @@ function readValidatedCatalog(
           || storedGeneration.target.appInstanceId !== receipt.resultingSelectedAppInstanceId)
         throw new Error("lifecycle receipt storage relationship is invalid");
     }
+    if (!options.legacyRetentionMigration) {
+      const history = readBackupRetentionHistory(driver);
+      assertBackupRetentionHistory(history, storedBackups.map(item => item.record), snapshot.authorityIncarnationId,
+        snapshot.catalogGeneration, [...leases].map(([leaseId, lease]) => ({ leaseId, ...lease })), generationEvents);
+      const requestIds = new Set(driver.select("SELECT request_id FROM catalog.production_request_receipts").map(row => String(row.request_id)));
+      for (const event of history.events) {
+        if (requestIds.has(event.requestId) || lifecycleRequestIds.has(event.requestId)
+            || lifecycleJobs.some(job => job.requestId === event.requestId)) throw new Error("retention request identity was reused");
+        requireRetained(event.operationId, "operation");
+      }
+    }
+    for (const row of driver.select("SELECT * FROM catalog.production_request_receipts")) {
+      const receipt = parseProductionRequestReceiptRow(row);
+      // Older catalogs did not retain no-op operation IDs. Preserve their read
+      // path; the guarded additive migration repairs only these exact rows.
+      if (receipt.state === "no_op" && retained.has(receipt.operationId)) requireRetained(receipt.operationId, "operation");
+    }
     for (const [value, kind] of retained) {
       if (kind !== "job" && !referenced.has(value))
         throw new Error(`unreferenced retained ${kind} identity`);
@@ -1382,6 +1412,18 @@ function readValidatedCatalog(
   }
 }
 
+function missingNoOpIdentities(driver: DbDriver) {
+  const retained = new Set(driver.select("SELECT id_value FROM catalog.id_registry").map(row => row.id_value));
+  return driver.select("SELECT * FROM catalog.production_request_receipts").map(parseProductionRequestReceiptRow)
+    .filter(receipt => receipt.state === "no_op" && !retained.has(receipt.operationId));
+}
+function migrateNoOpIdentities(driver: DbDriver): void {
+  for (const receipt of missingNoOpIdentities(driver)) driver.exec(
+    "INSERT INTO catalog.id_registry(id_value,id_kind,retained_at) VALUES (?,'operation',?)",
+    [receipt.operationId, receipt.preparedAt],
+  );
+}
+
 export class DeviceCatalog {
   private constructor(
     private readonly driver: DbDriver,
@@ -1390,6 +1432,39 @@ export class DeviceCatalog {
 
   static isAbsent(driver: DbDriver): boolean {
     return catalogTables(driver).length === 0;
+  }
+  static needsBackupRetentionMigration(driver: DbDriver): boolean {
+    const legacy = hasExactSchema(catalogTables(driver), true);
+    if (!hasExactSchema(catalogTables(driver), legacy) || !hasOnlyExpectedObjects(driver, legacy)
+        || !hasExactTableShapes(driver, legacy) || !hasExactTableDdl(driver, legacy))
+      throw new ClayError("E_CATALOG_UNAVAILABLE", "catalog is not a known retention schema");
+    return legacy || missingNoOpIdentities(driver).length > 0;
+  }
+
+  /** Boot-only additive migration under the worker's write capability and
+   * physical lifecycle exclusion. No selected app, lease or publication changes. */
+  static migrateBackupRetention(driver: DbDriver): void {
+    const exact = (legacy: boolean) => hasExactSchema(catalogTables(driver), legacy)
+      && hasOnlyExpectedObjects(driver, legacy) && hasExactTableShapes(driver, legacy) && hasExactTableDdl(driver, legacy);
+    if (exact(false)) {
+      driver.tx(() => {
+        const before = readValidatedCatalog(driver, { allowPendingRestore: true });
+        migrateNoOpIdentities(driver);
+        if (JSON.stringify(readValidatedCatalog(driver, { allowPendingRestore: true })) !== JSON.stringify(before))
+          throw new ClayError("E_CATALOG_CONFLICT", "no-op identity migration changed source data");
+      });
+      return;
+    }
+    if (!exact(true)) throw new ClayError("E_CATALOG_UNAVAILABLE", "legacy catalog is not the exact migration source");
+    driver.tx(() => {
+      if (!exact(true)) throw new ClayError("E_CATALOG_CONFLICT", "catalog changed before retention migration");
+      const before = readValidatedCatalog(driver, { allowPendingRestore: true, legacyRetentionMigration: true });
+      for (const ddl of BACKUP_RETENTION_DDL) driver.exec(ddl);
+      driver.exec("INSERT INTO catalog.backup_retention_root(singleton,schema_version,revision) VALUES (1,1,'0')");
+      migrateNoOpIdentities(driver);
+      if (JSON.stringify(readValidatedCatalog(driver, { allowPendingRestore: true })) !== JSON.stringify(before))
+        throw new ClayError("E_CATALOG_CONFLICT", "retention migration changed the source catalog");
+    });
   }
 
   static openExisting(driver: DbDriver): DeviceCatalog {
@@ -1416,6 +1491,7 @@ export class DeviceCatalog {
     try {
       driver.tx(() => {
         for (const ddl of CATALOG_DDL) driver.exec(ddl);
+        driver.exec("INSERT INTO catalog.backup_retention_root(singleton,schema_version,revision) VALUES (1,1,'0')");
         driver.exec(
           `INSERT INTO catalog.catalog_root(
              singleton, schema_version, authority_incarnation_id,
@@ -2289,6 +2365,12 @@ export class DeviceCatalog {
   }
 
   backupRecords(appInstanceId?: string): BackupRecord[] {
+    const absent = new Set(this.backupRetentionHistory().events.filter(event => event.outcome === "absent").map(event => event.intent.backupId));
+    return this.backupPublicationRecords(appInstanceId).map(record => absent.has(record.backupId)
+      ? BackupRecordV1.parse({ ...record, state: "deleted" }) : record);
+  }
+
+  backupPublicationRecords(appInstanceId?: string): BackupRecord[] {
     readValidatedCatalog(this.driver);
     return readBackupRecords(this.driver)
       .map(entry => entry.record)
@@ -2297,17 +2379,82 @@ export class DeviceCatalog {
       .map(record => BackupRecordV1.parse(record));
   }
 
+  backupRetentionHistory() {
+    readValidatedCatalog(this.driver);
+    return readBackupRetentionHistory(this.driver);
+  }
+
+  backupRetentionPlan(input: unknown) {
+    const snapshot = readValidatedCatalog(this.driver);
+    return planBackupRetention(readBackupRecords(this.driver).map(item => item.record), readBackupRetentionHistory(this.driver),
+      snapshot.authorityIncarnationId, input);
+  }
+
+  authorizeBackupRemoval(input: unknown, fence: WriteFence, nowMs: number): BackupRemovalAuthorizationV1 {
+    const command = BackupRemovalRequestV1.parse(input);
+    const snapshot = readValidatedCatalog(this.driver); this.assertWriteFence(fence, nowMs);
+    const history = readBackupRetentionHistory(this.driver);
+    const existing = history.events.find(event => event.requestId === command.requestId);
+    if (existing) {
+      if (JSON.stringify(existing.intent) !== JSON.stringify(command.intent))
+        throw new ClayError("E_CATALOG_CONFLICT", "retention request identity changed");
+      return { status: "recorded", receipt: existing };
+    }
+    const records = readBackupRecords(this.driver).map(item => item.record);
+    const record = records.find(item => item.backupId === command.intent.backupId);
+    const keeper = records.find(item => item.backupId === command.intent.keeperBackupId);
+    if (command.intent.authorityIncarnationId !== snapshot.authorityIncarnationId || command.requestId !== backupRemovalRequestId(command.intent)
+        || BigInt(command.intent.planningRevision) > BigInt(history.revision) || !record || !keeper || !retentionEligible(records, record, keeper)
+        || history.events.some(event => event.intent.backupId === record.backupId && event.outcome === "absent"))
+      throw new ClayError("E_CATALOG_CONFLICT", "retention file is not eligible; refresh its outcome");
+    return BackupRemovalAuthorizationV1.parse({ status: "ready", ...command, record, keeper, fence });
+  }
+
+  acknowledgeBackupRemoval(input: { requestId: string; intent: unknown; outcome: "absent" | "failed"; fence: WriteFence; nowMs: number }): BackupRetentionReceiptV1 {
+    const command = BackupRemovalAcknowledgementV1.parse({ requestId: input.requestId, intent: input.intent, outcome: input.outcome });
+    if (!validClockValue(input.nowMs)) throw new ClayError("E_CATALOG_CONFLICT", "retention clock is invalid");
+    return this.driver.tx(() => {
+      const before = readValidatedCatalog(this.driver); const history = readBackupRetentionHistory(this.driver);
+      const requestSha256 = backupRemovalHash(command);
+      const replay = history.events.find(event => event.requestId === command.requestId);
+      if (replay) {
+        if (replay.requestSha256 !== requestSha256) throw new ClayError("E_CATALOG_CONFLICT", "retention request identity is immutable");
+        return replay;
+      }
+      const fence = this.assertWriteFence(input.fence, input.nowMs);
+      const records = readBackupRecords(this.driver).map(item => item.record);
+      const record = records.find(item => item.backupId === command.intent.backupId);
+      const keeper = records.find(item => item.backupId === command.intent.keeperBackupId);
+      if (command.intent.authorityIncarnationId !== before.authorityIncarnationId
+          || command.requestId !== backupRemovalRequestId(command.intent)
+          || BigInt(command.intent.planningRevision) > BigInt(history.revision)
+          || !record || !keeper || !retentionEligible(records, record, keeper)
+          || history.events.some(event => event.intent.backupId === record.backupId && event.outcome === "absent"))
+        throw new ClayError("E_CATALOG_CONFLICT", "retention target or request is no longer eligible; read its outcome");
+      if (history.events.length >= 100_000) throw new ClayError("E_LIMIT", "retention receipt history is full");
+      const receipt = BackupRetentionReceiptV1.parse({ schema: 1, ...command,
+        revision: incrementCounter(history.revision, "E_CATALOG_CONFLICT"), requestSha256,
+        operationId: productionOperationIdV2(before.authorityIncarnationId, command.requestId, "backup.retention"),
+        catalogGeneration: before.catalogGeneration, fence, completedAt: new Date(input.nowMs).toISOString() });
+      this.driver.exec("INSERT INTO catalog.id_registry(id_value,id_kind,retained_at) VALUES (?,'operation',?)", [receipt.operationId, receipt.completedAt]);
+      this.driver.exec("INSERT INTO catalog.backup_retention_events(revision,request_id,operation_id,event_json) VALUES (?,?,?,?)",
+        [receipt.revision, receipt.requestId, receipt.operationId, JSON.stringify(receipt)]);
+      this.driver.exec("UPDATE catalog.backup_retention_root SET revision = ? WHERE singleton = 1 AND revision = ?", [receipt.revision, history.revision]);
+      readValidatedCatalog(this.driver);
+      const after = readBackupRetentionHistory(this.driver);
+      if (after.revision !== receipt.revision || JSON.stringify(after.events.at(-1)) !== JSON.stringify(receipt))
+        throw new ClayError("E_CATALOG_CONFLICT", "retention acknowledgement failed read-back");
+      return receipt;
+    });
+  }
+
   private backupRotation(record: BackupRecord): BackupRecord[] {
     // Recompute from the live catalog on replay as well. A lost response must
     // not suppress unfinished retention, and an old replay must never rotate
     // its own artifact, another app/folder, or one of the newest 32 records.
-    return readBackupRecords(this.driver).map(entry => entry.record)
-      .filter(candidate => candidate.state === "valid" && candidate.targetId === record.targetId
-        && candidate.evidence.appInstanceId === record.evidence.appInstanceId
-        && candidate.adapterCertificationId === record.adapterCertificationId)
-      .sort((left, right) => right.validatedAt.localeCompare(left.validatedAt)
-        || right.backupId.localeCompare(left.backupId))
-      .slice(32).filter(candidate => candidate.backupId !== record.backupId).slice(0, 64);
+    return this.backupRetentionPlan({ targetId: record.targetId, appInstanceId: record.evidence.appInstanceId,
+      adapterCertificationId: record.adapterCertificationId }).entries.map(item => item.record)
+      .filter(candidate => candidate.backupId !== record.backupId);
   }
 
   publishBackup(input: PublishBackupInput): BackupPublicationReceipt {
@@ -2321,6 +2468,8 @@ export class DeviceCatalog {
         const existing = readBackupRecords(this.driver)
           .find(entry => entry.record.backupId === request.data.artifact.backupId);
         if (existing) {
+          if (readBackupRetentionHistory(this.driver).events.some(event => event.intent.backupId === existing.record.backupId && event.outcome === "absent"))
+            throw new ClayError("E_CATALOG_CONFLICT", "a removed backup cannot be republished");
           const expected = BackupRecordV1.parse({
             ...request.data.artifact,
             validatedAt: existing.record.validatedAt,

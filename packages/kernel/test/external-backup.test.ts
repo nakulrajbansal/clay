@@ -322,16 +322,16 @@ describe("Release B2 automatic external-backup execution", () => {
       status: "published",
       publication: "already_published",
       record: { backupId: run.backupId, publicationCatalogGeneration: "31" },
-      rotation: { requested: 1, deleted: 1, failed: 0 },
+      rotation: { requested: 1, deleted: 0, failed: 1 },
     });
     expect(events.filter(event => event.startsWith("directory:create:"))).toHaveLength(1);
     expect(events.filter(event => event.startsWith("directory:write:"))).toHaveLength(1);
-    expect(directory.files.has(oldName)).toBe(false);
+    expect(directory.files.has(oldName)).toBe(true); // A publication receipt alone is not removal authority.
     expect(authority.records).toHaveLength(1);
     expect(authority.requests).toHaveLength(2);
   });
 
-  it("rotates exact owned records in authority order only after publication", async () => {
+  it("preserves every file when publication supplies rotation hints without per-file acknowledgement authority", async () => {
     const events: string[] = [];
     const bytes = new TextEncoder().encode("rotation source archive");
     const run = backupRun(bytes);
@@ -361,17 +361,12 @@ describe("Release B2 automatic external-backup execution", () => {
 
     expect(result).toMatchObject({
       status: "published",
-      rotation: { requested: 2, deleted: 1, failed: 1 },
+      rotation: { requested: 2, deleted: 0, failed: 2 },
     });
-    const publishIndex = events.indexOf("authority:publish");
     const removalEvents = events.filter(event => event.startsWith("directory:remove:"));
-    expect(removalEvents).toEqual([
-      `directory:remove:${firstName}`,
-      `directory:remove:${secondName}`,
-    ]);
-    expect(events.indexOf(removalEvents[0]!)).toBeGreaterThan(publishIndex);
+    expect(removalEvents).toEqual([]);
     expect(directory.files.has(firstName)).toBe(true);
-    expect(directory.files.has(secondName)).toBe(false);
+    expect(directory.files.has(secondName)).toBe(true);
     expect(directory.files.get("manual-family-photos.clay")).toEqual(new Uint8Array([6, 6, 6]));
   });
 

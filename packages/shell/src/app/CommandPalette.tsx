@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEven
 import type { AsyncStore, GlobalSearchResult, RegColumn, RegTable } from "@clay/kernel";
 import type { WorkerClient } from "./worker-client";
 import { ModalDialog } from "./ModalDialog";
-import { beginPresentationIntent, finishPresentationIntent, readPresentationIntent, reconcilePresentation } from "./presentation-intent";
+import { beginPresentationIntent, cancelPresentationIntent, finishPresentationIntent, readPresentationIntent, reconcilePresentation } from "./presentation-intent";
 import "./Operations.css";
 
 const humanize = (name: string): string => name.replace(/_/g, " ")
@@ -176,11 +176,25 @@ export function CommandPalette(props: {
     } finally { submitting.current = false; setBusy(false); }
   };
 
+  const cancelPending = async (): Promise<void> => {
+    const intent = pendingCreate.current;
+    if (!intent || submitting.current || intent.appInstanceId !== props.appInstanceId) return;
+    submitting.current = true; setBusy(true);
+    try {
+      if (await cancelPresentationIntent(sessionStorage, props.worker, intent)) {
+        pendingCreate.current = null; setCreating(props.tables.find(table => table.semantic?.tableId === intent.payload.tableId) ?? null);
+        props.onInfo("Pending capture cancelled without effects. You can correct the draft.");
+      } else props.onError("Capture already committed. Retry capture to read its result; it cannot be cancelled.");
+    } catch (error) { props.onError(error instanceof Error ? error.message : "Cancellation needs recovery"); }
+    finally { submitting.current = false; setBusy(false); }
+  };
+
   return (
     <ModalDialog className="command-palette" backdropClassName="modal-backdrop command-backdrop"
       ariaLabel="Search and act" onClose={props.onClose}>
       <div className="command-search-row">
         {recovery.error ? <p role="alert">{recovery.error}</p> : null}
+        {pendingCreate.current ? <button disabled={busy || !!recovery.error} onClick={() => void cancelPending()}>Cancel pending capture and edit</button> : null}
         {pendingCreate.current && !creating ? <p role="alert">The captured record type changed. Return to its original app and inspect Recovery Center; the request was kept.</p> : null}
         <span aria-hidden="true">⌕</span>
         <input autoFocus type="search" value={query} disabled={!!pendingCreate.current || submitting.current} onChange={event => setQuery(event.target.value)}

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BackupPublicationReceiptV1,
   BackupStageValidationV1,
@@ -29,6 +29,7 @@ import type { ChromiumBackupEnvironment } from "../src/app/backup-target.browser
 function asArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.slice().buffer;
 }
+afterEach(() => vi.unstubAllGlobals());
 
 function productionRuntime(
   userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/149.0.7827.55 Safari/537.36",
@@ -103,6 +104,7 @@ describe("production browser backup wiring", () => {
   });
 
   it("connects worker snapshot, exact directory read-back, worker validation, and publication", async () => {
+    vi.stubGlobal("localStorage", { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn() });
     const bytes = new Uint8Array([11, 22, 33, 44]);
     const run: BackupRun = {
       ...backupRun(bytes),
@@ -121,6 +123,8 @@ describe("production browser backup wiring", () => {
       return readExact(fileName);
     };
     const worker = {
+      backupRetentionPlan: vi.fn(async () => ({ schema: 1 as const, keeper: null, entries: [], remaining: 0 })),
+      authorizeBackupRemoval: vi.fn(), acknowledgeBackupRemoval: vi.fn(),
       completeAutomaticBackup: vi.fn(async () => {}),
       prepareAutomaticBackup: vi.fn(async () => {
         events.push("worker:prepare");
@@ -206,7 +210,13 @@ describe("production browser backup wiring", () => {
     });
     expect(loadProductionBackupTarget(storage, `app_${"z".repeat(26)}`)).toBeNull();
 
-    const [key] = values.keys();
+    const nextTarget = { ...TARGET, targetId: `tgt_${"s".repeat(26)}` };
+    saveProductionBackupTarget(storage, { target: nextTarget, folderName: "New folder" });
+    expect(loadProductionBackupTarget(storage, TARGET.appInstanceId, TARGET.targetId)?.target).toEqual(TARGET);
+    expect(loadProductionBackupTarget(storage, TARGET.appInstanceId)?.target).toEqual(nextTarget);
+    expect(loadProductionBackupTarget(storage, TARGET.appInstanceId, `tgt_${"z".repeat(26)}`)).toBeNull();
+
+    const key = `clay_backup_target_v1:${TARGET.appInstanceId}`;
     values.set(key!, JSON.stringify({ target: { ...TARGET, targetId: "forged" }, folderName: "x" }));
     expect(loadProductionBackupTarget(storage, TARGET.appInstanceId)).toBeNull();
   });
