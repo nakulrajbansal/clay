@@ -16,6 +16,7 @@ import { enumerateCanonicalStateV1 } from "./canonical-state";
 import { removeLegacyCredentialSettingsForAuthorityBoot } from "./credential-policy";
 import {
   browserDurableInventory,
+  browserDurableFileNames,
   openBrowserCatalogProbe,
   openBrowserProductionTarget,
   type DbDriver,
@@ -29,6 +30,7 @@ import {
 import { ClayError } from "./errors";
 import {
   createLiveWriteGuard,
+  type LiveWriteAuthority,
   type LiveWriteSession,
 } from "./live-write-guard";
 import {
@@ -324,6 +326,12 @@ function authenticateExistingTarget(
   expected?: ActiveCatalogTarget,
 ): { store: ClayStore; target: TargetEvidence; requested: ActiveCatalogTarget } {
   const requested = resolveExistingTarget(driver, input, expected);
+  return authenticateTargetContents(driver, requested);
+}
+
+function authenticateTargetContents(
+  driver: DbDriver, requested: ActiveCatalogTarget,
+): { store: ClayStore; target: TargetEvidence; requested: ActiveCatalogTarget } {
   const store = ClayStore.fromDriver(driver);
   removeLegacyCredentialSettingsForAuthorityBoot(driver);
   const target = TargetAuthorityStore.open(driver).evidence();
@@ -341,6 +349,27 @@ function authenticateExistingTarget(
 type PendingPlannerAttempt = Readonly<{ id: string; intent: string }>;
 
 const PREFLIGHT_ROLLBACK = Object.freeze({ kind: "authenticated-target-preflight" });
+
+/** Worker-only destructive-lifecycle preflight. Inspection cannot persist repairs. */
+export function assertLifecycleSurvivorReadable(session: LiveWriteSession, expected: ActiveCatalogTarget): void {
+  try {
+    session.authority.run(() => {
+      const current = DeviceCatalog.openExisting(session.driver).activeTargetStorageInventory()
+        .find(candidate => candidate.storageKey === expected.storageKey);
+      if (!current || current.namespaceId !== expected.namespaceId || !sameTarget(current.target, expected.target))
+        throw invalid("deletion fallback catalog identity changed");
+      const authenticated = authenticateTargetContents(session.driver, current);
+      if (STORE_PENDING_PLANNER_ATTEMPTS.call(authenticated.store).length > 0
+          || TargetAuthorityStore.open(session.driver).reservations().some(item => item.state === "reserved"))
+        throw invalid("deletion fallback requires recovery before it is usable");
+      throw PREFLIGHT_ROLLBACK;
+    });
+  } catch (error) {
+    if (error === PREFLIGHT_ROLLBACK) return;
+    throw error;
+  }
+  throw invalid("deletion fallback inspection did not complete");
+}
 
 function inspectExistingTarget(
   session: LiveWriteSession,
@@ -733,6 +762,26 @@ const TEST_COORDINATORS = new WeakMap<
   ProductionStoreAuthority, ProductionMutationCoordinator
 >();
 
+export type ProductionLifecycleContext = Readonly<{
+  driver: DbDriver;
+  writeAuthority: LiveWriteAuthority;
+  store: ClayStore;
+  leaseTtlMs: number;
+}>;
+
+const PRODUCTION_LIFECYCLE_CONTEXTS = new WeakMap<
+  ProductionStoreAuthority,
+  ProductionLifecycleContext
+>();
+
+export function productionLifecycleContext(
+  authority: ProductionStoreAuthority,
+): ProductionLifecycleContext {
+  const context = PRODUCTION_LIFECYCLE_CONTEXTS.get(authority);
+  if (!context) throw invalid("production lifecycle context is unavailable");
+  return context;
+}
+
 function bootInfoFromCatalog(
   store: ClayStore,
   catalog: ReturnType<DeviceCatalog["snapshot"]>,
@@ -825,13 +874,28 @@ export class ProductionStoreAuthority {
       },
     });
     TEST_COORDINATORS.set(this, this.#coordinator);
+    PRODUCTION_LIFECYCLE_CONTEXTS.set(this, Object.freeze({
+      driver: session.driver,
+      writeAuthority: session.authority,
+      store,
+      leaseTtlMs,
+    }));
   }
 
   static async bootBrowser(input: unknown): Promise<ProductionStoreAuthority> {
     const bootInput = captureBrowserBootInput(input);
     let inventory = await browserDurableInventory();
-    if (inventory.state !== "complete")
-      throw invalid(`durable namespace inventory is ${inventory.reason}`);
+    if (inventory.state !== "complete") {
+      // A declared lifecycle job can explain an interrupted file pair. Recovery
+      // independently validates all raw files under its claim/fence before unlink.
+      if ((await browserDurableFileNames()).includes("/clay-device-catalog-v1.db")) {
+        await (await import("./production-app-lifecycle")).reconcilePendingBrowserLifecycle();
+        inventory = await browserDurableInventory();
+      }
+      if (inventory.state !== "complete")
+        throw invalid(`durable namespace inventory is ${inventory.reason}`);
+    }
+    let lifecycleRecoveryRequired = false;
     if (inventory.catalogPresent) {
       const emptyProbe = await openBrowserCatalogProbe();
       try {
@@ -840,10 +904,19 @@ export class ProductionStoreAuthority {
           // transaction. Exact zero-object proof resumes catalog-free boot;
           // a partial schema continues into strict open and fails closed.
           inventory = { ...inventory, catalogPresent: false };
+        } else {
+          lifecycleRecoveryRequired = DeviceCatalog.openExisting(emptyProbe)
+            .pendingLifecycleJobs().length > 0;
         }
       } finally {
         emptyProbe.close();
       }
+    }
+    if (lifecycleRecoveryRequired) {
+      await (await import("./production-app-lifecycle")).reconcilePendingBrowserLifecycle();
+      inventory = await browserDurableInventory();
+      if (inventory.state !== "complete" || !inventory.catalogPresent)
+        throw invalid("durable lifecycle recovery inventory is unavailable");
     }
     const nowMs = Date.now();
     const releaseId = mintProductionAuthorityId("rel");
@@ -873,15 +946,8 @@ export class ProductionStoreAuthority {
         } else {
           const active = catalog.activeTargetStorageInventory();
           initialCatalogSnapshot = catalog.snapshot();
-          let selected = catalog.selectedTargetStorage();
+          const selected = catalog.selectedTargetStorage();
           initialStorageKey = selected.storageKey;
-          if (bootInput.requestedAppId !== null) {
-            const desired = active.find(item =>
-              item.target.appInstanceId === bootInput.requestedAppId
-              || item.storageKey === bootInput.requestedAppId);
-            if (!desired) throw invalid("requested app is not in the authoritative catalog");
-            selected = desired;
-          }
           storageKey = resolveCatalogInventory(
             initialCatalogSnapshot, active,
             selected.storageKey, inventory,
@@ -1461,6 +1527,31 @@ export class ProductionStoreAuthority {
 
   createRequestId(): string {
     return this.#coordinator.mintRequestId();
+  }
+
+  executeAppLifecycle(input: unknown): Promise<ProductionStoreAuthority> {
+    return import("./production-app-lifecycle").then(module =>
+      module.executeProductionAppLifecycle(this, input));
+  }
+
+  executeNewAppImport(input: unknown): Promise<Readonly<{
+    appInstanceId: string;
+    table: string;
+    imported: number;
+    columns: number;
+    version: 1;
+  }>> {
+    return import("./production-app-lifecycle").then(module =>
+      module.executeProductionNewAppImport(this, input));
+  }
+
+  undoNewAppImport(input: unknown): Promise<Readonly<{
+    appInstanceId: string;
+    undone: true;
+    version: 0;
+  }>> {
+    return import("./production-app-lifecycle").then(module =>
+      module.undoProductionNewAppImport(this, input));
   }
 
   /** Package-private diagnostics used by worker-boundary certification tests. */

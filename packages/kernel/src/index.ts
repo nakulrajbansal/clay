@@ -21,7 +21,7 @@ export {
   type Registry, type RelationFieldSpec, type RollupFieldSpec,
 } from "./registry";
 export {
-  copyDatabase, createSystemTables, deleteAppStorage, openBrowserDriver,
+  copyDatabase, createSystemTables, openBrowserDriver,
   openDriverFromBytes, openMemoryDriver, wipeBrowserStorage,
   type DatabaseCopyShape, type DbDriver, type SqlRow, type SqlValue,
 } from "./db";

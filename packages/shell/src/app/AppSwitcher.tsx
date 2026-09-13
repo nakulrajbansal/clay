@@ -129,6 +129,8 @@ export function AppSwitcher(props: {
               {current ? (
                 <button
                   className="appbar-item danger"
+                  disabled={props.apps.length < 2}
+                  title={props.apps.length < 2 ? "Clay keeps at least one usable app" : undefined}
                   onClick={() => { setOpen(false); props.onDelete(current.id); }}
                 >
                   Delete “{current.name}”

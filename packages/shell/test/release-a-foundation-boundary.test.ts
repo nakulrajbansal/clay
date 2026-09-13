@@ -7,14 +7,22 @@ const appSource = await readFile(new URL("../src/app/App.tsx", import.meta.url),
 const workerSource = await readFile(new URL("../src/worker/db-worker.ts", import.meta.url), "utf8");
 
 describe("Release A foundation boundary", () => {
-  it("fails closed instead of exposing unreserved cross-app import publication", () => {
+  it("exposes cross-app import only through a lifecycle-bound blank target", () => {
     expect("createImportedApp" in WorkerClient.prototype).toBe(false);
     expect(appSource).not.toContain("createImportedApp");
     expect(workerSource).not.toContain('case "createImportedApp"');
-    expect(appSource).toContain("Safe creation of another imported app is not available yet");
+    expect("importNewApp" in WorkerClient.prototype).toBe(true);
+    expect("undoNewAppImport" in WorkerClient.prototype).toBe(true);
+    expect(DB_WORKER_ROUTE_CENSUS.importNewApp).toMatchObject({
+      enforcement: "lifecycle-authority", mutates: "live",
+    });
+    expect(workerSource).toContain('case "importNewApp"');
+    expect(workerSource).toContain('case "undoNewAppImport"');
+    expect(appSource).toContain("client().createApp(");
+    expect(appSource).toContain("client().importNewApp(");
   });
 
-  it("routes file selection through explicit review without exposing unsupported publication", () => {
+  it("routes file selection through explicit review before authority publication", () => {
     expect(appSource).toContain("<ImportReview");
     expect(appSource).toContain("onImport={file => void reviewNewAppImport(file)}");
     expect(appSource).not.toContain("onImport={file => void importNewApp(file)}");
@@ -32,7 +40,9 @@ describe("Release A foundation boundary", () => {
     expect(workerSource).toContain('case "seed":');
     expect(workerSource).toContain('runAuthorityMutation("seed", createStarterSeedBundle');
     expect(appSource).toContain("firstRunTargetId.current = boot.selectedAppInstanceId");
-    expect(appSource).toContain("updateCachedApp(targetId, shellName(id), id)");
+    expect(appSource).toContain("{ requestId: setup.nameRequestId }, id");
+    expect(appSource).toContain("{ requestId: setup.applyRequestId }");
+    expect(appSource).not.toContain("client().renameApp(firstRunId, shellName(id), mutationContext(), id)");
     expect(appSource).toContain("canonicalHistory.length === 0");
     expect(appSource).not.toContain("const first = listApps().length === 0");
   });

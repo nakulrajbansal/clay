@@ -2870,7 +2870,7 @@ describe("production Store authority", () => {
         requestedAppId: secondAppId,
         appCache: [],
       });
-      expect(booted.bootInfo().selectedAppInstanceId).toBe(secondAppId);
+      expect(booted.bootInfo().selectedAppInstanceId).toBe(firstAppId);
       const reconciledFirst = opened.filter(item => item.storageKey === "default")
         .find(item => item.driver.select(
           "SELECT outcome FROM sys.attempts WHERE intent_text = 'interrupted in first app'",

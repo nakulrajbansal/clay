@@ -143,14 +143,14 @@ describe("production mutation route census", () => {
       exports: Record<string, string>;
     };
     expect(driver).toContain("pool.getFileNames()");
-    expect(driver).toContain("classifyDurableFileInventory(names)");
+    expect(driver).toContain("classifyDurableFileInventory(await browserDurableFileNames())");
     expect(driver).toContain("AS sys");
     expect(driver).toContain("AS catalog");
     expect(guard).toContain("export function createLiveWriteGuard");
     expect(guard).not.toContain("export class LiveWriteGuard");
     expect(authority.indexOf("browserDurableInventory()"))
       .toBeLessThan(authority.indexOf("openBrowserProductionTarget(namespace)"));
-    expect(authority).toContain("let selected = catalog.selectedTargetStorage()");
+    expect(authority).toContain("const selected = catalog.selectedTargetStorage()");
     expect(authority).toContain("selected.storageKey");
     expect(publicIndex).not.toContain("ProductionStoreAuthority");
     expect(publicIndex).not.toContain("ProductionMutationCoordinator");

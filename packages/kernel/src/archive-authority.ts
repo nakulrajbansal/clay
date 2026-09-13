@@ -321,24 +321,7 @@ function collectBootstrapManifest(driver: DbDriver) {
   }));
 }
 
-function collectPendingJobs(driver: DbDriver) {
-  return driver.select("SELECT * FROM catalog.pending_jobs ORDER BY job_id")
-    .map(row => ArchivePendingJobV1.parse({
-      schema: 1,
-      jobId: row.job_id,
-      authorityIncarnationId: row.authority_incarnation_id,
-      appInstanceId: row.app_instance_id,
-      generationId: row.generation_id,
-      namespaceId: row.namespace_id,
-      kind: row.kind,
-      state: row.state,
-      operationId: row.operation_id,
-      sourceArchiveSha256: row.source_archive_sha256,
-      sourceProvenanceId: row.source_provenance_id,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }));
-}
+import { pendingRowsForArchive as collectPendingJobs } from "./catalog-pending";
 
 function collectLineageReservations(driver: DbDriver) {
   return driver.select(

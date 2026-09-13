@@ -1,0 +1,379 @@
+{
+  "schema": 1,
+  "generatedAt": "2026-09-12T23:45:48.062Z",
+  "baseHead": "3dcea1a3d36618d240efcf1a41f25643e60acb47",
+  "sourceFingerprint": "4deab3f5aba8ef1b6e502d36b439ec6a924d945ccf5b4e7fa10daec1d4a64d96",
+  "endingSourceFingerprint": "4deab3f5aba8ef1b6e502d36b439ec6a924d945ccf5b4e7fa10daec1d4a64d96",
+  "sourceStable": true,
+  "gates": [
+    {
+      "name": "harness-security",
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--test",
+        "scripts/p0-browser-safety.test.mjs",
+        "scripts/p0-source-binding.test.mjs",
+        "scripts/p0-review-evidence.test.mjs",
+        "scripts/bundle-budget.test.mjs",
+        "scripts/product-gate-config.test.mjs",
+        "scripts/share-routing-config.test.mjs",
+        "scripts/release-a-evidence.test.mjs"
+      ],
+      "cwd": "D:\\Clay\\",
+      "exitCode": 0,
+      "passed": true,
+      "durationMs": 1456,
+      "log": "evidence/p0-verification/harness-security.log"
+    },
+    {
+      "name": "focused-kernel",
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "test/app-lifecycle.test.ts",
+        "test/lifecycle-recovery-inventory.test.ts",
+        "test/archive-authority.test.ts",
+        "--maxWorkers=1",
+        "--minWorkers=1",
+        "--reporter=dot"
+      ],
+      "cwd": "D:\\Clay\\packages\\kernel",
+      "exitCode": 0,
+      "passed": true,
+      "durationMs": 25448,
+      "log": "evidence/p0-verification/focused-kernel.log"
+    },
+    {
+      "name": "focused-shell",
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "test/worker-lifecycle-integration.test.ts",
+        "test/app-setup-intent.test.ts",
+        "test/new-app-import.test.ts",
+        "test/app-first-run-import-confirmation.test.tsx",
+        "--maxWorkers=1",
+        "--minWorkers=1",
+        "--reporter=dot"
+      ],
+      "cwd": "D:\\Clay\\packages\\shell",
+      "exitCode": 0,
+      "passed": true,
+      "durationMs": 34248,
+      "log": "evidence/p0-verification/focused-shell.log"
+    },
+    {
+      "name": "typecheck-schema",
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "node_modules/typescript/bin/tsc",
+        "--noEmit"
+      ],
+      "cwd": "D:\\Clay\\packages\\schema",
+      "exitCode": 0,
+      "passed": true,
+      "durationMs": 4239,
+      "log": "evidence/p0-verification/typecheck-schema.log"
+    },
+    {
+      "name": "typecheck-kernel",
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "node_modules/typescript/bin/tsc",
+        "--noEmit"
+      ],
+      "cwd": "D:\\Clay\\packages\\kernel",
+      "exitCode": 0,
+      "passed": true,
+      "durationMs": 8129,
+      "log": "evidence/p0-verification/typecheck-kernel.log"
+    },
+    {
+      "name": "typecheck-shell",
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "node_modules/typescript/bin/tsc",
+        "--noEmit"
+      ],
+      "cwd": "D:\\Clay\\packages\\shell",
+      "exitCode": 0,
+      "passed": true,
+      "durationMs": 12920,
+      "log": "evidence/p0-verification/typecheck-shell.log"
+    },
+    {
+      "name": "suite-schema",
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "--maxWorkers=1",
+        "--minWorkers=1",
+        "--reporter=dot"
+      ],
+      "cwd": "D:\\Clay\\packages\\schema",
+      "exitCode": 0,
+      "passed": true,
+      "durationMs": 6739,
+      "log": "evidence/p0-verification/suite-schema.log"
+    },
+    {
+      "name": "suite-kernel",
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "--maxWorkers=1",
+        "--minWorkers=1",
+        "--reporter=dot"
+      ],
+      "cwd": "D:\\Clay\\packages\\kernel",
+      "exitCode": 0,
+      "passed": true,
+      "durationMs": 248854,
+      "log": "evidence/p0-verification/suite-kernel.log"
+    },
+    {
+      "name": "suite-shell",
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "--maxWorkers=1",
+        "--minWorkers=1",
+        "--reporter=dot"
+      ],
+      "cwd": "D:\\Clay\\packages\\shell",
+      "exitCode": 0,
+      "passed": true,
+      "durationMs": 180478,
+      "log": "evidence/p0-verification/suite-shell.log"
+    },
+    {
+      "name": "packaged-browser",
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/p0-multi-app-ui.mjs"
+      ],
+      "cwd": "D:\\Clay\\",
+      "exitCode": 1,
+      "passed": false,
+      "durationMs": 79343,
+      "log": "evidence/p0-verification/packaged-browser.log"
+    },
+    {
+      "name": "frozen-budget",
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/bundle-budget.mjs"
+      ],
+      "cwd": "D:\\Clay\\",
+      "exitCode": 1,
+      "passed": false,
+      "durationMs": 554,
+      "log": "evidence/p0-verification/frozen-budget.log"
+    },
+    {
+      "name": "complete-bundle-measurements",
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/p0-bundle-report.mjs"
+      ],
+      "cwd": "D:\\Clay\\",
+      "exitCode": 1,
+      "passed": false,
+      "durationMs": 589,
+      "log": "evidence/p0-verification/complete-bundle-measurements.log"
+    },
+    {
+      "name": "diff-check",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "cwd": "D:\\Clay\\",
+      "exitCode": 0,
+      "passed": true,
+      "durationMs": 84,
+      "log": "evidence/p0-verification/diff-check.log"
+    }
+  ],
+  "journeys": [
+    {
+      "journey": "Create blank/starter",
+      "sourceAncestry": {
+        "baseHead": "3dcea1a3d36618d240efcf1a41f25643e60acb47",
+        "uncommittedReviewSource": "4deab3f5aba8ef1b6e502d36b439ec6a924d945ccf5b4e7fa10daec1d4a64d96"
+      },
+      "productionRoutes": [
+        {
+          "op": "createApp",
+          "enforcement": "lifecycle-authority",
+          "mutates": "lifecycle"
+        },
+        {
+          "op": "seed",
+          "enforcement": "authority",
+          "mutates": "live"
+        }
+      ],
+      "ui": "App.tsx / Onboarding",
+      "focusedEvidence": [
+        "focused-kernel.log",
+        "focused-shell.log"
+      ],
+      "packagedEvidence": "evidence/p0-multi-app-ui/report.json",
+      "status": "partial",
+      "reason": "Uncommitted review candidate; packaged proof and frozen release gates are required."
+    },
+    {
+      "journey": "Switch and reload isolation",
+      "sourceAncestry": {
+        "baseHead": "3dcea1a3d36618d240efcf1a41f25643e60acb47",
+        "uncommittedReviewSource": "4deab3f5aba8ef1b6e502d36b439ec6a924d945ccf5b4e7fa10daec1d4a64d96"
+      },
+      "productionRoutes": [
+        {
+          "op": "switchApp",
+          "enforcement": "lifecycle-authority",
+          "mutates": "lifecycle"
+        }
+      ],
+      "ui": "AppSwitcher.tsx",
+      "focusedEvidence": [
+        "focused-kernel.log",
+        "focused-shell.log"
+      ],
+      "packagedEvidence": "evidence/p0-multi-app-ui/report.json",
+      "status": "partial",
+      "reason": "Uncommitted review candidate; packaged proof and frozen release gates are required."
+    },
+    {
+      "journey": "Rename",
+      "sourceAncestry": {
+        "baseHead": "3dcea1a3d36618d240efcf1a41f25643e60acb47",
+        "uncommittedReviewSource": "4deab3f5aba8ef1b6e502d36b439ec6a924d945ccf5b4e7fa10daec1d4a64d96"
+      },
+      "productionRoutes": [
+        {
+          "op": "renameApp",
+          "enforcement": "lifecycle-authority",
+          "mutates": "lifecycle"
+        }
+      ],
+      "ui": "AppSwitcher.tsx",
+      "focusedEvidence": [
+        "focused-kernel.log",
+        "focused-shell.log"
+      ],
+      "packagedEvidence": "evidence/p0-multi-app-ui/report.json",
+      "status": "partial",
+      "reason": "Uncommitted review candidate; packaged proof and frozen release gates are required."
+    },
+    {
+      "journey": "Independent duplicate/history/panels",
+      "sourceAncestry": {
+        "baseHead": "3dcea1a3d36618d240efcf1a41f25643e60acb47",
+        "uncommittedReviewSource": "4deab3f5aba8ef1b6e502d36b439ec6a924d945ccf5b4e7fa10daec1d4a64d96"
+      },
+      "productionRoutes": [
+        {
+          "op": "forkApp",
+          "enforcement": "lifecycle-authority",
+          "mutates": "lifecycle"
+        }
+      ],
+      "ui": "AppSwitcher.tsx",
+      "focusedEvidence": [
+        "focused-kernel.log",
+        "focused-shell.log"
+      ],
+      "packagedEvidence": "evidence/p0-multi-app-ui/report.json",
+      "status": "partial",
+      "reason": "Uncommitted review candidate; packaged proof and frozen release gates are required."
+    },
+    {
+      "journey": "Confirmed delete/fallback/last-app denial",
+      "sourceAncestry": {
+        "baseHead": "3dcea1a3d36618d240efcf1a41f25643e60acb47",
+        "uncommittedReviewSource": "4deab3f5aba8ef1b6e502d36b439ec6a924d945ccf5b4e7fa10daec1d4a64d96"
+      },
+      "productionRoutes": [
+        {
+          "op": "deleteApp",
+          "enforcement": "lifecycle-authority",
+          "mutates": "lifecycle"
+        }
+      ],
+      "ui": "AppSwitcher.tsx",
+      "focusedEvidence": [
+        "focused-kernel.log",
+        "focused-shell.log"
+      ],
+      "packagedEvidence": "evidence/p0-multi-app-ui/report.json",
+      "status": "partial",
+      "reason": "Uncommitted review candidate; packaged proof and frozen release gates are required."
+    },
+    {
+      "journey": "Spreadsheet Preview/Keep/Discard/Undo",
+      "sourceAncestry": {
+        "baseHead": "3dcea1a3d36618d240efcf1a41f25643e60acb47",
+        "uncommittedReviewSource": "4deab3f5aba8ef1b6e502d36b439ec6a924d945ccf5b4e7fa10daec1d4a64d96"
+      },
+      "productionRoutes": [
+        {
+          "op": "importNewApp",
+          "enforcement": "lifecycle-authority",
+          "mutates": "live"
+        },
+        {
+          "op": "undoNewAppImport",
+          "enforcement": "lifecycle-authority",
+          "mutates": "live"
+        }
+      ],
+      "ui": "ImportReview.tsx / App.tsx",
+      "focusedEvidence": [
+        "focused-kernel.log",
+        "focused-shell.log"
+      ],
+      "packagedEvidence": "evidence/p0-multi-app-ui/report.json",
+      "status": "partial",
+      "reason": "Uncommitted review candidate; packaged proof and frozen release gates are required."
+    },
+    {
+      "journey": "Legacy OPFS adoption and crash recovery",
+      "sourceAncestry": {
+        "baseHead": "3dcea1a3d36618d240efcf1a41f25643e60acb47",
+        "uncommittedReviewSource": "4deab3f5aba8ef1b6e502d36b439ec6a924d945ccf5b4e7fa10daec1d4a64d96"
+      },
+      "productionRoutes": [
+        {
+          "op": "boot",
+          "enforcement": "boot",
+          "mutates": "lifecycle"
+        }
+      ],
+      "ui": "worker boot",
+      "focusedEvidence": [
+        "focused-kernel.log",
+        "focused-shell.log"
+      ],
+      "packagedEvidence": "evidence/p0-multi-app-ui/report.json",
+      "status": "partial",
+      "reason": "Uncommitted review candidate; packaged proof and frozen release gates are required."
+    }
+  ],
+  "scanFindings": [],
+  "verdict": "INVALIDATED",
+  "releaseCertificate": false,
+  "browserStatus": "BROWSER_LAUNCH_BLOCKED",
+  "limitations": [
+    "The working tree is intentionally uncommitted; no git writes were attempted.",
+    "Automated scan findings require contextual review; absence of matches is not security certification.",
+    "Independent security/product review, packaged browser proof, frozen budgets, and manual NVDA certification are not inferred from unit tests."
+  ]
+}

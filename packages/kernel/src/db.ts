@@ -617,25 +617,31 @@ async function strictBrowserPool(s: Sqlite3Static): Promise<PoolUtil> {
     `durable browser storage could not be opened: ${String(lastError)}`);
 }
 
-/** Trusted worker inventory from the VFS itself, before any target is opened. */
-export async function browserDurableInventory(): Promise<DurableFileInventory> {
+/** Trusted worker inventory names from the VFS itself. */
+export async function browserDurableFileNames(): Promise<string[]> {
   const s = await sqlite3();
   const pool = await strictBrowserPool(s);
   if (!pool.getFileNames)
     throw new ClayError("E_CATALOG_UNAVAILABLE", "durable file inventory is unavailable");
-  let names: string[];
   try {
     const actual = pool.getFileNames();
     if (!Array.isArray(actual)) throw new Error("inventory is not an array");
-    names = new Array<string>(actual.length);
+    const names = new Array<string>(actual.length);
     for (let index = 0; index < actual.length; index++) {
       if (typeof actual[index] !== "string") throw new Error("inventory name is invalid");
       names[index] = actual[index]!;
     }
+    if (new Set(names).size !== names.length)
+      throw new Error("inventory contains duplicate file names");
+    return names.sort((left, right) => left.localeCompare(right));
   } catch {
     throw new ClayError("E_CATALOG_UNAVAILABLE", "durable file inventory is unreadable");
   }
-  return classifyDurableFileInventory(names);
+}
+
+/** Trusted worker inventory from the VFS itself, before any target is opened. */
+export async function browserDurableInventory(): Promise<DurableFileInventory> {
+  return classifyDurableFileInventory(await browserDurableFileNames());
 }
 
 /** Catalog-only probe. It is closed before the selected target is opened. */
@@ -750,13 +756,39 @@ export async function wipeBrowserStorage(): Promise<boolean> {
   return true;
 }
 
-/** Delete one app's OPFS files (G4). The app must not be the currently
- * open one (caller closes its store first). Best-effort. */
-export async function deleteAppStorage(appId: string): Promise<void> {
-  if (!activePool?.unlink) return;
-  const files = appFiles(appId);
-  try { activePool.unlink(files.user); } catch { /* already gone */ }
-  try { activePool.unlink(files.system); } catch { /* already gone */ }
+/** Delete one exact catalog-declared namespace and verify both files are absent. */
+export async function deleteBrowserNamespaceStorage(
+  namespace: DurableNamespaceInventoryEntry,
+  assertClaim: () => void,
+): Promise<void> {
+  const classified = classifyDurableFileInventory([namespace.userFile, namespace.systemFile]);
+  if (classified.state !== "complete" || classified.catalogPresent
+      || classified.namespaces.length !== 1
+      || classified.namespaces[0]!.storageKey !== namespace.storageKey
+      || classified.namespaces[0]!.userFile !== namespace.userFile
+      || classified.namespaces[0]!.systemFile !== namespace.systemFile
+      || classified.namespaces[0]!.kind !== namespace.kind)
+    throw new ClayError("E_CATALOG_UNAVAILABLE", "cleanup namespace declaration is invalid");
+  const s = await sqlite3();
+  const pool = await strictBrowserPool(s);
+  if (!pool.unlink)
+    throw new ClayError("E_CATALOG_UNAVAILABLE", "durable namespace deletion is unavailable");
+  const before = new Set(await browserDurableFileNames());
+  const files = [namespace.userFile, namespace.systemFile].flatMap(file =>
+    [`${file}-journal`, `${file}-wal`, `${file}-shm`, file]);
+  for (const file of files) {
+    if (!before.has(file)) continue;
+    assertClaim();
+    try { pool.unlink(file); }
+    catch (error) {
+      throw new ClayError("E_CATALOG_UNAVAILABLE",
+        `durable namespace cleanup failed: ${String(error)}`);
+    }
+  }
+  const after = new Set(await browserDurableFileNames());
+  assertClaim();
+  if (files.some(file => after.has(file)))
+    throw new ClayError("E_CATALOG_UNAVAILABLE", "durable namespace cleanup was not confirmed");
 }
 
 export function systemSchemaSql(prefix: string): string {

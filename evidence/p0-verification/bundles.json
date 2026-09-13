@@ -1,0 +1,332 @@
+{
+  "schema": 1,
+  "frozenGateSha256": "14a96159093bba234646176429fd6d9f5526f7d356d0b45bae94f61a9c498a55",
+  "boundaries": [
+    {
+      "name": "workerAuthority",
+      "files": [
+        {
+          "file": "assets/worker-authority-DTpBYPGl.js",
+          "raw": 315549,
+          "gzip": 70151
+        }
+      ],
+      "raw": 315549,
+      "gzip": 70151,
+      "limits": {
+        "raw": 240000,
+        "gzip": 60000
+      },
+      "passed": false
+    },
+    {
+      "name": "completeWorker",
+      "files": [
+        {
+          "file": "assets/asyncstore-BNJS48ih.js",
+          "raw": 719000,
+          "gzip": 201981
+        },
+        {
+          "file": "assets/blueprints-CPG2w82f.js",
+          "raw": 14200,
+          "gzip": 4728
+        },
+        {
+          "file": "assets/db-worker-piI_c3T0.js",
+          "raw": 193880,
+          "gzip": 48333
+        },
+        {
+          "file": "assets/import-session-coordinator-DZpycMZ6.js",
+          "raw": 9176,
+          "gzip": 3331
+        },
+        {
+          "file": "assets/planner-authority-BzcoE_2C.js",
+          "raw": 2676,
+          "gzip": 1148
+        },
+        {
+          "file": "assets/planner-command-B_P79A2-.js",
+          "raw": 9190,
+          "gzip": 2948
+        },
+        {
+          "file": "assets/planner-pipeline-entry-B9sssVCs.js",
+          "raw": 7206,
+          "gzip": 2610
+        },
+        {
+          "file": "assets/production-app-lifecycle-CVKEZFKY.js",
+          "raw": 19865,
+          "gzip": 6171
+        },
+        {
+          "file": "assets/worker-authority-DTpBYPGl.js",
+          "raw": 315549,
+          "gzip": 70151
+        }
+      ],
+      "raw": 1290742,
+      "gzip": 341401,
+      "limits": {
+        "raw": 1010000,
+        "gzip": 280000
+      },
+      "passed": false
+    },
+    {
+      "name": "completeBrowser",
+      "raw": 3631764,
+      "gzip": 1172831,
+      "files": [
+        {
+          "file": "assets/AutomationCenter-BiHYg81E.js",
+          "raw": 30766,
+          "gzip": 8047
+        },
+        {
+          "file": "assets/CommandPalette-luZlk8dq.js",
+          "raw": 7198,
+          "gzip": 2735
+        },
+        {
+          "file": "assets/DataView-BF4gM3nP.js",
+          "raw": 42813,
+          "gzip": 12544
+        },
+        {
+          "file": "assets/ExportDialog-BTDMHOh3.css",
+          "raw": 1748,
+          "gzip": 812
+        },
+        {
+          "file": "assets/ExportDialog-BjX2MFC6.js",
+          "raw": 10785,
+          "gzip": 4131
+        },
+        {
+          "file": "assets/FirstSuccessChecklist-Bth6R6pu.js",
+          "raw": 3158,
+          "gzip": 1218
+        },
+        {
+          "file": "assets/HistoryView-yfA4m8xn.js",
+          "raw": 2932,
+          "gzip": 1235
+        },
+        {
+          "file": "assets/ImportWizard-CWsomDLD.js",
+          "raw": 11708,
+          "gzip": 3781
+        },
+        {
+          "file": "assets/IntakeCenter-DtBC8ldz.js",
+          "raw": 15994,
+          "gzip": 5000
+        },
+        {
+          "file": "assets/Operations-BDCygvpY.css",
+          "raw": 19471,
+          "gzip": 4627
+        },
+        {
+          "file": "assets/PanelFrame-Cs01IHgx.js",
+          "raw": 114251,
+          "gzip": 27968
+        },
+        {
+          "file": "assets/PrivateMetricsView-DCvmXadw.css",
+          "raw": 1809,
+          "gzip": 757
+        },
+        {
+          "file": "assets/PrivateMetricsView-sjWhGtLT.js",
+          "raw": 7003,
+          "gzip": 2476
+        },
+        {
+          "file": "assets/PublicIntakeForm-Dncc4-BT.js",
+          "raw": 5707,
+          "gzip": 2422
+        },
+        {
+          "file": "assets/RecordDetail-xWnV7oCI.js",
+          "raw": 17212,
+          "gzip": 5443
+        },
+        {
+          "file": "assets/RecoveryCenter-eOU6p_Lj.js",
+          "raw": 12492,
+          "gzip": 3998
+        },
+        {
+          "file": "assets/RelationConversionDialog-DIZK9oCA.js",
+          "raw": 4006,
+          "gzip": 1435
+        },
+        {
+          "file": "assets/ShapeMapView-BrS74YIy.js",
+          "raw": 10192,
+          "gzip": 3267
+        },
+        {
+          "file": "assets/ShareDialog-DcuFjL4A.css",
+          "raw": 1741,
+          "gzip": 732
+        },
+        {
+          "file": "assets/ShareDialog-XGeKetEr.js",
+          "raw": 9341,
+          "gzip": 3497
+        },
+        {
+          "file": "assets/TodayView-D3fno3QH.js",
+          "raw": 34810,
+          "gzip": 9514
+        },
+        {
+          "file": "assets/TodayView-Daghs8YW.css",
+          "raw": 5544,
+          "gzip": 1673
+        },
+        {
+          "file": "assets/asyncstore-BNJS48ih.js",
+          "raw": 719000,
+          "gzip": 201981
+        },
+        {
+          "file": "assets/automatic-backup-trigger.browser-DwOV3H-o.js",
+          "raw": 2021,
+          "gzip": 886
+        },
+        {
+          "file": "assets/backup-BFGZKYWZ.js",
+          "raw": 7748,
+          "gzip": 2576
+        },
+        {
+          "file": "assets/blueprints-CPG2w82f.js",
+          "raw": 14200,
+          "gzip": 4728
+        },
+        {
+          "file": "assets/client-COL04vSV.js",
+          "raw": 65737,
+          "gzip": 20328
+        },
+        {
+          "file": "assets/client-DtQ205HX.js",
+          "raw": 11110,
+          "gzip": 3921
+        },
+        {
+          "file": "assets/db-worker-piI_c3T0.js",
+          "raw": 193880,
+          "gzip": 48333
+        },
+        {
+          "file": "assets/import-session-coordinator-DZpycMZ6.js",
+          "raw": 9176,
+          "gzip": 3331
+        },
+        {
+          "file": "assets/import-worker-BQZYoqhX.js",
+          "raw": 86469,
+          "gzip": 21470
+        },
+        {
+          "file": "assets/import-worker-client-CXx0iuUB.js",
+          "raw": 6277,
+          "gzip": 2369
+        },
+        {
+          "file": "assets/index-B2VbjlG5.css",
+          "raw": 48394,
+          "gzip": 11568
+        },
+        {
+          "file": "assets/index-CYoUjJ-p.js",
+          "raw": 491054,
+          "gzip": 145154
+        },
+        {
+          "file": "assets/new-app-import-B7hTujaT.js",
+          "raw": 8086,
+          "gzip": 3250
+        },
+        {
+          "file": "assets/planner-authority-BzcoE_2C.js",
+          "raw": 2676,
+          "gzip": 1148
+        },
+        {
+          "file": "assets/planner-command-B_P79A2-.js",
+          "raw": 9190,
+          "gzip": 2948
+        },
+        {
+          "file": "assets/planner-pipeline-entry-B9sssVCs.js",
+          "raw": 7206,
+          "gzip": 2610
+        },
+        {
+          "file": "assets/production-app-lifecycle-CVKEZFKY.js",
+          "raw": 19865,
+          "gzip": 6171
+        },
+        {
+          "file": "assets/production-backup.browser-CY41T7hL.js",
+          "raw": 23787,
+          "gzip": 7316
+        },
+        {
+          "file": "assets/sqlite3-BVKGSWc-.wasm",
+          "raw": 864752,
+          "gzip": 401933
+        },
+        {
+          "file": "assets/sqlite3-opfs-async-proxy-D_xnb1D8.js",
+          "raw": 32289,
+          "gzip": 10433
+        },
+        {
+          "file": "assets/sqlite3-worker1-DFC-uqlG.js",
+          "raw": 211723,
+          "gzip": 62853
+        },
+        {
+          "file": "assets/state-digest-DNxs7KTu.js",
+          "raw": 2862,
+          "gzip": 1312
+        },
+        {
+          "file": "assets/worker-authority-DTpBYPGl.js",
+          "raw": 315549,
+          "gzip": 70151
+        },
+        {
+          "file": "assets/xlsx-adapter-DSaRkzUY.js",
+          "raw": 25848,
+          "gzip": 8730
+        },
+        {
+          "file": "index.html",
+          "raw": 1091,
+          "gzip": 639
+        },
+        {
+          "file": "panel-runtime.iife.js",
+          "raw": 81093,
+          "gzip": 19380
+        }
+      ],
+      "limits": {
+        "raw": 3250000,
+        "gzip": 1100000
+      },
+      "passed": false
+    }
+  ]
+}

@@ -13,6 +13,7 @@ export type MutationRouteEnforcement =
   | "shadow"
   | "boot"
   | "lifecycle-control"
+  | "lifecycle-authority"
   | "authority"
   | "planner-authority"
   | "authority-store-port"
@@ -31,8 +32,13 @@ const route = (
 export const DB_WORKER_ROUTE_CENSUS = Object.freeze({
   boot: route("boot", "lifecycle"),
   shutdown: route("lifecycle-control", "lifecycle"),
-  forkApp: route("unavailable", "lifecycle"),
-  deleteApp: route("unavailable", "lifecycle"),
+  createApp: route("lifecycle-authority", "lifecycle"),
+  switchApp: route("lifecycle-authority", "lifecycle"),
+  renameApp: route("lifecycle-authority", "lifecycle"),
+  forkApp: route("lifecycle-authority", "lifecycle"),
+  deleteApp: route("lifecycle-authority", "lifecycle"),
+  importNewApp: route("lifecycle-authority", "live"),
+  undoNewAppImport: route("lifecycle-authority", "live"),
   seed: route("authority", "live"),
   firstRunEvidence: route("read", "none"),
   firstEverydayActionTarget: route("read", "none"),

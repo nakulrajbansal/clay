@@ -83,6 +83,7 @@ type PendingPreview = {
 let pending: PendingPreview | null = null;
 let pipelineRun: Promise<IntentOutcome> | null = null;
 let shuttingDown = false;
+let lifecycleTransitioning = false;
 let shutdownRun: Promise<null> | null = null;
 let activeOperations = 0;
 let storeAdmissionClosed = false;
@@ -107,11 +108,11 @@ function beginCountedOperation(closed: boolean): () => void {
 }
 
 function beginWorkerOperation(): () => void {
-  return beginCountedOperation(shuttingDown);
+  return beginCountedOperation(shuttingDown || lifecycleTransitioning);
 }
 
 function beginStoreOperation(): () => void {
-  return beginCountedOperation(storeAdmissionClosed);
+  return beginCountedOperation(storeAdmissionClosed || lifecycleTransitioning);
 }
 
 function waitForWorkerIdle(): Promise<void> {
@@ -432,6 +433,18 @@ function failClosedMutation(route: string): never {
     `production mutation '${route}' is unavailable until it is authority-routed`);
 }
 
+function projectAuthority(target: ProductionStoreAuthority): WorkerBootProjection {
+  const info = target.bootInfo();
+  return Object.freeze({
+    persistent: true as const,
+    seeded: info.seeded,
+    shellId: info.shellId,
+    selectedAppInstanceId: info.selectedAppInstanceId,
+    catalogGeneration: info.catalogGeneration,
+    apps: info.apps.map(app => Object.freeze({ ...app })),
+  });
+}
+
 function enforceProductionMutationRoute(op: string): void {
   const classification = DB_WORKER_ROUTE_CENSUS[op as keyof typeof DB_WORKER_ROUTE_CENSUS];
   if (!classification)
@@ -443,25 +456,16 @@ async function bootProductionAuthority(input: unknown): Promise<WorkerBootProjec
   const workerAuthority = await import("@clay/kernel/worker-authority");
   const captured = workerAuthority.captureBrowserBootInput(input);
   const key = JSON.stringify(captured);
-  const project = (target: ProductionStoreAuthority): WorkerBootProjection => {
-    const info = target.bootInfo();
-    return Object.freeze({
-      persistent: true as const,
-      seeded: info.seeded,
-      shellId: info.shellId,
-      selectedAppInstanceId: info.selectedAppInstanceId,
-      catalogGeneration: info.catalogGeneration,
-      apps: info.apps.map(app => Object.freeze({ ...app })),
-    });
-  };
   if (authority) {
     const info = authority.bootInfo();
     if (captured.requestedAppId !== null
         && captured.requestedAppId !== info.selectedAppInstanceId
         && !openedBootAliases?.has(captured.requestedAppId))
-      throw new ClayError("E_CATALOG_CONFLICT",
-        "boot requested a different target than the opened worker authority");
-    return project(authority);
+      throw new ClayError(
+        "E_CATALOG_CONFLICT",
+        "boot requested a different target than the opened worker authority",
+      );
+    return projectAuthority(authority);
   }
   if (authorityBoot) {
     if (authorityBoot.key !== key)
@@ -475,7 +479,7 @@ async function bootProductionAuthority(input: unknown): Promise<WorkerBootProjec
       candidate = await workerAuthority.ProductionStoreAuthority.bootBrowser(captured);
       await candidate.reconcileInterruptedPlannerAttempts();
       const candidateStore = candidate.readStore();
-      const projection = project(candidate);
+      const projection = projectAuthority(candidate);
       authority = candidate;
       store = candidateStore;
       persistent = true;
@@ -497,6 +501,126 @@ async function bootProductionAuthority(input: unknown): Promise<WorkerBootProjec
     return await current;
   } finally {
     if (authorityBoot === inFlight) authorityBoot = null;
+  }
+}
+
+function captureLifecyclePayload(
+  payload: Record<string, unknown>,
+  keys: readonly string[],
+): Record<string, unknown> {
+  const actual = Reflect.ownKeys(payload);
+  const expected = [...keys].sort();
+  if (actual.some(key => typeof key !== "string") || actual.length !== expected.length
+      || (actual as string[]).slice().sort().some((key, index) => key !== expected[index]))
+    throw new ClayError("E_CATALOG_UNAVAILABLE", "lifecycle payload has unknown fields");
+  const captured: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const key of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(payload, key);
+    if (!descriptor || !("value" in descriptor) || descriptor.enumerable !== true)
+      throw new ClayError("E_CATALOG_UNAVAILABLE", "lifecycle payload field is not plain data");
+    captured[key] = descriptor.value;
+  }
+  return captured;
+}
+
+async function runAppLifecycle(
+  route: "createApp" | "forkApp" | "switchApp" | "renameApp" | "deleteApp",
+  payload: Record<string, unknown>,
+  req: Request,
+): Promise<WorkerBootProjection> {
+  if (lifecycleTransitioning || activeOperations !== 1)
+    throw new ClayError("E_CONFLICT", "finish active work before changing apps");
+  if (pending !== null || pipelineRun !== null)
+    throw new ClayError("E_CONFLICT", "keep or discard the open preview before changing apps");
+  const requestId = authorityRequestId(req);
+  let captured: Record<string, unknown>;
+  if (route === "createApp") captured = {
+    kind: "create", requestId,
+    ...captureLifecyclePayload(payload, ["displayName", "shellId"]),
+  };
+  else if (route === "forkApp") {
+    captureLifecyclePayload(payload, []);
+    captured = { kind: "fork", requestId };
+  } else if (route === "switchApp") captured = {
+    kind: "switch", requestId,
+    ...captureLifecyclePayload(payload, ["appInstanceId"]),
+  };
+  else if (route === "renameApp") captured = {
+    kind: "rename", requestId,
+    ...captureLifecyclePayload(payload, ["appInstanceId", "displayName", "shellId"]),
+  };
+  else captured = {
+    kind: "delete", requestId,
+    ...captureLifecyclePayload(payload, ["appInstanceId"]),
+  };
+
+  lifecycleTransitioning = true;
+  try {
+    if (importCoordinator && (await importCoordinator).hasOpenSession())
+      throw new ClayError("E_CONFLICT", "cancel the open import before changing apps");
+    await Promise.all([...storeServers].map(server => server.quiesce()));
+    for (const port of storePorts) {
+      try { port.close(); } catch { /* already closed */ }
+    }
+    storePorts.clear();
+    storeServers.clear();
+    const target = mustAuthority();
+    authority = null;
+    store = null;
+    authorityBoot = null;
+    openedBootAliases = null;
+    importCoordinator = null;
+    let next: ProductionStoreAuthority | null = null;
+    try {
+      next = await target.executeAppLifecycle(captured);
+      authority = next;
+      store = next.readStore();
+      persistent = true;
+      const projection = projectAuthority(next);
+      openedBootAliases = new Set([projection.selectedAppInstanceId]);
+      return projection;
+    } catch (error) {
+      try { next?.close(); } catch { /* partially reopened authority */ }
+      try { target.close(); } catch { /* lifecycle may already have closed it */ }
+      persistent = false;
+      throw error;
+    }
+  } finally {
+    lifecycleTransitioning = false;
+  }
+}
+
+async function runNewAppImport(
+  mode: "commit" | "undo",
+  payload: Record<string, unknown>,
+  req: Request,
+): Promise<unknown> {
+  if (lifecycleTransitioning || activeOperations !== 1)
+    throw new ClayError("E_CONFLICT", "finish active work before importing another app");
+  if (pending !== null || pipelineRun !== null)
+    throw new ClayError("E_CONFLICT", "keep or discard the open preview before importing");
+  if (importCoordinator && (await importCoordinator).hasOpenSession())
+    throw new ClayError("E_CONFLICT", "cancel the open import before importing another app");
+  const bindingKey = Object.hasOwn(payload, "firstRunTarget") ? "firstRunTarget" : "createRequestId";
+  const capturedPayload = captureLifecyclePayload(payload, [bindingKey, mode === "commit" ? "payload" : "importRequestId"]);
+  lifecycleTransitioning = true;
+  try {
+    const target = mustAuthority();
+    const binding = bindingKey === "firstRunTarget"
+      ? { firstRunTarget: capturedPayload.firstRunTarget } : { createRequestId: capturedPayload.createRequestId };
+    return mode === "commit"
+      ? await target.executeNewAppImport({
+        ...binding,
+        requestId: authorityRequestId(req),
+        payload: capturedPayload.payload,
+      })
+      : await target.undoNewAppImport({
+        ...binding,
+        importRequestId: capturedPayload.importRequestId,
+        requestId: authorityRequestId(req),
+      });
+  } finally {
+    lifecycleTransitioning = false;
   }
 }
 
@@ -1046,8 +1170,20 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       return bootProductionAuthority(p);
     case "shutdown":
       return quiesceWorker(req);
+    case "createApp":
+      return runAppLifecycle("createApp", p, req);
     case "forkApp":
+      return runAppLifecycle("forkApp", p, req);
+    case "switchApp":
+      return runAppLifecycle("switchApp", p, req);
+    case "renameApp":
+      return runAppLifecycle("renameApp", p, req);
     case "deleteApp":
+      return runAppLifecycle("deleteApp", p, req);
+    case "importNewApp":
+      return runNewAppImport("commit", p, req);
+    case "undoNewAppImport":
+      return runNewAppImport("undo", p, req);
     case "importTable":
       return failClosedMutation(req.op);
     case "beginImport":

@@ -170,6 +170,92 @@ export const AppCatalogSnapshotV1 = z.object({
 });
 export type AppCatalogSnapshotV1 = z.infer<typeof AppCatalogSnapshotV1>;
 
+const LifecycleJobId = z.string().regex(/^job_[a-z2-7]{26}$/);
+const LifecycleStorageKey = z.string()
+  .regex(/^(?:ns_[a-z2-7]{26}|[a-zA-Z0-9_][a-zA-Z0-9_-]{0,79})$/);
+export const LifecyclePhysicalTargetV1 = z.object({
+  appInstanceId: AppInstanceId,
+  generationId: GenerationId,
+  namespaceId: NamespaceId,
+  storageKey: LifecycleStorageKey,
+  userFile: z.string().min(1).max(128),
+  systemFile: z.string().min(1).max(128),
+  storageKind: z.enum(["legacy", "generation"]),
+  displayName: CatalogDisplayName,
+  shellId: CatalogShellId,
+}).strict().superRefine((value, context) => {
+  const generation = value.storageKey === value.namespaceId
+    && value.userFile === `/${value.namespaceId}-user.db`
+    && value.systemFile === `/${value.namespaceId}-system.db`;
+  const legacy = value.storageKey === "default"
+    ? value.userFile === "/user.db" && value.systemFile === "/system.db"
+    : value.userFile === `/app-${value.storageKey}-user.db`
+      && value.systemFile === `/app-${value.storageKey}-system.db`;
+  if ((value.storageKind === "generation" && !generation)
+      || (value.storageKind === "legacy" && !legacy))
+    context.addIssue({ code: "custom", message: "lifecycle physical target is not canonical" });
+});
+export type LifecyclePhysicalTargetV1 = z.infer<typeof LifecyclePhysicalTargetV1>;
+
+export const PendingTargetLifecycleJobV1 = z.object({
+  schema: z.literal(1),
+  kind: z.enum(["create", "fork", "cleanup"]),
+  jobId: LifecycleJobId,
+  authorityIncarnationId: AuthorityIncarnationId,
+  requestId: RequestId,
+  operationId: OperationId,
+  requestSha256: Sha256,
+  declaredCatalogGeneration: UInt64Decimal,
+  expectedTarget: TargetEvidenceV1,
+  target: LifecyclePhysicalTargetV1,
+  createdAt: CanonicalInstant,
+  recoveryFence: WriteFenceV1.optional(),
+}).strict().superRefine((value, context) => {
+  if (value.declaredCatalogGeneration === "0")
+    context.addIssue({ code: "custom", message: "lifecycle declaration generation cannot be zero" });
+  if (value.kind !== "cleanup" && value.target.storageKind !== "generation")
+    context.addIssue({ code: "custom", message: "new lifecycle targets must use generation storage" });
+  if (value.target.appInstanceId === value.expectedTarget.appInstanceId
+      || value.target.generationId === value.expectedTarget.activeGenerationId)
+    context.addIssue({ code: "custom", message: "created app target must have fresh identity" });
+});
+export type PendingTargetLifecycleJobV1 = z.infer<typeof PendingTargetLifecycleJobV1>;
+
+const LegacyAppLifecycleReceiptV1 = z.object({
+  schema: z.literal(1),
+  kind: z.enum(["create", "fork", "switch", "rename", "delete"]),
+  jobId: LifecycleJobId,
+  authorityIncarnationId: AuthorityIncarnationId,
+  requestId: RequestId,
+  requestSha256: Sha256,
+  operationId: OperationId,
+  requestedAppInstanceId: AppInstanceId.nullable(),
+  resultingSelectedAppInstanceId: AppInstanceId,
+  completedCatalogGeneration: UInt64Decimal,
+  completedAt: CanonicalInstant,
+}).strict();
+/** v1 is retained for historical readback only. All new/replayable outcomes are v2. */
+export const AppLifecycleReceiptV1 = z.discriminatedUnion("schema", [
+  LegacyAppLifecycleReceiptV1,
+  LegacyAppLifecycleReceiptV1.extend({
+    schema: z.literal(2),
+    resultTarget: TargetEvidenceV1,
+    resultDisplayName: CatalogDisplayName,
+    resultShellId: CatalogShellId,
+  }).strict(),
+]).superRefine((value, context) => {
+  const explicitTarget = value.kind === "switch" || value.kind === "rename"
+    || value.kind === "delete";
+  if (explicitTarget !== (value.requestedAppInstanceId !== null))
+    context.addIssue({ code: "custom", message: "lifecycle receipt request target is inconsistent" });
+  if ((value.kind === "switch" || value.kind === "rename")
+      && value.requestedAppInstanceId !== value.resultingSelectedAppInstanceId)
+    context.addIssue({ code: "custom", message: "lifecycle receipt selected target is inconsistent" });
+  if (value.schema === 2 && value.resultTarget.appInstanceId !== value.resultingSelectedAppInstanceId)
+    context.addIssue({ code: "custom", message: "lifecycle receipt result target is inconsistent" });
+});
+export type AppLifecycleReceiptV1 = z.infer<typeof AppLifecycleReceiptV1>;
+
 export const CatalogCasPublicationV1 = z.object({
   schema: z.literal(1),
   authorityIncarnationId: AuthorityIncarnationId,

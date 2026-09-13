@@ -136,6 +136,10 @@ export class ImportSessionCoordinator {
 
   constructor(private readonly authority: ProductionStoreAuthority) {}
 
+  hasOpenSession(): boolean {
+    return this.session !== null;
+  }
+
   private selectedAppId(): string {
     return this.authority.bootInfo().selectedAppInstanceId;
   }

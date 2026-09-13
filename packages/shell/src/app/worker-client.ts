@@ -83,6 +83,24 @@ export type BootInfo = {
 
 export type WorkerMutationContext = Readonly<{ requestId: string }>;
 
+export type NewAppTableImport = Readonly<{
+  table: string;
+  columns: readonly Readonly<{
+    name: string;
+    type: "text" | "number" | "date" | "enum";
+    values?: readonly string[];
+  }>[];
+  rows: readonly Readonly<Record<string, unknown>>[];
+}>;
+
+export type NewAppImportResult = Readonly<{
+  appInstanceId: string;
+  table: string;
+  imported: number;
+  columns: number;
+  version: 1;
+}>;
+
 export type AuthorityCommitNotice = Readonly<{
   appInstanceId: string;
   activeGenerationId: string;
@@ -1037,6 +1055,19 @@ export class WorkerClient {
     return completion;
   }
 
+  private lifecycleCall(
+    op: "createApp" | "forkApp" | "switchApp" | "renameApp" | "deleteApp",
+    payload: Record<string, unknown>,
+    context: WorkerMutationContext,
+  ): DurableMutationPromise<BootInfo> {
+    const request = this.mutationCall<unknown>(op, payload, context);
+    const completion = request.then(parseBootInfo) as DurableMutationPromise<BootInfo>;
+    Object.defineProperty(completion, "requestId", {
+      value: request.requestId, enumerable: true, configurable: false, writable: false,
+    });
+    return completion;
+  }
+
   /** Mint once at the user-operation boundary and pass the same context to a
    * reconstructed WorkerClient when an authenticated response was lost. */
   createMutationContext(): WorkerMutationContext {
@@ -1429,16 +1460,64 @@ export class WorkerClient {
     }
   }
 
-  deleteApp(appId: string, context: WorkerMutationContext): Promise<null> {
-    return this.mutationCall("deleteApp", { appId }, context);
+  createApp(
+    displayName: string, shellId: string, context: WorkerMutationContext,
+  ): DurableMutationPromise<BootInfo> {
+    return this.lifecycleCall("createApp", { displayName, shellId }, context);
   }
-  forkApp(newAppId: string, context: WorkerMutationContext): Promise<null> {
-    return this.mutationCall("forkApp", { newAppId }, context);
+  switchApp(
+    appInstanceId: string, context: WorkerMutationContext,
+  ): DurableMutationPromise<BootInfo> {
+    return this.lifecycleCall("switchApp", { appInstanceId }, context);
+  }
+  renameApp(
+    appInstanceId: string,
+    displayName: string,
+    context: WorkerMutationContext,
+    shellId: string | null = null,
+  ): DurableMutationPromise<BootInfo> {
+    return this.lifecycleCall(
+      "renameApp", { appInstanceId, displayName, shellId }, context,
+    );
+  }
+  forkApp(context: WorkerMutationContext): DurableMutationPromise<BootInfo> {
+    return this.lifecycleCall("forkApp", {}, context);
+  }
+  deleteApp(
+    appInstanceId: string, context: WorkerMutationContext,
+  ): DurableMutationPromise<BootInfo> {
+    return this.lifecycleCall("deleteApp", { appInstanceId }, context);
+  }
+  importNewApp(
+    binding: string | TargetEvidenceV1,
+    payload: NewAppTableImport,
+    context: WorkerMutationContext,
+  ): Promise<NewAppImportResult> {
+    return this.mutationCall("importNewApp", {
+      ...(typeof binding === "string" ? { createRequestId: binding } : { firstRunTarget: binding }), payload,
+    }, context);
+  }
+  undoNewAppImport(
+    binding: string | TargetEvidenceV1,
+    importRequestId: string,
+    context: WorkerMutationContext,
+  ): Promise<Readonly<{ appInstanceId: string; undone: true; version: 0 }>> {
+    return this.mutationCall(
+      "undoNewAppImport", {
+        ...(typeof binding === "string" ? { createRequestId: binding } : { firstRunTarget: binding }), importRequestId,
+      }, context,
+    );
   }
   async status(): Promise<StatusInfo> {
     const access = Object.freeze({ ...this.#modelAccess });
     const status = await this.ephemeralCall<Omit<StatusInfo, "modelConnection">>("status");
     return { ...status, modelConnection: await this.#modelConnection(access) };
+  }
+  async requestPersist(): Promise<Readonly<{ persisted: boolean }>> {
+    const result = await this.ephemeralCall<unknown>("requestPersist");
+    if (!exactRecord(result, ["persisted"]) || typeof result.persisted !== "boolean")
+      throw new Error("invalid persistence permission response");
+    return Object.freeze({ persisted: result.persisted });
   }
   seed(shellId: string, context: WorkerMutationContext): Promise<null> {
     return this.mutationCall("seed", { shellId }, context);

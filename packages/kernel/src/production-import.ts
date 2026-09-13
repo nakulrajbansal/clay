@@ -198,6 +198,8 @@ const STORE_REGISTRY: ClayStore["registrySnapshot"] = ClayStore.prototype.regist
 const STORE_VALIDATION_REGISTRY: ClayStore["validationRegistrySnapshot"] =
   ClayStore.prototype.validationRegistrySnapshot;
 const STORE_LIVE_PANELS: ClayStore["livePanels"] = ClayStore.prototype.livePanels;
+const STORE_GET_SETTING: ClayStore["getSetting"] = ClayStore.prototype.getSetting;
+const STORE_SET_SETTING: ClayStore["setSetting"] = ClayStore.prototype.setSetting;
 const DERIVE_INVERSE: typeof deriveInverse = deriveInverse;
 
 /** Execute only on a disposable stage or inside the coordinator's physical transaction. */
@@ -243,5 +245,9 @@ export function executeCapturedTableImport(
   });
   for (let index = 0; index < input.rows.length; index++)
     STORE_INSERT.call(store, table, input.rows[index] as Record<string, unknown>);
+  // Activation survives bounded table Undo; this is part of the same physical
+  // import transaction and never changes an existing committed starter identity.
+  if (STORE_GET_SETTING.call(store, "shell_id") === undefined)
+    STORE_SET_SETTING.call(store, "shell_id", "blank");
   return Object.freeze({ table, imported: input.rows.length, columns: input.columns.length });
 }

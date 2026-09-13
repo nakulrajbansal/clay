@@ -17,7 +17,8 @@ import type {
   AuthenticatedFormat5RestoreGrant,
   BackupFailureReasonCode,
 } from "@clay/kernel/recovery";
-import { WorkerClient, type RecoveryRecordCandidate } from "./worker-client";
+import { WorkerClient, type BootInfo, type RecoveryRecordCandidate } from "./worker-client";
+import { beginAppSetup, readAppSetup, saveAppSetup, finishAppSetup } from "./app-setup-intent";
 import {
   LatestRequestGate, beginLazySession, createRetryingLoader, runLatestRequest,
 } from "./async-lifecycle";
@@ -45,8 +46,7 @@ import { ImportReview, type ReviewedImportFile } from "./ImportReview";
 import { TimeSlider } from "./TimeSlider";
 import { AppSwitcher } from "./AppSwitcher";
 import {
-  addForkEntry, currentApp, currentAppId, deriveAppName, listApps,
-  removeApp, renameApp, replaceAppCache, setCurrentApp, shellName, updateCachedApp, type AppEntry,
+  currentApp, currentAppId, listApps, replaceAppCache, shellName, type AppEntry,
 } from "./apps";
 import {
   THEMES, applyThemeToRoot, getThemeId, panelThemeCss, setThemeId as saveThemeId, themeById,
@@ -322,6 +322,7 @@ export function App(): React.JSX.Element {
   const restoreToRef = useRef<(version: number) => Promise<void>>(async () => {});
   const firstRunOnboarding = useRef(false);
   const firstRunTargetId = useRef<string | null>(null);
+  const onboardingCreatesApp = useRef(false);
   const [phase, setPhase] = useState<Phase>("loading");
   const [apps, setApps] = useState<AppEntry[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
@@ -335,7 +336,7 @@ export function App(): React.JSX.Element {
   const [bootError, setBootError] = useState<string | null>(null);
   const [onboardingError, setOnboardingError] = useState<string | null>(null);
   const [pendingImport, setPendingImport] = useState<{
-    operationId: string; fileName: string; parsed: ReviewedImportFile;
+    fileName: string; displayName: string; parsed: ReviewedImportFile;
   } | null>(null);
   const [firstSuccess, setFirstSuccess] = useState<FirstSuccessState | null>(null);
   const [deviceProtectionState, setDeviceProtectionState] =
@@ -734,7 +735,19 @@ export function App(): React.JSX.Element {
         ));
         setHasKey(hasModelAccess());
 
-        if (!boot.seeded) {
+        const pendingSetup = readAppSetup(sessionStorage);
+        if (pendingSetup) {
+          onboardingCreatesApp.current = pendingSetup.createsApp && pendingSetup.stage === "target";
+          firstRunOnboarding.current = true;
+          firstRunTargetId.current = pendingSetup.targetAppInstanceId ?? pendingSetup.sourceAppInstanceId;
+          setApps(boot.apps);
+          setCurrentId(boot.selectedAppInstanceId);
+          setPendingImport(pendingSetup.reviewed);
+          setOnboardingError("An app setup was interrupted. Retry to reconcile the same request; no app will be deleted automatically.");
+          setPhase("onboarding");
+          return;
+        }
+        if (!boot.seeded && boot.shellId === null) {
           firstRunOnboarding.current = true;
           firstRunTargetId.current = boot.selectedAppInstanceId;
           setApps(boot.apps);
@@ -798,17 +811,54 @@ export function App(): React.JSX.Element {
     setBusy(true);
     setOnboardingError(null);
     try {
-      if (!firstRunOnboarding.current)
-        throw new Error("Creating another app is not available in this MVP.");
-      const targetId = firstRunTargetId.current;
-      if (!targetId) throw new Error("authoritative first-run app is unavailable");
-      updateCachedApp(targetId, shellName(id), id);
+      const sourceId = currentIdRef.current;
+      if (!sourceId) throw new Error("The authority-selected source app is unavailable.");
+      let setup = beginAppSetup(sessionStorage, { kind: "starter", sourceAppInstanceId: sourceId,
+        createsApp: onboardingCreatesApp.current, displayName: shellName(id), shellId: id, reviewed: null,
+      }, mutationContext);
+      id = setup.shellId as StarterShellId;
+      let lifecycleBoot = await client().boot({ requestedAppId: null, appCache: [] });
+      if (setup.stage === "target" && setup.createsApp) {
+        lifecycleBoot = await withTimeout(
+          client().createApp(setup.displayName, id, { requestId: setup.createRequestId }),
+          20_000,
+          "Creating the app",
+        );
+        // A retry after starter seeding fails must reuse this exact worker-
+        // published app instead of minting another lifecycle request/target.
+        onboardingCreatesApp.current = false;
+        firstRunOnboarding.current = true;
+        firstRunTargetId.current = lifecycleBoot.selectedAppInstanceId;
+      } else if (setup.stage === "target" && !lifecycleBoot.seeded) {
+        const firstRunId = setup.sourceAppInstanceId;
+        if (lifecycleBoot.selectedAppInstanceId !== firstRunId)
+          throw new Error("The app selected for setup has changed. No starter was applied.");
+        lifecycleBoot = await withTimeout(
+          client().renameApp(firstRunId, setup.displayName, { requestId: setup.nameRequestId }, id),
+          20_000,
+          "Naming the app",
+        );
+      }
+      if (setup.targetAppInstanceId !== null && lifecycleBoot.selectedAppInstanceId !== setup.targetAppInstanceId)
+        throw new Error("The app selected for setup has changed. No starter was applied.");
+      setup = { ...setup, stage: "apply", targetAppInstanceId: lifecycleBoot.selectedAppInstanceId };
+      saveAppSetup(sessionStorage, setup);
+      replaceAppCache(lifecycleBoot.apps, lifecycleBoot.selectedAppInstanceId);
+      dataStoreRef.current = null;
+      const targetId = lifecycleBoot.selectedAppInstanceId;
       const canonicalHistory = await withTimeout(
         client().history(), 20_000, "Checking the first-run app",
       );
-      if (canonicalHistory.length === 0) await withTimeout(
-        client().seed(id, mutationContext()), 20_000, "Setting up the app",
-      );
+      if (canonicalHistory.length === 0) {
+        await withTimeout(client().seed(id, { requestId: setup.applyRequestId }), 20_000, "Setting up the app");
+      } else {
+        // A presentation failure is not permission to relabel an already committed starter.
+        const committedStarter = await client().getSetting<string>("shell_id");
+        if (!committedStarter) throw new Error("The committed starter identity is unavailable. Existing history was kept.");
+        id = committedStarter as StarterShellId;
+      }
+      setup = { ...setup, stage: "committed" };
+      saveAppSetup(sessionStorage, setup);
       await updateFirstSuccess({
         type: "app_created",
         path: id === "blank" ? "blank" : "recommended",
@@ -821,15 +871,16 @@ export function App(): React.JSX.Element {
       if (!protection.target || protection.target.appInstanceId !== targetId)
         throw new Error("the opened app changed while setup was finishing");
       setDeviceProtectionState(protection);
-      updateCachedApp(targetId, shellName(id), id);
-      setApps(listApps());
+      setApps(lifecycleBoot.apps);
       setCurrentId(targetId);
       setLiveBridge(makeBridge(client(), "live", pushToast, recordFault, askConfirm,
         (table, rowId) => openRecordRef.current(table, rowId)));
       await refreshPanels();
+      finishAppSetup(sessionStorage);
       setFeed([{ kind: "info", text: "Your app is ready. Describe any change to reshape it." }]);
       firstRunOnboarding.current = false;
       firstRunTargetId.current = null;
+      onboardingCreatesApp.current = false;
       setPhase("main");
       recordPrivateMetric({ type: "app_ready", entry: "new_starter" });
     } catch (error) {
@@ -849,49 +900,43 @@ export function App(): React.JSX.Element {
       .catch(() => undefined)
       .finally(() => window.location.reload());
   };
-  const switchApp = (id: string): void => { setCurrentApp(id); reloadApp(); };
-  const newApp = (): void => pushToast(
-    "Creating another app is not available in this MVP.", "default",
-  );
-  const reviewedImportFromFile = async (file: File): Promise<ReviewedImportFile> => {
-    const text = await file.text();
-    const lines = text.split(/\r?\n/).filter(line => line.trim() !== "");
-    const headers = (lines[0] ?? "value").split(/\t|,/).slice(0, 20)
-      .map((header, index) => {
-        const cleaned = header.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_")
-          .replace(/^_+|_+$/g, "");
-        return (cleaned || `column_${index + 1}`).replace(/^[0-9]/, "c_$&").slice(0, 40);
-      });
-    const acceptedRows = Math.max(0, Math.min(5_000, lines.length - 1));
-    const table = (file.name.replace(/\.[^.]+$/, "").toLowerCase()
-      .replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "imported_data")
-      .replace(/^[0-9]/, "t_$&").slice(0, 40);
-    return {
-      table,
-      columns: headers.map(name => ({ name, type: "text" })),
-      rows: lines.slice(1, acceptedRows + 1).map(line => {
-        const cells = line.split(/\t|,/);
-        return Object.fromEntries(headers.map((name, index) => [name, cells[index] ?? ""]));
-      }),
-      review: {
-        sourceRows: Math.max(0, lines.length - 1),
-        acceptedRows,
-        skippedRows: 0,
-        truncatedRows: Math.max(0, lines.length - 1 - acceptedRows),
-        sourceColumns: headers.length,
-        acceptedColumns: headers.length,
-        truncatedColumns: 0,
-      },
-    };
+  const publishLifecycleBoot = (boot: BootInfo): void => {
+    replaceAppCache(boot.apps, boot.selectedAppInstanceId);
+    setApps(boot.apps);
+    setCurrentId(boot.selectedAppInstanceId);
+  };
+  const switchApp = async (id: string): Promise<void> => {
+    if (id === currentIdRef.current) return;
+    setBusy(true);
+    try {
+      publishLifecycleBoot(await withTimeout(
+        client().switchApp(id, mutationContext()), 20_000, "Switching apps",
+      ));
+    } catch (error) {
+      pushToast(error instanceof Error ? error.message : "Couldn’t switch apps.", "danger");
+    } finally {
+      reloadApp();
+    }
+  };
+  const newApp = (): void => {
+    onboardingCreatesApp.current = true;
+    setPendingImport(null);
+    setOnboardingError(null);
+    setPhase("onboarding");
   };
   const reviewNewAppImport = async (file: File): Promise<void> => {
     setBusy(true);
     setOnboardingError(null);
     try {
+      if (readAppSetup(sessionStorage)) throw new Error("Finish the pending setup before choosing another file.");
+      const parserAppId = currentIdRef.current;
+      if (!parserAppId) throw new Error("The current app identity is unavailable.");
+      const { newAppImportDisplayName, parseNewAppImportFile } =
+        await import("./new-app-import");
       setPendingImport({
-        operationId: `import-${crypto.randomUUID?.() ?? Date.now()}`,
         fileName: file.name,
-        parsed: await reviewedImportFromFile(file),
+        displayName: newAppImportDisplayName(file.name),
+        parsed: await parseNewAppImportFile(file, parserAppId),
       });
     } catch (error) {
       setOnboardingError(error instanceof Error ? error.message : String(error));
@@ -899,37 +944,157 @@ export function App(): React.JSX.Element {
       setBusy(false);
     }
   };
-  const importNewApp = async (): Promise<void> => {
-    const warning = persistent ? "Continue anyway?" : "Continue with temporary storage?";
-    if (!(await askConfirm(`${warning} Safe creation of another imported app is not available yet. Your existing apps were not changed.`)))
-      return;
-    setOnboardingError("Safe creation of another imported app is not available yet. Your existing apps were not changed.");
+  const confirmUnprotectedNewApp = async (): Promise<boolean> => {
+    let persisted = false;
+    try { persisted = (await client().requestPersist()).persisted; }
+    catch { /* An unreadable permission result is not protection evidence. */ }
+    if (persisted) return true;
+    return askConfirm(persistent
+      ? "Clay cannot protect this imported app on this device yet. If you continue, it could be lost if this browser clears its site data. Continue anyway?"
+      : "Clay cannot protect this imported app on this device yet. If you continue, it can disappear when this tab closes. Continue with temporary storage?");
   };
-  // B5 fork-and-explore: duplicate the current app (data + history + panels)
-  // into a new one, then switch to it — experiment freely without risking the
-  // original. Uses the validated .clay export/import path in the worker.
-  const forkApp = async (): Promise<void> => {
-    const cur = currentApp();
-    const entry = addForkEntry(`${cur?.name ?? "My app"} (copy)`, cur?.shellId ?? "blank");
+  const importNewApp = async (): Promise<void> => {
+    const reviewed = pendingImport;
+    if (!reviewed) return;
+    if (!await confirmUnprotectedNewApp()) return;
+    setBusy(true);
+    setOnboardingError(null);
     try {
-      await withTimeout(client().forkApp(entry.id, mutationContext()),
-        20000, "Duplicating the app");
-    } catch {
-      removeApp(entry.id);
-      pushToast("Couldn’t duplicate this app.", "danger");
-      return;
+      const sourceId = currentIdRef.current;
+      if (!sourceId) throw new Error("The authority-selected source app is unavailable.");
+      let setup = beginAppSetup(sessionStorage, { kind: "import", sourceAppInstanceId: sourceId,
+        createsApp: onboardingCreatesApp.current, displayName: reviewed.displayName, shellId: "blank", reviewed,
+      }, mutationContext);
+      const original = setup.reviewed;
+      if (!original) throw new Error("The retained import preview is unavailable.");
+      let created = await client().boot({ requestedAppId: null, appCache: [] });
+      if (setup.stage === "target") {
+        if (setup.createsApp) {
+          created = await withTimeout(client().createApp(setup.displayName, "blank",
+            { requestId: setup.createRequestId }), 20_000, "Creating the imported app");
+        } else {
+          if (created.selectedAppInstanceId !== setup.sourceAppInstanceId || created.apps.length !== 1 || created.seeded)
+            throw new Error("First-run import requires the original empty selected app.");
+          if (!setup.firstRunTarget) {
+            const target = (await client().deviceProtection()).target;
+            if (!target) throw new Error("The first-run target identity is unavailable.");
+            setup = { ...setup, firstRunTarget: { appInstanceId: target.appInstanceId,
+              activeGenerationId: target.activeGenerationId, lineageEpoch: target.lineageEpoch,
+              protectionRevision: target.stateRevision, digestSchema: 1, stateSha256: target.stateDigest } };
+            saveAppSetup(sessionStorage, setup);
+          }
+          created = await client().renameApp(setup.sourceAppInstanceId, setup.displayName,
+            { requestId: setup.nameRequestId });
+        }
+        setup = { ...setup, targetAppInstanceId: created.selectedAppInstanceId, stage: "apply" };
+        saveAppSetup(sessionStorage, setup);
+      }
+      if (created.selectedAppInstanceId !== setup.targetAppInstanceId)
+        throw new Error("The selected app changed. The retained import has not been applied to another target.");
+      publishLifecycleBoot(created);
+      dataStoreRef.current = null;
+      const importBinding = setup.firstRunTarget ?? setup.createRequestId;
+      const result = await withTimeout(client().importNewApp(
+        importBinding,
+        {
+          table: original.parsed.table,
+          columns: original.parsed.columns,
+          rows: original.parsed.rows,
+        },
+        { requestId: setup.applyRequestId },
+      ), 30_000, "Importing the reviewed rows");
+      if (result.appInstanceId !== created.selectedAppInstanceId)
+        throw new Error("The imported app identity changed before read-back.");
+      setup = { ...setup, stage: "committed" };
+      saveAppSetup(sessionStorage, setup);
+      firstRunOnboarding.current = false;
+      firstRunTargetId.current = null;
+      onboardingCreatesApp.current = false;
+      setLiveBridge(makeBridge(client(), "live", pushToast, recordFault, askConfirm,
+        (table, rowId) => openRecordRef.current(table, rowId)));
+      await refreshPanels();
+      finishAppSetup(sessionStorage);
+      setPendingImport(null);
+      setWorkspaceMode("customize");
+      setPhase("main");
+      pushToast(
+        `Imported ${result.imported} row${result.imported === 1 ? "" : "s"} into a new app.`,
+        "success",
+        {
+          label: "Undo",
+          run: () => {
+            void (async () => {
+              setBusy(true);
+              try {
+                await client().undoNewAppImport(
+                  importBinding, setup.applyRequestId, { requestId: setup.undoRequestId },
+                );
+                dataStoreRef.current = null;
+                await refreshPanels();
+                pushToast("Import undone. The empty app is still available.", "success");
+              } catch (error) {
+                pushToast(error instanceof Error ? error.message : "Couldn’t undo the import.", "danger");
+              } finally {
+                setBusy(false);
+              }
+            })();
+          },
+        },
+      );
+    } catch (error) {
+      // Timeout and post-commit readback/presentation errors are outcome-ambiguous.
+      // The exact request remains retained for reconciliation. Never delete its target.
+      setOnboardingError((error instanceof Error ? error.message : String(error))
+        + " No app was deleted. Retry (or reload and retry) to reconcile the same import receipt.");
+    } finally {
+      setBusy(false);
     }
-    reloadApp();   // boot the fork (its OPFS files are now populated)
+  };
+  // Duplicate canonical state into a separately declared physical generation;
+  // the worker publishes the fresh target only after exact read-back succeeds.
+  const forkApp = async (): Promise<void> => {
+    setBusy(true);
+    try {
+      publishLifecycleBoot(await withTimeout(
+        client().forkApp(mutationContext()), 20_000, "Duplicating the app",
+      ));
+    } catch (error) {
+      pushToast(error instanceof Error ? error.message : "Couldn’t duplicate this app.", "danger");
+    } finally {
+      reloadApp();
+    }
   };
   const deleteApp = async (id: string): Promise<void> => {
     const entry = apps.find(a => a.id === id);
+    if (apps.length < 2) {
+      pushToast("Clay keeps at least one usable app on this device.", "default");
+      return;
+    }
     if (!(await askConfirm(
       `Delete “${entry?.name ?? "this app"}” and all of its data? `
       + "This cannot be undone. (Export a .clay backup first if unsure.)"))) return;
-    removeApp(id);
-    try { await client().deleteApp(id, mutationContext()); }
-    catch { /* files may already be gone */ }
-    reloadApp();
+    setBusy(true);
+    try {
+      publishLifecycleBoot(await withTimeout(
+        client().deleteApp(id, mutationContext()), 20_000, "Deleting the app",
+      ));
+    } catch (error) {
+      pushToast(error instanceof Error ? error.message : "Couldn’t delete this app.", "danger");
+    } finally {
+      reloadApp();
+    }
+  };
+  const renameCurrentApp = async (id: string, name: string): Promise<void> => {
+    setBusy(true);
+    try {
+      publishLifecycleBoot(await withTimeout(
+        client().renameApp(id, name, mutationContext()), 20_000, "Renaming the app",
+      ));
+    } catch (error) {
+      pushToast(error instanceof Error ? error.message : "Couldn’t rename this app.", "danger");
+    } finally {
+      reloadApp();
+    }
   };
 
   const handleOutcome = (outcome: IntentOutcome): void => {
@@ -1585,16 +1750,6 @@ export function App(): React.JSX.Element {
     closePreview();
     await refreshPanels();   // hot swap: keyed remount against the new blobs
     await refreshSuggestions();
-    // A blank canvas earns its name from its first build — "My app"
-    // reads unfinished; "Portfolio Dashboard" reads alive.
-    const current = currentApp();
-    if (current && current.name === "My app") {
-      const derived = deriveAppName(preview.summary);
-      if (derived) {
-        renameApp(current.id, derived);
-        setApps(listApps());
-      }
-    }
     // Rewind through the same confirmed path as History. If later versions
     // exist when this toast is clicked, they are named before truncation.
     pushToast(`Kept — your app is now v${version}`, "success", {
@@ -1998,14 +2153,11 @@ export function App(): React.JSX.Element {
         <p className="boot-error-msg">{bootError}</p>
         <div className="rail-actions">
           <button className="primary" onClick={() => window.location.reload()}>Try again</button>
-          {apps.filter(a => a.id !== currentId).map(a => (
-            <button key={a.id} onClick={() => switchApp(a.id)}>Open “{a.name}”</button>
-          ))}
-          <button className="link danger" onClick={() => void resetApp()}>Start over…</button>
         </div>
         <p className="boot-error-hint">
-          Tip: this often clears on a second try. If it keeps failing, open the
-          console (F12) and send the [clay boot] error.
+          Your stored apps were kept. Switching and deleting are unavailable until
+          the authoritative catalog opens successfully. Close any other Clay tab,
+          then try again; do not clear this site's storage.
         </p>
       </div>
       {confirmDialog}
@@ -2019,7 +2171,13 @@ export function App(): React.JSX.Element {
           busy={busy}
           error={onboardingError}
           onCancel={!firstRunOnboarding.current && listApps().length > 0
-            ? () => setPhase("main") : undefined}
+            ? () => {
+              if (readAppSetup(sessionStorage)) {
+                setOnboardingError("Finish reconciling the pending setup before returning to the app. No app was deleted.");
+                return;
+              }
+              setPhase("main");
+            } : undefined}
         />
         {pendingImport ? (
           <ImportReview
@@ -2027,7 +2185,27 @@ export function App(): React.JSX.Element {
             parsed={pendingImport.parsed}
             busy={busy}
             error={onboardingError}
-            onCancel={() => {
+            onHeaderChange={choice => {
+              if (readAppSetup(sessionStorage)) {
+                setOnboardingError("This import was already submitted. Retry its original reviewed payload before changing the header.");
+                return;
+              }
+              const reviewed = pendingImport;
+              if (!reviewed.parsed.headerReview) return;
+              void import("./new-app-import").then(({ reviewParsedNewAppRows }) => {
+                try {
+                  setPendingImport({ ...reviewed, parsed: reviewParsedNewAppRows(
+                    reviewed.fileName, reviewed.parsed.headerReview!.sourceRows, choice,
+                  ) });
+                  setOnboardingError(null);
+                } catch (error) { setOnboardingError(error instanceof Error ? error.message : String(error)); }
+              });
+            }}
+              onCancel={() => {
+                if (readAppSetup(sessionStorage)) {
+                  setOnboardingError("This import may already be committed. Reload and retry to reconcile its receipt; no app was deleted.");
+                  return;
+                }
               setPendingImport(null);
               setOnboardingError(null);
             }}
@@ -2325,10 +2503,10 @@ export function App(): React.JSX.Element {
       <AppSwitcher
         apps={apps}
         currentId={currentId}
-        onSwitch={switchApp}
+        onSwitch={id => { void switchApp(id); }}
         onNew={newApp}
         onFork={() => void forkApp()}
-        onRename={(id, name) => { renameApp(id, name); setApps(listApps()); }}
+        onRename={(id, name) => { void renameCurrentApp(id, name); }}
         onDelete={id => void deleteApp(id)}
         onOpenSearch={() => openCommandPalette(false)}
         onOpenAutomations={() => openAutomations()}

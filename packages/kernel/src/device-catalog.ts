@@ -5,11 +5,13 @@ import {
   LeaseId,
   NamespaceId,
   OperationId,
+  RequestId,
   ReleaseId,
   Sha256,
   UInt64Decimal,
 } from "@clay/schema";
 import {
+  AppLifecycleReceiptV1,
   AppCatalogEntryV1,
   AppCatalogSnapshotV1,
   CatalogCasPublicationV1,
@@ -17,6 +19,7 @@ import {
   CatalogReservationRecoveryV1,
   CatalogRevisionReservationV1,
   ImmutableAppGenerationV1,
+  PendingTargetLifecycleJobV1,
   TargetEvidenceV1,
   WriteFenceV1,
 } from "@clay/schema/catalog";
@@ -33,12 +36,14 @@ import {
   type ArchivePendingJobV1 as ArchivePendingJob,
 } from "@clay/schema/archive";
 import type {
+  AppLifecycleReceiptV1 as AppLifecycleReceipt,
   AppCatalogSnapshotV1 as AppCatalogSnapshot,
   CatalogCasPublicationV1 as CatalogCasPublication,
   CatalogGenerationEventV1 as CatalogGenerationEvent,
   CatalogReservationRecoveryV1 as CatalogReservationRecovery,
   CatalogRevisionReservationV1 as CatalogRevisionReservation,
   ImmutableAppGenerationV1 as ImmutableAppGeneration,
+  PendingTargetLifecycleJobV1 as PendingTargetLifecycleJob,
   TargetEvidenceV1 as TargetEvidence,
   WriteFenceV1 as WriteFence,
 } from "@clay/schema/catalog";
@@ -48,6 +53,7 @@ import {
   type DurableNamespaceInventoryEntry,
 } from "./durable-inventory";
 import { ClayError } from "./errors";
+import { readCatalogPendingRows, LIFECYCLE_PROVENANCE, LIFECYCLE_RECEIPT_PROVENANCE } from "./catalog-pending";
 
 const CATALOG_DDL = [
   `CREATE TABLE catalog.catalog_root(
@@ -423,7 +429,48 @@ export type AddAppTargetInput = {
   sourceProvenanceId?: string | null;
 };
 
+export type DeclareAppGenerationInput = {
+  kind: "create" | "fork";
+  requestId: string;
+  expectedCatalogGeneration: string;
+  expectedTarget: TargetEvidence;
+  target: PendingTargetLifecycleJob["target"];
+  jobId: string;
+  operationId: string;
+  requestSha256: string;
+  fence: WriteFence;
+  nowMs: number;
+};
+
+export type PublishDeclaredAppGenerationInput = {
+  expectedCatalogGeneration: string;
+  jobId: string;
+  publishedTarget: TargetEvidence;
+  fence: WriteFence;
+  nowMs: number;
+};
+
+export type DeleteSelectedAppInput = {
+  requestId: string;
+  expectedCatalogGeneration: string;
+  expectedTarget: TargetEvidence;
+  jobId: string;
+  operationId: string;
+  requestSha256: string;
+  fence: WriteFence;
+  nowMs: number;
+};
+
+export type CompleteLifecycleCleanupInput = {
+  expectedCatalogGeneration: string;
+  jobId: string;
+  cleanupConfirmed: true;
+  fence: WriteFence;
+  nowMs: number;
+};
+
 export type UpdateSelectedAppMetadataInput = {
+  recordNoop?: boolean;
   expectedCatalogGeneration: string;
   displayName: string;
   shellId: string;
@@ -433,11 +480,23 @@ export type UpdateSelectedAppMetadataInput = {
 };
 
 export type SelectAppInput = {
+  recordNoop?: boolean;
   expectedCatalogGeneration: string;
   appInstanceId: string;
   operationId: string;
   fence: WriteFence;
   nowMs: number;
+};
+
+export type RecordAppLifecycleReceiptInput = {
+  kind: "switch" | "rename";
+  requestId: string;
+  requestSha256: string;
+  jobId: string;
+  operationId: string;
+  requestedAppInstanceId: string;
+  expectedCatalogGeneration: string;
+  completedAt: string;
 };
 
 export type PublishBackupInput = {
@@ -669,28 +728,78 @@ function readSnapshotClosed(driver: DbDriver): AppCatalogSnapshot {
 }
 
 function readPendingRestoreJobs(driver: DbDriver): ArchivePendingJob[] {
-  return driver.select("SELECT * FROM catalog.pending_jobs ORDER BY job_id")
-    .map(row => {
-      const parsed = ArchivePendingJobV1.parse({
-        schema: 1,
-        jobId: row.job_id,
-        authorityIncarnationId: row.authority_incarnation_id,
-        appInstanceId: row.app_instance_id,
-        generationId: row.generation_id,
-        namespaceId: row.namespace_id,
-        kind: row.kind,
-        state: row.state,
-        operationId: row.operation_id,
-        sourceArchiveSha256: row.source_archive_sha256,
-        sourceProvenanceId: row.source_provenance_id,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-      });
-      if (parsed.kind !== "restore_as_new" || parsed.state !== "prepared"
-          || parsed.appInstanceId === null || parsed.updatedAt < parsed.createdAt)
-        throw new Error("pending restore job is invalid");
-      return parsed;
-    });
+  return readCatalogPendingRows(driver).flatMap(row => row.kind === "restore" ? [row.value] : []);
+}
+
+function lifecycleStorageKind(kind: PendingTargetLifecycleJob["kind"]): string {
+  return `app_lifecycle_${kind}`;
+}
+
+function readPendingLifecycleJobs(driver: DbDriver): PendingTargetLifecycleJob[] {
+  return readCatalogPendingRows(driver).flatMap(row => row.kind === "lifecycle" ? [row.value] : []);
+}
+
+function insertPendingLifecycleJob(driver: DbDriver, job: PendingTargetLifecycleJob): void {
+  driver.exec(
+    `INSERT INTO catalog.pending_jobs(
+       job_id,authority_incarnation_id,app_instance_id,generation_id,namespace_id,
+       kind,state,operation_id,source_archive_sha256,source_provenance_id,created_at,updated_at
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [job.jobId, job.authorityIncarnationId, job.target.appInstanceId,
+      job.target.generationId, job.target.namespaceId, lifecycleStorageKind(job.kind),
+      JSON.stringify(job), job.operationId, job.requestSha256, LIFECYCLE_PROVENANCE,
+      job.createdAt, job.createdAt],
+  );
+}
+
+function readAppLifecycleReceipts(driver: DbDriver): AppLifecycleReceipt[] {
+  return readCatalogPendingRows(driver).flatMap(row => row.kind === "receipt" ? [row.value] : []);
+}
+
+function storeAppLifecycleReceipt(
+  driver: DbDriver,
+  receipt: AppLifecycleReceipt,
+  selected: SelectedTargetStorage,
+): void {
+  const existing = driver.select(
+    "SELECT job_id FROM catalog.pending_jobs WHERE job_id = ?", [receipt.jobId],
+  );
+  if (existing.length > 1)
+    throw new ClayError("E_CATALOG_CONFLICT", "lifecycle receipt identity is ambiguous");
+  if (existing.length === 0) {
+    if (driver.select(
+      "SELECT id_value FROM catalog.id_registry WHERE id_value = ?", [receipt.jobId],
+    ).length !== 0)
+      throw new ClayError("E_CATALOG_CONFLICT", "lifecycle request identity was reused");
+    driver.exec(
+      "INSERT INTO catalog.id_registry(id_value,id_kind,retained_at) VALUES (?,'job',?)",
+      [receipt.jobId, receipt.completedAt],
+    );
+    driver.exec(
+      `INSERT INTO catalog.pending_jobs(
+         job_id,authority_incarnation_id,app_instance_id,generation_id,namespace_id,
+         kind,state,operation_id,source_archive_sha256,source_provenance_id,created_at,updated_at
+       ) VALUES (?,?,?,?,?,'app_lifecycle_receipt',?,?,?,?,?,?)`,
+      [receipt.jobId, receipt.authorityIncarnationId,
+        receipt.requestedAppInstanceId ?? receipt.resultingSelectedAppInstanceId,
+        selected.target.activeGenerationId, selected.namespaceId, JSON.stringify(receipt),
+        receipt.operationId, receipt.requestSha256, LIFECYCLE_RECEIPT_PROVENANCE,
+        receipt.completedAt, receipt.completedAt],
+    );
+    return;
+  }
+  driver.exec(
+    `UPDATE catalog.pending_jobs SET
+       authority_incarnation_id = ?, app_instance_id = ?, generation_id = ?, namespace_id = ?,
+       kind = 'app_lifecycle_receipt', state = ?, operation_id = ?,
+       source_archive_sha256 = ?, source_provenance_id = ?, created_at = ?, updated_at = ?
+     WHERE job_id = ?`,
+    [receipt.authorityIncarnationId,
+      receipt.requestedAppInstanceId ?? receipt.resultingSelectedAppInstanceId,
+      selected.target.activeGenerationId, selected.namespaceId, JSON.stringify(receipt),
+      receipt.operationId, receipt.requestSha256, LIFECYCLE_RECEIPT_PROVENANCE,
+      receipt.completedAt, receipt.completedAt, receipt.jobId],
+  );
 }
 
 function readValidatedCatalog(
@@ -724,12 +833,14 @@ function readValidatedCatalog(
 
     const appRows = driver.select("SELECT * FROM catalog.app_entries ORDER BY app_instance_id");
     const apps = new Map<string, AppCatalogSnapshot["entries"][number]>();
+    const tombstonedApps = new Set<string>();
     for (const row of appRows) {
       const tombstoned = Number(row.tombstoned);
       if (tombstoned !== 0 && tombstoned !== 1) throw new Error("invalid app tombstone");
       const app = AppCatalogEntryV1.parse({ ...mapLiveEntry({ ...row, tombstoned: 0 }) });
       requireRetained(app.appInstanceId, "app");
       apps.set(app.appInstanceId, app);
+      if (tombstoned === 1) tombstonedApps.add(app.appInstanceId);
     }
     if (snapshot.entries.length !== appRows.filter(row => Number(row.tombstoned) === 0).length)
       throw new Error("live app projection is incomplete");
@@ -765,6 +876,83 @@ function readValidatedCatalog(
       generations.set(descriptor.generationId, descriptor);
       generationOperations.set(descriptor.generationId, operationId);
     }
+
+    const lifecycleJobs = readPendingLifecycleJobs(driver);
+    if (lifecycleJobs.length > 1)
+      throw new Error("multiple pending lifecycle targets are unsupported");
+    for (const job of lifecycleJobs) {
+      const declaredGeneration = BigInt(job.declaredCatalogGeneration);
+      const currentGeneration = BigInt(snapshot.catalogGeneration);
+      const interveningEvents = readCatalogGenerationEvents(driver).filter(event =>
+        BigInt(event.catalogGeneration) > declaredGeneration);
+      if (job.authorityIncarnationId !== snapshot.authorityIncarnationId
+          || declaredGeneration > currentGeneration
+          || interveningEvents.some(event => event.eventKind !== "lease_issued"
+            || event.appInstanceId !== job.expectedTarget.appInstanceId))
+        throw new Error("pending lifecycle authority is stale");
+      const expectedApp = apps.get(job.expectedTarget.appInstanceId);
+      if (!expectedApp || tombstonedApps.has(expectedApp.appInstanceId)
+          || snapshot.selectedAppInstanceId !== expectedApp.appInstanceId
+          || !sameTarget(job.expectedTarget, {
+            appInstanceId: expectedApp.appInstanceId,
+            activeGenerationId: expectedApp.activeGenerationId,
+            lineageEpoch: expectedApp.currentLineageEpoch,
+            protectionRevision: expectedApp.currentProtectionRevision,
+            digestSchema: expectedApp.digestSchema,
+            stateSha256: expectedApp.stateSha256,
+          }))
+        throw new Error("pending lifecycle source target is no longer current");
+      requireRetained(job.jobId, "job");
+      requireRetained(job.operationId, "operation");
+      requireRetained(job.target.appInstanceId, "app");
+      requireRetained(job.target.generationId, "generation");
+      requireRetained(job.target.namespaceId, "namespace");
+      const manifests = driver.select(
+        "SELECT * FROM catalog.legacy_bootstrap_manifest WHERE operation_id = ?",
+        [job.operationId],
+      );
+      if (job.kind === "cleanup") {
+        const retired = generations.get(job.target.generationId);
+        if (manifests.length !== 0 || !retired
+            || retired.target.appInstanceId !== job.target.appInstanceId
+            || retired.namespaceId !== job.target.namespaceId
+            || driver.select(
+              "SELECT storage_key FROM catalog.generations WHERE generation_id = ? AND storage_key = ?",
+              [job.target.generationId, job.target.storageKey],
+            ).length !== 1
+            || !tombstonedApps.has(job.target.appInstanceId))
+          throw new Error("pending lifecycle cleanup does not name a retired target");
+      } else {
+        const manifest = manifests[0];
+        if (manifests.length !== 1 || !manifest
+            || manifest.storage_key !== job.target.storageKey
+            || manifest.user_file !== job.target.userFile
+            || manifest.system_file !== job.target.systemFile
+            || manifest.storage_kind !== job.target.storageKind
+            || manifest.app_instance_id !== job.target.appInstanceId
+            || manifest.generation_id !== job.target.generationId
+            || manifest.namespace_id !== job.target.namespaceId
+            || manifest.display_name !== job.target.displayName
+            || manifest.shell_id !== job.target.shellId
+            || Number(manifest.selected) !== 1
+            || manifest.declared_at !== job.createdAt)
+          throw new Error("pending lifecycle physical declaration is incomplete");
+        if (apps.has(job.target.appInstanceId) || generations.has(job.target.generationId))
+          throw new Error("pending lifecycle target is not fresh");
+      }
+    }
+    const lifecycleReceipts = readAppLifecycleReceipts(driver);
+    const lifecycleRequestIds = new Set<string>();
+    for (const receipt of lifecycleReceipts) {
+      if (receipt.authorityIncarnationId !== snapshot.authorityIncarnationId
+          || lifecycleRequestIds.has(receipt.requestId))
+        throw new Error("lifecycle receipt authority or request identity is invalid");
+      lifecycleRequestIds.add(receipt.requestId);
+      requireRetained(receipt.jobId, "job");
+      requireRetained(receipt.operationId, "operation");
+    }
+    if (lifecycleJobs.some(job => lifecycleRequestIds.has(job.requestId)))
+      throw new Error("lifecycle request is both pending and complete");
     for (const app of apps.values()) {
       const generation = generations.get(app.activeGenerationId);
       if (!generation
@@ -1116,12 +1304,49 @@ function readValidatedCatalog(
           || event.operationId !== stored.operationId)
         throw new Error("catalog backup publication event is missing");
     }
+    for (const receipt of lifecycleReceipts) {
+      const event = eventByGeneration.get(receipt.completedCatalogGeneration);
+      const expectedKind = receipt.kind === "rename" ? "app_metadata"
+        : receipt.kind === "create" || receipt.kind === "fork" ? "app_seed"
+          : "app_selected";
+      const resultApp = apps.get(receipt.resultingSelectedAppInstanceId);
+      if (!event || event.eventKind !== expectedKind
+          || event.operationId !== receipt.operationId
+          || event.appInstanceId !== receipt.resultingSelectedAppInstanceId
+          || event.at !== receipt.completedAt || !resultApp)
+        throw new Error("lifecycle receipt does not match its catalog event");
+      if ((receipt.kind === "switch" || receipt.kind === "rename")
+          && receipt.requestedAppInstanceId !== receipt.resultingSelectedAppInstanceId)
+        throw new Error("lifecycle receipt selected the wrong requested app");
+      if (receipt.kind === "delete"
+          && (!receipt.requestedAppInstanceId
+            || !tombstonedApps.has(receipt.requestedAppInstanceId)))
+        throw new Error("lifecycle deletion receipt does not retain its victim");
+      if (receipt.kind === "create" || receipt.kind === "fork") {
+        const generation = generations.get(resultApp.activeGenerationId);
+        if (!generation
+            || (receipt.kind === "create" && generation.sourceProvenanceId !== null)
+            || (receipt.kind === "fork" && generation.sourceProvenanceId === null))
+          throw new Error("lifecycle creation receipt has invalid provenance");
+      }
+      const receiptRows = driver.select(
+        "SELECT generation_id,namespace_id FROM catalog.pending_jobs WHERE job_id = ?",
+        [receipt.jobId],
+      );
+      const storedGeneration = receiptRows[0]
+        ? generations.get(String(receiptRows[0].generation_id)) : undefined;
+      if (receiptRows.length !== 1 || !storedGeneration
+          || storedGeneration.namespaceId !== String(receiptRows[0]!.namespace_id)
+          || storedGeneration.target.appInstanceId !== receipt.resultingSelectedAppInstanceId)
+        throw new Error("lifecycle receipt storage relationship is invalid");
+    }
     for (const [value, kind] of retained) {
       if (kind !== "job" && !referenced.has(value))
         throw new Error(`unreferenced retained ${kind} identity`);
     }
     const pendingRestores = readPendingRestoreJobs(driver);
-    if (pendingRestores.length > (options.allowPendingRestore ? 1 : 0))
+    if (pendingRestores.length > (options.allowPendingRestore ? 1 : 0)
+        || (pendingRestores.length > 0 && lifecycleJobs.length > 0))
       throw new Error("unsupported catalog work is present");
     for (const job of pendingRestores) {
       if (job.authorityIncarnationId !== snapshot.authorityIncarnationId
@@ -1383,6 +1608,594 @@ export class DeviceCatalog {
   revisionReservations(): CatalogRevisionReservation[] {
     readValidatedCatalog(this.driver);
     return readRevisionReservations(this.driver);
+  }
+
+  generationDescriptors(): ImmutableAppGeneration[] {
+    readValidatedCatalog(this.driver);
+    return this.driver.select("SELECT * FROM catalog.generations ORDER BY generation_id")
+      .map(row => ImmutableAppGenerationV1.parse({
+        schema: 1,
+        generationId: row.generation_id,
+        namespaceId: row.namespace_id,
+        target: {
+          appInstanceId: row.app_instance_id,
+          activeGenerationId: row.generation_id,
+          lineageEpoch: row.lineage_epoch,
+          protectionRevision: row.first_revision,
+          digestSchema: row.digest_schema,
+          stateSha256: row.state_sha256,
+        },
+        sourceArchiveSha256: row.source_archive_sha256,
+        sourceProvenanceId: row.source_provenance_id,
+        sealedAt: row.sealed_at,
+        readBackAt: row.read_back_at,
+      }));
+  }
+
+  pendingLifecycleJobs(): PendingTargetLifecycleJob[] {
+    readValidatedCatalog(this.driver);
+    return readPendingLifecycleJobs(this.driver).map(job => ({
+      ...job,
+      expectedTarget: { ...job.expectedTarget },
+      target: { ...job.target },
+    }));
+  }
+
+  appLifecycleReceipt(requestId: string): AppLifecycleReceipt | null {
+    const parsed = RequestId.safeParse(requestId);
+    if (!parsed.success)
+      throw new ClayError("E_CATALOG_CONFLICT", "lifecycle request identity is invalid");
+    readValidatedCatalog(this.driver);
+    const receipt = readAppLifecycleReceipts(this.driver)
+      .find(candidate => candidate.requestId === parsed.data);
+    return receipt ? { ...receipt } : null;
+  }
+
+  assertAppLifecycleReplay(receipt: AppLifecycleReceipt): AppLifecycleReceipt {
+    if (receipt.schema !== 2)
+      throw new ClayError("E_CATALOG_CONFLICT", "historical lifecycle receipt lacks canonical replay evidence; the app was kept");
+    const snapshot = this.snapshot();
+    const stored = this.appLifecycleReceipt(receipt.requestId);
+    const selected = this.selectedTargetStorage().target;
+    const entry = snapshot.entries.find(app => app.appInstanceId === selected.appInstanceId);
+    if (!stored || JSON.stringify(stored) !== JSON.stringify(receipt)
+        || !sameTarget(selected, receipt.resultTarget)
+        || !entry || entry.displayName !== receipt.resultDisplayName || entry.shellId !== receipt.resultShellId
+        || readCatalogGenerationEvents(this.driver).some(event =>
+          BigInt(event.catalogGeneration) > BigInt(receipt.completedCatalogGeneration)
+          && (event.eventKind !== "lease_issued" || event.appInstanceId !== selected.appInstanceId)))
+      throw new ClayError("E_CATALOG_CONFLICT", "lifecycle replay result is stale; reconcile the current catalog");
+    return AppLifecycleReceiptV1.parse(stored);
+  }
+
+  recordAppLifecycleReceipt(
+    input: RecordAppLifecycleReceiptInput,
+  ): AppLifecycleReceipt {
+    const requestId = RequestId.safeParse(input.requestId);
+    const requestSha256 = Sha256.safeParse(input.requestSha256);
+    const operationId = OperationId.safeParse(input.operationId);
+    const expectedGeneration = UInt64Decimal.safeParse(input.expectedCatalogGeneration);
+    const requestedApp = AppInstanceId.safeParse(input.requestedAppInstanceId);
+    if (!requestId.success || !requestSha256.success || !operationId.success
+        || !expectedGeneration.success || !requestedApp.success
+        || !/^job_[a-z2-7]{26}$/.test(input.jobId)
+        || (input.kind !== "switch" && input.kind !== "rename"))
+      throw new ClayError("E_CATALOG_CONFLICT", "lifecycle receipt is invalid");
+    return this.driver.tx(() => {
+      const before = readValidatedCatalog(this.driver);
+      const existing = readAppLifecycleReceipts(this.driver)
+        .find(candidate => candidate.requestId === requestId.data);
+      if (existing) {
+        if (existing.requestSha256 !== requestSha256.data
+            || existing.operationId !== operationId.data || existing.kind !== input.kind
+            || existing.jobId !== input.jobId
+            || existing.requestedAppInstanceId !== requestedApp.data
+            || existing.resultingSelectedAppInstanceId !== requestedApp.data
+            || existing.completedCatalogGeneration !== expectedGeneration.data
+            || existing.completedAt !== input.completedAt)
+          throw new ClayError("E_CATALOG_CONFLICT", "lifecycle request identity was reused");
+        return this.assertAppLifecycleReplay(existing);
+      }
+      if (readPendingLifecycleJobs(this.driver)
+        .some(job => job.requestId === requestId.data))
+        throw new ClayError("E_CATALOG_CONFLICT", "lifecycle request is still pending");
+      const selected = this.selectedTargetStorage();
+      const metadata = before.entries.find(app => app.appInstanceId === selected.target.appInstanceId)!;
+      const receipt = AppLifecycleReceiptV1.safeParse({
+        schema: 2,
+        kind: input.kind,
+        jobId: input.jobId,
+        authorityIncarnationId: before.authorityIncarnationId,
+        requestId: requestId.data,
+        requestSha256: requestSha256.data,
+        operationId: operationId.data,
+        requestedAppInstanceId: requestedApp.data,
+        resultingSelectedAppInstanceId: selected.target.appInstanceId,
+        resultTarget: selected.target,
+        resultDisplayName: metadata.displayName,
+        resultShellId: metadata.shellId,
+        completedCatalogGeneration: before.catalogGeneration,
+        completedAt: input.completedAt,
+      });
+      const event = readCatalogGenerationEvents(this.driver).at(-1);
+      const expectedEvent = input.kind === "switch" ? "app_selected" : "app_metadata";
+      if (!receipt.success || before.catalogGeneration !== expectedGeneration.data
+          || selected.target.appInstanceId !== requestedApp.data
+          || !event || event.eventKind !== expectedEvent
+          || event.operationId !== operationId.data || event.at !== input.completedAt)
+        throw new ClayError("E_CATALOG_CONFLICT", "lifecycle receipt event is stale");
+      storeAppLifecycleReceipt(this.driver, receipt.data, selected);
+      readValidatedCatalog(this.driver);
+      const persisted = readAppLifecycleReceipts(this.driver)
+        .find(candidate => candidate.requestId === requestId.data);
+      if (!persisted || JSON.stringify(persisted) !== JSON.stringify(receipt.data))
+        throw new ClayError("E_CATALOG_CONFLICT", "lifecycle receipt failed read-back");
+      return { ...persisted };
+    });
+  }
+
+  declareAppGeneration(input: DeclareAppGenerationInput): PendingTargetLifecycleJob {
+    const expectedCatalogGeneration = UInt64Decimal.safeParse(input.expectedCatalogGeneration);
+    const expectedTarget = TargetEvidenceV1.safeParse(input.expectedTarget);
+    const fence = WriteFenceV1.safeParse(input.fence);
+    if (!expectedCatalogGeneration.success || !expectedTarget.success || !fence.success
+        || !["create", "fork"].includes(input.kind) || !validClockValue(input.nowMs))
+      throw new ClayError("E_CATALOG_CONFLICT", "app generation declaration is invalid");
+    let createdAt: string;
+    try { createdAt = new Date(input.nowMs).toISOString(); }
+    catch {
+      throw new ClayError("E_CATALOG_CONFLICT", "app generation declaration time is invalid");
+    }
+    try {
+      return this.driver.tx(() => {
+        const before = readValidatedCatalog(this.driver);
+        const replay = readPendingLifecycleJobs(this.driver)
+          .find(job => job.operationId === input.operationId);
+        if (replay) {
+          const requested = PendingTargetLifecycleJobV1.safeParse({
+            schema: 1,
+            kind: input.kind,
+            jobId: input.jobId,
+            authorityIncarnationId: before.authorityIncarnationId,
+            requestId: input.requestId,
+            operationId: input.operationId,
+            requestSha256: input.requestSha256,
+            declaredCatalogGeneration: replay.declaredCatalogGeneration,
+            expectedTarget: expectedTarget.data,
+            target: input.target,
+            createdAt: replay.createdAt,
+          });
+          if (!requested.success || JSON.stringify(requested.data) !== JSON.stringify(replay))
+            throw new ClayError("E_CATALOG_CONFLICT", "lifecycle operation identity was reused");
+          return replay;
+        }
+        this.assertWriteFence(fence.data, input.nowMs);
+        const selected = this.selectedTargetStorage().target;
+        if (before.catalogGeneration !== expectedCatalogGeneration.data
+            || before.authorityIncarnationId !== fence.data.authorityIncarnationId
+            || before.writeEpoch !== fence.data.writeEpoch
+            || !sameTarget(selected, expectedTarget.data)
+            || this.legacyBootstrapManifest().length !== 0
+            || readPendingLifecycleJobs(this.driver).length !== 0
+            || readPendingRestoreJobs(this.driver).length !== 0
+            || readRevisionReservations(this.driver).some(item => item.state === "reserved"))
+          throw new ClayError("E_CATALOG_CONFLICT", "app generation declaration CAS is stale");
+        const job = PendingTargetLifecycleJobV1.safeParse({
+          schema: 1,
+          kind: input.kind,
+          jobId: input.jobId,
+          authorityIncarnationId: before.authorityIncarnationId,
+          requestId: input.requestId,
+          operationId: input.operationId,
+          requestSha256: input.requestSha256,
+          declaredCatalogGeneration: before.catalogGeneration,
+          expectedTarget: expectedTarget.data,
+          target: input.target,
+          createdAt,
+        });
+        if (!job.success)
+          throw new ClayError("E_CATALOG_CONFLICT", "app generation declaration is invalid");
+        const retained = [
+          [job.data.jobId, "job"],
+          [job.data.operationId, "operation"],
+          [job.data.target.appInstanceId, "app"],
+          [job.data.target.generationId, "generation"],
+          [job.data.target.namespaceId, "namespace"],
+        ] as const;
+        for (const [value] of retained) {
+          if (this.driver.select(
+            "SELECT id_value FROM catalog.id_registry WHERE id_value = ?", [value],
+          ).length !== 0)
+            throw new ClayError("E_CATALOG_CONFLICT", "lifecycle identity was already retained");
+        }
+        for (const [value, kind] of retained) this.driver.exec(
+          "INSERT INTO catalog.id_registry(id_value,id_kind,retained_at) VALUES (?,?,?)",
+          [value, kind, createdAt],
+        );
+        this.driver.exec(
+          `INSERT INTO catalog.legacy_bootstrap_manifest(
+             storage_key,user_file,system_file,storage_kind,app_instance_id,generation_id,
+             namespace_id,operation_id,display_name,shell_id,selected,declared_at
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,1,?)`,
+          [job.data.target.storageKey, job.data.target.userFile, job.data.target.systemFile,
+            job.data.target.storageKind, job.data.target.appInstanceId,
+            job.data.target.generationId, job.data.target.namespaceId,
+            job.data.operationId, job.data.target.displayName, job.data.target.shellId, createdAt],
+        );
+        insertPendingLifecycleJob(this.driver, job.data);
+        readValidatedCatalog(this.driver);
+        const persisted = readPendingLifecycleJobs(this.driver);
+        if (persisted.length !== 1 || JSON.stringify(persisted[0]) !== JSON.stringify(job.data))
+          throw new ClayError("E_CATALOG_CONFLICT", "lifecycle declaration failed read-back");
+        return persisted[0]!;
+      });
+    } catch (error) {
+      if (error instanceof ClayError && [
+        "E_CATALOG_CONFLICT", "E_CATALOG_UNAVAILABLE", "E_STALE_WRITE_EPOCH",
+        "E_GENERATION_NOT_SELECTED",
+      ].includes(error.code)) throw error;
+      throw new ClayError("E_CATALOG_UNAVAILABLE", "app generation declaration failed");
+    }
+  }
+
+  /** Transactionally takes over one exact pending job before any physical unlink. */
+  claimPendingLifecycleRecovery(input: {
+    expectedJob: PendingTargetLifecycleJob; fence: WriteFence; nowMs: number;
+  }): PendingTargetLifecycleJob {
+    return this.driver.tx(() => {
+      readValidatedCatalog(this.driver);
+      this.assertWriteFence(input.fence, input.nowMs);
+      const persisted = readPendingLifecycleJobs(this.driver).find(job => job.jobId === input.expectedJob.jobId);
+      if (!persisted || JSON.stringify(persisted) !== JSON.stringify(input.expectedJob)
+          || !sameTarget(this.selectedTargetStorage().target, persisted.expectedTarget)
+          || this.snapshot().entries.some(app => app.appInstanceId === persisted.target.appInstanceId
+            || app.activeGenerationId === persisted.target.generationId))
+        throw new ClayError("E_CATALOG_CONFLICT", "pending lifecycle recovery claim is stale");
+      const claimed = PendingTargetLifecycleJobV1.parse({ ...persisted, recoveryFence: input.fence });
+      this.driver.exec("UPDATE catalog.pending_jobs SET state = ? WHERE job_id = ? AND state = ?",
+        [JSON.stringify(claimed), claimed.jobId, JSON.stringify(persisted)]);
+      this.assertLifecycleRecoveryClaim(claimed, input.fence, input.nowMs);
+      return claimed;
+    });
+  }
+
+  assertLifecycleRecoveryClaim(job: PendingTargetLifecycleJob, fence: WriteFence, nowMs: number): void {
+    this.assertWriteFence(fence, nowMs);
+    const persisted = this.pendingLifecycleJobs().find(item => item.jobId === job.jobId);
+    if (!persisted || JSON.stringify(persisted) !== JSON.stringify(job)
+        || JSON.stringify(job.recoveryFence) !== JSON.stringify(fence))
+      throw new ClayError("E_CATALOG_CONFLICT", "pending lifecycle recovery claim is stale");
+  }
+
+  publishDeclaredAppGeneration(
+    input: PublishDeclaredAppGenerationInput,
+  ): ReturnType<DeviceCatalog["snapshot"]> {
+    const expectedCatalogGeneration = UInt64Decimal.safeParse(input.expectedCatalogGeneration);
+    const publishedTarget = TargetEvidenceV1.safeParse(input.publishedTarget);
+    const fence = WriteFenceV1.safeParse(input.fence);
+    if (!expectedCatalogGeneration.success || !publishedTarget.success || !fence.success
+        || typeof input.jobId !== "string" || !/^job_[a-z2-7]{26}$/.test(input.jobId)
+        || !validClockValue(input.nowMs))
+      throw new ClayError("E_CATALOG_CONFLICT", "app generation publication is invalid");
+    let publishedAt: string;
+    try { publishedAt = new Date(input.nowMs).toISOString(); }
+    catch {
+      throw new ClayError("E_CATALOG_CONFLICT", "app generation publication time is invalid");
+    }
+    try {
+      return this.driver.tx(() => {
+        const before = readValidatedCatalog(this.driver);
+        this.assertWriteFence(fence.data, input.nowMs);
+        const job = readPendingLifecycleJobs(this.driver)
+          .find(candidate => candidate.jobId === input.jobId);
+        if (!job || job.kind === "cleanup"
+            || (job.recoveryFence && JSON.stringify(job.recoveryFence) !== JSON.stringify(fence.data))
+            || before.catalogGeneration !== expectedCatalogGeneration.data
+            || before.authorityIncarnationId !== fence.data.authorityIncarnationId
+            || before.writeEpoch !== fence.data.writeEpoch
+            || !sameTarget(this.selectedTargetStorage().target, job.expectedTarget)
+            || publishedTarget.data.appInstanceId !== job.target.appInstanceId
+            || publishedTarget.data.activeGenerationId !== job.target.generationId
+            || publishedTarget.data.lineageEpoch !== "0"
+            || publishedTarget.data.protectionRevision !== "0"
+            || publishedTarget.data.digestSchema !== 1)
+          throw new ClayError("E_CATALOG_CONFLICT", "app generation publication CAS is stale");
+        const sourceRows = this.driver.select(
+          "SELECT operation_id FROM catalog.generations WHERE generation_id = ?",
+          [job.expectedTarget.activeGenerationId],
+        );
+        if (sourceRows.length !== 1 || typeof sourceRows[0]!.operation_id !== "string")
+          throw new ClayError("E_CATALOG_CONFLICT", "lifecycle source generation is unavailable");
+        const sourceProvenanceId = job.kind === "fork"
+          ? String(sourceRows[0]!.operation_id) : null;
+        this.driver.exec(
+          `INSERT INTO catalog.generations(
+             generation_id,app_instance_id,namespace_id,storage_key,operation_id,
+             lineage_epoch,first_revision,digest_schema,state_sha256,
+             source_archive_sha256,source_provenance_id,sealed_at,read_back_at
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [job.target.generationId, job.target.appInstanceId, job.target.namespaceId,
+            job.target.storageKey, job.operationId, publishedTarget.data.lineageEpoch,
+            publishedTarget.data.protectionRevision, publishedTarget.data.digestSchema,
+            publishedTarget.data.stateSha256, null, sourceProvenanceId, publishedAt, publishedAt],
+        );
+        this.driver.exec(
+          `INSERT INTO catalog.app_entries(
+             app_instance_id,display_name,shell_id,active_generation_id,
+             journal_genesis_generation_id,journal_genesis_lineage_epoch,
+             journal_genesis_protection_revision,journal_genesis_state_sha256,
+             current_lineage_epoch,lineage_epoch_high_water,current_protection_revision,
+             revision_high_water,digest_schema,state_sha256,tombstoned
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
+          [job.target.appInstanceId, job.target.displayName, job.target.shellId,
+            job.target.generationId, job.target.generationId,
+            publishedTarget.data.lineageEpoch, publishedTarget.data.protectionRevision,
+            publishedTarget.data.stateSha256, publishedTarget.data.lineageEpoch,
+            publishedTarget.data.lineageEpoch, publishedTarget.data.protectionRevision,
+            publishedTarget.data.protectionRevision, publishedTarget.data.digestSchema,
+            publishedTarget.data.stateSha256],
+        );
+        this.driver.exec(
+          "DELETE FROM catalog.legacy_bootstrap_manifest WHERE operation_id = ?",
+          [job.operationId],
+        );
+        const nextCatalogGeneration = incrementCounter(
+          before.catalogGeneration, "E_CATALOG_CONFLICT",
+        );
+        insertCatalogGenerationEvent(this.driver, {
+          schema: 1,
+          catalogGeneration: nextCatalogGeneration,
+          eventKind: "app_seed",
+          appInstanceId: job.target.appInstanceId,
+          operationId: job.operationId,
+          writeEpoch: fence.data.writeEpoch,
+          at: publishedAt,
+          target: publishedTarget.data,
+          displayName: job.target.displayName,
+          shellId: job.target.shellId,
+        });
+        this.driver.exec(
+          `UPDATE catalog.catalog_root
+           SET catalog_generation = ?, selected_app_instance_id = ?
+           WHERE singleton = 1 AND authority_incarnation_id = ?
+             AND catalog_generation = ? AND selected_app_instance_id = ? AND write_epoch = ?`,
+          [nextCatalogGeneration, job.target.appInstanceId, before.authorityIncarnationId,
+            before.catalogGeneration, before.selectedAppInstanceId, before.writeEpoch],
+        );
+        const receipt = AppLifecycleReceiptV1.parse({
+          schema: 2,
+          kind: job.kind,
+          jobId: job.jobId,
+          authorityIncarnationId: before.authorityIncarnationId,
+          requestId: job.requestId,
+          requestSha256: job.requestSha256,
+          operationId: job.operationId,
+          requestedAppInstanceId: null,
+          resultingSelectedAppInstanceId: job.target.appInstanceId,
+          resultTarget: publishedTarget.data,
+          resultDisplayName: job.target.displayName,
+          resultShellId: job.target.shellId,
+          completedCatalogGeneration: nextCatalogGeneration,
+          completedAt: publishedAt,
+        });
+        storeAppLifecycleReceipt(this.driver, receipt, {
+          target: publishedTarget.data,
+          namespaceId: job.target.namespaceId,
+          storageKey: job.target.storageKey,
+        });
+        const after = readValidatedCatalog(this.driver);
+        const entry = after.entries.find(candidate =>
+          candidate.appInstanceId === job.target.appInstanceId);
+        if (!entry || after.catalogGeneration !== nextCatalogGeneration
+            || after.selectedAppInstanceId !== job.target.appInstanceId
+            || entry.activeGenerationId !== job.target.generationId
+            || entry.stateSha256 !== publishedTarget.data.stateSha256
+            || readPendingLifecycleJobs(this.driver).some(candidate => candidate.jobId === job.jobId)
+            || readAppLifecycleReceipts(this.driver)
+              .filter(candidate => candidate.requestId === job.requestId).length !== 1
+            || this.legacyBootstrapManifest().some(candidate =>
+              candidate.operationId === job.operationId))
+          throw new ClayError("E_CATALOG_CONFLICT", "app generation publication failed read-back");
+        return after;
+      });
+    } catch (error) {
+      if (error instanceof ClayError && [
+        "E_CATALOG_CONFLICT", "E_CATALOG_UNAVAILABLE", "E_STALE_WRITE_EPOCH",
+        "E_GENERATION_NOT_SELECTED",
+      ].includes(error.code)) throw error;
+      throw new ClayError("E_CATALOG_UNAVAILABLE", "app generation publication failed");
+    }
+  }
+
+  deleteSelectedApp(input: DeleteSelectedAppInput): {
+    snapshot: ReturnType<DeviceCatalog["snapshot"]>;
+    cleanupJob: PendingTargetLifecycleJob;
+  } {
+    const expectedCatalogGeneration = UInt64Decimal.safeParse(input.expectedCatalogGeneration);
+    const expectedTarget = TargetEvidenceV1.safeParse(input.expectedTarget);
+    const fence = WriteFenceV1.safeParse(input.fence);
+    if (!expectedCatalogGeneration.success || !expectedTarget.success || !fence.success
+        || typeof input.jobId !== "string" || typeof input.operationId !== "string"
+        || typeof input.requestSha256 !== "string" || !validClockValue(input.nowMs))
+      throw new ClayError("E_CATALOG_CONFLICT", "app deletion is invalid");
+    let deletedAt: string;
+    try { deletedAt = new Date(input.nowMs).toISOString(); }
+    catch { throw new ClayError("E_CATALOG_CONFLICT", "app deletion time is invalid"); }
+    try {
+      return this.driver.tx(() => {
+        const before = readValidatedCatalog(this.driver);
+        this.assertWriteFence(fence.data, input.nowMs);
+        if (before.catalogGeneration !== expectedCatalogGeneration.data
+            || before.authorityIncarnationId !== fence.data.authorityIncarnationId
+            || before.writeEpoch !== fence.data.writeEpoch
+            || !sameTarget(this.selectedTargetStorage().target, expectedTarget.data)
+            || this.legacyBootstrapManifest().length !== 0
+            || readPendingLifecycleJobs(this.driver).length !== 0
+            || readPendingRestoreJobs(this.driver).length !== 0
+            || readRevisionReservations(this.driver).some(item => item.state === "reserved"))
+          throw new ClayError("E_CATALOG_CONFLICT", "app deletion CAS is stale");
+        if (before.entries.length < 2)
+          throw new ClayError("E_CATALOG_CONFLICT", "the last live app cannot be deleted");
+        const victim = before.entries.find(entry =>
+          entry.appInstanceId === expectedTarget.data.appInstanceId);
+        const fallback = [...before.entries]
+          .filter(entry => entry.appInstanceId !== expectedTarget.data.appInstanceId)
+          .sort((left, right) => left.appInstanceId.localeCompare(right.appInstanceId))[0];
+        if (!victim || !fallback)
+          throw new ClayError("E_CATALOG_CONFLICT", "the last live app cannot be deleted");
+        const victimStorage = this.selectedTargetStorage();
+        const victimPhysical = physicalNamespaceEntry(
+          victimStorage.storageKey, victimStorage.namespaceId,
+        );
+        const fallbackTarget: TargetEvidence = {
+          appInstanceId: fallback.appInstanceId,
+          activeGenerationId: fallback.activeGenerationId,
+          lineageEpoch: fallback.currentLineageEpoch,
+          protectionRevision: fallback.currentProtectionRevision,
+          digestSchema: fallback.digestSchema,
+          stateSha256: fallback.stateSha256,
+        };
+        const nextCatalogGeneration = incrementCounter(
+          before.catalogGeneration, "E_CATALOG_CONFLICT",
+        );
+        const cleanupJob = PendingTargetLifecycleJobV1.safeParse({
+          schema: 1,
+          kind: "cleanup",
+          jobId: input.jobId,
+          authorityIncarnationId: before.authorityIncarnationId,
+          requestId: input.requestId,
+          operationId: input.operationId,
+          requestSha256: input.requestSha256,
+          declaredCatalogGeneration: nextCatalogGeneration,
+          expectedTarget: fallbackTarget,
+          target: {
+            appInstanceId: victim.appInstanceId,
+            generationId: victimStorage.target.activeGenerationId,
+            namespaceId: victimStorage.namespaceId,
+            storageKey: victimStorage.storageKey,
+            userFile: victimPhysical.userFile,
+            systemFile: victimPhysical.systemFile,
+            storageKind: victimPhysical.kind,
+            displayName: victim.displayName,
+            shellId: victim.shellId,
+          },
+          createdAt: deletedAt,
+        });
+        if (!cleanupJob.success)
+          throw new ClayError("E_CATALOG_CONFLICT", "app cleanup declaration is invalid");
+        for (const [value, kind] of [
+          [cleanupJob.data.jobId, "job"], [cleanupJob.data.operationId, "operation"],
+        ] as const) {
+          if (this.driver.select(
+            "SELECT id_value FROM catalog.id_registry WHERE id_value = ?", [value],
+          ).length !== 0)
+            throw new ClayError("E_CATALOG_CONFLICT", "app deletion identity was already retained");
+          this.driver.exec(
+            "INSERT INTO catalog.id_registry(id_value,id_kind,retained_at) VALUES (?,?,?)",
+            [value, kind, deletedAt],
+          );
+        }
+        this.driver.exec(
+          "UPDATE catalog.app_entries SET tombstoned = 1 WHERE app_instance_id = ? AND tombstoned = 0",
+          [victim.appInstanceId],
+        );
+        insertPendingLifecycleJob(this.driver, cleanupJob.data);
+        insertCatalogGenerationEvent(this.driver, {
+          schema: 1,
+          catalogGeneration: nextCatalogGeneration,
+          eventKind: "app_selected",
+          appInstanceId: fallback.appInstanceId,
+          operationId: cleanupJob.data.operationId,
+          writeEpoch: fence.data.writeEpoch,
+          at: deletedAt,
+          target: fallbackTarget,
+        });
+        this.driver.exec(
+          `UPDATE catalog.catalog_root
+           SET catalog_generation = ?, selected_app_instance_id = ?
+           WHERE singleton = 1 AND authority_incarnation_id = ?
+             AND catalog_generation = ? AND selected_app_instance_id = ? AND write_epoch = ?`,
+          [nextCatalogGeneration, fallback.appInstanceId, before.authorityIncarnationId,
+            before.catalogGeneration, before.selectedAppInstanceId, before.writeEpoch],
+        );
+        const after = readValidatedCatalog(this.driver);
+        const persisted = readPendingLifecycleJobs(this.driver)
+          .find(job => job.jobId === cleanupJob.data.jobId);
+        if (!persisted || after.catalogGeneration !== nextCatalogGeneration
+            || after.selectedAppInstanceId !== fallback.appInstanceId
+            || after.entries.some(entry => entry.appInstanceId === victim.appInstanceId)
+            || JSON.stringify(persisted) !== JSON.stringify(cleanupJob.data))
+          throw new ClayError("E_CATALOG_CONFLICT", "app deletion failed read-back");
+        return { snapshot: after, cleanupJob: persisted };
+      });
+    } catch (error) {
+      if (error instanceof ClayError && [
+        "E_CATALOG_CONFLICT", "E_CATALOG_UNAVAILABLE", "E_STALE_WRITE_EPOCH",
+        "E_GENERATION_NOT_SELECTED",
+      ].includes(error.code)) throw error;
+      throw new ClayError("E_CATALOG_UNAVAILABLE", "app deletion failed");
+    }
+  }
+
+  completeLifecycleCleanup(
+    input: CompleteLifecycleCleanupInput,
+  ): ReturnType<DeviceCatalog["snapshot"]> {
+    const expectedCatalogGeneration = UInt64Decimal.safeParse(input.expectedCatalogGeneration);
+    const fence = WriteFenceV1.safeParse(input.fence);
+    if (!expectedCatalogGeneration.success || !fence.success
+        || typeof input.jobId !== "string" || !/^job_[a-z2-7]{26}$/.test(input.jobId)
+        || input.cleanupConfirmed !== true || !validClockValue(input.nowMs))
+      throw new ClayError("E_CATALOG_CONFLICT", "lifecycle cleanup completion is invalid");
+    try {
+      return this.driver.tx(() => {
+        const before = readValidatedCatalog(this.driver);
+        this.assertWriteFence(fence.data, input.nowMs);
+        const job = readPendingLifecycleJobs(this.driver)
+          .find(candidate => candidate.jobId === input.jobId && candidate.kind === "cleanup");
+        if (!job || (job.recoveryFence && JSON.stringify(job.recoveryFence) !== JSON.stringify(fence.data))
+            || before.catalogGeneration !== expectedCatalogGeneration.data
+            || before.authorityIncarnationId !== fence.data.authorityIncarnationId
+            || before.writeEpoch !== fence.data.writeEpoch
+            || !sameTarget(this.selectedTargetStorage().target, job.expectedTarget)
+            || before.entries.some(entry =>
+              entry.activeGenerationId === job.target.generationId
+              || entry.appInstanceId === job.target.appInstanceId))
+          throw new ClayError("E_CATALOG_CONFLICT", "lifecycle cleanup CAS is stale");
+        const selected = this.selectedTargetStorage();
+        const metadata = before.entries.find(app => app.appInstanceId === selected.target.appInstanceId)!;
+        const receipt = AppLifecycleReceiptV1.parse({
+          schema: 2,
+          kind: "delete",
+          jobId: job.jobId,
+          authorityIncarnationId: job.authorityIncarnationId,
+          requestId: job.requestId,
+          requestSha256: job.requestSha256,
+          operationId: job.operationId,
+          requestedAppInstanceId: job.target.appInstanceId,
+          resultingSelectedAppInstanceId: job.expectedTarget.appInstanceId,
+          resultTarget: selected.target,
+          resultDisplayName: metadata.displayName,
+          resultShellId: metadata.shellId,
+          completedCatalogGeneration: job.declaredCatalogGeneration,
+          completedAt: job.createdAt,
+        });
+        storeAppLifecycleReceipt(this.driver, receipt, selected);
+        const after = readValidatedCatalog(this.driver);
+        if (after.catalogGeneration !== before.catalogGeneration
+            || after.selectedAppInstanceId !== before.selectedAppInstanceId
+            || readPendingLifecycleJobs(this.driver).some(candidate => candidate.jobId === job.jobId)
+            || readAppLifecycleReceipts(this.driver)
+              .filter(candidate => candidate.requestId === job.requestId).length !== 1)
+          throw new ClayError("E_CATALOG_CONFLICT", "lifecycle cleanup failed read-back");
+        return after;
+      });
+    } catch (error) {
+      if (error instanceof ClayError && [
+        "E_CATALOG_CONFLICT", "E_CATALOG_UNAVAILABLE", "E_STALE_WRITE_EPOCH",
+        "E_GENERATION_NOT_SELECTED",
+      ].includes(error.code)) throw error;
+      throw new ClayError("E_CATALOG_UNAVAILABLE", "lifecycle cleanup completion failed");
+    }
   }
 
   backupRecords(appInstanceId?: string): BackupRecord[] {
@@ -1919,7 +2732,7 @@ export class DeviceCatalog {
       const app = before.entries.find(item =>
         item.appInstanceId === before.selectedAppInstanceId && !item.tombstoned);
       if (!app) throw new ClayError("E_CATALOG_CONFLICT", "selected app is unavailable");
-      if (app.displayName === input.displayName && app.shellId === input.shellId) return before;
+      if (!input.recordNoop && app.displayName === input.displayName && app.shellId === input.shellId) return before;
       if (this.driver.select(
         "SELECT id_value FROM catalog.id_registry WHERE id_value = ?", [operation.data],
       ).length !== 0)
@@ -1984,7 +2797,7 @@ export class DeviceCatalog {
             || before.writeEpoch !== fence.data.writeEpoch || !app
             || this.legacyBootstrapManifest().length !== 0)
           throw new ClayError("E_CATALOG_CONFLICT", "catalog app selection CAS is stale");
-        if (before.selectedAppInstanceId === appInstanceId.data) return before;
+        if (!input.recordNoop && before.selectedAppInstanceId === appInstanceId.data) return before;
         if (this.driver.select(
           "SELECT id_value FROM catalog.id_registry WHERE id_value = ?", [operationId.data],
         ).length !== 0)

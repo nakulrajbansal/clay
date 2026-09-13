@@ -1,4 +1,5 @@
 import { ModalDialog } from "./ModalDialog";
+import type { ImportHeaderChoice } from "@clay/kernel/import-contracts";
 
 export type ImportReviewSummary = {
   sourceRows: number;
@@ -21,6 +22,11 @@ export type ReviewedImportFile = {
   columns: ImportReviewColumn[];
   rows: Record<string, unknown>[];
   review: ImportReviewSummary;
+  headerReview?: {
+    sourceRows: string[][];
+    choice: ImportHeaderChoice;
+    confidence: "high" | "low" | "none";
+  };
 };
 
 export function ImportReview(props: {
@@ -30,6 +36,7 @@ export function ImportReview(props: {
   error?: string | null;
   onCancel: () => void;
   onConfirm: () => void;
+  onHeaderChange?: (choice: ImportHeaderChoice) => void;
 }): React.JSX.Element {
   const { review } = props.parsed;
   return (
@@ -41,8 +48,31 @@ export function ImportReview(props: {
     >
       <span className="contract-eyebrow">Review before import</span>
       <h2 id="import-review-title">Bring in {props.fileName}</h2>
-      <p>Clay has not created an app or changed any records yet.</p>
+      <p>{props.busy || props.error
+        ? "Review the proposed fields and rows below. The status message shows whether a submitted request still needs reconciliation."
+        : "No records have changed. No additional app has been created for this import."}</p>
       {props.error ? <p role="alert">{props.error}</p> : null}
+      {props.parsed.headerReview && props.onHeaderChange ? (
+        <fieldset disabled={props.busy}>
+          <legend>Does this spreadsheet have field names?</legend>
+          <label><input type="radio" name="import-header" checked={props.parsed.headerReview.choice.mode === "no_header"}
+            onChange={() => props.onHeaderChange?.({ mode: "no_header" })} />No header — keep the first row as data</label>
+          <label><input type="radio" name="import-header" checked={props.parsed.headerReview.choice.mode === "header"}
+            onChange={() => props.onHeaderChange?.({ mode: "header", sourceRow: 1 })} />Use a row as field names</label>
+          {props.parsed.headerReview.choice.mode === "header" ? <label>Header row
+            <input type="number" min={1} max={props.parsed.headerReview.sourceRows.length - 1}
+              value={props.parsed.headerReview.choice.sourceRow}
+              onChange={event => props.onHeaderChange?.({ mode: "header", sourceRow: Number(event.target.value) })} />
+          </label> : null}
+          <p>{props.parsed.headerReview.confidence === "high" ? "Suggested from the file shape. Review this choice."
+            : "The header is uncertain. No rows are removed unless you choose a header."}
+            {props.parsed.headerReview.choice.mode === "header" ? " Rows before the chosen header are excluded." : ""}</p>
+          <ol aria-label="Source rows" style={{ maxHeight: 120, overflow: "auto" }}>
+            {props.parsed.headerReview.sourceRows.slice(0, 5).map((row, index) =>
+              <li key={index}>{row.join(" | ")}</li>)}
+          </ol>
+        </fieldset>
+      ) : null}
       <dl style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "6px 18px", margin: 0 }}>
         <dt>Proposed table</dt><dd style={{ margin: 0 }}>{props.parsed.table}</dd>
         <dt>Rows in file</dt><dd style={{ margin: 0 }}>{review.sourceRows}</dd>
