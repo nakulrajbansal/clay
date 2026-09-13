@@ -1579,6 +1579,7 @@ export function DataView(props: {
           onShare={() => void openRecordShare()}
           onConfirm={props.onConfirm}
           onEverydayAction={props.onEverydayAction}
+          onDailyHomeInvalidated={props.onDailyHomeInvalidated}
         />
         </Suspense>
       ) : null}

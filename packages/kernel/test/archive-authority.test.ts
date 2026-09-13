@@ -325,6 +325,41 @@ async function expectRejectedBeforeReplacement(
 }
 
 describe("archive format 5 authority evidence", () => {
+  it("retains terminal lifecycle receipts in authenticated catalog evidence and rejects omission or rebinding", async () => {
+    const source = await authoritativeArchiveSource();
+    try {
+      const { catalog, fence, target } = source;
+      const operationId = id("op", "w");
+      const nowMs = Date.parse("2026-09-05T20:01:10.000Z");
+      catalog.selectApp({
+        expectedCatalogGeneration: catalog.snapshot().catalogGeneration,
+        appInstanceId: target.evidence().appInstanceId,
+        operationId, fence, nowMs, recordNoop: true,
+      });
+      const receipt = catalog.recordAppLifecycleReceipt({
+        kind: "switch", jobId: id("job", "x"), requestId: id("req", "y"),
+        requestSha256: `sha256:${"a".repeat(64)}`, operationId,
+        requestedAppInstanceId: target.evidence().appInstanceId,
+        expectedCatalogGeneration: catalog.snapshot().catalogGeneration,
+        completedAt: new Date(nowMs).toISOString(),
+      });
+      const archive = await exportAuthorityArchiveV5(await source.store.exportArchive("Field Service"), source.driver);
+      const imported = await importAuthorityArchive(archive);
+      expect(imported.authority.evidence?.catalogAuthority).toMatchObject({
+        schema: 2, lifecycleReceipts: [{ receipt }],
+      });
+      imported.store.close();
+      const omitted = rewriteAuthority(archive, evidence => {
+        Reflect.deleteProperty(evidence.catalogAuthority, "lifecycleReceipts");
+      });
+      await expect(importAuthorityArchive(omitted)).rejects.toThrow();
+      const rebound = rewriteAuthority(archive, evidence => {
+        const rows = Reflect.get(evidence.catalogAuthority, "lifecycleReceipts") as Array<{ receipt: { operationId: string } }>;
+        rows[0]!.receipt.operationId = id("op", "d");
+      });
+      await expect(importAuthorityArchive(rebound)).rejects.toThrow();
+    } finally { source.store.close(); }
+  });
   it("carries global catalog continuity when an unrelated app advances the root", async () => {
     const source = await authoritativeArchiveSource();
     try {

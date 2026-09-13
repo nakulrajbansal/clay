@@ -186,6 +186,7 @@ export function RecordDetail(props: {
   onClose: () => void;
   onWrite: (table: string) => void;
   onEverydayAction?: (state: FirstSuccessState) => void;
+  onDailyHomeInvalidated?: () => void;
   onError: (message: string) => void;
   onInfo: (message: string) => void;
   onExport?: () => void;
@@ -219,6 +220,7 @@ export function RecordDetail(props: {
   } | null>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const reportedEverydayRecord = useRef<string | null>(null);
+  const reportedNavigationRecord = useRef<string | null>(null);
   const columns = useMemo(() => props.table.columns
     .filter(column => !column.hidden && !column.inactive), [props.table]);
 
@@ -320,6 +322,17 @@ export function RecordDetail(props: {
     setAttachments(files);
     setRelated(groups);
     setLoaded(true);
+    const navigationKey = `${props.table.semantic?.tableId}\u0000${props.recordId}`;
+    if (canonical && props.table.semantic?.tableId && props.worker?.rememberDailyRecordOpened
+        && reportedNavigationRecord.current !== navigationKey) {
+      reportedNavigationRecord.current = navigationKey;
+      try {
+        await props.worker.rememberDailyRecordOpened(props.table.semantic.tableId, props.recordId);
+        props.onDailyHomeInvalidated?.();
+      } catch (error) {
+        props.onError(`Recently opened could not be saved: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     const everydayKey = `${props.table.name}\u0000${props.recordId}`;
     if (canonical && props.worker?.completeEverydayAction
         && reportedEverydayRecord.current !== everydayKey) {

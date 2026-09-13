@@ -1782,32 +1782,46 @@ export class WorkerClient {
   private dailyHomeRuntimeTimeZone(): string {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   }
-  dailyHome(): Promise<DailyHomeSnapshot> {
-    return this.call("dailyHome", { timeZone: this.dailyHomeRuntimeTimeZone() });
+  private async ensureDailyHomeTimeZone(): Promise<void> {
+    if (await this.getSetting("daily_time_zone_v1") === null)
+      await this.initializeDailyHomeTimeZone(this.dailyHomeRuntimeTimeZone(), this.createMutationContext());
   }
-  resolveDailyHomeDate(value: string): Promise<string> {
-    return this.call("dailyHomeResolveDate", {
-      value, timeZone: this.dailyHomeRuntimeTimeZone(),
-    });
+  async dailyHome(): Promise<DailyHomeSnapshot> {
+    await this.ensureDailyHomeTimeZone();
+    return this.ephemeralCall("dailyHome");
+  }
+  async resolveDailyHomeDate(value: string): Promise<string> {
+    await this.ensureDailyHomeTimeZone();
+    return this.ephemeralCall("dailyHomeResolveDate", { value });
   }
   compareAndSetDailySource<T>(
     expectedRevision: number, value: T,
+    context: WorkerMutationContext = createWorkerMutationContext(),
   ): Promise<{ ok: boolean; current: unknown }> {
-    return this.call("dailyHomeSourceCompareAndSet", { expectedRevision, value });
+    return this.mutationCall("dailyHomeSourceCompareAndSet", { expectedRevision, value }, context);
   }
   compareAndSetDailyNavigation<T>(
     expectedRevision: number, value: T,
+    context: WorkerMutationContext = createWorkerMutationContext(),
   ): Promise<{ ok: boolean; current: unknown }> {
-    return this.call("dailyHomeNavigationCompareAndSet", { expectedRevision, value });
+    return this.mutationCall("dailyHomeNavigationCompareAndSet", { expectedRevision, value }, context);
   }
-  initializeDailyHomeTimeZone(timeZone: string): Promise<string> {
-    return this.call("dailyHomeInitializeTimeZone", { timeZone });
+  initializeDailyHomeTimeZone(timeZone: string, context: WorkerMutationContext = createWorkerMutationContext()): Promise<string> {
+    return this.mutationCall("dailyHomeInitializeTimeZone", { timeZone }, context);
   }
-  quickCapture(table: string, row: Record<string, unknown>, tableId: string): Promise<BatchReceipt> {
-    return this.call("dailyHomeQuickCapture", { table, row, tableId });
+  quickCapture(table: string, row: Record<string, unknown>, tableId: string, context: WorkerMutationContext = createWorkerMutationContext()): Promise<BatchReceipt> {
+    return this.mutationCall("dailyHomeQuickCapture", { table, row, tableId }, context);
   }
-  undoQuickCapture(batchId: string): Promise<BatchReceipt> {
-    return this.call("dailyHomeUndoCapture", { batchId });
+  undoQuickCapture(batchId: string, context: WorkerMutationContext = createWorkerMutationContext()): Promise<BatchReceipt> {
+    return this.mutationCall("dailyHomeUndoCapture", { batchId }, context);
+  }
+  async rememberDailyRecordOpened(tableId: string, rowId: string): Promise<void> {
+    const navigation = await import("@clay/kernel/daily-navigation");
+    await navigation.rememberDailyRecordOpened(this, { tableId, rowId });
+  }
+  async toggleDailyFavorite(tableId: string, rowId: string): Promise<void> {
+    const navigation = await import("@clay/kernel/daily-navigation");
+    await navigation.toggleDailyFavorite(this, { tableId, rowId });
   }
   notifications(limit = 100): Promise<ClayNotification[]> {
     return this.ephemeralCall("notifications", { limit });
@@ -1967,9 +1981,6 @@ export class WorkerClient {
   deviceProtection(): Promise<import("../worker/db-worker").DeviceProtectionProjection> {
     return this.ephemeralCall("deviceProtection");
   }
-  reset(context: WorkerMutationContext): Promise<null> {
-    return this.mutationCall("reset", undefined, context);
-  }
   registryTables(): Promise<RegTable[]> { return this.ephemeralCall("registryTables"); }
   async projectExport(
     request: ProjectionRequestV1, signal?: AbortSignal,
@@ -2005,67 +2016,60 @@ export class WorkerClient {
   ): Promise<null> {
     return this.mutationCall("acceptSuggestion", { subject, kind }, context);
   }
-  backupSelection(): Promise<ProductionBackupSelection> {
-    return this.ephemeralCall("backupSelection");
+  backupSelection(context: WorkerMutationContext = createWorkerMutationContext()): Promise<ProductionBackupSelection> {
+    return this.mutationCall("backupSelection", undefined, context);
   }
   backupRecords(): Promise<BackupRecord[]> {
     return this.ephemeralCall("backupRecords");
   }
-  prepareAutomaticBackup(
+  #backupRuntime: Promise<import("./trusted-backup-runtime").TrustedBackupRuntime> | null = null;
+  private trustedBackupRuntime(): Promise<import("./trusted-backup-runtime").TrustedBackupRuntime> {
+    return this.#backupRuntime ??= import("./trusted-backup-runtime").then(({ TrustedBackupRuntime }) => new TrustedBackupRuntime({
+      backupSelection: () => this.backupSelection(), backupRecords: () => this.backupRecords(),
+      collectArchiveSnapshot: () => this.ephemeralCall("collectArchiveSnapshot"),
+      validateArchive: (bytes, expected, port) => this.ephemeralCall("validateBackupStage", { bytes, expected }, [bytes, port]),
+      publishBackup: request => this.mutationCall("publishBackup", { request }, createWorkerMutationContext()),
+    })).catch(error => { this.#backupRuntime = null; throw error; });
+  }
+  async prepareAutomaticBackup(
     target: BackupRun["target"],
     reason: BackupRun["reason"],
   ): Promise<{ run: BackupRun; bytes: ArrayBuffer }> {
-    return this.mutationCall(
-      "prepareAutomaticBackup", { target, reason }, createWorkerMutationContext(),
-    );
+    const prepared = await (await this.trustedBackupRuntime()).automatic.prepare(target, reason);
+    return { run: prepared.run, bytes: prepared.bytes.slice().buffer };
   }
-  validateBackupStage(
+  async validateBackupStage(
     bytes: ArrayBuffer,
     expected: ProductionBackupSelection["selected"]["target"],
   ): Promise<BackupStageValidation> {
-    return this.ephemeralCall("validateBackupStage", { bytes, expected }, [bytes]);
+    return (await this.trustedBackupRuntime()).automatic.validateStage(new Uint8Array(bytes), expected);
   }
-  publishBackup(request: BackupPublicationRequest): Promise<BackupPublicationReceipt> {
-    return this.mutationCall(
-      "publishBackup", { request }, createWorkerMutationContext(),
-    );
+  async publishBackup(request: BackupPublicationRequest): Promise<BackupPublicationReceipt> {
+    return (await this.trustedBackupRuntime()).automatic.publish(request);
   }
-  backupTrustStatus(): Promise<BackupTrustRuntimeStatus> {
-    return this.ephemeralCall("backupTrustStatus");
+  async backupTrustStatus(): Promise<BackupTrustRuntimeStatus> {
+    return (await this.trustedBackupRuntime()).trust.status();
   }
-  beginBackupTrustEnrollment(): Promise<RecoveryKitEnrollment> {
-    return this.mutationCall(
-      "beginBackupTrustEnrollment", undefined, createWorkerMutationContext(),
-    );
+  async beginBackupTrustEnrollment(): Promise<RecoveryKitEnrollment> {
+    return (await this.trustedBackupRuntime()).trust.beginEnrollment();
   }
-  confirmBackupTrustEnrollment(
+  async confirmBackupTrustEnrollment(
     enrollmentId: string,
     recoveryKitBytes: ArrayBuffer,
   ): Promise<BackupTrustRuntimeStatus> {
-    return this.mutationCall(
-      "confirmBackupTrustEnrollment",
-      { enrollmentId, recoveryKitBytes },
-      createWorkerMutationContext(),
-      [recoveryKitBytes],
-    );
+    try { return await (await this.trustedBackupRuntime()).trust.confirmEnrollment(enrollmentId, new Uint8Array(recoveryKitBytes)); }
+    finally { new Uint8Array(recoveryKitBytes).fill(0); }
   }
-  importRecoveryKit(recoveryKitBytes: ArrayBuffer): Promise<RecoveryKitImportResult> {
-    return this.mutationCall(
-      "importRecoveryKit",
-      { recoveryKitBytes },
-      createWorkerMutationContext(),
-      [recoveryKitBytes],
-    );
+  async importRecoveryKit(recoveryKitBytes: ArrayBuffer): Promise<RecoveryKitImportResult> {
+    try { return await (await this.trustedBackupRuntime()).trust.importRecoveryKit(new Uint8Array(recoveryKitBytes)); }
+    finally { new Uint8Array(recoveryKitBytes).fill(0); }
   }
-  activateImportedBackupSeries(
+  async activateImportedBackupSeries(
     seriesId: string,
     expectedActiveSeriesId: string | null,
   ): Promise<BackupTrustRuntimeStatus> {
-    return this.mutationCall(
-      "activateImportedBackupSeries",
-      { seriesId, expectedActiveSeriesId },
-      createWorkerMutationContext(),
-    );
+    return (await this.trustedBackupRuntime()).trust.activateImportedSeries({ seriesId, expectedActiveSeriesId,
+      confirmation: "use_imported_recovery_kit_for_future_backups" });
   }
   recoveryCandidates(): Promise<RecoveryRecordCandidate[]> {
     return this.ephemeralCall("recoveryCandidates");
@@ -2078,13 +2082,9 @@ export class WorkerClient {
       "restoreAsNew", { grant }, createWorkerMutationContext(),
     );
   }
-  exportArchive(): Promise<{ bytes: ArrayBuffer; filename: string }> {
-    return this.ephemeralCall("exportArchive");
-  }
-  importArchive(bytes: ArrayBuffer, context: WorkerMutationContext): Promise<{
-    manifest: { app: string; versions: number }; invalidPanels: string[];
-  }> {
-    return this.mutationCall("importArchive", { bytes }, context, [bytes]);
+  async exportArchive(): Promise<{ bytes: ArrayBuffer; filename: string }> {
+    const exported = await (await this.trustedBackupRuntime()).automatic.prepareManualDownload();
+    return { bytes: exported.bytes.slice().buffer, filename: exported.filename };
   }
   getSetting<T>(key: string): Promise<T | null> {
     return this.ephemeralCall("getSetting", { key });

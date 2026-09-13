@@ -125,7 +125,7 @@ export function RecoveryCenter(props: RecoveryCenterProps): React.JSX.Element {
       await action();
       setKitMessage(success);
     } catch {
-      setKitMessage("Recovery Kit check failed. Nothing changed.");
+      setKitMessage("Recovery Kit check did not finish. Retry or refresh its status. No app data was replaced.");
     } finally {
       setKitBusy(false);
     }

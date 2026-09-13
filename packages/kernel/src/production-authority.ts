@@ -7,6 +7,7 @@ import type {
   BackupAuthenticationV1 as BackupAuthentication,
 } from "@clay/schema/backup";
 import type { AsyncStore, StoreMutationContext } from "./asyncstore";
+import { captureAppImportRequest } from "./app-lifecycle-request";
 import {
   validateAutomationTargetIdentity,
   type AutomationSimulationProofV1,
@@ -48,7 +49,7 @@ import { assertLiveSampleProvenance } from "./sample-provenance-proof";
 import { activeSampleRowCount } from "./production-samples";
 import { stateLeafHashV1 } from "./state-merkle";
 import { StateMerkleIndex, type StateMerkleChange } from "./state-merkle-index";
-import { ClayStore } from "./store";
+import { ClayStore, exportStoreArchiveReadOnly, PRODUCTION_STORE_PRIMITIVES } from "./store";
 import { TargetCommitCoordinator } from "./target-commit-coordinator";
 import { TargetAuthorityStore } from "./target-authority";
 
@@ -1450,6 +1451,38 @@ export class ProductionStoreAuthority {
     return this.#reader;
   }
 
+  activeSemanticRegistry() {
+    this.bootInfo();
+    const registry = PRODUCTION_STORE_PRIMITIVES.validationRegistrySnapshot.call(this.#store);
+    return new Map([...registry].filter(([, table]) => !table.inactive).map(([name, table]) =>
+      [name, { ...table, columns: table.columns.filter(column => !column.inactive) }]));
+  }
+
+  async dailyHome() {
+    return this.#coordinator.serializeRead(async () => {
+      const { projectDailyHome } = await import("./daily-home-projection");
+      const target = this.inspectAuthority().target;
+      const timeZone = this.#reader.getSetting<unknown>("daily_time_zone_v1");
+      if (typeof timeZone !== "string") throw invalid("Daily Home calendar is not initialized");
+      const registry = this.activeSemanticRegistry();
+      // The projection's legacy-shaped read adapter is derived only from the
+      // validated authority ledger. A legacy cache is never trusted as evidence.
+      let samples: { format: 1; tables: Record<string, readonly string[]> } | undefined;
+      try {
+        const { readSampleRowProvenance } = await import("./production-samples");
+        samples = { format: 1, tables: Object.fromEntries(Object.entries(readSampleRowProvenance(this.#store))
+          .filter(([table]) => registry.has(table))) };
+      } catch { /* The projection truthfully reports an invalid/partial source. */ }
+      return projectDailyHome({ ...this.#reader, registrySnapshot: () => registry,
+        getSetting: <T>(key: string): T | undefined => key === "sample_rows"
+          ? samples as T | undefined : this.#reader.getSetting<T>(key),
+      }, {
+        appInstanceId: target.appInstanceId, activeGenerationId: target.activeGenerationId,
+        now: new Date(Date.now()).toISOString(), timeZone,
+      });
+    });
+  }
+
   plannerMutations(): PlannerMutationAuthority {
     return this.#plannerMutations;
   }
@@ -1508,6 +1541,27 @@ export class ProductionStoreAuthority {
     return this.#coordinator.simulateAutomation(input);
   }
 
+  async previewRelationConversion(input: unknown) {
+    const snapshot = captureAppImportRequest(input);
+    const { RelationPreviewRequest } = await import("./production-relation");
+    const captured = RelationPreviewRequest.parse(snapshot);
+    return this.#coordinator.serializeRead(async () => {
+      const before = this.inspectAuthority();
+      this.bootInfo(); // Reject an authority whose app is no longer selected.
+      const preview = this.#reader.previewRelationConversion(captured);
+      const shadowDriver = await this.#driver.snapshot();
+      let shadow: ClayStore | null = null;
+      try {
+        shadow = ClayStore.fromDriver(shadowDriver);
+        const { PRODUCTION_STORE_PRIMITIVES } = await import("./store");
+        PRODUCTION_STORE_PRIMITIVES.convertTextToRelation.call(shadow, { ...preview, cardinality: "one" });
+        if (JSON.stringify(before) !== JSON.stringify(this.inspectAuthority()))
+          throw invalid("conversion preview source changed");
+        return { ...preview, authorityTarget: before.target };
+      } finally { if (shadow) shadow.close(); else shadowDriver.close(); }
+    });
+  }
+
   currentAutomationTarget(): AutomationTargetIdentityV1 {
     const target = this.inspectAuthority().target;
     return validateAutomationTargetIdentity({
@@ -1527,6 +1581,81 @@ export class ProductionStoreAuthority {
 
   createRequestId(): string {
     return this.#coordinator.mintRequestId();
+  }
+
+  backupSelection() {
+    return this.#coordinator.backupSelection();
+  }
+
+  backupRecords() {
+    return this.#coordinator.backupRecords();
+  }
+
+  publishBackup(request: Parameters<ProductionMutationCoordinator["publishBackup"]>[0]) {
+    return this.#coordinator.publishBackup(request);
+  }
+
+  backupMetadata(): { fileLabel: string; shapeHead: number; shapeCurrent: number } {
+    const boot = this.bootInfo();
+    const entry = boot.apps.find(app => app.id === boot.selectedAppInstanceId)!;
+    const shapeHead = this.#reader.headVersion();
+    const shapeCurrent = this.#reader.getSetting<number>("current_version") ?? shapeHead;
+    if (!Number.isSafeInteger(shapeCurrent) || shapeCurrent < 0 || shapeCurrent > shapeHead)
+      throw invalid("backup shape metadata is invalid");
+    return { fileLabel: entry.name, shapeHead, shapeCurrent };
+  }
+
+  /** Internal snapshot for the trusted shell's sealing capability, never a portable download.
+   * Backup Trust keys and Recovery Kit bytes must not enter this authority. */
+  collectArchiveSnapshot(): Promise<ProductionArchiveExport & { metadata: ReturnType<ProductionStoreAuthority["backupMetadata"]> }> {
+    return this.#coordinator.serializeRead(async () => {
+      const before = this.inspectAuthority();
+      const metadata = this.backupMetadata();
+      const { exportAuthorityArchiveV5 } = await import("./archive-authority");
+      const legacy = await exportStoreArchiveReadOnly(this.#store, metadata.fileLabel);
+      const bytes = await exportAuthorityArchiveV5(legacy, this.#driver);
+      const after = this.inspectAuthority();
+      if (JSON.stringify(before) !== JSON.stringify(after)
+          || JSON.stringify(metadata) !== JSON.stringify(this.backupMetadata()))
+        throw invalid("archive source changed while collecting its snapshot");
+      const stem = metadata.fileLabel.normalize("NFKC").toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "clay";
+        return Object.freeze({ format: 5, bytes, filename: `${stem}.clay`, metadata,
+          target: Object.freeze({ ...after.target }), catalogGeneration: after.catalog.catalogGeneration });
+    });
+  }
+
+  /** Consistency inspection only, not an authentication grant. Production
+   * callers authenticate the envelope through their private verifier port first. */
+  async inspectArchiveSnapshot(bytes: Uint8Array): Promise<TargetEvidence> {
+    const { importAuthorityArchive } = await import("./archive-authority");
+    const imported = await importAuthorityArchive(bytes);
+    try {
+      if (imported.authority.format !== 5 || !imported.authority.evidence || imported.invalidPanels.length)
+        throw invalid("archive snapshot is not an intact format 5 target");
+      return Object.freeze({ ...imported.authority.evidence.target });
+    } finally { imported.store.close(); }
+  }
+
+  recoveryCandidates() {
+    return this.#coordinator.serializeRead(async () => {
+      this.inspectAuthority();
+      const candidates: Array<{ table: string; id: string; deleted: boolean; historyAt: string; attachmentCount: number }> = [];
+      let scanned = 0;
+      for (const table of this.activeSemanticRegistry().values()) {
+        for (const id of this.#reader.restorableRows(table.name, 30)) {
+          if (++scanned > 2_000) break;
+          const row = this.#reader.query({ from: table.name, where: [{ field: "id", op: "eq", value: id }], includeDeleted: true, limit: 1 })[0];
+          const history = this.#reader.rowHistory(table.name, id, 1)[0];
+          if (!row || !history) continue;
+          candidates.push({ table: table.name, id, deleted: row.deleted_at != null, historyAt: history.at,
+            attachmentCount: table.columns.filter(column => column.type === "attachment")
+              .reduce((count, column) => count + this.#reader.attachmentsForRecord(table.name, id, column.name).length, 0) });
+        }
+        if (scanned > 2_000) break;
+      }
+      return candidates.sort((a, b) => b.historyAt.localeCompare(a.historyAt) || a.table.localeCompare(b.table) || a.id.localeCompare(b.id)).slice(0, 100);
+    });
   }
 
   executeAppLifecycle(input: unknown): Promise<ProductionStoreAuthority> {

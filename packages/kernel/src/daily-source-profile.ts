@@ -247,7 +247,7 @@ export async function removeReviewedDailySource(
   throw new Error("Today setup changed in another window; try again");
 }
 
-function recoverableRevision(raw: unknown): number {
+export function recoverableDailySourceRevision(raw: unknown): number {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return 0;
   const descriptor = Reflect.getOwnPropertyDescriptor(raw, "revision");
   const value = descriptor && "value" in descriptor ? descriptor.value : 0;
@@ -260,7 +260,7 @@ export async function resetDailySourceLibrary(
   let raw: unknown = await storage.getSetting<unknown>(DAILY_SOURCE_LIBRARY_SETTING);
   for (let attempt = 0; attempt < 3; attempt++) {
     const parsed = DailySourceLibraryV1.safeParse(raw);
-    const expectedRevision = parsed.success ? parsed.data.revision : recoverableRevision(raw);
+    const expectedRevision = parsed.success ? parsed.data.revision : recoverableDailySourceRevision(raw);
     if (expectedRevision >= Number.MAX_SAFE_INTEGER)
       throw new Error("Today setup revision cannot be advanced safely");
     const candidate = DailySourceLibraryV1.parse({

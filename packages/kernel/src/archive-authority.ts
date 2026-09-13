@@ -96,8 +96,10 @@ export function assertArchiveAuthorityCardinality(input: unknown): void {
       catalogRecord.revisionReservations,
       catalogRecord.bootstrapManifest,
       catalogRecord.pendingJobs,
+      catalogRecord.lifecycleReceipts,
       catalogRecord.lineageReservations,
       catalogRecord.generationEvents,
+      catalogRecord.backupRecords,
     );
   }
   let total = 0;
@@ -321,7 +323,7 @@ function collectBootstrapManifest(driver: DbDriver) {
   }));
 }
 
-import { pendingRowsForArchive as collectPendingJobs } from "./catalog-pending";
+import { catalogPendingEvidenceForArchive } from "./catalog-pending";
 
 function collectLineageReservations(driver: DbDriver) {
   return driver.select(
@@ -379,7 +381,7 @@ function collectCatalogAuthority(
   const leases = allLeases.sort((left, right) => compareUint64(left.writeEpoch, right.writeEpoch)
     || left.leaseId.localeCompare(right.leaseId));
   const bootstrapManifest = collectBootstrapManifest(driver);
-  const pendingJobs = collectPendingJobs(driver);
+  const { pendingJobs, lifecycleReceipts } = catalogPendingEvidenceForArchive(driver);
   const lineageReservations = collectLineageReservations(driver);
   if (bootstrapManifest.length !== 0)
     throw invalid("catalog bootstrap is incomplete");
@@ -387,7 +389,7 @@ function collectCatalogAuthority(
     throw invalid("catalog contains unsupported unfinished work");
 
   return {
-    schema: 1,
+    schema: lifecycleReceipts.length ? 2 : 1,
     schemaObjects: collectCatalogSchemaObjects(driver),
     authorityIncarnationId: snapshot.authorityIncarnationId,
     catalogGeneration: snapshot.catalogGeneration,
@@ -410,7 +412,8 @@ function collectCatalogAuthority(
     generationEvents,
     backupRecords: catalog.backupRecords().sort((left, right) =>
       left.backupId.localeCompare(right.backupId)),
-  };
+    ...(lifecycleReceipts.length ? { lifecycleReceipts } : {}),
+  } as ArchiveAuthorityEvidence["catalogAuthority"];
 }
 
 /**
@@ -780,6 +783,16 @@ function validateCatalogIdentityRegistry(evidence: ArchiveAuthorityEvidence): vo
     requireId(job.appInstanceId, "app");
     requireId(job.operationId, "operation");
   }
+  if (catalog.schema === 2) for (const row of catalog.lifecycleReceipts) {
+    const receipt = row.receipt;
+    requireId(receipt.jobId, "job");
+    requireId(receipt.operationId, "operation");
+    requireId(receipt.authorityIncarnationId, "authority");
+    requireId(receipt.requestedAppInstanceId, "app");
+    requireId(receipt.resultingSelectedAppInstanceId, "app");
+    requireId(row.generationId, "generation");
+    requireId(row.namespaceId, "namespace");
+  }
   for (const reservation of catalog.lineageReservations) {
     requireId(reservation.appInstanceId, "app");
     requireId(reservation.operationId, "operation");
@@ -787,6 +800,54 @@ function validateCatalogIdentityRegistry(evidence: ArchiveAuthorityEvidence): vo
   for (const [value, kind] of byId) {
     if (kind !== "job" && !referenced.has(value))
       throw invalid(`catalog contains an unreferenced retained ${kind} identity`);
+  }
+}
+
+function validateLifecycleReceipts(evidence: ArchiveAuthorityEvidence): void {
+  const catalog = evidence.catalogAuthority;
+  if (catalog.schema !== 2) return;
+  const jobs = new Set<string>(), operations = new Set<string>();
+  const requests = new Set(catalog.requestReceipts.map(row => row.requestId));
+  let previousJob = "";
+  for (const row of catalog.lifecycleReceipts) {
+    const receipt = row.receipt;
+    const event = catalog.generationEvents.find(item => item.catalogGeneration === receipt.completedCatalogGeneration);
+    const expectedKind = receipt.kind === "rename" ? "app_metadata"
+      : receipt.kind === "create" || receipt.kind === "fork" ? "app_seed" : "app_selected";
+    const generation = catalog.generations.find(item => item.descriptor.generationId === row.generationId);
+    if (receipt.jobId <= previousJob || jobs.has(receipt.jobId) || operations.has(receipt.operationId)
+        || requests.has(receipt.requestId) || receipt.authorityIncarnationId !== catalog.authorityIncarnationId
+        || !event || event.eventKind !== expectedKind || event.operationId !== receipt.operationId
+        || event.at !== receipt.completedAt || event.appInstanceId !== receipt.resultingSelectedAppInstanceId
+        || !generation || generation.descriptor.namespaceId !== row.namespaceId
+        || generation.descriptor.target.appInstanceId !== receipt.resultingSelectedAppInstanceId)
+      throw invalid("lifecycle receipt identity or terminal event is inconsistent");
+    previousJob = receipt.jobId;
+    jobs.add(receipt.jobId); operations.add(receipt.operationId); requests.add(receipt.requestId);
+    if (receipt.kind === "delete") {
+      const victim = catalog.entries.find(item => item.appInstanceId === receipt.requestedAppInstanceId);
+      if (!victim?.tombstoned || victim.appInstanceId === receipt.resultingSelectedAppInstanceId)
+        throw invalid("lifecycle deletion receipt has no distinct tombstoned target");
+    } else if (receipt.kind === "rename" || receipt.kind === "switch") {
+      if (receipt.requestedAppInstanceId !== receipt.resultingSelectedAppInstanceId)
+        throw invalid("lifecycle metadata or selection receipt is rebound");
+    }
+    if (receipt.schema === 2) {
+      const result = receipt.resultTarget;
+      const metadata = catalog.generationEvents.filter(item => item.appInstanceId === result.appInstanceId
+        && item.displayName !== null
+        && BigInt(item.catalogGeneration) <= BigInt(receipt.completedCatalogGeneration)).at(-1);
+      const targetKnown = sameTarget(result, generation.descriptor.target)
+        || catalog.revisionReservations.some(item => item.state === "committed"
+          && item.appInstanceId === result.appInstanceId && item.publishedActiveGenerationId === result.activeGenerationId
+          && item.publishedLineageEpoch === result.lineageEpoch && item.revision === result.protectionRevision
+          && item.stateSha256 === result.stateSha256 && item.finalizedCatalogGeneration !== null
+          && BigInt(item.finalizedCatalogGeneration) <= BigInt(receipt.completedCatalogGeneration));
+      if (!targetKnown || result.activeGenerationId !== row.generationId
+          || (event.target !== null && !sameTarget(result, event.target))
+          || metadata?.displayName !== receipt.resultDisplayName || metadata?.shellId !== receipt.resultShellId)
+        throw invalid("lifecycle receipt canonical result is inconsistent");
+    }
   }
 }
 
@@ -802,6 +863,7 @@ function validateAuthorityHistory(evidence: ArchiveAuthorityEvidence): void {
     throw invalid("catalog bootstrap or unfinished-work invariants are not sealed");
   validateRequestReceipts(evidence);
   validateCatalogIdentityRegistry(evidence);
+  validateLifecycleReceipts(evidence);
   const targetRevisions = evidence.targetAuthority.revisions;
   const highWater = BigInt(evidence.targetAuthority.header.protectionRevisionHighWater);
   if (BigInt(targetRevisions.length) !== highWater)

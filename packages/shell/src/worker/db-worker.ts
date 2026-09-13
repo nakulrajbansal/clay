@@ -8,7 +8,7 @@ import type {
   PreparedMutationPreview, TargetIdentityV1,
 } from "@clay/kernel";
 import {
-  deriveDeviceState, projectDailyHome, resolveDailyRelativeDate, targetIdentityEquals,
+  deriveDeviceState, resolveDailyRelativeDate, targetIdentityEquals,
 } from "@clay/kernel";
 import { portFromMessagePort, serveStore } from "@clay/kernel/worker-rpc";
 import type { StoreServerControl } from "@clay/kernel/worker-rpc";
@@ -505,9 +505,12 @@ async function bootProductionAuthority(input: unknown): Promise<WorkerBootProjec
 }
 
 function captureLifecyclePayload(
-  payload: Record<string, unknown>,
+  payload: unknown,
   keys: readonly string[],
 ): Record<string, unknown> {
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)
+      || (Object.getPrototypeOf(payload) !== Object.prototype && Object.getPrototypeOf(payload) !== null))
+    throw new ClayError("E_CATALOG_UNAVAILABLE", "lifecycle payload must be a plain record");
   const actual = Reflect.ownKeys(payload);
   const expected = [...keys].sort();
   if (actual.some(key => typeof key !== "string") || actual.length !== expected.length
@@ -640,6 +643,12 @@ const DIRECT_AUTHORITY_ROUTES = Object.freeze({
   removePanel: { route: "panel.remove" },
   addColumn: { route: "schema.addColumn" },
   addRelationColumn: { route: "schema.addRelationColumn" },
+  convertTextToRelation: { route: "schema.convertTextToRelation" },
+  dailyHomeSourceCompareAndSet: { route: "daily.source" },
+  dailyHomeNavigationCompareAndSet: { route: "daily.navigation" },
+  dailyHomeInitializeTimeZone: { route: "daily.timeZone" },
+  dailyHomeQuickCapture: { route: "daily.capture" },
+  dailyHomeUndoCapture: { route: "daily.undoCapture" },
   renameColumn: { route: "schema.renameColumn" },
   setSetting: { route: "setting.set" },
   deleteSetting: { route: "setting.delete" },
@@ -651,6 +660,8 @@ type DirectAuthorityRoute = keyof typeof DIRECT_AUTHORITY_ROUTES;
 
 async function runAuthorityMutation(
   route:
+    | DirectAuthorityRoute
+    | "backupSelection" | "publishBackup"
     | "seed" | "importTable" | "removeSamples" | "fillSamples"
     | "setSetting" | "deleteSetting" | "compareAndSetSetting" | "completeEverydayAction"
     | "commitLayout"
@@ -675,6 +686,11 @@ async function runAuthorityMutation(
 ): Promise<unknown> {
   const target = mustAuthority();
   const requestId = authorityRequestId(req);
+  if (route === "backupSelection") return target.backupSelection();
+  if (route === "publishBackup") {
+    const captured = captureLifecyclePayload(payload, ["request"]);
+    return (await import("./production-backup-routes")).publishProductionBackup(target, captured.request);
+  }
   if (route === "commitImport") {
     const record = payload as Record<string, unknown>;
     return (await mustImportCoordinator()).commitImport({
@@ -837,7 +853,7 @@ function activeSampleCoordinates(reader: ProductionStoreReader): readonly Active
     throw new ClayError("E_TARGET_AUTHORITY_INVALID", "legacy sample provenance is unauthenticated");
   const ledger = parseSampleProvenanceLedger(reader.getSetting(SAMPLE_PROVENANCE_SETTING));
   const byId = new Map<string, { name: string; active: boolean }>();
-  for (const table of reader.registrySnapshot().values()) {
+  for (const table of mustAuthority().activeSemanticRegistry().values()) {
     const tableId = table.semantic?.tableId;
     if (!tableId) continue;
     if (byId.has(tableId))
@@ -1259,7 +1275,7 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "makeLatest":
       return runAuthorityMutation("makeLatest", rawPayload, req);
     case "registryTables":
-      return [...mustStore().registrySnapshot().values()];
+      return [...mustAuthority().activeSemanticRegistry().values()];
     case "projectPlaintextV1":
       try {
         const artifact = await projectPlaintextV1Cooperative(mustStore(), p as ProjectionRequestV1, {
@@ -1279,35 +1295,26 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       const outcome = await lifecycle.terminal;
       return { targetId, quiescent: true, outcome };
     }
-    case "dailyHome": {
-      const info = mustAuthority().bootInfo();
-      const target = mustAuthority().inspectAuthority().target;
-      const storedZone = mustStore().getSetting<unknown>("daily_time_zone_v1");
-      const timeZone = typeof storedZone === "string"
-        ? storedZone : typeof p.timeZone === "string" ? p.timeZone : null;
-      if (timeZone === null)
-        throw new Error("Daily Home calendar is not initialized");
-      return projectDailyHome(mustStore(), {
-        appInstanceId: info.selectedAppInstanceId,
-        activeGenerationId: target.activeGenerationId,
-        now: new Date(Date.now()).toISOString(),
-        timeZone,
-      });
-    }
+    case "dailyHome":
+      return mustAuthority().dailyHome();
     case "dailyHomeResolveDate": {
       const storedZone = mustStore().getSetting<unknown>("daily_time_zone_v1");
       const timeZone = typeof storedZone === "string"
-        ? storedZone : typeof p.timeZone === "string" ? p.timeZone : null;
+        ? storedZone : null;
       if (timeZone === null || typeof p.value !== "string")
         throw new Error("Daily Home calendar is not initialized");
       return resolveDailyRelativeDate(p.value, new Date(Date.now()).toISOString(), timeZone);
     }
     case "dailyHomeSourceCompareAndSet":
+      return runAuthorityMutation("dailyHomeSourceCompareAndSet", rawPayload, req);
     case "dailyHomeNavigationCompareAndSet":
+      return runAuthorityMutation("dailyHomeNavigationCompareAndSet", rawPayload, req);
     case "dailyHomeInitializeTimeZone":
+      return runAuthorityMutation("dailyHomeInitializeTimeZone", rawPayload, req);
     case "dailyHomeQuickCapture":
+      return runAuthorityMutation("dailyHomeQuickCapture", rawPayload, req);
     case "dailyHomeUndoCapture":
-      return failClosedMutation(req.op);
+      return runAuthorityMutation("dailyHomeUndoCapture", rawPayload, req);
     case "storePort": {
       const port = ports[0];
       if (!port) throw new Error("storePort needs a transferred port");
@@ -1440,12 +1447,9 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "rowHistory":
       return mustStore().rowHistory(String(p.table), String(p.id));
     case "previewRelationConversion":
-      return mustStore().previewRelationConversion({
-        sourceTable: String(p.sourceTable), sourceField: String(p.sourceField),
-        targetTable: String(p.targetTable), displayField: String(p.displayField),
-      });
+      return mustAuthority().previewRelationConversion(rawPayload);
     case "convertTextToRelation":
-      return failClosedMutation(req.op);
+      return runAuthorityMutation("convertTextToRelation", rawPayload, req);
     case "removeColumn":
       return runAuthorityMutation("removeColumn", p, req);
     case "addColumn":
@@ -1478,20 +1482,27 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       return runAuthorityMutation("dismissSuggestion", p, req);
     case "acceptSuggestion":
       return runAuthorityMutation("acceptSuggestion", p, req);
+    case "collectArchiveSnapshot":
+      return mustAuthority().collectArchiveSnapshot();
+    case "backupSelection":
+      return runAuthorityMutation("backupSelection", rawPayload, req);
+    case "backupRecords":
+      return mustAuthority().backupRecords();
+    case "recoveryCandidates":
+      return mustAuthority().recoveryCandidates();
+    case "validateBackupStage":
+      return (await import("./production-backup-routes")).validateProductionBackup(mustAuthority(), p.bytes as ArrayBuffer, p.expected, ports[0]);
+    case "publishBackup":
+      return runAuthorityMutation("publishBackup", rawPayload, req);
     case "reset":
     case "exportArchive":
     case "importArchive":
-    case "backupSelection":
-    case "backupRecords":
     case "prepareAutomaticBackup":
-    case "validateBackupStage":
-    case "publishBackup":
     case "backupTrustStatus":
     case "beginBackupTrustEnrollment":
     case "confirmBackupTrustEnrollment":
     case "importRecoveryKit":
     case "activateImportedBackupSeries":
-    case "recoveryCandidates":
     case "validateRestoreArchive":
     case "restoreAsNew":
       return failClosedMutation(req.op);

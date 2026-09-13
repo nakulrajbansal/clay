@@ -446,7 +446,24 @@ export class AutomaticBackupWorkerCoordinator {
   async publish(requestInput: BackupPublicationRequest): Promise<BackupPublicationReceipt> {
     const request = BackupPublicationRequestV1.parse(requestInput);
     const envelope = this.#staged.get(request.artifact.archiveSha256);
-    if (!envelope || envelope.byteLength !== request.artifact.byteLength)
+    if (!envelope) {
+      // After a successful publication/response loss the byte cache may already
+      // be released. Only the exact durable trust commit AND catalog artifact
+      // can substitute for that ephemeral proof; arbitrary historic requests
+      // cannot publish new metadata this way.
+      const trust = await this.trust.status();
+      const artifact = request.artifact;
+      const record = (await this.authority.backupRecords()).find(item => item.backupId === artifact.backupId);
+      if (trust.status === "ready" && trust.committed?.backupId === artifact.backupId
+          && trust.committed.generation === artifact.authentication.generation
+          && trust.committed.envelopeSha256 === artifact.archiveSha256
+          && trust.seriesId === artifact.authentication.seriesId && trust.keyId === artifact.authentication.keyId
+          && record?.state === "valid"
+          && JSON.stringify(Object.fromEntries(Object.keys(artifact).map(key => [key, Reflect.get(record, key)]))) === JSON.stringify(artifact))
+        return this.authority.publishBackup(request);
+      throw unavailable("Authenticated backup read-back has not been staged for publication");
+    }
+    if (envelope.byteLength !== request.artifact.byteLength)
       throw unavailable("Authenticated backup read-back has not been staged for publication");
     const header = inspectAuthenticatedArchiveV5Header(envelope);
     try {

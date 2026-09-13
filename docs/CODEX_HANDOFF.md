@@ -4,6 +4,18 @@
 
 This document gives Codex the compact engineering, product, safety, and release context needed to continue Clay without importing private chat transcripts or rediscovering the campaign history.
 
+## Active development mission (2026-09-12)
+
+The active user instruction supersedes the per-feature release sequence below:
+finish A-F development first using targeted RED/GREEN tests and affected package
+typechecks. Defer broad regression, builds/budgets, browser/accessibility
+certification, and independent review to the single integrated test phase.
+Do not commit or push: `.git` is intentionally protected. Sole writer, `D:\Clay`,
+branch `codex/clay-project`, development base `f96f674059c806bcd8483344e1eda16b86b472cc`.
+The uncommitted development continuation, capability matrix, real finder-loop
+results, and next code tasks are recorded in `docs/CODEX_DEVELOPMENT_HANDOFF.md`.
+Neither development completion nor release completion is currently claimed.
+
 ## Repository identity
 
 - Codex checkout: `D:\Clay`

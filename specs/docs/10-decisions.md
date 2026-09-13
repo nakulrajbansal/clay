@@ -1104,3 +1104,39 @@ ADR-054 (2026-09-06) Daily Home begins as a local read-time projection over expl
   Capture, Snooze, Dismiss, reminders, or recurrence as available merely because the
   read projection exists. Exact totals and caught-up copy are forbidden under any partial
   source state, and no user-study promotion requirement is waived by this decision.
+
+ADR-055 (2026-09-12) Development reconciliation of lifecycle archives and secret custody.
+  CONTEXT: The worker-owned multi-app catalog now retains terminal lifecycle receipts.
+  Format-5 collection must not drop those physical rows. Backup Trust key material
+  must remain outside the DB worker, even though app snapshots, identity, and backup
+  publication are owned by ProductionStoreAuthority.
+  DECISION: Keep the format-5 archive and COSE authentication envelope unchanged.
+  Catalog evidence schema 2 extends schema 1 with bounded lifecycle receipts and
+  their exact physical generation/namespace bindings. Schema 1 stays readable.
+  Unknown versions, incomplete physical row coverage, and nonterminal lifecycle
+  jobs fail closed. Receipts are validated against catalog events, metadata, and
+  target history; they are evidence, not authority to replace a local namespace.
+  Backup Trust uses its existing IndexedDB vault in the trusted shell. It is not
+  an app-data authority and cannot mint an app identity or choose physical storage.
+  Recovery Kit bytes and keys never enter the DB worker, provider, or panel. The
+  shell authenticates archive envelopes over a dedicated, single-use MessagePort
+  attached only to the corresponding worker request. The worker waits for that
+  channel, checks its request/digest binding, then validates the format-5 payload
+  in isolated memory. Checksums or caller-supplied authentication booleans alone
+  cannot authorize parsing or publication. Publication additionally requires a
+  retained authenticated stage, or an exact already-published catalog artifact,
+  and the current production catalog fence. Restore-as-new remains closed until
+  fresh destination reservation, installation, publication, and crash recovery
+  are reconciled with the lifecycle journal. No replace-current fallback exists.
+  During the explicitly authorized development-first mission, source-backed
+  conversion and Daily Home actions may be enabled for development finder loops.
+  This does not waive the frozen budgets, physical certification, final integrated
+  test campaign, independent review, or human accessibility requirements for release.
+  Text conversion previews bind a SHA-256 fingerprint to semantic identities and
+  the authority target, scan at most 5,000 source and 5,000 target rows, and execute
+  a disposable shadow conversion before Keep. Original text and physical values
+  remain available to the inverse migration. Daily Home configuration, navigation,
+  timezone, and Capture/Undo receipts use the guarded production mutation journal.
+  CONSEQUENCE: Legacy secret-bearing DB commands are documented as retired, not
+  re-enabled. Read-only OPFS status still means only Protected on this device.
+  Development checkpoints are not shipping claims or regenerated review evidence.

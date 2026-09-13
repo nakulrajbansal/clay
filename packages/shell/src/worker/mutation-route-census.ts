@@ -71,11 +71,11 @@ export const DB_WORKER_ROUTE_CENSUS = Object.freeze({
   cancelProjectionV1: route("ephemeral", "none"),
   dailyHome: route("read", "none"),
   dailyHomeResolveDate: route("read", "none"),
-  dailyHomeSourceCompareAndSet: route("unavailable", "live"),
-  dailyHomeNavigationCompareAndSet: route("unavailable", "live"),
-  dailyHomeInitializeTimeZone: route("unavailable", "live"),
-  dailyHomeQuickCapture: route("unavailable", "live"),
-  dailyHomeUndoCapture: route("unavailable", "live"),
+  dailyHomeSourceCompareAndSet: route("authority", "live"),
+  dailyHomeNavigationCompareAndSet: route("authority", "live"),
+  dailyHomeInitializeTimeZone: route("authority", "live"),
+  dailyHomeQuickCapture: route("authority", "live"),
+  dailyHomeUndoCapture: route("authority", "live"),
   storePort: route("authority-store-port", "live"),
   intent: route("planner-authority", "live"),
   repairPanel: route("planner-authority", "live"),
@@ -129,7 +129,7 @@ export const DB_WORKER_ROUTE_CENSUS = Object.freeze({
   undoBatch: route("authority", "live"),
   rowHistory: route("read", "none"),
   previewRelationConversion: route("read", "none"),
-  convertTextToRelation: route("unavailable", "live"),
+  convertTextToRelation: route("authority", "live"),
   addColumn: route("authority", "live"),
   addRelationColumn: route("authority", "live"),
   renameColumn: route("authority", "live"),
@@ -148,18 +148,19 @@ export const DB_WORKER_ROUTE_CENSUS = Object.freeze({
   acceptSuggestion: route("authority", "live"),
   reset: route("unavailable", "lifecycle"),
   exportArchive: route("unavailable", "live"),
+  collectArchiveSnapshot: route("read", "none"),
   importArchive: route("unavailable", "lifecycle"),
-  backupSelection: route("unavailable", "none"),
-  backupRecords: route("unavailable", "none"),
+  backupSelection: route("authority", "lifecycle"),
+  backupRecords: route("read", "none"),
   prepareAutomaticBackup: route("unavailable", "live"),
-  validateBackupStage: route("unavailable", "none"),
-  publishBackup: route("unavailable", "live"),
+  validateBackupStage: route("read", "none"),
+  publishBackup: route("authority", "lifecycle"),
   backupTrustStatus: route("unavailable", "none"),
   beginBackupTrustEnrollment: route("unavailable", "live"),
   confirmBackupTrustEnrollment: route("unavailable", "live"),
   importRecoveryKit: route("unavailable", "live"),
   activateImportedBackupSeries: route("unavailable", "live"),
-  recoveryCandidates: route("unavailable", "none"),
+  recoveryCandidates: route("read", "none"),
   validateRestoreArchive: route("unavailable", "none"),
   restoreAsNew: route("unavailable", "lifecycle"),
   status: route("read", "none"),
@@ -170,6 +171,25 @@ export const DB_WORKER_ROUTE_CENSUS = Object.freeze({
   deleteSetting: route("authority", "live"),
   compareAndSetSetting: route("authority", "live"),
 } as const satisfies Record<string, MutationRouteClassification>);
+
+/** No current WorkerClient caller. These old DB commands intentionally remain
+ * closed, including commands that would transport secret Recovery Kit bytes. */
+export const RETIRED_DB_WORKER_ROUTES = Object.freeze({
+  reset: "Start over opens authority-backed new-app setup and preserves existing apps.",
+  importTable: "Use bounded begin/stage/configure/preview/commitImport, or importNewApp.",
+  importArchive: "Replacement import retired; only authenticated restore-as-new is intended.",
+  exportArchive: "Trusted-shell authenticated export uses collectArchiveSnapshot plus private-channel readback.",
+  prepareAutomaticBackup: "Trusted-shell coordinator prepares; worker owns snapshots, validation and publication.",
+  backupTrustStatus: "Trust vault status is read in the trusted shell; no keys enter the worker.",
+  beginBackupTrustEnrollment: "Recovery Kit creation is a trusted-shell key-vault operation.",
+  confirmBackupTrustEnrollment: "Recovery Kit confirmation is a trusted-shell key-vault operation.",
+  importRecoveryKit: "Recovery Kit bytes stay in the trusted-shell key vault.",
+  activateImportedBackupSeries: "Explicit trust rotation runs in the trusted-shell key vault.",
+} as const);
+
+export function productionWorkerRouteAvailable(name: keyof typeof DB_WORKER_ROUTE_CENSUS): boolean {
+  return DB_WORKER_ROUTE_CENSUS[name].enforcement !== "unavailable";
+}
 
 export const STORE_RPC_ROUTE_CENSUS = Object.freeze({
   query: route("read", "none"),
@@ -211,7 +231,7 @@ export const CLAY_STORE_WRITER_CENSUS = Object.freeze({
   finishAttempt: "unavailable",
   rollbackTo: "unavailable",
   rollForwardTo: "unavailable",
-  convertTextToRelation: "unavailable",
+  convertTextToRelation: "authority",
   insert: "authority",
   recordUsage: "authority",
   markSuggestionShown: "unavailable",

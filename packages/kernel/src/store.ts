@@ -313,6 +313,8 @@ export type RelationConversionRequest = {
   displayField: string;
 };
 export type RelationConversionPreview = RelationConversionRequest & {
+  /** Required by production Keep; absent only on isolated legacy Store previews. */
+  authorityTarget?: import("@clay/schema/catalog").TargetEvidenceV1;
   atVersion: number;
   fingerprint: string;
   matchedRows: number;
@@ -705,6 +707,14 @@ function stableFingerprint(value: string): string {
 }
 
 const PHYSICAL_ROLLBACK_REFRESH = new WeakMap<ClayStore, () => void>();
+const AUTHORITY_ARCHIVE_READERS = new WeakMap<ClayStore, (name: string) => Promise<Uint8Array>>();
+
+/** Worker-private read capability; no credential scrubbing or live writes. */
+export function exportStoreArchiveReadOnly(store: ClayStore, name: string): Promise<Uint8Array> {
+  const read = AUTHORITY_ARCHIVE_READERS.get(store);
+  if (!read) throw new ClayError("E_VALIDATION", "archive read capability is unavailable");
+  return read(name);
+}
 
 /** Source-private recovery hook; intentionally absent from the public index. */
 export function refreshStoreAfterPhysicalRollback(store: ClayStore): void {
@@ -731,6 +741,7 @@ export class ClayStore {
       (input, digest) => this.#addCapturedAttachment(input, digest),
     );
     PHYSICAL_ROLLBACK_REFRESH.set(this, () => this.loadRegistry());
+    AUTHORITY_ARCHIVE_READERS.set(this, name => this.#exportArchiveReadOnly(name));
   }
 
   static async openMemory(): Promise<ClayStore> {
@@ -871,6 +882,7 @@ export class ClayStore {
 
   close(): void {
     PHYSICAL_ROLLBACK_REFRESH.delete(this);
+    AUTHORITY_ARCHIVE_READERS.delete(this);
     this.#driver.close();
   }
 
@@ -2188,12 +2200,14 @@ export class ClayStore {
       throw new ClayError("E_VALIDATION", "display field must be visible text");
     const sources = this.#driver.select(
       `SELECT "id", ${qid(input.sourceField)} FROM ${qid(input.sourceTable)}
-       WHERE "deleted_at" IS NULL ORDER BY "id"`,
+       WHERE "deleted_at" IS NULL ORDER BY "id" LIMIT 5001`,
     );
     const targets = this.#driver.select(
       `SELECT "id", ${qid(input.displayField)} FROM ${qid(input.targetTable)}
-       WHERE "deleted_at" IS NULL ORDER BY "id"`,
+       WHERE "deleted_at" IS NULL ORDER BY "id" LIMIT 5001`,
     );
+    if (sources.length > 5_000 || targets.length > 5_000)
+      throw new ClayError("E_LIMIT", "text conversion is limited to 5,000 source and target rows");
     const targetsByLabel = new Map<string, string[]>();
     for (const row of targets) {
       const label = normalizedLabel(row[input.displayField]);
@@ -2225,6 +2239,9 @@ export class ClayStore {
     }
     const signature = JSON.stringify({
       version: this.currentVersion(),
+      sourceTable: input.sourceTable, sourceField: input.sourceField,
+      targetTable: input.targetTable, displayField: input.displayField,
+      sourceIdentity: source.semantic, targetIdentity: target.semantic,
       source: sources.map(row => [row.id, row[input.sourceField]]),
       target: targets.map(row => [row.id, row[input.displayField]]),
     });
@@ -2232,7 +2249,7 @@ export class ClayStore {
       preview: {
         ...input,
         atVersion: this.currentVersion(),
-        fingerprint: stableFingerprint(signature),
+        fingerprint: `sha256:${sha256HexSync(new TextEncoder().encode(signature))}`,
         matchedRows, unmatchedRows, ambiguousRows,
         duplicateSourceRows: [...sourceFrequency.values()]
           .reduce((total, count) => total + Math.max(0, count - 1), 0),
@@ -2280,7 +2297,7 @@ export class ClayStore {
     let version = 0;
     try {
       this.#driver.tx(() => {
-        version = this.commit({
+        version = PRODUCTION_STORE_PRIMITIVES.commit.call(this, {
           intent: `connect ${input.sourceTable}.${input.sourceField} to ${input.targetTable}`,
           summary: `Connects ${label} to ${input.targetTable} records without deleting the original text.`,
           migration,
@@ -5494,7 +5511,8 @@ export class ClayStore {
     getTable(this.reg, table);
     const cutoff = new Date(Date.now() - sinceDays * 86_400_000).toISOString();
     return this.#driver.select(
-      `SELECT DISTINCT "row_id" FROM "row_history" WHERE "table" = ? AND "at" >= ?`,
+      `SELECT DISTINCT "row_id" FROM "row_history" WHERE "table" = ? AND "at" >= ?
+       AND NOT (COALESCE("change_kind", '') = 'create' AND "before_json" = 'null')`,
       [table, cutoff]).map(r => String(r.row_id));
   }
 
@@ -5509,7 +5527,9 @@ export class ClayStore {
     const live = new Set(t.columns.filter(c => !c.inactive).map(c => c.name));
     return this.#driver.select(
       `SELECT "at", "before_json" FROM "row_history"
-       WHERE "table" = ? AND "row_id" = ? ORDER BY "sequence" DESC LIMIT ?`,
+       WHERE "table" = ? AND "row_id" = ?
+       AND NOT (COALESCE("change_kind", '') = 'create' AND "before_json" = 'null')
+       ORDER BY "sequence" DESC LIMIT ?`,
       [table, id, limit]).map(r => {
       const raw = JSON.parse(String(r.before_json)) as Record<string, unknown>;
       const values: Record<string, unknown> = {};
@@ -5526,6 +5546,7 @@ export class ClayStore {
     const entry = this.#driver.select(
       `SELECT "before_json" FROM "row_history"
        WHERE "table" = ? AND "row_id" = ? AND COALESCE("change_kind", '') != 'restore'
+       AND NOT (COALESCE("change_kind", '') = 'create' AND "before_json" = 'null')
        ORDER BY "sequence" DESC LIMIT 1`,
       [table, id])[0];
     if (!entry)
@@ -5667,6 +5688,17 @@ export class ClayStore {
    * trust artifact: the whole app in one file. */
   async exportArchive(appName: string): Promise<Uint8Array> {
     this.scrubLegacyCredentialSettings();
+    return this.#buildArchive(appName);
+  }
+
+  async #exportArchiveReadOnly(appName: string): Promise<Uint8Array> {
+    for (const key of LEGACY_CREDENTIAL_SETTING_KEYS)
+      if (this.#driver.select("SELECT key FROM sys.settings WHERE key = ?", [key]).length)
+        throw new ClayError("E_VALIDATION", "archive refused unsanitized legacy credential settings");
+    return this.#buildArchive(appName);
+  }
+
+  async #buildArchive(appName: string): Promise<Uint8Array> {
     const attachmentIssues = await this.attachmentIntegrityIssues();
     if (attachmentIssues.length > 0)
       throw new ClayError("E_VALIDATION",
@@ -6019,7 +6051,13 @@ export class ClayStore {
  * kernel entrypoint.
  */
 export const PRODUCTION_STORE_PRIMITIVES = Object.freeze({
+  applyBatch: ClayStore.prototype.applyBatch,
+  undoBatch: ClayStore.prototype.undoBatch,
+  query: ClayStore.prototype.query,
+  validationRegistrySnapshot: ClayStore.prototype.validationRegistrySnapshot,
   commit: ClayStore.prototype.commit,
+  convertTextToRelation: ClayStore.prototype.convertTextToRelation,
+  previewRelationConversion: ClayStore.prototype.previewRelationConversion,
   currentVersion: ClayStore.prototype.currentVersion,
   getEntry: ClayStore.prototype.getEntry,
   getSetting: ClayStore.prototype.getSetting,

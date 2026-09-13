@@ -267,6 +267,26 @@ async function independentCatalogTarget(
 }
 
 describe("production Store authority", () => {
+  it("exports through a read-only authority snapshot without granting live Store writes", async () => {
+    const driver = await cataloguedStore();
+    const authority = ProductionStoreAuthority.openExisting(driver, {
+      inventory: { ...legacyInventory, catalogPresent: true }, storageKey: "default",
+      releaseId: opaque("rel", "e"), nowMs: Date.now(), leaseTtlMs: 60_000,
+    });
+    try {
+      const before = authority.inspectAuthority();
+      const exported = await authority.collectArchiveSnapshot();
+      expect(exported.target).toEqual(before.target);
+      expect(exported.catalogGeneration).toBe(before.catalog.catalogGeneration);
+      expect(authority.inspectAuthority()).toEqual(before);
+      const { importAuthorityArchive } = await import("../src/archive-authority");
+      const imported = await importAuthorityArchive(exported.bytes);
+      expect(imported.store.query({ from: "projects" })).toEqual([expect.objectContaining({ name: "Preserved" })]);
+      imported.store.close();
+      expect((await authority.backupSelection()).selected.target).toEqual(before.target);
+      expect(await authority.backupRecords()).toEqual([]);
+    } finally { authority.close(); }
+  });
   it("plans every inventoried legacy namespace with one requested selection", () => {
     const inventory = {
       state: "complete" as const,

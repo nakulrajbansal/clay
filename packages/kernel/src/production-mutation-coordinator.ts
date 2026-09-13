@@ -19,6 +19,7 @@ import {
   DAILY_NAVIGATION_SETTING,
 } from "./daily-navigation";
 import { DAILY_SOURCE_LIBRARY_SETTING } from "./daily-source-profile";
+import { DAILY_CAPTURE_LEDGER } from "./production-daily";
 import {
   automationPhysicalTransactionCapability,
   isThenable,
@@ -131,6 +132,7 @@ const RESERVED_SETTING_OWNERS = new Map<string, string>([
   [DAILY_NAVIGATION_SETTING, "Daily Home navigation authority"],
   [DAILY_TIME_ZONE_SETTING, "Daily Home calendar authority"],
   [QUICK_CAPTURE_LAST_TABLE_SETTING, "Daily Home capture authority"],
+  [DAILY_CAPTURE_LEDGER, "Daily Home capture authority"],
   ["sample_provenance_v1", "starter sample provenance authority"],
   ["sample_rows", "starter sample provenance authority"],
 ]);
@@ -662,12 +664,18 @@ function captureMutation(input: unknown): CapturedProductionMutation {
       case "samples.fill": return done(captureSampleFill(payload));
       case "starter.seed": return done(captureStarterSeedBundle(payload));
       case "timeline.setCheckpoint":
+      case "daily.source":
+      case "daily.navigation":
+      case "daily.timeZone":
+      case "daily.capture":
+      case "daily.undoCapture":
       case "timeline.makeLatest":
       case "panel.revert":
       case "panel.rename":
       case "panel.remove":
       case "schema.addColumn":
       case "schema.renameColumn":
+      case "schema.convertTextToRelation":
       case "schema.addRelationColumn": {
         const captured = captureCoreMutation(requestId, route, captureJsonRecord(payload));
         if (captured) return captured;
@@ -1100,7 +1108,7 @@ function executeCapturedMutation(
 ): CapturedMutationExecution {
   if (isCapturedCoreMutation(request))
     return capturedExecution(captureJsonValue(
-      executeCapturedCoreMutation(store, request), new WeakSet(),
+      executeCapturedCoreMutation(store, request, expectedTarget), new WeakSet(),
     ));
   switch (request.route) {
     case "store.insert":

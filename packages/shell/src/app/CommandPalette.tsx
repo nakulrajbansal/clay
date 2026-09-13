@@ -37,8 +37,11 @@ export function CommandPalette(props: {
   const [active, setActive] = useState(0);
   const [creating, setCreating] = useState<RegTable | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
+  const submitting = useRef(false);
   const pendingCreate = useRef<{
-    key: string;
+    table: string;
+    tableId: string;
+    row: Record<string, unknown>;
     context: WorkerMutationContext;
   } | null>(null);
   const fields = useMemo(() => (creating?.columns ?? []).filter(column =>
@@ -122,39 +125,39 @@ export function CommandPalette(props: {
 
   const create = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
-    if (!creating) return;
-    const row: Record<string, unknown> = {};
-    for (const column of fields) {
-      const value = draft[column.name] ?? "";
-      if (value !== "") row[column.name] = column.type === "date"
-        ? await props.worker.resolveDailyHomeDate(value)
-        : coerce(column, value);
-    }
-    const summary = `Create ${humanize(creating.name)} record`;
-    const mutations = [{ kind: "insert" as const, table: creating.name, row }];
-    const operationKey = JSON.stringify({ summary, mutations });
+    if (!creating || submitting.current) return;
+    submitting.current = true;
     setBusy(true);
     try {
       const tableId = creating.semantic?.tableId;
       if (props.captureMode && !tableId)
         throw new Error("Quick capture requires a stable record type identity");
-      const context = props.captureMode ? null : pendingCreate.current?.key === operationKey
-        ? pendingCreate.current.context : props.worker.createMutationContext();
-      if (context) pendingCreate.current = { key: operationKey, context };
+      if (!pendingCreate.current) {
+        const row: Record<string, unknown> = {};
+        for (const column of fields) {
+          const value = draft[column.name] ?? "";
+          if (value !== "") row[column.name] = column.type === "date"
+            ? await props.worker.resolveDailyHomeDate(value) : coerce(column, value);
+        }
+        pendingCreate.current = { table: creating.name, tableId: String(tableId), row,
+          context: props.worker.createMutationContext() };
+      }
+      const intent = pendingCreate.current;
       const receipt = props.captureMode
-        ? await props.worker.quickCapture(creating.name, row, String(tableId))
-        : await props.worker.applyBatch(summary, mutations, context!);
-      pendingCreate.current = null;
+        ? await props.worker.quickCapture(intent.table, intent.row, intent.tableId, intent.context)
+        : await props.worker.applyBatch(`Create ${humanize(intent.table)} record`,
+          [{ kind: "insert", table: intent.table, row: intent.row }], intent.context);
       const created = receipt.created[0];
       if (!created || created.table !== creating.name)
         throw new Error("Quick capture did not return its durable created-record receipt");
       props.onWrite(creating.name);
+      const undoContext = props.worker.createMutationContext();
       props.onInfo(`Created in ${humanize(creating.name)} with a durable undo receipt.`, {
         label: "Undo",
         run: () => {
           const undo = props.captureMode
-            ? props.worker.undoQuickCapture(receipt.id)
-            : props.worker.undoBatch(receipt.id, props.worker.createMutationContext());
+            ? props.worker.undoQuickCapture(receipt.id, undoContext)
+            : props.worker.undoBatch(receipt.id, undoContext);
           void undo.then(() => {
             props.onWrite(creating.name);
             props.onInfo(`Undid quick capture in ${humanize(creating.name)}.`);
@@ -165,9 +168,10 @@ export function CommandPalette(props: {
       });
       props.onClose();
       props.onOpenRecord(creating.name, created.id);
+      pendingCreate.current = null;
     } catch (error) {
       props.onError(error instanceof Error ? error.message : String(error));
-    } finally { setBusy(false); }
+    } finally { submitting.current = false; setBusy(false); }
   };
 
   return (
@@ -175,7 +179,7 @@ export function CommandPalette(props: {
       ariaLabel="Search and act" onClose={props.onClose}>
       <div className="command-search-row">
         <span aria-hidden="true">⌕</span>
-        <input autoFocus type="search" value={query} onChange={event => setQuery(event.target.value)}
+        <input autoFocus type="search" value={query} disabled={!!pendingCreate.current || submitting.current} onChange={event => setQuery(event.target.value)}
           onKeyDown={onKeyDown} placeholder="Find any record or choose an action…"
           role="combobox" aria-expanded="true"
           aria-activedescendant={itemCount > 0 ? `command-item-${active}` : undefined}
@@ -186,27 +190,27 @@ export function CommandPalette(props: {
       {creating ? (
         <form className="command-create" onSubmit={event => void create(event)}>
           <header>
-            <button type="button" className="link" onClick={() => { setCreating(null); setDraft({}); }}>← Back</button>
+            <button type="button" className="link" disabled={!!pendingCreate.current || submitting.current} onClick={() => { setCreating(null); setDraft({}); }}>← Back</button>
             <div><span>Quick create</span><h2>New {humanize(creating.name)}</h2></div>
           </header>
           <div className="command-create-fields">
             {fields.map((column, index) => (
               <label key={column.name}>{column.label ?? humanize(column.name)}
                 {column.type === "enum" ? (
-                  <select autoFocus={index === 0} required={column.required}
+                  <select autoFocus={index === 0} required={column.required} disabled={!!pendingCreate.current || submitting.current}
                     value={draft[column.name] ?? ""}
                     onChange={event => setDraft(value => ({ ...value, [column.name]: event.target.value }))}>
                     <option value="">Choose…</option>
                     {(column.values ?? []).map(value => <option key={value}>{value}</option>)}
                   </select>
                 ) : column.type === "boolean" ? (
-                  <select autoFocus={index === 0} required={column.required}
+                  <select autoFocus={index === 0} required={column.required} disabled={!!pendingCreate.current || submitting.current}
                     value={draft[column.name] ?? ""}
                     onChange={event => setDraft(value => ({ ...value, [column.name]: event.target.value }))}>
                     <option value="">—</option><option value="true">Yes</option><option value="false">No</option>
                   </select>
                 ) : (
-                  <input autoFocus={index === 0} required={column.required}
+                  <input autoFocus={index === 0} required={column.required} disabled={!!pendingCreate.current || submitting.current}
                     aria-label={column.label ?? humanize(column.name)}
                     type={column.type === "number" || column.type === "integer" ? "number" : "text"}
                     placeholder={column.type === "date" ? "today, tomorrow, or YYYY-MM-DD" : undefined}
@@ -216,8 +220,10 @@ export function CommandPalette(props: {
               </label>
             ))}
           </div>
-          <footer><button type="button" onClick={() => setCreating(null)}>Cancel</button>
-            <button className="primary" disabled={busy} type="submit">{busy ? "Creating…" : "Create record"}</button></footer>
+          {pendingCreate.current && !busy && <p role="status">The outcome is not yet reconciled. Retry the same capture; closing does not cancel a committed record.</p>}
+          <footer><button type="button" disabled={submitting.current}
+            onClick={() => pendingCreate.current ? props.onClose() : setCreating(null)}>{pendingCreate.current ? "Close" : "Cancel"}</button>
+            <button className="primary" disabled={busy} type="submit">{busy ? "Creating…" : pendingCreate.current ? "Retry capture" : "Create record"}</button></footer>
         </form>
       ) : (
         <div id="command-results" className="command-results">

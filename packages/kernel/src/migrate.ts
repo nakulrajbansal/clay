@@ -51,6 +51,7 @@ function recordRename(table: RegTable, from: string, to: string): void {
 
 function undoRename(table: RegTable, name: string): void {
   table.reservedColumnNames = table.reservedColumnNames?.filter(item => item !== name);
+  if (!table.reservedColumnNames?.length) delete table.reservedColumnNames;
 }
 
 /** Kernel-owned user.db tables user migrations may not claim (G6). */

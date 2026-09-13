@@ -6,6 +6,7 @@ import {
   BRIDGE_WRITE_ROUTE_CENSUS,
   CLAY_STORE_WRITER_CENSUS,
   DB_WORKER_ROUTE_CENSUS,
+  RETIRED_DB_WORKER_ROUTES,
   STORE_RPC_ROUTE_CENSUS,
 } from "../src/worker/mutation-route-census";
 
@@ -92,6 +93,13 @@ function clayStorePublicWriterNames(text: string): Set<string> {
 }
 
 describe("production mutation route census", () => {
+  it("keeps retired compatibility commands closed and without WorkerClient transport callers", () => {
+    const client = source("packages/shell/src/app/worker-client.ts");
+    for (const name of Object.keys(RETIRED_DB_WORKER_ROUTES) as Array<keyof typeof RETIRED_DB_WORKER_ROUTES>) {
+      expect(DB_WORKER_ROUTE_CENSUS[name].enforcement).toBe("unavailable");
+      expect(client).not.toMatch(new RegExp(`(?:mutationCall|ephemeralCall)\\(\\s*"${name}"`));
+    }
+  });
   it("classifies every db-worker command and enforces every live writer", () => {
     const worker = source("packages/shell/src/worker/db-worker.ts");
     expect([...quotedSwitchCases(worker)].sort())

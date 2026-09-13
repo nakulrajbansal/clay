@@ -18,6 +18,7 @@ import type {
   BackupFailureReasonCode,
 } from "@clay/kernel/recovery";
 import { WorkerClient, type BootInfo, type RecoveryRecordCandidate } from "./worker-client";
+import { productionWorkerRouteAvailable } from "../worker/mutation-route-census";
 import { beginAppSetup, readAppSetup, saveAppSetup, finishAppSetup } from "./app-setup-intent";
 import {
   LatestRequestGate, beginLazySession, createRetryingLoader, runLatestRequest,
@@ -129,21 +130,6 @@ export function firstSuccessJourneyComplete(
     && protection?.result.state === "protected_on_device"
     && protection.checkpoint.state === "valid"
     && targetIdentityEquals(protection.target, protection.checkpoint.target);
-}
-
-async function wipeOpfsWithoutWorker(): Promise<void> {
-  type IterableDirectory = {
-    entries: () => AsyncIterableIterator<[string, unknown]>;
-    removeEntry: (name: string, options?: { recursive?: boolean }) => Promise<void>;
-  };
-  const storage = navigator.storage;
-  const getDirectory = (storage as unknown as {
-    getDirectory?: () => Promise<IterableDirectory>;
-  }).getDirectory;
-  if (!getDirectory) return;
-  const root = await getDirectory.call(storage);
-  for await (const [name] of root.entries())
-    await root.removeEntry(name, { recursive: true });
 }
 
 async function prepareWorkerModelAccess(
@@ -2071,23 +2057,9 @@ export function App(): React.JSX.Element {
 
   const resetApp = async (): Promise<void> => {
     if (!(await askConfirm(
-      "Erase EVERYTHING and start over? All apps and their data are deleted. "
-      + "This is the one action Clay cannot undo."))) return;
-    try {
-      if (!workerRef.current) throw new Error("worker unavailable");
-      await withTimeout(workerRef.current.reset(workerRef.current.createMutationContext()),
-        5_000, "Erasing local data");
-    } catch {
-      try {
-        await wipeOpfsWithoutWorker();
-      } catch (error) {
-        setBootError(`Could not erase local data: ${error instanceof Error ? error.message : String(error)}`);
-        return;
-      }
-    }
-    try { localStorage.removeItem("clay_apps"); localStorage.removeItem("clay_current_app"); }
-    catch { /* ignore */ }
-    window.location.reload();
+      "Start a new app? Your existing apps and their data will be kept. "
+      + "Choose a blank app or starter next; you can switch back at any time."))) return;
+    newApp();
   };
 
   const removeSamples = async (): Promise<void> => {
@@ -2601,8 +2573,8 @@ export function App(): React.JSX.Element {
               onRestoreRecord={restoreRecoveryRecord}
               onUndoBatch={undoRecoveryBatch}
               onRewindStructure={rewindRecoveryStructure}
-              onValidateRestore={validateRestore}
-              onRestoreAsNew={restoreAsNew}
+              onValidateRestore={productionWorkerRouteAvailable("validateRestoreArchive") ? validateRestore : undefined}
+              onRestoreAsNew={productionWorkerRouteAvailable("restoreAsNew") ? restoreAsNew : undefined}
             />
           </Suspense>
         </LazySurfaceBoundary>
@@ -2634,7 +2606,10 @@ export function App(): React.JSX.Element {
               onSetup={() => openData()}
               onCreateRecurring={() => openAutomations("recurring_record")}
               automationMutationsAvailable={false}
-              dailyHomeMutationsAvailable={false}
+              onToggleFavorite={async (tableId, rowId) => {
+                await client().toggleDailyFavorite(tableId, rowId);
+                invalidateDailyHome();
+              }}
               onError={message => pushToast(message, "danger")}
             />
           </Suspense>

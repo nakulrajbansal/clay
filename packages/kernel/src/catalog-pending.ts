@@ -1,6 +1,6 @@
 import { GenerationId, NamespaceId } from "@clay/schema";
 import { AppLifecycleReceiptV1, PendingTargetLifecycleJobV1 } from "@clay/schema/catalog";
-import { ArchivePendingJobV1 } from "@clay/schema/archive";
+import { ArchivePendingJobV1, type ArchiveLifecycleReceiptV1 } from "@clay/schema/archive";
 import type { DbDriver } from "./db";
 import { ClayError } from "./errors";
 
@@ -9,7 +9,7 @@ export const LIFECYCLE_RECEIPT_PROVENANCE = "app-lifecycle-receipt-v1";
 type PendingRow =
   | { kind: "restore"; value: ArchivePendingJobV1 }
   | { kind: "lifecycle"; value: PendingTargetLifecycleJobV1 }
-  | { kind: "receipt"; value: AppLifecycleReceiptV1 };
+  | { kind: "receipt"; value: AppLifecycleReceiptV1; generationId: string; namespaceId: string };
 
 /** No SQL kind filters: every physical row must have exactly one closed interpretation. */
 export function readCatalogPendingRows(driver: DbDriver): PendingRow[] {
@@ -50,9 +50,9 @@ export function readCatalogPendingRows(driver: DbDriver): PendingRow[] {
             || row.source_provenance_id !== LIFECYCLE_RECEIPT_PROVENANCE
             || row.created_at !== value.completedAt || row.updated_at !== value.completedAt)
           throw new Error("receipt columns disagree");
-        GenerationId.parse(row.generation_id);
-        NamespaceId.parse(row.namespace_id);
-        result = { kind: "receipt", value };
+        result = { kind: "receipt", value,
+          generationId: GenerationId.parse(row.generation_id),
+          namespaceId: NamespaceId.parse(row.namespace_id) };
       } else throw new Error("unknown physical pending kind");
       const value = result.value;
       if (row.job_id !== value.jobId || row.authority_incarnation_id !== value.authorityIncarnationId
@@ -74,7 +74,7 @@ export function readCatalogPendingRows(driver: DbDriver): PendingRow[] {
   }
 }
 
-/** Format 5 cannot silently omit lifecycle history. Release B needs an explicit format reconciliation. */
+/** Legacy collector: callers without a lifecycle-evidence member must fail closed. */
 export function pendingRowsForArchive(driver: DbDriver): ArchivePendingJobV1[] {
   const rows = readCatalogPendingRows(driver);
   if (rows.some(row => row.kind === "lifecycle"))
@@ -82,4 +82,19 @@ export function pendingRowsForArchive(driver: DbDriver): ArchivePendingJobV1[] {
   if (rows.some(row => row.kind === "receipt"))
     throw new ClayError("E_CATALOG_UNAVAILABLE", "archive format 5 cannot omit lifecycle receipts");
   return rows.flatMap(row => row.kind === "restore" ? [row.value] : []);
+}
+
+/** One physical read, no kind filters and no dropped terminal history. */
+export function catalogPendingEvidenceForArchive(driver: DbDriver): {
+  pendingJobs: ArchivePendingJobV1[]; lifecycleReceipts: ArchiveLifecycleReceiptV1[];
+} {
+  const rows = readCatalogPendingRows(driver);
+  if (rows.some(row => row.kind === "lifecycle"))
+    throw new ClayError("E_CATALOG_UNAVAILABLE", "archive blocked by unfinished lifecycle work");
+  return {
+    pendingJobs: rows.flatMap(row => row.kind === "restore" ? [row.value] : []),
+    lifecycleReceipts: rows.flatMap(row => row.kind === "receipt" ? [{
+      receipt: row.value, generationId: row.generationId, namespaceId: row.namespaceId,
+    }] : []),
+  };
 }

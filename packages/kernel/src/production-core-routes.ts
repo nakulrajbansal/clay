@@ -2,6 +2,9 @@ import { ClayError } from "./errors";
 import { deriveInverse, type ForwardOpT } from "./migrate";
 import { registryToJson } from "./registry";
 import { ClayStore, PRODUCTION_STORE_PRIMITIVES } from "./store";
+import { RelationKeepRequest, keepRelation, type CapturedRelationKeep } from "./production-relation";
+import type { TargetEvidenceV1 } from "@clay/schema/catalog";
+import { captureDaily, executeDaily, type CapturedDaily } from "./production-daily";
 
 const IDENT = /^[a-z][a-z0-9_]{0,40}$/;
 const PANEL_ID = /^[a-z][a-z0-9_]{2,40}$/;
@@ -26,6 +29,8 @@ type CapturedRelationColumn = Readonly<{
 }>;
 
 export type CapturedCoreMutation =
+  | CapturedDaily
+  | Readonly<{ requestId: string; route: "schema.convertTextToRelation"; payload: CapturedRelationKeep }>
   | Readonly<{ requestId: string; route: "timeline.setCheckpoint";
       payload: Readonly<{ version: number; label: string }> }>
   | Readonly<{ requestId: string; route: "timeline.makeLatest";
@@ -173,6 +178,14 @@ export function captureCoreMutation(
   input: unknown,
 ): CapturedCoreMutation | null {
   switch (route) {
+    case "daily.source":
+    case "daily.navigation":
+    case "daily.timeZone":
+    case "daily.capture":
+    case "daily.undoCapture":
+      return captureDaily(requestId, route, input);
+    case "schema.convertTextToRelation":
+      return { requestId, route, payload: RelationKeepRequest.parse(input) };
     case "timeline.setCheckpoint": {
       const payload = dataRecord(input, ["version", "label"]);
       if (!Number.isSafeInteger(payload.version) || (payload.version as number) < 0
@@ -233,6 +246,12 @@ export function isCapturedCoreMutation(
   request: Readonly<{ route: string }>,
 ): request is CapturedCoreMutation {
   switch (request.route) {
+    case "daily.source":
+    case "daily.navigation":
+    case "daily.timeZone":
+    case "daily.capture":
+    case "daily.undoCapture":
+    case "schema.convertTextToRelation":
     case "timeline.setCheckpoint":
     case "timeline.makeLatest":
     case "panel.revert":
@@ -329,8 +348,18 @@ function renameColumn(store: ClayStore, table: string, from: string, to: string)
 export function executeCapturedCoreMutation(
   store: ClayStore,
   request: CapturedCoreMutation,
+  target?: TargetEvidenceV1,
 ): unknown {
   switch (request.route) {
+    case "daily.source":
+    case "daily.navigation":
+    case "daily.timeZone":
+    case "daily.capture":
+    case "daily.undoCapture":
+      return executeDaily(store, request);
+    case "schema.convertTextToRelation":
+      if (!target) throw new ClayError("E_CONFLICT", "conversion requires an authority target");
+      return keepRelation(store, request.payload, target);
     case "timeline.setCheckpoint":
       PRODUCTION_STORE_PRIMITIVES.setCheckpoint.call(
         store, request.payload.version, request.payload.label,

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { RelationConversionPreview, RegTable } from "@clay/kernel";
 import type { WorkerClient } from "./worker-client";
 import { ModalDialog } from "./ModalDialog";
@@ -30,6 +30,11 @@ export function RelationConversionDialog(props: {
     ? displayField : displayFields[0]?.name ?? "";
   const [preview, setPreview] = useState<RelationConversionPreview | null>(null);
   const [busy, setBusy] = useState(false);
+  const pendingKeep = useRef<{
+    input: RelationConversionPreview & { cardinality: "one" };
+    context: ReturnType<WorkerClient["createMutationContext"]>;
+  } | null>(null);
+  const [needsReconciliation, setNeedsReconciliation] = useState(false);
 
   const analyze = async (): Promise<void> => {
     if (!sourceField || !targetTable || !effectiveDisplay) return;
@@ -47,16 +52,19 @@ export function RelationConversionDialog(props: {
   const connect = async (): Promise<void> => {
     if (!preview) return;
     setBusy(true);
-    const context = props.worker.createMutationContext();
+    const intent = pendingKeep.current ?? {
+      input: { ...preview, cardinality: "one" as const }, context: props.worker.createMutationContext(),
+    };
+    pendingKeep.current = intent;
     try {
       await props.runWrite(async () => {
         const result = await props.worker.convertTextToRelation(
-          { ...preview, cardinality: "one" }, context);
+          intent.input, intent.context);
         await props.onCommitted(result);
       });
     } catch (error) {
       props.onError(error instanceof Error ? error.message : String(error));
-      setPreview(null);
+      setNeedsReconciliation(true);
     } finally { setBusy(false); }
   };
 
@@ -74,7 +82,7 @@ export function RelationConversionDialog(props: {
 
       <div className="relation-dialog-grid">
         <label>Text field
-          <select autoFocus value={sourceField}
+          <select autoFocus value={sourceField} disabled={busy || needsReconciliation}
             onChange={event => { setSourceField(event.target.value); setPreview(null); }}>
             {sourceFields.map(field => <option key={field.name} value={field.name}>
               {field.label ?? label(field.name)}
@@ -83,7 +91,7 @@ export function RelationConversionDialog(props: {
         </label>
         <span className="relation-arrow" aria-hidden="true">→</span>
         <label>Link to table
-          <select value={targetTable}
+          <select value={targetTable} disabled={busy || needsReconciliation}
             onChange={event => {
               setTargetTable(event.target.value); setDisplayField(""); setPreview(null);
             }}>
@@ -93,7 +101,7 @@ export function RelationConversionDialog(props: {
           </select>
         </label>
         <label>Match using
-          <select value={effectiveDisplay}
+          <select value={effectiveDisplay} disabled={busy || needsReconciliation}
             onChange={event => { setDisplayField(event.target.value); setPreview(null); }}>
             {displayFields.map(field => <option key={field.name} value={field.name}>
               {field.label ?? label(field.name)}
@@ -127,13 +135,14 @@ export function RelationConversionDialog(props: {
       )}
 
       <footer className="relation-dialog-actions">
-        <button onClick={props.onClose}>Cancel</button>
+        {needsReconciliation ? <p role="status">The Keep outcome needs checking. Retry the same request, or close and inspect History. No changes are discarded by closing.</p> : null}
+        <button disabled={busy} onClick={props.onClose}>{needsReconciliation ? "Close" : preview ? "Discard preview" : "Cancel"}</button>
         {!preview ? (
           <button className="primary" disabled={busy || !sourceField || !targetTable || !effectiveDisplay}
             onClick={() => void analyze()}>{busy ? "Checking…" : "Preview matches"}</button>
         ) : (
           <button className="primary" disabled={busy}
-            onClick={() => void connect()}>{busy ? "Connecting…" : `Connect ${preview.matchedRows} rows`}</button>
+            onClick={() => void connect()}>{busy ? "Connecting…" : needsReconciliation ? "Retry Keep" : `Keep — connect ${preview.matchedRows} rows`}</button>
         )}
       </footer>
     </ModalDialog>

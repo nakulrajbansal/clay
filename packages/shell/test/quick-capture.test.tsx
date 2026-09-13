@@ -7,7 +7,7 @@ import {
   CommandPalette,
   QUICK_CAPTURE_LAST_TABLE_SETTING,
 } from "../src/app/CommandPalette";
-import type { WorkerClient } from "../src/app/worker-client";
+import { createWorkerMutationContext, type WorkerClient } from "../src/app/worker-client";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -23,6 +23,40 @@ function typeInto(input: HTMLInputElement, value: string): void {
 }
 
 describe("quick capture", () => {
+  it("retries the original payload and identity after a lost response, even across midnight", async () => {
+    const tableId = "tbl_018f4c2a-7b31-7001-8000-000000000001";
+    const tables = [{ name: "tasks", semantic: { tableId }, columns: [
+      { name: "due", type: "date", required: true },
+    ] }] as unknown as RegTable[];
+    const calls: unknown[][] = [];
+    let resolutions = 0;
+    const worker = {
+      createMutationContext: createWorkerMutationContext, globalSearch: async () => [], getSetting: async () => tableId,
+      resolveDailyHomeDate: async () => ++resolutions === 1 ? "2026-09-13" : "2026-09-14",
+      quickCapture: async (...args: unknown[]) => {
+        calls.push(structuredClone(args));
+        if (calls.length === 1) throw new Error("response lost after commit");
+        return { id: "018f4c2a-7b31-7001-8000-000000000091", created: [{ table: "tasks", id: "row" }] };
+      },
+    } as unknown as WorkerClient;
+    const host = document.createElement("div"); document.body.replaceChildren(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(<CommandPalette worker={worker} store={{} as AsyncStore}
+        tables={tables} captureMode onClose={() => {}} onOpenRecord={() => {}} onOpenData={() => {}}
+        onWrite={() => {}} onError={() => {}} onInfo={() => {}} />));
+      await settle();
+      await act(async () => typeInto(document.querySelector<HTMLInputElement>('input[aria-label="Due"]')!, "tomorrow"));
+      const submit = async () => {
+        await act(async () => { document.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+        await settle();
+      };
+      await submit(); await submit();
+      expect(calls).toHaveLength(2);
+      expect(calls[1]).toEqual(calls[0]);
+      expect(resolutions).toBe(1);
+    } finally { await act(async () => root.unmount()); }
+  });
   it("opens the last record type and inserts through the authority-backed Store port", async () => {
     const taskTableId = "tbl_018f4c2a-7b31-7001-8000-000000000001";
     const tables = [{
@@ -49,6 +83,7 @@ describe("quick capture", () => {
       undone: false,
     };
     const worker = {
+      createMutationContext: createWorkerMutationContext,
       globalSearch: async () => [],
       getSetting: async (key: string) => key === QUICK_CAPTURE_LAST_TABLE_SETTING ? taskTableId : null,
       resolveDailyHomeDate: async (value: string) => value === "tomorrow" ? "2026-09-07" : value,

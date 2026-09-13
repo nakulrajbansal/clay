@@ -4,7 +4,7 @@ import {
   OperationId, ReleaseId, Sha256, UInt64Decimal,
 } from "./index";
 import {
-  AppCatalogEntryV1, CanonicalInstant, CatalogGenerationEventV1,
+  AppCatalogEntryV1, AppLifecycleReceiptV1, CanonicalInstant, CatalogGenerationEventV1,
   CatalogRevisionReservationV1, ImmutableAppGenerationV1,
   ProductionRequestReceiptV1, TargetAuthorityHeaderV1, TargetEvidenceV1,
 } from "./catalog";
@@ -216,25 +216,14 @@ const ArchiveAuthorityBindingV1 = z.object({
   systemDb: ArchiveFileDigestV1,
 }).strict();
 
-export const ArchiveAuthorityEvidenceV1 = z.object({
-  schema: z.literal(1),
-  binding: ArchiveAuthorityBindingV1,
-  target: TargetEvidenceV1,
-  merkle: z.object({
-    schema: z.literal(1),
-    stateSha256: Sha256,
-    leafCount: ArchiveCount,
-    bucketRoots: z.array(Sha256).length(1024),
-  }).strict(),
-  targetAuthority: z.object({
-    schema: z.literal(1),
-    header: TargetAuthorityHeaderV1,
-    revisions: z.array(ArchiveTargetRevisionV1)
-      .max(MAX_ARCHIVE_AUTHORITY_HISTORY_ENTRIES),
-    requestReceipts: z.array(ArchiveTargetRequestReceiptV1)
-      .max(MAX_ARCHIVE_AUTHORITY_HISTORY_ENTRIES),
-  }).strict(),
-  catalogAuthority: z.object({
+export const ArchiveLifecycleReceiptV1 = z.object({
+  receipt: AppLifecycleReceiptV1,
+  generationId: GenerationId,
+  namespaceId: NamespaceId,
+}).strict();
+export type ArchiveLifecycleReceiptV1 = z.infer<typeof ArchiveLifecycleReceiptV1>;
+
+const ArchiveCatalogAuthorityV1 = z.object({
     schema: z.literal(1),
     schemaObjects: z.array(ArchiveCatalogSchemaObjectV1).max(64),
     authorityIncarnationId: AuthorityIncarnationId,
@@ -262,7 +251,32 @@ export const ArchiveAuthorityEvidenceV1 = z.object({
       .max(MAX_ARCHIVE_AUTHORITY_HISTORY_ENTRIES),
     backupRecords: z.array(BackupRecordV1)
       .max(MAX_ARCHIVE_AUTHORITY_HISTORY_ENTRIES),
+}).strict();
+
+// Version only the catalog evidence member. The format-5 authenticated envelope,
+// its authentication-before-parsing order, and all existing bindings are unchanged.
+const ArchiveCatalogAuthorityV2 = ArchiveCatalogAuthorityV1.extend({
+  schema: z.literal(2),
+  lifecycleReceipts: z.array(ArchiveLifecycleReceiptV1).max(MAX_ARCHIVE_AUTHORITY_HISTORY_ENTRIES),
+}).strict();
+
+export const ArchiveAuthorityEvidenceV1 = z.object({
+  schema: z.literal(1),
+  binding: ArchiveAuthorityBindingV1,
+  target: TargetEvidenceV1,
+  merkle: z.object({
+    schema: z.literal(1),
+    stateSha256: Sha256,
+    leafCount: ArchiveCount,
+    bucketRoots: z.array(Sha256).length(1024),
   }).strict(),
+  targetAuthority: z.object({
+    schema: z.literal(1),
+    header: TargetAuthorityHeaderV1,
+    revisions: z.array(ArchiveTargetRevisionV1).max(MAX_ARCHIVE_AUTHORITY_HISTORY_ENTRIES),
+    requestReceipts: z.array(ArchiveTargetRequestReceiptV1).max(MAX_ARCHIVE_AUTHORITY_HISTORY_ENTRIES),
+  }).strict(),
+  catalogAuthority: z.discriminatedUnion("schema", [ArchiveCatalogAuthorityV1, ArchiveCatalogAuthorityV2]),
 }).strict().superRefine((value, context) => {
   const authorityEntries = value.targetAuthority.revisions.length
     + value.targetAuthority.requestReceipts.length
@@ -276,7 +290,8 @@ export const ArchiveAuthorityEvidenceV1 = z.object({
     + value.catalogAuthority.pendingJobs.length
     + value.catalogAuthority.lineageReservations.length
     + value.catalogAuthority.generationEvents.length
-    + value.catalogAuthority.backupRecords.length;
+    + value.catalogAuthority.backupRecords.length
+    + (value.catalogAuthority.schema === 2 ? value.catalogAuthority.lifecycleReceipts.length : 0);
   if (authorityEntries > MAX_ARCHIVE_AUTHORITY_TOTAL_ENTRIES)
     context.addIssue({
       code: z.ZodIssueCode.custom,
