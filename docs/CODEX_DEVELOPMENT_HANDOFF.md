@@ -4,11 +4,74 @@ Development checkpoint only. Development is NOT complete. No certification or
 shipping claim. Continue from Exact continuation; do not start the integrated
 regression/build/budget/browser/accessibility/review campaign yet.
 
+## Latest development continuation on ad6d9db0
+
+This section and Exact continuation supersede the preserved earlier checkpoint
+notes below. A-D and the committed E/F baseline were preserved. No certification.
+
+- `intakeCommand` -> `intake.command` now accepts the sixteenth closed inner
+  route, `intake.closePublication`. It checks original app/generation/lineage and
+  public definition, journals the immutable request and returns the exact canonical
+  closure receipt. Optional bounded `publicationClosures` in closed intake_v2
+  excludes every future save/publish of that form ID, including unknown old-client
+  IDs with fresh targets. It never deletes, relabels or revokes a local form.
+- Revoked metadata cannot be resurrected by a higher save revision. Repeated
+  revoke IDs cannot rewrite the original revokedAt/terminalReason. This permanent
+  terminal state is required before treating unknown old-client revoke work as
+  harmless; a read-only not_invoked snapshot is still not a request fence.
+- Trusted-shell `IntakePublication.terminalizeLegacy` first proves the original
+  V2 source, proposal, existing vault/key pair and relay. It claims closure-only
+  public work while preserving `legacyOriginal`, cancels/reads every known original
+  request, persists the authority closure intent before invoking, validates its
+  receipt, and obtains the exact relay tombstone. Active published forms still need
+  explicit local revoke; UI never calls them reconciled. Missing custody or original
+  generation remains quarantined, without minting keys or discarding work.
+- `IntakeOwnerClient.adoptLegacyRevocation(reviewedTarget)` proves original local
+  metadata and existing private custody/readback before retaining a cache-only
+  revoke. Adoption itself neither invokes nor declares local/remote completion.
+  `renewRevocation(reviewedTarget)` cancels/reads the preceding invocation and
+  verifies the exact relay tombstone before retaining a new immutable request.
+  Reviewed source is checked again after asynchronous proofs. Prior requests remain
+  in a maximum-eight renewal chain. A racing unknown revoke can win only once;
+  reconciliation still terminalizes the known original and preserves that winner.
+- Public terminal proof contains exact form, target, invocation status/ID and relay
+  acknowledgement. It commits/readbacks before workflow finish and is immutable.
+  Completed workflow slots retain up to 100 original jobs; capacity fails closed,
+  not silent eviction. Cache teardown, cancellation/readback/claim/persist faults,
+  wrong source/configuration and lost acknowledgements preserve all identities.
+- IntakeCenter exposes confirmed legacy publication closure, reviewed original-
+  owner revoke adoption, normal original retry, and explicit stale-revoke renewal.
+  Adoption of an active local form is labeled incomplete. Copied source metadata
+  and already-closed-form renewal prerequisites do not advertise a usable renewal.
+- Archive guards now understand the existing prefixed canonical production
+  response envelope. SQLite checks private property names before selecting values;
+  public bodies then undergo canonical decode in bounded pages with exact physical
+  cardinality. Malformed envelopes, escaped private keys, legacy rows/private
+  receipts still reject. No original row or format-5 authentication was rewritten.
+- E: the actual installed browser sqlite-wasm/SAHPool binary, running only against
+  owned protocol handles, reproduced mixed `[2,1,1]` / `[2,2,1]` values on ordinary
+  reopen after a three-file commit interruption. EXCLUSIVE mode alone also failed.
+  New `sahpool-journal-recovery.ts` is an UNCONNECTED low-level adapter. It scopes
+  the reserved-lock correction to an unopened exact tuple; bounds/prevalidates
+  super-journal members; uses SQLite for hot/cold journal recovery; restricts native
+  open/access/delete; and poisons uncertain recovery instances until reopen.
+  Faults cover journal/master allocation/write/flush/delete, each database write
+  and flush, write-through versus flush-only persistence, interrupted rollback,
+  unowned side paths and unchanged unrelated legacy namespace bytes.
+- No production boot call, capability grant, observer weakening or OPFS certificate
+  was added. Catalog-proven exclusion/boot ordering is still CODE work. A pinned
+  native-WASM protocol fixture is not physical browser certification.
+- ADR-065/066 and the census record these boundaries as inventory only. Private V1
+  intake/historical receipt adoption and old unbound share-receipt adoption remain
+  required. Do not infer original owner authority from a copied source, URL or key.
+
+Latest focused command results are recorded in the final finder-loop section.
+
 ## Workspace and preserved baseline
 
 - Sole writer in `D:\Clay`, branch `codex/clay-project`.
 - HEAD and local origin tracking ref remain
-  `49d1b777c4d23df83af9ba0936e7d28bcbd88f7d`. Live location, clean starting
+  `ad6d9db0a4ae37cba2953dd572b304c0cf07292b`. Live location, clean starting
   status, HEAD and local origin tracking ref were verified. No fetch or actual
   remote-server readback. This continuation leaves one uncommitted diff on that base.
 - The earlier 13-path intake continuation and its expanded F implementation are
@@ -25,7 +88,11 @@ regression/build/budget/browser/accessibility/review campaign yet.
 - No build, bundle report, browser evidence, release fingerprint or independent
   review was generated. Historical certification failures remain deferred.
 
-## Current continuation: terminal publication and durable owner work
+## Preserved committed baseline: terminal publication and durable owner work
+
+The following detailed baseline notes describe ad6d9db0's predecessor work.
+Where they say a workflow fix is still required, the latest section above and
+Exact continuation take precedence. They are not new test or completion claims.
 
 - Added `POST /intake/forms/:formId/terminalize` and
   `POST /shares/:shareId/terminalize`. Authentication and exact allowlisted shell
@@ -76,7 +143,7 @@ regression/build/budget/browser/accessibility/review campaign yet.
 - ADR-064 records the protocol and explicitly preserves the remaining legacy and
   OPFS boundaries. This is source development, not certification.
 
-## New F production intake path
+## Committed F production intake path (historical baseline)
 
 ### Worker, authority and physical metadata
 
@@ -229,11 +296,53 @@ packaged-product certification claim.
 | D Capture/Undo | dailyHomeResolveDate/dailyHomeQuickCapture/dailyHomeUndoCapture/mutationOutcome/cancelPresentation; CommandPalette | Original producer-bound immutable Undo and receipt | shell quick-capture/presentation-intent and real worker; preserved |
 | D Inbox/actions/Undo | dailyPresentation/dailyInboxAction/dailyInboxUndo; Today/Inbox | Closed physical dispositions, item/action/source/projection CAS, local-calendar Snooze, bounded inverse | kernel daily-inbox-authority; shell today-view/real worker; preserved |
 | E editor/recipes/custom/preview/enable/pause/delete | automationPresentation/automationCommand/simulateAutomation; AutomationCenter | Lossless retained V2 drafts, timezone and immutable retries | shell automation-retained-ui baseline; OPFS capability BLOCKED |
-| E manual/due/history/status/notifications/Undo | same read/command routes + mutationOutcome/cancelPresentation; AutomationCenter/App tick | Original due command terminalization, local runtime and exact bounded receipts/Undo | shell automation-tick and worker-automation-integration; OPFS capability BLOCKED |
+| E manual/due/history/status/notifications/Undo | same read/command routes + mutationOutcome/cancelPresentation; AutomationCenter/App tick | Original due command terminalization, local runtime and exact bounded receipts/Undo; scoped native recovery adapter is not boot-connected | shell automation-tick, worker-automation-integration; kernel sahpool-recovery (owned pinned WASM); OPFS capability BLOCKED |
 | F local Print/CSV | projectPlaintextV1/cancelProjectionV1; ExportDialog | Source/egress fences unchanged | shell export-dialog; preserved |
 | F encrypted sharing/files/expiry/revoke | presentationSource/projectPlaintextV1/attachmentsForRecord/readAttachment -> trusted-shell vault/relay; ShareDialog | Immutable ciphertext, owner CAS/readback, exact remote tombstones before replacement, explicit fresh preview | shell share-custody/share-terminal/share-owner-ui/share-security-integration and real worker; legacy adoption/source-loss recovery open |
-| F intake publication/delivery/review | intakePresentation/intakeCommand/mutationOutcome/cancelPresentation; IntakeCenter + shell owner custody/ledger | Original IDs, durable workflow CAS before effects, exact worker/relay terminal proofs, cache-loss recovery, bounded staging/review | shell intake-publication-terminal/intake-workflows/intake-ui/intake-delivery-boundary/worker-intake-integration; legacy/cache-only and stale local-revoke renewal open |
+| F intake publication/delivery/review | intakePresentation/intakeCommand/mutationOutcome/cancelPresentation, inner intake.closePublication; IntakeCenter + shell custody/ledger | Permanent publication exclusion, original-custody cache-only recovery, explicitly reviewed stale-revoke renewal, terminal proof/history, bounded staging/review | shell intake-publication-terminal/intake-revocation-renewal/intake-workflows/intake-ui/worker-intake-integration; private legacy/source-loss and stale closure-intent renewal remain |
 | F auto-accept/receipts/Undo | same closed intake command/read routes; IntakeCenter | Receipt-target-bound simulation/enable, file review required, bounded inverse/history | shell intake-ui/worker-intake-integration; kernel intake/V2 authority |
+
+## Final finder-loop results for this continuation
+
+These are selected development packets, not full package/workspace regression.
+Package-local command:
+`node node_modules/vitest/vitest.mjs run <files> --maxWorkers=1 --minWorkers=1 --reporter=dot`.
+
+| Package / exact final selected files | Actual output |
+| --- | --- |
+| kernel: test/intake.test.ts test/intake-v2-authority.test.ts test/intake-archive-boundary.test.ts test/sahpool-recovery.test.ts | 4 files / 53 passed; 19.02s |
+| shell: test/intake-session.test.ts test/intake-publication.test.ts test/intake-workflows.test.ts test/intake-publication-terminal.test.ts test/intake-revocation-renewal.test.ts test/intake-owner-custody.test.ts test/intake-owner-vault.browser.test.ts test/intake-ui.test.tsx test/automation-tick.test.ts test/production-mutation-route-census.test.ts | 10 files / 88 passed; 11.53s |
+| shell: test/worker-intake-integration.test.ts | 1 file / 1 passed; 36.50s (test 33.90s) |
+| schema: test/intake.test.ts test/catalog.test.ts test/share.test.ts | 3 files / 15 passed; 1.47s |
+
+- Disjoint final packets: **157 passed in 18 files**. Earlier repeated finder
+  packets are not added again. No full suites or release gates were run.
+- `node node_modules/typescript/bin/tsc --noEmit` in schema, kernel and shell:
+  exit 0, no diagnostics. An intermediate test passed a non-driver adapter to a
+  DbDriver-only capability function; that redundant assertion was removed and
+  the real production-driver guard test retained. No type error was called a pass.
+- RED observations included the absent authority closure, unknown-ID terminal
+  time overwrite, missing cache-only revoke adoption method/UI, archive rejection
+  of a valid prefixed response, pinned native-WASM mixed commit values and unowned
+  native file callbacks. The final packets above include their GREEN regressions.
+- The real WorkerClient/db-worker fixture retains the complete committed intake/
+  encrypted-share flow and now also loses the owned workflow ledger/cache, adopts
+  an original-custody cache-only revoke, explicitly renews stale source after exact
+  cancellation, delivers the cancelled original, loses relay acknowledgement,
+  reloads, closes a cache-only publication, rejects unknown future save/publish IDs
+  and preserves terminal time after authority reopen. No private field enters its
+  WorkerClient transport. SQLite/catalog, IDB and backend are owned fixtures.
+- The 29 SAHPool tests use the actual installed unmodified browser WASM/VFS with
+  owned in-process directory/SyncAccessHandle objects. No host browser/profile,
+  OPFS directory, provider HTTP or real credentials were accessed. This is NOT
+  physical OPFS certification and grants no production capability.
+- Census command exited 0: 19 capabilities; developmentComplete=false; zero scanned
+  hardcoded false UI flags; 25 unavailable routes, all explicitly callerless retired;
+  OPFS productionBootCaller=false and capabilityGranted=false. The census executes
+  no tests/build and writes no release evidence.
+- Live HEAD/local origin tracking ref remain ad6d9db0a4ae37cba2953dd572b304c0cf07292b.
+  No remote-server readback, Git metadata write, commit/push, installation/download,
+  build/budget, browser/accessibility/formal review, deployment or configuration.
 
 ## Previous checkpoint finder-loop results (historical, not rerun wholesale)
 
@@ -277,7 +386,7 @@ These are targeted development packets, NOT full package/workspace regression.
 - No packaged-browser evidence, builds/budgets, full ordinary suites, accessibility,
   formal review, immutable fingerprint or release evidence was produced.
 
-## Current finder-loop results
+## Previous checkpoint finder-loop results (historical ad6d9db0 baseline)
 
 Package-local commands were used; no dependency download or Corepack cache access
 was needed. Test command in each package:
@@ -316,90 +425,99 @@ was needed. Test command in each package:
 
 ## Exact continuation
 
-1. Verify live Git status/HEAD and preserve this diff or its externally saved
-   checkpoint. Base is 49d1b777c4d23df83af9ba0936e7d28bcbd88f7d, not the older
-   1f24 checkpoint. One writer; no commits/pushes/downloads/production actions.
-   Keep development-first sequencing; do not start certification.
+1. Verify live status/HEAD and preserve the entire diff or Hermes-saved checkpoint
+   on ad6d9db0a4ae37cba2953dd572b304c0cf07292b. One writer, D:\Clay only; no
+   commits/pushes/downloads/production actions. Continue finder loops, not certification.
 
-2. Next F boundary: narrow authority-backed adoption/terminalization of legacy
-   cache-only work and stale local revoke renewal.
-   - New ledger-owned publication/sharing closure and cache-loss recovery are
-     connected and tested. Do not restart those primitives or revert terminal
-     HTTP to a DELETE/404 shortcut.
-   - IntakeWorkflowSlot.recover deliberately rejects a cache-only original with
-     no durable slot. A legacy client may still mint/send an unknown save/publish
-     request after a read-only snapshot. Copying its cache, adding a protocol flag,
-     or cancelling only known IDs does not exclude those later requests.
-   - Design an original-form/owner/source-bound authority terminal protocol (or
-     equivalently proven exclusion) before granting legacy workflow closure.
-     Preserve original metadata, keys, IDs and responses. Add deterministic old
-     client/new client, delayed unknown-ID and cancel/readback/persist faults first.
-   - A local revocation retained before invocation can become stale if another
-     canonical write wins. It currently fails closed and remains retained.
-     Add explicitly reviewed source renewal ONLY after the original request is
-     terminally cancelled/reconciled and the exact remote identity is terminal.
-     Preserve all prior invocation identities; do not mutate the old immutable
-     job/receipt, change a form's identity, or retarget unknown work.
-   - If a publication already committed locally, Close stops the relay but asks
-     the user to review/revoke the local form, then finish closure. That path is
-     intentional; never report a still-active local form as reconciled.
-   - Original app/generation loss/change remains quarantined. A narrow catalog/
-     owner-history recovery grant is needed where the original target cannot be
-     selected. Wrong-source copies must never gain owner custody. Keep source data
-     usable outside the quarantine and make recovery prerequisites explicit.
+2. Finish the remaining F owner-recovery edges, not the completed cache-only V2
+   protocol again. Existing original-custody cache-only publication/revoke recovery
+   and stale local-revoke renewal now have UI/worker/fault coverage. Never replace
+   their exact tombstone/cancellation protocols with absence or a cache marker.
+   - Exact next small code boundary: a persisted publication authorityClosure
+     invocation can itself become stale before invocation. It is retained and fails
+     closed today. Add a bounded, explicit reviewed closure-renewal chain analogous
+     to revocation renewal: cancel/read back the previous exact request, prove exact
+     relay terminal identity, then retain a new immutable closure request against the
+     reviewed original target. Keep all prior closure IDs/receipts. Test delayed
+     original, cancellation/readback/persist loss and reload before wiring UI.
+   - Original app/generation loss or missing original custody remains quarantined.
+     It requires a narrow catalog/owner-history proof, not assignment to another
+     selected app or minting replacement keys. A missing app is not proof that a
+     delayed original request or HTTP publication cannot arrive.
+   - Local publication closure intentionally leaves active forms active. Revoke
+     explicitly, then finish closure. Cache-only revoke adoption also does not mean
+     completion until local terminal metadata and exact relay proof read back.
 
-3. Finish F legacy intake/private historical receipt and old share receipt adoption.
-   - Originals stay untouched. Do not inspect real private values, silently strip/
-     delete state, rebind copied/forked/restored metadata, archive legacy secrets,
-     or send private material through ordinary WorkerClient.
-   - Implement the narrow trusted-shell path with original authority/owner proof
-     and custody commit/readback BEFORE publication metadata/owner actions.
-     Test synthetic legacy state, responses/archives, wrong-source copies, lost
-     commits and teardown/reload. A possession-only old share URL/receipt without
-     app/source evidence must not be silently assigned to the currently open app.
-   - Extend real worker/catalog/archive fixtures through create/fork/delete/
-     restore-as-new. Metadata copies keep original source binding and cannot gain
-     the source vault's owner authority. Existing quarantine/export denial is not
-     a completed migration and must not be bypassed to enable UI.
+3. Implement safe private legacy intake/historical response and old sharing receipt
+   adoption in trusted shell. This is still unimplemented, not a configuration gate.
+   - Never inspect real values, strip/delete original rows/responses, archive private
+     material, rebind a fork/restore, or pass private values through WorkerClient.
+     Use synthetic fixtures. Current quarantine/export denial must remain.
+   - LocalIntakeFormV1 lacks original ownerSource. Old OwnerShareReceiptV1 contains
+     no app/generation/lineage; its projection scope contains semantic IDs, which a
+     fork copies. Neither key/URL possession nor a matching table proves original
+     authority. First establish a narrow original catalog/history/owner proof and
+     custody commit/readback protocol; ordinary private-form routes stay retired.
+   - Existing prefixed public response envelopes now export correctly; malformed
+     or private historical envelopes still fail before values are selected. Do not
+     change old response IDs/bytes to make them public or weaken format 5.
+   - Cover synthetic state/responses/archives, lost custody commits, wrong-source
+     copies, teardown/reload and create/fork/delete/restore-as-new ownership. Copied
+     metadata must not acquire original vault authority.
 
-4. Finish E's real production physical transaction/recovery capability.
-   - Guard remains test_memory or unavailable in db.ts. No OPFS label/certificate
-     was added. Re-read durable-inventory, boot order, lifecycle/restore recovery,
-     observer guards and the pinned sqlite-wasm SAHPool VFS.
-   - Add deterministic user/system/catalog commit, hot/super-journal, flush/delete,
-     partial-publication, worker-loss and reopen faults before implementing.
-     Recovery must explain exact owned files under fencing/exclusion, then rerun
-     strict catalog/canonical classification; preserve unrelated and legacy files.
-   - SAHPool xSync flush and its xCheckReservedLock behavior need real VFS-level
-     investigation. A memory-driver fixture or route/UI label cannot grant OPFS
-     capability. Physical/browser certification remains the later campaign.
-   - Preserve retained scheduled-command reconciliation and the new durable intake
-     check before scheduling any replacement invocation.
+4. Integrate real production physical transaction/recovery capability. The new
+   low-level adapter is not connected to db.ts or boot; production remains unavailable.
+   - Read sahpool-journal-recovery.ts and its actual pinned-WASM owned-file fault
+     tests. They are not memory DbDriver substitutes, but also not a physical browser
+     certificate. All callback correction is scoped; do not make xCheckReservedLock
+     globally return 0. Keep native side-path rejection and poison/reopen behavior.
+   - Exact next architectural boundary: establish original catalog-proven ownership
+     of an unopened recovery tuple under physical exclusion BEFORE first durable
+     catalog read/rollback. A hot catalog creates a proof-order dependency. A tuple
+     assembled solely from filenames or super-journal members is not owner proof.
+     A separately validated shadow/preflight recovery may be needed; no such proof
+     implementation exists yet. Do not silently recover an unadopted legacy app.
+   - Pinned SAHPool installation may disassociate invalid association headers before
+     getFileNames. Account for that initialization behavior and exclusive-handle
+     prerequisites; don't mistake the resulting filename map for pre-init inventory.
+     The adapter tracks main handles opened after installation; install/preflight
+     must also prove there were no earlier handles. It cannot retroactively grant
+     unopened-pool authority from its own initially empty tracking map.
+   - bootBrowser currently runs catalog-retention migration and restore recovery
+     before normal strict inventory, then lifecycle recovery. Resolve hot/super-
+     journals BEFORE those paths can read/write partial state, while preserving exact
+     job-fenced partial-file recovery. Re-run strict catalog/canonical/Merkle/target
+     classification for every active target after native recovery. Do not create or
+     unlink unexplained files, acknowledge uncertain cleanup, or publish partial data.
+   - Add real ProductionStoreAuthority/boot faults for user/system/catalog commits,
+     worker loss/reopen and lifecycle/restore partial publication around that new
+     coordinator. Only then implement a genuine runtime capability predicate and
+     wire observer/paired availability. Preserve scheduler reconciliation/intake deferral.
 
-5. Update census/handoff as inventory. Once every A-F source/UI/custody/recovery
-   boundary is genuinely implemented, stop for the single integrated testing
-   phase. No full regression/build/budget/browser/accessibility/formal-review
-   campaign now; never raise frozen budgets or fabricate a passing certificate.
+5. Update inventory/handoff. Once all A-F source/UI/custody/recovery boundaries really
+   exist, stop for the single integrated testing campaign. No full regression,
+   build/budget, browser/accessibility or formal-review campaign in development.
 
-Remaining development blockers are CODE: legacy/unfenced owner recovery and
-stale local-revoke renewal in F, and actual OPFS transaction capability in E.
-There is no verified host blocker. This is a coherent continuation checkpoint,
-not development-complete, certified, P0 shipped, or roadmap shipped.
+Remaining blockers are CODE: private legacy owner adoption and original-source
+recovery/closure-renewal edges in F; catalog-proven production OPFS recovery and
+capability in E. No verified host blocker. This checkpoint is not development-
+complete, certified, P0 shipped or roadmap shipped.
 
 ## Changed-file scope
 
 Use `git status --short --untracked-files=all` for the exact current path list.
-This continuation currently changes 38 paths (including 8 new files).
+This continuation has 27 changed paths (23 tracked modifications, 4 new files):
+kernel/schema/shell code and focused tests plus inventory and ADR/handoff documents.
+Use live Git status for any subsequent externally saved checkpoint.
 
-- Kernel: no source changes in this continuation; preserved authority/archive
-  boundary finder tests and typecheck passed.
-- Schema: closed terminal acknowledgements/request and retained revocation/closure
-  job validation. No archive version, catalog identity or secret transport changes.
-- Shell: App scheduler, IntakeCenter, ShareDialog, original publication/revocation,
-  new public-only workflow ledger and terminal relay request helpers, shared request
-  digest, trusted-shell relay client/configuration, focused protocol/UI/worker tests.
-- Backend: immutable terminal relay endpoints, memory/Postgres identity retention,
-  serialized clock revalidation, exact share replay, owned SQL/HTTP fault tests.
-- Inventory/specification: development census, this handoff, ADR-064.
+- Kernel: canonical intake publication exclusion, terminal metadata immutability,
+  prefixed public receipt/archive validation; UNCONNECTED scoped SAHPool native
+  recovery adapter and owned native-WASM fault fixture/tests.
+- Schema: sixteenth intake inner command, closure metadata, bounded renewal chain
+  and closed public terminal proof. No private transport or archive version change.
+- Shell: IntakeCenter, owner publication/revocation/custody readback, immutable
+  workflow history and exact-source UI/protocol/real-worker tests. Sharing/backend
+  and scheduler source are preserved; no hosted configuration changes.
+- Inventory/specification: census, this handoff, ADR-065/066.
 - No dependency/lockfile, production configuration, generated release artifact,
   evidence report or Git metadata changes.

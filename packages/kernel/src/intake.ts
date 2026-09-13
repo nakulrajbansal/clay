@@ -6,6 +6,7 @@ import {
   IntakeSubmissionValueV1,
   IntakeUploadedFileV1,
   LocalIntakeFormV2,
+  IntakePublicationClosureV1,
   type IntakeUploadedFileV1 as IntakeUploadedFile,
   type PublicFileRequestV1,
   type IntakeFormDefinitionV1,
@@ -98,6 +99,7 @@ export type IntakeLocalStateV2 = {
   rules: IntakeAutoAcceptRuleV1[];
   simulations: IntakeAutoAcceptSimulation[];
   receipts: IntakeAcceptanceReceipt[];
+  publicationClosures?: IntakePublicationClosureV1[];
 };
 
 const FileReviewSchema = z.object({
@@ -208,6 +210,9 @@ const LocalStateSchema = z.object({
   rules: z.array(IntakeAutoAcceptRuleV1).max(100),
   simulations: z.array(SimulationSchema).max(100),
   receipts: z.array(ReceiptSchema).max(1_000),
+  // Optional until the first explicit authority closure; old canonical bytes
+  // are not normalized on read. Older closed parsers fail closed on this field.
+  publicationClosures: z.array(IntakePublicationClosureV1).max(100).optional(),
 }).strict().superRefine((state, context) => {
   for (const [path, values] of [
     ["forms", state.forms.map(form => form.publicForm.formId)],
@@ -216,6 +221,7 @@ const LocalStateSchema = z.object({
     ["rules", state.rules.map(rule => rule.formId)],
     ["simulations", state.simulations.map(item => item.formId)],
     ["receipts", state.receipts.map(receipt => receipt.id)],
+    ["publicationClosures", (state.publicationClosures ?? []).map(row => row.form.publicForm.formId)],
   ] as const) {
     if (new Set(values).size !== values.length)
       context.addIssue({ code: "custom", path: [path], message: `${path} identities must be unique` });

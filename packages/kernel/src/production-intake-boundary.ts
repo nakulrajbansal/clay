@@ -10,7 +10,7 @@ export function assertIntakeOwnerSource(form: LocalIntakeFormV2, target: TargetE
     throw new ClayError("E_CONFLICT", "Intake owner source changed; a copied or rebound form has no delivery authority");
 }
 export function assertIntakeCommandSource(store: ClayStore, route: string, payload: Readonly<Record<string, unknown>>, target: TargetEvidenceV1): void {
-  if (route === "intake.saveForm") { assertIntakeOwnerSource(LocalIntakeFormV2.parse(payload.form), target); return; }
+  if (route === "intake.saveForm" || route === "intake.closePublication") { assertIntakeOwnerSource(LocalIntakeFormV2.parse(payload.form), target); return; }
   let formId = payload.formId;
   if (route === "intake.stageSubmission") formId = (payload.submission as { formId: string }).formId;
   if (route === "intake.recordDeliveryFailure") formId = (payload.failure as { formId: string }).formId;

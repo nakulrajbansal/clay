@@ -289,6 +289,7 @@ export const CLAY_STORE_WRITER_CENSUS = Object.freeze({
   writeInboxDisposition: "authority",
   restoreRow: "authority",
   saveIntakeForm: "authority",
+  closeIntakePublication: "authority",
   markIntakeFormPublished: "authority",
   revokeIntakeForm: "authority",
   markIntakeFormExpired: "authority",

@@ -1435,3 +1435,61 @@ ADR-064 (2026-09-13) Terminal relay identities and durable owner workflow fencin
   unfenced-workflow adoption, stale local-revoke renewal, and E's physical OPFS
   transaction capability remain required code work. No production values,
   hosted requests, old private state or user-owned browser storage were accessed.
+
+ADR-065 (2026-09-13) Original-custody legacy workflow recovery, not cache authority.
+  CONTEXT: ADR-064's ledger cannot exclude an older client's unknown future
+  request ID. A stale local revoke also cannot be retried against a newer target
+  by replacing its immutable payload. A second revoke could rewrite terminal time.
+  DECISION: Extend the closed intake.command union with intake.closePublication.
+  Its original-source-bound public form definition creates a permanent, bounded
+  canonical publication exclusion. Optional publicationClosures in the closed V2
+  state participates in canonical/archive validation without changing old absent
+  bytes. No eviction, metadata deletion, source rebinding or automatic local
+  revocation occurs. Save and publish reject a closed identity even under unknown
+  request IDs/fresh targets; revoked form definitions and first terminal times
+  cannot be resurrected or rewritten. A publication closure does NOT mean an
+  active local form is reconciled: explicit local revocation is still required.
+  The trusted shell may claim cache-only V2 work only after exact original
+  app/generation/lineage, relay, public definition and existing vault/key proof.
+  Such a claim retains legacyOriginal and is NOT itself an old-client fence.
+  Publication completes only after permanent worker exclusion and exact remote
+  terminal proof. Legacy revocation is adopted only for reconciliation; its
+  original request remains unchanged. A closed canonical local form, exact
+  original invocation cancellation/outcome and relay tombstone precede finish.
+  Persist the public terminal proof, never private values, with the original job.
+  Explicit reviewed revocation renewal cancels and reads back the preceding
+  invocation, verifies the exact relay tombstone, rechecks the reviewed target,
+  then retains one new immutable invocation. Keep the bounded chain (at most 8)
+  and prior completed workflow identities (at most 100), with no silent eviction.
+  Read-only not_invoked and remote absence are never exclusion proof. Cache loss,
+  failed custody/claim/cancel/readback/persist, wrong origin/configuration and
+  original generation loss preserve ambiguous work. Copied metadata never gains
+  source vault authority. Truly private V1 state/historical response and unbound
+  sharing receipt adoption remain separate, unimplemented code boundaries.
+  Archive property-name checks recognize the existing canonical response prefix
+  before closed envelope validation; malformed and escaped-private-key responses
+  still reject without rewriting the original bytes. Format 5 is unchanged.
+  CONSEQUENCE: Focused real-worker, UI and owned custody/relay fault tests are
+  development feedback. No physical browser or roadmap completion is claimed.
+
+ADR-066 (2026-09-13) Scoped SAHPool recovery development, no production grant yet.
+  CONTEXT: Installed sqlite-wasm 3.53.0-build1 SAHPool flushes at xSync but returns
+  a constant reserved-lock result. Owned native-WASM faults exposed mixed user,
+  system and catalog values on ordinary reopen; EXCLUSIVE mode alone did not fix
+  it. Inventory rejection before catalog recovery cannot establish safe ownership.
+  DECISION: Develop an unconnected low-level recovery adapter and deterministic
+  SyncAccessHandle protocol fixture using the unmodified installed browser WASM.
+  Only a synchronous, unopened exact tuple can temporarily report no reserved
+  writer. Bound and validate exact super-journal membership, let SQLite reconcile
+  its own hot/cold journals, and reject native open/access/delete outside that
+  tuple and prevalidated journals. Main databases are never unlinked. Cleanup
+  acknowledgement failure poisons that recovery instance; reopen before retry.
+  Other and legacy namespace bytes are preserved. No route installs the adapter;
+  syntax-valid filenames and an owned fixture are not catalog ownership proof.
+  Before integration, boot must prove physical exclusion and original ownership
+  before any native rollback, account for catalog hot journals and SAHPool header
+  repair, order lifecycle/restore recovery, and rerun strict catalog/canonical
+  validation. The production automation capability/observer guard is unchanged.
+  CONSEQUENCE: Actual installed native VFS crash tests are not a production OPFS
+  runtime capability or browser durability certificate. Integration remains code
+  work; physical certification remains the later integrated campaign.

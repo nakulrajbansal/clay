@@ -9,7 +9,7 @@ export function intakeRegistration(form: Pick<IntakeOwnerTransport, "publicForm"
     expiresAt: form.publicForm.delivery.expiresAt, maxCiphertextBytes: 12 * 1024 * 1024 });
 }
 export async function terminalizeIntakeRelay(form: Pick<IntakeOwnerTransport, "publicForm" | "ownerToken">,
-  relayBaseUrl: string, fetchImpl: typeof fetch): Promise<void> {
+  relayBaseUrl: string, fetchImpl: typeof fetch): Promise<ReturnType<typeof IntakeRelayTerminalResultV1.parse>> {
   const request = intakeRegistration(form); const identity = await relayRequestSha256(request);
   try {
     const response = await fetchImpl(`${relayBaseUrl.replace(/\/$/u, "")}/intake/forms/${request.formId}/terminalize`, {
@@ -19,5 +19,6 @@ export async function terminalizeIntakeRelay(form: Pick<IntakeOwnerTransport, "p
     if (!response.ok) throw new Error();
     const receipt = IntakeRelayTerminalResultV1.parse(await boundedRelayJson(response, 8 * 1024));
     if (receipt.formId !== request.formId || receipt.expiresAt !== request.expiresAt || receipt.requestSha256 !== identity) throw new Error();
+    return receipt;
   } catch { throw new Error("Original intake relay terminalization is unconfirmed; original requests and custody were kept"); }
 }

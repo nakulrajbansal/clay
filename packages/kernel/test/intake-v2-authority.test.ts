@@ -66,3 +66,80 @@ it("quarantines legacy state without returning, rewriting or exporting its priva
     expect(raw === JSON.stringify(original)).toBe(true);
   } finally { authority.close(); }
 });
+
+it("terminally fences unknown delayed publication IDs without deleting or relabeling the original form", async () => {
+  const { authority, form } = await fixture();
+  const command = (route: string, payload: unknown) => ({ requestId: authority.createRequestId(), route: "intake.command",
+    payload: { authorityTarget: authority.inspectAuthority().target, command: { route, payload } } });
+  try {
+    const originalSave = command("intake.saveForm", { form });
+    await authority.executeMutation(originalSave);
+    const close = command("intake.closePublication", { form });
+    const result = await authority.executeMutation(close);
+    expect(result.result).toMatchObject({ terminal: true, form });
+    expect((await authority.executeMutation(close)).replayed).toBe(true);
+    expect(authority.readStore().listIntakeForms()).toEqual([form]);
+    // Unknown IDs, even with a freshly read target, cannot resurrect the identity.
+    await expect(authority.executeMutation(command("intake.markPublished", { formId: form.publicForm.formId, publishedAt: new Date().toISOString() }))).rejects.toThrow(/closed|terminal/);
+    await expect(authority.executeMutation(command("intake.saveForm", { form: { ...form, publicForm: { ...form.publicForm, revision: 2 } } }))).rejects.toThrow(/closed|terminal/);
+    expect(await authority.mutationOutcome(originalSave)).toMatchObject({ status: "recorded", result: form });
+    expect((await authority.collectArchiveSnapshot()).target).toEqual(authority.inspectAuthority().target);
+  } finally { authority.close(); }
+});
+
+it("closes an unsaved identity before a delayed old-client save, without creating a local form", async () => {
+  const { authority, form } = await fixture();
+  try {
+    const originalSource = authority.inspectAuthority().target;
+    await authority.executeMutation({ requestId: authority.createRequestId(), route: "intake.command", payload: {
+      authorityTarget: originalSource, command: { route: "intake.closePublication", payload: { form } } } });
+    expect(authority.readStore().listIntakeForms()).toEqual([]);
+    for (const authorityTarget of [originalSource, authority.inspectAuthority().target]) {
+      await expect(authority.executeMutation({ requestId: authority.createRequestId(), route: "intake.command", payload: {
+        authorityTarget, command: { route: "intake.saveForm", payload: { form } } } })).rejects.toThrow(/source|closed|terminal/);
+    }
+  } finally { authority.close(); }
+});
+
+it("rejects wrong-source and changed-definition closure, keeping a published form active until explicit local revoke", async () => {
+  const { authority, form } = await fixture();
+  const run = (route: string, payload: unknown) => authority.executeMutation({ requestId: authority.createRequestId(), route: "intake.command",
+    payload: { authorityTarget: authority.inspectAuthority().target, command: { route, payload } } });
+  try {
+    await run("intake.saveForm", { form });
+    await run("intake.markPublished", { formId: form.publicForm.formId, publishedAt: new Date().toISOString() });
+    await expect(run("intake.closePublication", { form: { ...form, ownerSource: { ...form.ownerSource, activeGenerationId: id("gen", "z") } } })).rejects.toThrow(/source/);
+    await expect(run("intake.closePublication", { form: { ...form, publicForm: { ...form.publicForm, title: "Changed" } } })).rejects.toThrow(/identity|definition/);
+    await run("intake.closePublication", { form });
+    expect(authority.readStore().listIntakeForms()[0]?.revokedAt).toBeNull();
+    await run("intake.revokeForm", { formId: form.publicForm.formId, revokedAt: new Date().toISOString() });
+    expect(authority.readStore().listIntakeForms()[0]?.terminalReason).toBe("revoked");
+  } finally { authority.close(); }
+});
+
+it("never permits a higher save revision to resurrect revoked form metadata", async () => {
+  const { authority, form } = await fixture();
+  const run = (route: string, payload: unknown) => authority.executeMutation({ requestId: authority.createRequestId(), route: "intake.command",
+    payload: { authorityTarget: authority.inspectAuthority().target, command: { route, payload } } });
+  try {
+    await run("intake.saveForm", { form });
+    await run("intake.markPublished", { formId: form.publicForm.formId, publishedAt: new Date().toISOString() });
+    await run("intake.revokeForm", { formId: form.publicForm.formId, revokedAt: new Date().toISOString() });
+    await expect(run("intake.saveForm", { form: { ...form, publicForm: { ...form.publicForm, revision: 2 } } })).rejects.toThrow(/terminal|revoked/);
+  } finally { authority.close(); }
+});
+
+it("keeps the original terminal disposition under unknown delayed revoke IDs and fresh targets", async () => {
+  const { authority, form } = await fixture();
+  const run = (route: string, payload: unknown) => authority.executeMutation({ requestId: authority.createRequestId(), route: "intake.command",
+    payload: { authorityTarget: authority.inspectAuthority().target, command: { route, payload } } });
+  try {
+    await run("intake.saveForm", { form });
+    await run("intake.markPublished", { formId: form.publicForm.formId, publishedAt: new Date().toISOString() });
+    const original = await run("intake.revokeForm", { formId: form.publicForm.formId, revokedAt: "2026-09-13T12:00:00.000Z" });
+    const bytes = JSON.stringify(authority.readStore().listIntakeForms());
+    const delayed = await run("intake.revokeForm", { formId: form.publicForm.formId, revokedAt: "2026-09-13T13:00:00.000Z" });
+    expect(delayed.result).toEqual(original.result);
+    expect(JSON.stringify(authority.readStore().listIntakeForms())).toBe(bytes);
+  } finally { authority.close(); }
+});

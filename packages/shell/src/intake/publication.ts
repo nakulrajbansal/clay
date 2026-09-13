@@ -1,11 +1,11 @@
 import { type TargetEvidenceV1, PresentationIntentV1, IntakeCommandPayloadV1 } from "@clay/schema/catalog";
-import { IntakePublicationProposalV1 as Proposal, IntakeRelayFormRegistrationResultV1, LocalIntakeFormV2 } from "@clay/schema/intake";
+import { IntakePublicationProposalV1 as Proposal, IntakeRelayFormRegistrationResultV1, LocalIntakeFormV2, IntakePublicationClosureV1 } from "@clay/schema/intake";
 import { IntakePublicationJobV1 as Job } from "@clay/schema/intake-workflow";
-import { hydrateIntakeOwnerForm, prepareIntakeOwnerForm, type IntakeOwnerVault } from "./owner-custody";
+import { hydrateIntakeOwnerForm, prepareIntakeOwnerForm, recoverIntakeOwnerForm, type IntakeOwnerVault } from "./owner-custody";
 import { buildPublicIntakeLink, mintIntakeFormId } from "./client";
 import { executeIntakeIntent, IntakeSession } from "./session";
 import { boundedRelayJson } from "../app/bounded-relay-response";
-import { IndexedDbIntakeWorkflows, IntakeWorkflowSlot, type IntakeWorkflows } from "./workflows";
+import { IndexedDbIntakeWorkflows, IntakeWorkflowSlot, UnfencedIntakeWorkflowError, type IntakeWorkflows } from "./workflows";
 import { intakeRegistration, terminalizeIntakeRelay } from "./relay-terminal";
 
 type FetchLike = typeof fetch;
@@ -64,7 +64,7 @@ export class IntakePublication {
       save: null, publish: null, complete: null, relayInvoked: false, relayConfirmed: false });
   }
   private async persist(job: Job): Promise<Job> { return this.cache(await this.workflow.persist(job)); }
-  private intent(source: TargetEvidenceV1, route: "intake.saveForm" | "intake.markPublished", payload: unknown): PresentationIntentV1 {
+  private intent(source: TargetEvidenceV1, route: "intake.saveForm" | "intake.markPublished" | "intake.closePublication", payload: unknown): PresentationIntentV1 {
     return PresentationIntentV1.parse({ schema: 1, appInstanceId: source.appInstanceId, slot: "intake", route: "intake.command",
       requestId: this.session.worker.createMutationContext().requestId, payload: { authorityTarget: source, command: { route, payload } } });
   }
@@ -114,6 +114,26 @@ export class IntakePublication {
     const job = this.pending(); if (!job?.complete) throw new Error("Intake publication is not reconciled");
     await this.workflow.finish(); if (this.pending()) throw new Error("Intake publication cleanup needs retry");
   }
+  /** Explicit owner recovery for public cache-only V2 work. It is never adopted
+   * as resumable publication. Private V1 rows/receipts remain a separate boundary. */
+  async terminalizeLegacy(): Promise<void> {
+    try { await this.recover(); }
+    catch (error) {
+      if (!(error instanceof UnfencedIntakeWorkflowError)) throw error;
+      const original = this.pending(); if (!original) throw error;
+      const read = await this.session.read();
+      if (read.authorityTarget.activeGenerationId !== original.source.activeGenerationId || read.authorityTarget.lineageEpoch !== original.source.lineageEpoch)
+        throw new Error("Original intake owner source is unavailable; legacy work and custody were kept");
+      const form = await recoverIntakeOwnerForm(original.source, original.formId, this.configuration.shellOrigin, this.configuration.relayBaseUrl, this.vault);
+      if (JSON.stringify(Proposal.parse({ title: form.publicForm.title, description: form.publicForm.description,
+        target: form.publicForm.target, fields: form.publicForm.fields, fileRequests: form.publicForm.fileRequests, expiresAt: form.publicForm.delivery.expiresAt })) !== JSON.stringify(original.proposal))
+        throw new Error("Legacy proposal differs from original owner custody; work was kept");
+      if (original.save && JSON.stringify(LocalIntakeFormV2.parse(IntakeCommandPayloadV1.parse(original.save.payload).command.payload.form)) !== JSON.stringify(form))
+        throw new Error("Legacy save differs from original custody; work was kept");
+      await this.workflow.claimLegacyClosure(original);
+    }
+    await this.terminalize();
+  }
   /** Explicit abandonment, never source renewal. Each original worker request
    * is terminally cancelled/reconciled; remote absence alone grants nothing. */
   async terminalize(): Promise<void> {
@@ -131,8 +151,21 @@ export class IntakePublication {
       if (confirmed.status === "recorded" && LocalIntakeFormV2.parse(confirmed.result).publicForm.formId !== job.formId)
         throw new Error("Original intake outcome identity differs; requests and custody were kept");
     }
-    if (job.publish) {
-      const draft = LocalIntakeFormV2.parse(IntakeCommandPayloadV1.parse(job.save!.payload).command.payload.form);
+    if (this.workflow.requiresAuthorityClosure()) {
+      const draft = await recoverIntakeOwnerForm(job.source, job.formId, this.configuration.shellOrigin, this.configuration.relayBaseUrl, this.vault);
+      if (!job.termination!.authorityClosure) {
+        const reviewed = await this.session.read();
+        job = await this.persist({ ...job, termination: { ...job.termination!,
+          authorityClosure: this.intent(reviewed.authorityTarget, "intake.closePublication", { form: draft }) } });
+      }
+      const closure = await executeIntakeIntent(this.session.worker, job.termination!.authorityClosure!);
+      if (JSON.stringify(IntakePublicationClosureV1.parse(closure.result).form) !== JSON.stringify(draft))
+        throw new Error("Original authority closure differs; work was kept");
+      // The authority tombstone, not the ledger claim or cancel snapshots, now
+      // excludes every late save/publish ID, including those unknown to this tab.
+    }
+    if (job.publish || this.workflow.requiresAuthorityClosure()) {
+      const draft = await recoverIntakeOwnerForm(job.source, job.formId, this.configuration.shellOrigin, this.configuration.relayBaseUrl, this.vault);
       const hydrated = await hydrateIntakeOwnerForm(draft, job.source, this.configuration.shellOrigin, this.vault);
       await terminalizeIntakeRelay(hydrated, this.configuration.relayBaseUrl, this.fetchImpl);
     }

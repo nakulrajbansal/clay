@@ -38,14 +38,19 @@ it("executes custody publication, delivery loss, partial attachments, review/Und
     if (drop && data.ok && sent.slice().reverse().find(row => row.id === data.id)?.op === "intakeCommand") { drop = false; dropped = true; return; }
     queueMicrotask(() => transport.onmessage?.({ data: structuredClone(data) } as MessageEvent));
   } };
-  const transport = { onmessage: null as ((event: MessageEvent) => void) | null, postMessage: (data: { id: number; op: string }) => {
-    sent.push(structuredClone(data)); queueMicrotask(() => scope.onmessage?.({ data: structuredClone(data) } as MessageEvent));
+  let holdRevoke = false; let heldRevoke: unknown = null;
+  const transport = { onmessage: null as ((event: MessageEvent) => void) | null, postMessage: (data: { id: number; op: string; payload?: any }) => {
+    sent.push(structuredClone(data));
+    if (holdRevoke && data.op === "intakeCommand" && data.payload?.command?.route === "intake.revokeForm") {
+      holdRevoke = false; heldRevoke = structuredClone(data); return;
+    }
+    queueMicrotask(() => scope.onmessage?.({ data: structuredClone(data) } as MessageEvent));
   }, terminate: () => {} };
   vi.stubGlobal("self", scope); let client = new WorkerClient(transport as unknown as Worker);
   const rows = new Map<string, string>(); const cache = { getItem: (key: string) => rows.get(key) ?? null, setItem: (key: string, value: string) => { rows.set(key, value); }, removeItem: (key: string) => { rows.delete(key); } };
   const owners = new Map<string, IntakeOwnerCustody>(); const vault: IntakeOwnerVault = { read: async key => owners.get(key) ?? null, insert: async record => { owners.set(record.key, structuredClone(record)); } };
   const config = { shellOrigin: "https://app.example.test", publicBaseUrl: "https://app.example.test", relayBaseUrl: "https://relay.example.test/" };
-  const workflows = new IndexedDbIntakeWorkflows(new OwnedFactory() as unknown as IDBFactory);
+  const workflowFactory = new OwnedFactory(), workflows = new IndexedDbIntakeWorkflows(workflowFactory as unknown as IDBFactory);
   let registrationLost = true, deleteLost = false, revocationLost = false;
   const deliveries = new Map<string, any>(); const registered = new Map<string, string>(); let deleted = 0;
   const fetchImpl = async (url: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -156,21 +161,42 @@ it("executes custody publication, delivery loss, partial attachments, review/Und
     const accepted = await session.processIntakeAutoAccept(draft.formId); expect(accepted).toHaveLength(1);
     expect(await session.processIntakeAutoAccept(draft.formId)).toEqual([]);
     await session.undoIntakeReceipt(accepted[0]!.id); await session.disableIntakeAutoAccept(draft.formId);
-    revocationLost = true; await expect(owner.revoke(automatic.localForm)).rejects.toThrow(/unconfirmed/);
+    holdRevoke = true;
+    const delayedRevokeResult = owner.revoke(automatic.localForm).then(() => "unexpectedly revoked", () => "cancelled original");
+    await vi.waitFor(() => expect(heldRevoke !== null).toBe(true));
+    const originalRevoke = owner.pendingRevocation()!.intent;
+    // A separate source-bound worker request wins while the old message is held.
+    await client.intakeCommand({ authorityTarget: (await client.intakePresentation()).authorityTarget, command: { route: "intake.recordDeliveryFailure", payload: {
+      failure: { formId: automatic.localForm.publicForm.formId, submissionId: id("sub", "v"), envelopeSha256: "7".repeat(64), failedAt: new Date().toISOString() } } } }, client.createMutationContext());
+    workflowFactory.rows.delete(JSON.stringify([1, config.shellOrigin, id("app", "a"), "revocation"])); // Owned cache-only old-client original, not a new fence.
+    owner = new IntakeOwnerClient(await openSession(), vault, config, fetchImpl, workflows);
+    await expect(owner.recover()).rejects.toThrow(/unfenced/);
+    await owner.adoptLegacyRevocation((await client.intakePresentation()).authorityTarget);
+    rows.clear(); owner = new IntakeOwnerClient(await openSession(), vault, config, fetchImpl, workflows);
+    await owner.renewRevocation((await client.intakePresentation()).authorityTarget);
+    expect(owner.pendingRevocation()?.intent).toEqual(originalRevoke);
+    scope.onmessage!({ data: heldRevoke } as MessageEvent); expect(await delayedRevokeResult).toBe("cancelled original");
+    revocationLost = true; await expect(owner.revoke()).rejects.toThrow(/unconfirmed/);
     rows.clear(); // Reopen from the original durable revoke invocation, not a fresh ID.
     owner = new IntakeOwnerClient(await openSession(), vault, config, fetchImpl, workflows); await owner.revoke(); expect(owner.pendingRevocation()).toBeNull();
+    const terminalRecord = workflowFactory.rows.get(JSON.stringify([1, config.shellOrigin, id("app", "a"), "revocation"])) as any;
+    expect(terminalRecord.legacyOriginal.intent).toEqual(originalRevoke); expect(terminalRecord.closed).toBe(true);
+    expect(terminalRecord.job.terminalProof.relay.terminal).toBe(true);
     // A retained publication becomes stale after an unrelated original form's
     // expiry write. Close its exact worker invocation before a delayed message.
     publication = new IntakePublication(await openSession(), vault, config, fetchImpl, workflows);
     await publication.recover(); await publication.begin({ ...proposal, title: "Owned interrupted publication" });
     registrationLost = true; await expect(publication.resume()).rejects.toThrow(/uncertain/);
-    const delayedPublish = publication.pending()!.publish!;
+    const legacyPublication = publication.pending()!, delayedPublish = legacyPublication.publish!;
+    workflowFactory.rows.delete(JSON.stringify([1, config.shellOrigin, id("app", "a"), "publication"])); // Owned synthetic old-client slot absence.
     vi.setSystemTime(new Date("2026-10-02T00:00:00.000Z"));
     owner = new IntakeOwnerClient(await openSession(), vault, config, fetchImpl, workflows); await owner.fetch(published.localForm);
-    rows.clear(); publication = new IntakePublication(await openSession(), vault, config, fetchImpl, workflows);
-    await publication.terminalize(); expect(publication.pending()).toBeNull();
+    publication = new IntakePublication(await openSession(), vault, config, fetchImpl, workflows);
+    await publication.terminalizeLegacy(); expect(publication.pending()).toBeNull();
     await expect(client.intakeCommand(delayedPublish.payload as never, { requestId: delayedPublish.requestId })).rejects.toThrow();
     expect((await client.mutationOutcome(delayedPublish.route, delayedPublish.payload, { requestId: delayedPublish.requestId })).status).toBe("cancelled");
+    await expect(client.intakeCommand({ authorityTarget: (await client.intakePresentation()).authorityTarget,
+      command: { route: "intake.markPublished", payload: { formId: legacyPublication.formId, publishedAt: new Date().toISOString() } } }, client.createMutationContext())).rejects.toThrow(/closed/);
     expect((await client.intakePresentation()).forms.filter(form => form.publishedAt).every(form => form.revokedAt !== null)).toBe(true);
     expect(JSON.stringify(sent).match(/ownerPrivateKey|ownerToken|submitToken/)).toBeNull();
     // Reopen a byte-equivalent owned SQLite target with the same durable catalog.
@@ -186,5 +212,12 @@ it("executes custody publication, delivery loss, partial attachments, review/Und
     await client.boot({ requestedAppId: null, appCache: [] }); const reopened = await client.intakePresentation();
     expect(reopened.forms).toHaveLength(3); expect(reopened.receipts).toHaveLength(2); expect(reopened.receipts.every(row => row.undone)).toBe(true);
     expect(authority.query({ from: "requests" })).toHaveLength(0);
+    const revoked = reopened.forms.find(form => form.publicForm.formId === terminalRecord.job.form.publicForm.formId)!;
+    await client.intakeCommand({ authorityTarget: reopened.authorityTarget, command: { route: "intake.revokeForm",
+      payload: { formId: revoked.publicForm.formId, revokedAt: new Date(Date.now() + 1000).toISOString() } } }, client.createMutationContext());
+    expect((await client.intakePresentation()).forms.find(form => form.publicForm.formId === revoked.publicForm.formId)).toEqual(revoked);
+    await expect(client.intakeCommand({ authorityTarget: (await client.intakePresentation()).authorityTarget,
+      command: { route: "intake.saveForm", payload: { form: legacyPublication.save!.payload.command && (legacyPublication.save!.payload.command as any).payload.form } } }, client.createMutationContext())).rejects.toThrow(/closed/);
+    expect((await authority.collectArchiveSnapshot()).target).toEqual((await client.intakePresentation()).authorityTarget);
   } finally { await client.shutdown().catch(() => {}); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); }
 }, 90_000);

@@ -17,7 +17,7 @@ import {
 import type { WorkerClient } from "../src/app/worker-client";
 import { hydrateIntakeOwnerForm, type IntakeOwnerCustody, type IntakeOwnerVault } from "../src/intake/owner-custody";
 import { mintIntakeToken } from "../src/intake/client";
-import { IndexedDbIntakeWorkflows } from "../src/intake/workflows";
+import { IndexedDbIntakeWorkflows, IntakeWorkflowSlot } from "../src/intake/workflows";
 import { OwnedFactory } from "./helpers/owned-idb";
 import { relayRequestSha256 } from "../src/app/relay-request-identity";
 import { IntakePublication } from "../src/intake/publication";
@@ -42,6 +42,7 @@ function protocol(methods: Record<string, (...args: any[]) => Promise<any>>): Wo
   let serial = 0; let current = structuredClone(target); const outcomes = new Map<string, unknown>();
   const handlers: Record<string, (p: any) => Promise<unknown>> = {
     "intake.saveForm": p => methods.saveIntakeForm!(p.form),
+    "intake.closePublication": async p => ({ schema: 1, form: p.form, terminal: true, closedAt: new Date().toISOString() }),
     "intake.markPublished": p => methods.markIntakeFormPublished!(p.formId, p.publishedAt),
     "intake.markExpired": p => methods.markIntakeFormExpired!(p.formId, p.expiredAt),
     "intake.revokeForm": p => methods.revokeIntakeForm!(p.formId, p.revokedAt),
@@ -92,6 +93,12 @@ const semanticTrace = {
 const flush = async (): Promise<void> => {
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
 };
+const waitForUi = async (ready: () => boolean): Promise<void> => {
+  // Serial act scopes; a timer-based async polling callback can overlap React
+  // scopes and contaminate the next test while a custody operation is pending.
+  for (let attempt = 0; attempt < 100; attempt++) { await flush(); if (ready()) return; }
+  throw new Error("Owned UI operation did not reach its observable terminal state");
+};
 
 function publishedForm(input: {
   publicKey: string;
@@ -133,7 +140,46 @@ function publishedForm(input: {
 }
 
 describe("public intake UI", () => {
-  it("recovers an interrupted publication without its cache and requires confirmation before closing the exact original work", async () => {
+  it.each(["ledger", "legacy"])("requires explicit %s revoke recovery review and preserves the original invocation", async mode => {
+    const keys = await generateIntakeOwnerKeyPair();
+    let form = publishedForm({ publicKey: keys.publicKey, privateKey: keys.privateKey, formId: `form_${"r".repeat(26)}`,
+      title: "Original revoke", submitToken: "unused", ownerToken: "unused", expiresAt: "2030-01-01T00:00:00.000Z" });
+    const worker = protocol({ listIntakeForms: async () => [form], intakeInbox: async () => [], intakeReceipts: async () => [], intakeDeliveryFailures: async () => [],
+      recordIntakeDeliveryFailure: async () => null,
+      revokeIntakeForm: async (_id, at) => { form = { ...form, revokedAt: at, terminalReason: "revoked" }; return form; } });
+    const session = new IntakeSession(sessionStorage, worker, appInstanceId); await session.read();
+    const original = session.begin("intake.revokeForm", { formId: form.publicForm.formId, revokedAt: "2026-09-13T12:00:00.000Z" });
+    const job = { schema: 1 as const, form, intent: original, relayConfirmed: false };
+    if (mode === "legacy") sessionStorage.setItem(`clay_intake_revocation_v1:${appInstanceId}`, JSON.stringify(job));
+    else { const slot = new IntakeWorkflowSlot(workflows, sessionStorage, location.origin, appInstanceId, "revocation"); await slot.recover(); await slot.persist(job); }
+    await worker.intakeCommand({ authorityTarget: target, command: { route: "intake.recordDeliveryFailure", payload: {} } }, worker.createMutationContext());
+    const fetchImpl = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ schema: 1, formId: request.formId, expiresAt: request.expiresAt, requestSha256: await relayRequestSha256(request), terminal: true }));
+    });
+    const errors: string[] = []; const host = document.createElement("div"); document.body.replaceChildren(host); const root = createRoot(host);
+    const button = (text: string) => [...document.body.querySelectorAll<HTMLButtonElement>("button")].find(row => row.textContent === text)!;
+    try {
+      await act(async () => root.render(<IntakeCenter workflows={workflows} appInstanceId={appInstanceId} ownerVault={vault} worker={worker} tables={tables} semanticTrace={semanticTrace}
+        relayBaseUrl="https://relay.example.test" publicBaseUrl={location.origin} fetchImpl={fetchImpl} onClose={() => {}} onError={message => errors.push(message)} onInfo={() => {}} />));
+      await flush();
+      if (mode === "legacy") {
+        expect(document.body.textContent).not.toContain("Resume original revocation");
+        await act(async () => button("Review legacy revocation recovery").click());
+        await waitForUi(() => !!button("Confirm original-owner recovery"));
+        await act(async () => button("Confirm original-owner recovery").click());
+        await waitForUi(() => !!button("Resume original revocation") && !button("Review revocation recovery").matches(":disabled"));
+      }
+      expect(form.revokedAt).toBeNull(); expect(fetchImpl).not.toHaveBeenCalled();
+      await act(async () => button("Review revocation recovery").click());
+      await waitForUi(() => !!button("Confirm renewed local revocation"));
+      await act(async () => button("Confirm renewed local revocation").click());
+      await waitForUi(() => !!button("Review form") && !button("Review form").matches(":disabled"));
+      expect(errors).toEqual([]); expect(form.terminalReason).toBe("revoked"); expect(custody.size).toBe(1);
+      expect((await worker.mutationOutcome(original.route, original.payload, { requestId: original.requestId })).status).toBe("cancelled");
+    } finally { await act(async () => root.unmount()); }
+  });
+  it.each(["ledger", "legacy"])("recovers %s interrupted publication and requires confirmation before closing the exact original work", async mode => {
     let forms: LocalIntakeFormV2[] = [];
     const worker = protocol({ listIntakeForms: async () => forms, intakeInbox: async () => [], intakeReceipts: async () => [], intakeDeliveryFailures: async () => [],
       saveIntakeForm: async form => { forms = [form]; return form; } });
@@ -147,15 +193,19 @@ describe("public intake UI", () => {
     await publication.recover(); await publication.begin({ title: "Original draft", description: "", target: { tableId, expectedSchemaVersion: 3 }, expiresAt: "2030-01-01T00:00:00.000Z",
       fields: [{ fieldId: nameFieldId, label: "Name", type: "text", required: true, maxLength: 100, options: [] }], fileRequests: [] });
     await expect(publication.resume().then(() => "published")).rejects.toThrow(/uncertain/);
-    const original = publication.pending()!; sessionStorage.clear();
+    const original = publication.pending()!;
+    if (mode === "ledger") sessionStorage.clear(); else workflows = new IndexedDbIntakeWorkflows(new OwnedFactory() as unknown as IDBFactory);
     const errors: string[] = []; const host = document.createElement("div"); document.body.replaceChildren(host); const root = createRoot(host);
     const button = (text: string) => [...document.body.querySelectorAll<HTMLButtonElement>("button")].find(row => row.textContent === text)!;
     try {
       await act(async () => root.render(<IntakeCenter workflows={workflows} appInstanceId={appInstanceId} ownerVault={vault} worker={worker} tables={tables} semanticTrace={semanticTrace}
         relayBaseUrl="https://relay.example.test" publicBaseUrl={location.origin} fetchImpl={fetchImpl} onClose={() => {}} onError={message => errors.push(message)} onInfo={() => {}} />));
-      await flush(); expect(document.body.textContent).toContain("Resume original publication");
+      await flush();
+      if (mode === "ledger") expect(document.body.textContent).toContain("Resume original publication");
+      else expect(document.body.textContent).not.toContain("Resume original publication");
       await act(async () => button("Close original publication").click()); expect(fetchImpl).toHaveBeenCalledTimes(1);
-      await act(async () => button("Confirm close original publication").click()); await flush();
+      await act(async () => button("Confirm close original publication").click());
+      await waitForUi(() => !!button("Review form") && !button("Review form").matches(":disabled"));
       expect(errors).toEqual([]); expect(document.body.textContent).not.toContain("Resume original publication");
       expect(forms).toHaveLength(1); expect(forms[0]!.publicForm.formId).toBe(original.formId); expect(forms[0]!.publishedAt).toBeNull(); expect(custody.size).toBe(1);
       expect((await worker.mutationOutcome(original.publish!.route, original.publish!.payload, { requestId: original.publish!.requestId })).status).toBe("cancelled");
@@ -186,7 +236,9 @@ describe("public intake UI", () => {
     try {
       await act(async () => root.render(<IntakeCenter workflows={workflows} appInstanceId={appInstanceId} ownerVault={vault} worker={worker} tables={tables} semanticTrace={semanticTrace}
         relayBaseUrl="https://relay.example.test" publicBaseUrl="https://app.example.test" onClose={() => {}} onError={() => {}} onInfo={() => {}} />));
-      await flush(); await act(async () => button("Preview auto-accept").click()); await flush();
+      await waitForUi(() => !!button("Preview auto-accept") && !button("Preview auto-accept").matches(":disabled"));
+      await act(async () => button("Preview auto-accept").click());
+      await waitForUi(() => !!button("Enable this exact rule"));
       await act(async () => button("Enable this exact rule").click()); await flush();
       expect(calls).toHaveLength(2);
       expect(calls[1].authorityTarget).toEqual(simulatedTarget);

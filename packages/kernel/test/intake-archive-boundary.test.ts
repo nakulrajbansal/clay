@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { ClayStore, openMemoryDriver } from "../src/index";
 import { assertNoLegacyIntakeArchive, assertIntakeResponsePublic } from "../src/production-intake-boundary";
 import { emptyIntakeState } from "../src/intake";
+import { encodeProductionResponse } from "../src/production-response-envelope";
 
 it.each(["private_property", "malformed_v2"])("denies %s at archive collection without rewriting the physical V2 row", async fault => {
   const store = await ClayStore.openMemory();
@@ -12,6 +13,26 @@ it.each(["private_property", "malformed_v2"])("denies %s at archive collection w
     expect(denied).toBe(true);
     expect(JSON.stringify(store.getSetting("intake_v2")) === original).toBe(true);
   } finally { store.close(); }
+});
+
+it("validates prefixed canonical receipts without hiding malformed envelopes or escaped private properties", async () => {
+  const driver = await openMemoryDriver();
+  try {
+    driver.exec("CREATE TABLE sys.settings(key TEXT PRIMARY KEY,value_json TEXT NOT NULL)");
+    driver.exec("CREATE TABLE sys.production_request_receipts(request_id TEXT PRIMARY KEY,response_json TEXT)");
+    const publicResponse = encodeProductionResponse("intake.command", { message: "Original request is closed" }).json;
+    driver.exec("INSERT INTO sys.production_request_receipts VALUES (?,?)", ["owned", publicResponse]);
+    expect(() => assertNoLegacyIntakeArchive(driver)).not.toThrow();
+    for (const invalid of [
+      'clay-response-v1:intake.command\n{"schema":1,"route":"intake.command","result":{"owner\\u0054oken":"owned-synthetic-marker"}}',
+      'clay-response-v1:intake.command\n{"schema":1,"route":"different","result":null}',
+      "clay-response-v1:intake.command\nnot-json",
+    ]) {
+      driver.exec("UPDATE sys.production_request_receipts SET response_json=?", [invalid]);
+      expect(() => assertNoLegacyIntakeArchive(driver)).toThrow();
+      expect(driver.select("SELECT response_json = ? AS unchanged FROM sys.production_request_receipts", [invalid])[0]?.unchanged).toBe(1);
+    }
+  } finally { driver.close(); }
 });
 
 it("blocks legacy intake export at the Store boundary without changing the original row", async () => {

@@ -195,6 +195,10 @@ export function IntakeCenter(props: {
   const [pendingRevoke, setPendingRevoke] = useState<string | null>(null);
   const [confirmClosePublication, setConfirmClosePublication] = useState(false);
   const [closingPublication, setClosingPublication] = useState(false);
+  const [legacyPublication, setLegacyPublication] = useState(false);
+  const [legacyRevocation, setLegacyRevocation] = useState(false);
+  const [revocationId, setRevocationId] = useState<string | null>(null);
+  const [renewalReview, setRenewalReview] = useState<{ target: IntakeRead["authorityTarget"]; mode: "adopt" | "renew" } | null>(null);
   const ownsForm = (form: LocalIntakeFormV2 | undefined): boolean => !!form && !!read
     && form.ownerSource.appInstanceId === read.authorityTarget.appInstanceId
     && form.ownerSource.activeGenerationId === read.authorityTarget.activeGenerationId
@@ -210,16 +214,24 @@ export function IntakeCenter(props: {
       setRetainedPublication(configured.publication?.pending() != null);
       setClosingPublication(configured.publication?.pending()?.termination != null);
       setRetainedRevocation(configured.owner?.pendingRevocation() != null);
+      setRevocationId(configured.owner?.pendingRevocation()?.form.publicForm.formId ?? null);
       setRecoveryError(null);
     } catch { setRecoveryError("Retained intake work needs its original source and configuration. It has not been discarded."); }
   };
   const blocked = busy || !read || retained || retainedPublication || retainedRevocation || recoveryError !== null;
 
   const refresh = async (): Promise<void> => {
+    let cacheOnlyPublication = false, cacheOnlyRevocation = false;
     try {
-      if (configured.publication && configured.owner) { await configured.publication.recover(); await configured.owner.recover(); }
+      if (configured.publication && configured.owner) {
+        try { await configured.publication.recover(); }
+        catch (cause) { if (!(cause instanceof UnfencedIntakeWorkflowError) || !configured.publication.pending()) throw cause; cacheOnlyPublication = true; }
+        try { await configured.owner.recover(); }
+        catch (cause) { if (!(cause instanceof UnfencedIntakeWorkflowError) || !configured.owner.pendingRevocation()) throw cause; cacheOnlyRevocation = true; }
+      }
       else for (const kind of ["publication", "revocation"] as const) await new IntakeWorkflowSlot(workflows, sessionStorage, location.origin, props.appInstanceId, kind).recover();
       workflowRecoveryError.current = null;
+      setLegacyPublication(cacheOnlyPublication); setLegacyRevocation(cacheOnlyRevocation);
     } catch (cause) {
       workflowRecoveryError.current = cause instanceof UnfencedIntakeWorkflowError ? cause.message
         : "Retained intake work needs its original source and configuration. It has not been discarded.";
@@ -227,7 +239,15 @@ export function IntakeCenter(props: {
     }
     const next = await session.read(); setRead(next);
     setForms(next.forms); setInbox(next.inbox); setReceipts(next.receipts);
-    setDeliveryFailures(next.deliveryFailures); updateRecovery();
+    setDeliveryFailures(next.deliveryFailures);
+    if (cacheOnlyPublication || cacheOnlyRevocation) {
+      // The cache can supply a review, never a late-client invocation fence.
+      workflowRecoveryError.current = "Legacy intake work needs original-owner recovery. Active forms remain active until exact local and relay terminal proof succeed.";
+      setRecoveryError(workflowRecoveryError.current); setRetained(session.pending() !== null);
+      setRetainedPublication(configured.publication?.pending() != null); setClosingPublication(configured.publication?.pending()?.termination != null);
+      setRetainedRevocation(configured.owner?.pendingRevocation() != null);
+      setRevocationId(configured.owner?.pendingRevocation()?.form.publicForm.formId ?? null);
+    } else updateRecovery();
   };
   useEffect(() => { void refresh().catch(cause =>
     props.onError(cause instanceof Error ? cause.message : String(cause))); }, []);
@@ -336,10 +356,32 @@ export function IntakeCenter(props: {
     if (!configured.publication || busy) return;
     setBusy(true);
     try {
-      await configured.publication.terminalize(); setConfirmClosePublication(false); setPreview(null); setShareLink("");
+      if (legacyPublication) await configured.publication.terminalizeLegacy(); else await configured.publication.terminalize();
+      setConfirmClosePublication(false); setPreview(null); setShareLink("");
       await refresh(); props.onInfo("Original publication closed. Data and custody are kept. Review a fresh source before creating another form.");
     } catch (cause) { props.onError(cause instanceof Error ? cause.message : "Original intake closure needs recovery"); }
-    finally { setBusy(false); updateRecovery(); }
+    finally { await refresh().catch(() => {}); setBusy(false); updateRecovery(); }
+  };
+  const reviewRevocation = async (mode: "adopt" | "renew"): Promise<void> => {
+    setBusy(true); setRenewalReview(null);
+    try { await refresh(); setRenewalReview({ target: session.reviewed!.authorityTarget, mode }); }
+    catch { props.onError("Original revocation source is unavailable; retained work was kept."); }
+    finally { setBusy(false); }
+  };
+  const renewRevocation = async (): Promise<void> => {
+    if (!configured.owner || !renewalReview) return;
+    setBusy(true);
+    try {
+      if (renewalReview.mode === "adopt") {
+        await configured.owner.adoptLegacyRevocation(renewalReview.target); setRenewalReview(null); await refresh();
+        props.onInfo("Original owner custody verified and legacy revocation retained. Resume its outcome or explicitly review renewal; an active form has not been closed.");
+      } else {
+        await configured.owner.renewRevocation(renewalReview.target); setRenewalReview(null);
+        await configured.owner.revoke(); await refresh();
+        props.onInfo("Original invocation terminalized and reviewed local revocation completed. All request identities were kept.");
+      }
+    } catch (cause) { props.onError(cause instanceof Error ? cause.message : "Revocation recovery remains incomplete"); }
+    finally { await refresh().catch(() => {}); setBusy(false); updateRecovery(); }
   };
 
   const retryDelivery = async (failure: IntakeDeliveryFailure): Promise<void> => {
@@ -401,13 +443,20 @@ export function IntakeCenter(props: {
       {read?.legacyCustody === "quarantined" ? <p role="alert">Legacy intake custody is quarantined. Original forms, private material and historical receipts are untouched. Archive export remains blocked until safe custody adoption.</p> : null}
       {recoveryError ? <p role="alert">{recoveryError}</p> : null}
       {retainedPublication ? <p role="status">Publication has a retained original form and request.
-        {!closingPublication ? <button disabled={busy} onClick={() => void publish()}>Resume original publication</button> : null}
+        {!closingPublication && !legacyPublication ? <button disabled={busy} onClick={() => void publish()}>Resume original publication</button> : null}
         {confirmClosePublication || closingPublication ? <span>Close this original publication before reviewing a new source? Original data and custody will be kept.
           <button disabled={busy} onClick={() => void closePublication()}>Confirm close original publication</button>
           {!closingPublication ? <button onClick={() => setConfirmClosePublication(false)}>Keep original publication</button> : null}</span>
           : <button disabled={busy} onClick={() => setConfirmClosePublication(true)}>Close original publication</button>}</p> : null}
-      {retainedRevocation ? <p role="status">The form is closed locally; relay revocation needs acknowledgement.
-        <button disabled={busy} onClick={() => void revoke()}>Resume original revocation</button></p> : null}
+      {retainedRevocation ? <div role="status">Original revocation is retained. Local and relay outcomes still need reconciliation.
+        {!legacyRevocation ? <button disabled={busy} onClick={() => void revoke()}>Resume original revocation</button> : null}
+        <button disabled={busy || !read || !configured.owner || !forms.some(form => form.publicForm.formId === revocationId && ownsForm(form)
+          && form.relayBaseUrl === configured.owner!.configuration.relayBaseUrl && form.publishedAt !== null && (legacyRevocation || form.revokedAt === null))}
+          onClick={() => void reviewRevocation(legacyRevocation ? "adopt" : "renew")}>{legacyRevocation ? "Review legacy revocation recovery" : "Review revocation recovery"}</button>
+        {renewalReview ? <p>{renewalReview.mode === "adopt" ? "Verify original owner custody and retain this exact legacy revocation for reconciliation? This does not close an active form."
+          : "Close the original invocation and relay identity, then revoke this same form against the reviewed source?"} Prior requests and custody will be kept.
+          <button disabled={busy} onClick={() => void renewRevocation()}>{renewalReview.mode === "adopt" ? "Confirm original-owner recovery" : "Confirm renewed local revocation"}</button>
+          <button disabled={busy} onClick={() => setRenewalReview(null)}>Keep original revocation</button></p> : null}</div> : null}
       {retained && !retainedRevocation ? <p role="status">An original intake request needs reconciliation.
         <button disabled={busy} onClick={() => void localAction(() => session.retry(), "Original intake outcome recovered.")}>Retry original intake request</button>
         <button disabled={busy} onClick={() => void localAction(async () => {

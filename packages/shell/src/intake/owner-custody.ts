@@ -105,3 +105,13 @@ export async function hydrateIntakeOwnerForm(formInput: LocalIntakeFormV2, sourc
   const publicForm = PublicIntakeFormV1.parse({ ...form.publicForm, delivery: { ...form.publicForm.delivery, submitToken: record.submitToken } });
   return { publicForm, ownerPrivateKey: record.ownerPrivateKey, ownerToken: record.ownerToken };
 }
+
+/** Recovery never mints replacement material, including after a lost insert
+ * acknowledgement. Return only the public original to the workflow caller. */
+export async function recoverIntakeOwnerForm(source: TargetEvidenceV1, formId: string, shellOrigin: string, relay: string, vault: IntakeOwnerVault): Promise<LocalIntakeFormV2> {
+  const fixed = TargetEvidenceV1.parse(source);
+  const record = validateIntakeOwnerCustody(await vault.read(custodyKey(shellOrigin, fixed, relay, formId)));
+  await hydrateIntakeOwnerForm(record.form, fixed, shellOrigin, vault);
+  if (record.form.publicForm.formId !== formId || record.form.relayBaseUrl !== relay) throw failure();
+  return structuredClone(record.form);
+}

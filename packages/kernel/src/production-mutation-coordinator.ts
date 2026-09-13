@@ -249,6 +249,7 @@ type CapturedProductionMutation = CapturedCoreMutation | Readonly<{
   | { route: "acceptSuggestion"; payload: Readonly<{ subject: string; kind: string }> }
   | { route: "dismissSuggestion"; payload: Readonly<{ subject: string; kind: string }> }
   | { route: "intake.saveForm"; payload: Readonly<{ form: Readonly<JsonRecord> }> }
+  | { route: "intake.closePublication"; payload: Readonly<{ form: Readonly<JsonRecord> }> }
   | { route: "intake.markPublished"; payload: Readonly<{ formId: string; publishedAt: string }> }
   | { route: "intake.revokeForm"; payload: Readonly<{ formId: string; revokedAt: string }> }
   | { route: "intake.markExpired"; payload: Readonly<{ formId: string; expiredAt: string }> }
@@ -768,7 +769,8 @@ function captureMutation(input: unknown): CapturedProductionMutation {
       case "recordUsage": fields = ["event"]; break;
       case "acceptSuggestion":
       case "dismissSuggestion": fields = ["subject", "kind"]; break;
-      case "intake.saveForm": fields = ["form"]; break;
+      case "intake.saveForm":
+      case "intake.closePublication": fields = ["form"]; break;
       case "intake.markPublished": fields = ["formId", "publishedAt"]; break;
       case "intake.revokeForm": fields = ["formId", "revokedAt"]; break;
       case "intake.markExpired": fields = ["formId", "expiredAt"]; break;
@@ -862,7 +864,8 @@ function captureMutation(input: unknown): CapturedProductionMutation {
           "regroup_board", "make_workflow", "chart_metric",
         ].includes(captured.kind as string)) throw new Error();
         break;
-      case "intake.saveForm": LocalIntakeFormV2.parse(capturedJsonRecord(captured.form)); break;
+      case "intake.saveForm":
+      case "intake.closePublication": LocalIntakeFormV2.parse(capturedJsonRecord(captured.form)); break;
       case "intake.markPublished": strings("formId", "publishedAt"); break;
       case "intake.revokeForm": strings("formId", "revokedAt"); break;
       case "intake.markExpired": strings("formId", "expiredAt"); break;
@@ -1037,6 +1040,7 @@ const STORE_DELETE_SETTING: ClayStore["deleteSetting"] = ClayStore.prototype.del
 const STORE_SAMPLE_PROVENANCE: ClayStore["sampleRowProvenance"] =
   ClayStore.prototype.sampleRowProvenance;
 const STORE_SAVE_INTAKE_FORM: ClayStore["saveIntakeForm"] = ClayStore.prototype.saveIntakeForm;
+const STORE_CLOSE_INTAKE_PUBLICATION = ClayStore.prototype.closeIntakePublication;
 const STORE_MARK_INTAKE_FORM_PUBLISHED: ClayStore["markIntakeFormPublished"] =
   ClayStore.prototype.markIntakeFormPublished;
 const STORE_REVOKE_INTAKE_FORM: ClayStore["revokeIntakeForm"] = ClayStore.prototype.revokeIntakeForm;
@@ -1340,6 +1344,10 @@ function executeCapturedMutation(
       return capturedExecution(captureJsonValue(STORE_SAVE_INTAKE_FORM.call(
         store,
         request.payload.form as unknown as Parameters<ClayStore["saveIntakeForm"]>[0],
+      ), new WeakSet()));
+    case "intake.closePublication":
+      return capturedExecution(captureJsonValue(STORE_CLOSE_INTAKE_PUBLICATION.call(
+        store, LocalIntakeFormV2.parse(request.payload.form), executionInstant ?? undefined,
       ), new WeakSet()));
     case "intake.markPublished":
       return capturedExecution(captureJsonValue(STORE_MARK_INTAKE_FORM_PUBLISHED.call(

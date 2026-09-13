@@ -75,6 +75,7 @@ import type {
   IntakeSubmissionPlaintextV1,
   LocalIntakeFormV2,
 } from "@clay/schema/intake";
+import { IntakePublicationClosureV1 } from "@clay/schema/intake";
 import { IntakeAutoAcceptRuleV1 } from "@clay/schema/intake";
 import { assertNoLegacyIntakeArchive } from "./intake-archive-boundary";
 import {
@@ -2755,11 +2756,15 @@ export class ClayStore {
     const form = parseLocalIntakeForm(input);
     resolveIntakeForm(form.publicForm, this.validationRegistrySnapshot(), this.currentVersion());
     const state = this.intakeState();
+    if (state.publicationClosures?.some(row => row.form.publicForm.formId === form.publicForm.formId))
+      throw new ClayError("E_CONFLICT", "intake publication identity is terminally closed");
     const index = state.forms.findIndex(candidate =>
       candidate.publicForm.formId === form.publicForm.formId);
     if (index >= 0) {
       const prior = state.forms[index]!;
       if (JSON.stringify(prior) === JSON.stringify(form)) return parseLocalIntakeForm(prior);
+      if (prior.revokedAt !== null)
+        throw new ClayError("E_CONFLICT", "revoked intake metadata is terminal; review a new form identity");
       if (form.publicForm.revision <= prior.publicForm.revision
           || JSON.stringify(form.ownerSource) !== JSON.stringify(prior.ownerSource)
           || form.publicForm.encryption.ownerPublicKey !== prior.publicForm.encryption.ownerPublicKey
@@ -2779,6 +2784,8 @@ export class ClayStore {
 
   markIntakeFormPublished(formId: string, publishedAt = nowIso()): LocalIntakeFormV2 {
     const state = this.intakeState();
+    if (state.publicationClosures?.some(row => row.form.publicForm.formId === formId))
+      throw new ClayError("E_CONFLICT", "intake publication identity is terminally closed");
     const form = state.forms.find(candidate => candidate.publicForm.formId === formId);
     if (!form) throw new ClayError("E_VALIDATION", "unknown intake form");
     if (form.revokedAt !== null) throw new ClayError("E_CONFLICT", "revoked intake form cannot be published");
@@ -2788,11 +2795,31 @@ export class ClayStore {
     return parseLocalIntakeForm(next);
   }
 
+  closeIntakePublication(input: LocalIntakeFormV2, closedAt = nowIso()): IntakePublicationClosureV1 {
+    const form = parseLocalIntakeForm(input), state = this.intakeState();
+    const identity = (value: LocalIntakeFormV2) => JSON.stringify([value.ownerSource, value.publicForm, value.relayBaseUrl]);
+    const current = state.forms.find(row => row.publicForm.formId === form.publicForm.formId);
+    const prior = state.publicationClosures?.find(row => row.form.publicForm.formId === form.publicForm.formId);
+    if ((current && identity(current) !== identity(form)) || (prior && identity(prior.form) !== identity(form))
+        || (!current && form.publishedAt !== null))
+      throw new ClayError("E_CONFLICT", "original intake publication definition or identity differs");
+    if (prior) return IntakePublicationClosureV1.parse(prior);
+    if ((state.publicationClosures?.length ?? 0) >= 100)
+      throw new ClayError("E_LIMIT", "intake publication closure capacity reached; originals were kept");
+    const closure = IntakePublicationClosureV1.parse({ schema: 1, form, closedAt, terminal: true });
+    state.publicationClosures = [...(state.publicationClosures ?? []), closure];
+    this.writeIntakeState(state);
+    return closure;
+  }
+
   revokeIntakeForm(formId: string, revokedAt = nowIso()): LocalIntakeFormV2 {
     const state = this.intakeState();
     const form = state.forms.find(candidate => candidate.publicForm.formId === formId);
     if (!form) throw new ClayError("E_VALIDATION", "unknown intake form");
     if (form.publishedAt === null) throw new ClayError("E_CONFLICT", "unpublished intake form cannot be revoked");
+    // Permanent terminal metadata excludes even an old client's unknown future
+    // request ID. A retry must not rewrite the first revocation/expiry receipt.
+    if (form.revokedAt !== null) return parseLocalIntakeForm(form);
     const next = parseLocalIntakeForm({ ...form, revokedAt, terminalReason: "revoked" });
     state.forms[state.forms.indexOf(form)] = next;
     state.rules = state.rules.filter(rule => rule.formId !== formId);

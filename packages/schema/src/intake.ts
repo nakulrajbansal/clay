@@ -278,6 +278,12 @@ export const LocalIntakeFormV2 = z.object({ schema: z.literal(2), publicForm: In
 });
 export type LocalIntakeFormV2 = z.infer<typeof LocalIntakeFormV2>;
 
+/** Public, canonical, permanent publication exclusion. This does not revoke an
+ * already active local form or confer private owner custody on a copied app. */
+export const IntakePublicationClosureV1 = z.object({ schema: z.literal(1), form: LocalIntakeFormV2,
+  closedAt: z.string().datetime({ offset: true }), terminal: z.literal(true) }).strict();
+export type IntakePublicationClosureV1 = z.infer<typeof IntakePublicationClosureV1>;
+
 export const IntakeAutoAcceptRuleV1 = z.object({
   schema: z.literal(1),
   formId: IntakeFormId,

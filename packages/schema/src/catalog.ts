@@ -95,7 +95,7 @@ export const AutomationWorkspaceV1 = z.object({ schema: z.literal(1), draftId: R
 }).strict();
 export type AutomationWorkspaceV1 = z.infer<typeof AutomationWorkspaceV1>;
 
-export const IntakeCommandRouteV1 = z.enum(["intake.saveForm", "intake.markPublished", "intake.revokeForm", "intake.markExpired",
+export const IntakeCommandRouteV1 = z.enum(["intake.saveForm", "intake.closePublication", "intake.markPublished", "intake.revokeForm", "intake.markExpired",
   "intake.stageSubmission", "intake.recordDeliveryFailure", "intake.authorizeDeliveryDiscard", "intake.resolveDeliveryFailure",
   "intake.rejectSubmission", "intake.simulateAutoAccept", "intake.enableAutoAccept", "intake.disableAutoAccept",
   "intake.processAutoAccept", "intake.acceptSubmission", "intake.undoReceipt"]);

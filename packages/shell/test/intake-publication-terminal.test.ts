@@ -20,7 +20,8 @@ async function fixture(pause: "save" | "http" | "none" = "none") {
   const factory = new OwnedFactory(), workflows = new IndexedDbIntakeWorkflows(factory as unknown as IDBFactory);
   const custody = new Map<string, IntakeOwnerCustody>(); const vault: IntakeOwnerVault = { read: async key => custody.get(key) ?? null, insert: async row => { if (!custody.has(row.key)) custody.set(row.key, structuredClone(row)); } };
   const results = new Map<string, any>(); const forms: any[] = []; const invoked: string[] = [], cancelled: string[] = [];
-  const paused = latch(), release = latch(); let serial = 0; let loseCancel = false;
+  const closed = new Set<string>();
+  const paused = latch(), release = latch(); let serial = 0; let loseCancel = false, loseClosure = false;
   const worker = { createMutationContext: () => ({ requestId: `req_${String.fromCharCode(97 + ++serial).repeat(26)}` }),
     intakePresentation: async () => ({ authorityTarget: target, forms, inbox: [], receipts: [], rules: [], deliveryFailures: [], tables: [], trace: {}, legacyCustody: "none" }),
     mutationOutcome: async (_route: string, _payload: unknown, context: { requestId: string }) => results.get(context.requestId) ?? { status: "not_invoked" },
@@ -36,10 +37,17 @@ async function fixture(pause: "save" | "http" | "none" = "none") {
       if (results.get(context.requestId)?.status === "cancelled") throw new Error("Original invocation terminally cancelled");
       if (JSON.stringify(payload.authorityTarget) !== JSON.stringify(target)) { results.set(context.requestId, { status: "failed" }); throw new Error("Original source changed"); }
       let result;
-      if (payload.command.route === "intake.saveForm") { result = payload.command.payload.form; forms.push(result); }
+      if (payload.command.route === "intake.closePublication") {
+        closed.add(payload.command.payload.form.publicForm.formId);
+        result = { schema: 1, form: payload.command.payload.form, terminal: true, closedAt: new Date().toISOString() };
+      }
+      else if (closed.has(payload.command.payload.form?.publicForm.formId ?? payload.command.payload.formId)) throw new Error("Publication identity terminally closed");
+      else if (payload.command.route === "intake.saveForm") { result = payload.command.payload.form; forms.push(result); }
       else { result = { ...forms[0], publishedAt: payload.command.payload.publishedAt }; forms[0] = result; }
       target = { ...target, protectionRevision: String(Number(target.protectionRevision) + 1) };
-      results.set(context.requestId, { status: "recorded", current: true, result, target }); return result;
+      results.set(context.requestId, { status: "recorded", current: true, result, target });
+      if (loseClosure && payload.command.route === "intake.closePublication") { loseClosure = false; throw new Error("Owned closure response loss"); }
+      return result;
     },
   } as unknown as WorkerClient;
   const relay = new MemoryIntakeRelayStore({ now: () => Date.now() }); const backend = ownedRelayApp({ intakeRelay: relay, now: () => Date.now() });
@@ -58,8 +66,9 @@ async function fixture(pause: "save" | "http" | "none" = "none") {
   const proposal = { title: "Owned retained request", description: "", expiresAt: "2026-09-20T12:00:00.000Z", target: { tableId: "tbl_11111111-1111-7111-8111-111111111111", expectedSchemaVersion: 1 },
     fields: [{ fieldId: "fld_22222222-2222-7222-8222-222222222222", label: "Title", type: "text" as const, required: true, maxLength: 100, options: [] }], fileRequests: [] };
   await publication.begin(proposal); const originalId = publication.pending()!.formId;
-  return { publication, open, proposal, originalId, originalTarget, cacheRows, custody, results, invoked, cancelled, forms, paused, release, relay, backend,
-    posts: () => posts, loseCancel: () => { loseCancel = true; }, bump: () => { target = { ...target, protectionRevision: "8" }; } };
+  return { publication, open, proposal, originalId, originalTarget, cacheRows, custody, results, invoked, cancelled, forms, paused, release, relay, backend, worker, workflows, factory, closed,
+    posts: () => posts, loseCancel: () => { loseCancel = true; }, loseClosure: () => { loseClosure = true; }, bump: () => { target = { ...target, protectionRevision: "8" }; },
+    changeGeneration: () => { target = { ...target, activeGenerationId: `gen_${"z".repeat(26)}` }; } };
 }
 
 it("fences a delayed original save across cache loss and never invokes it after terminal acknowledgement", async () => {
@@ -69,6 +78,50 @@ it("fences a delayed original save across cache loss and never invokes it after 
   f.release.release(); expect(await pending).toBe("stopped");
   expect(f.results.get(request)?.status).toBe("cancelled"); expect(f.forms).toHaveLength(0); expect(f.posts()).toBe(0);
   expect(f.custody.size).toBe(1); expect((await f.open()).pending()).toBeNull();
+});
+
+it("claims cache-only legacy work for closure only, then excludes delayed unknown old-client IDs at the authority", async () => {
+  const f = await fixture("http"); const pending = f.publication.resume().then(() => "published", () => "stopped");
+  await f.paused.promise; const original = f.publication.pending()!;
+  f.factory.rows.clear(); // Synthetic pre-ledger client: only its public cache and private custody exist.
+  await expect(f.open()).rejects.toThrow(/unfenced/);
+  await f.publication.terminalizeLegacy();
+  expect(f.closed.has(original.formId)).toBe(true);
+  const target = (await f.worker.intakePresentation()).authorityTarget;
+  await expect(f.worker.intakeCommand({ authorityTarget: target, command: { route: "intake.markPublished",
+    payload: { formId: original.formId, publishedAt: new Date().toISOString() } } }, f.worker.createMutationContext())).rejects.toThrow(/closed/);
+  f.release.release(); expect(await pending).toBe("stopped");
+  expect(f.forms).toHaveLength(1); expect(f.forms[0].publishedAt).toBeNull(); expect(f.custody.size).toBe(1);
+  const persisted = await f.workflows.read(JSON.stringify([1, original.configuration.shellOrigin, original.source.appInstanceId, "publication"]));
+  expect(persisted?.closed).toBe(true); expect(persisted?.legacyOriginal).toEqual(original);
+  f.cacheRows.clear(); expect((await f.open()).pending()).toBeNull();
+});
+
+it.each(["claim", "cancel", "authority"])("retains cache-only originals across %s commit/readback loss and full cache teardown", async fault => {
+  const f = await fixture("http"); const pending = f.publication.resume().then(() => "published", () => "stopped");
+  await f.paused.promise; const original = f.publication.pending()!; f.factory.rows.clear();
+  if (fault === "claim") f.factory.failCommit = true;
+  else if (fault === "cancel") f.loseCancel(); else f.loseClosure();
+  await expect(f.publication.terminalizeLegacy()).rejects.toThrow(); f.factory.failCommit = false;
+  if (fault === "claim") {
+    expect(f.publication.pending()).toEqual(original); expect(f.closed.size).toBe(0);
+    await f.publication.terminalizeLegacy();
+  } else {
+    f.cacheRows.clear(); const reopened = await f.open();
+    expect(reopened.pending()?.formId).toBe(original.formId);
+    await expect(reopened.resume()).rejects.toThrow(/closing/); await reopened.terminalize();
+  }
+  f.release.release(); expect(await pending).toBe("stopped"); expect(f.custody.size).toBe(1); expect(f.forms[0].publishedAt).toBeNull();
+  expect((await f.open()).pending()).toBeNull();
+});
+
+it.each(["generation", "custody"])("quarantines legacy closure after original %s loss without claiming terminal success", async fault => {
+  const f = await fixture("http"); const pending = f.publication.resume().then(() => "published", () => "stopped");
+  await f.paused.promise; const original = f.publication.pending()!; f.factory.rows.clear();
+  if (fault === "generation") f.changeGeneration(); else f.custody.clear(); // Owned synthetic loss only.
+  await expect(f.publication.terminalizeLegacy()).rejects.toThrow(/source|Source|custody/i);
+  expect(f.publication.pending()).toEqual(original); expect(f.closed.size).toBe(0); expect(f.factory.rows.size).toBe(0);
+  f.bump(); f.release.release(); expect(await pending).toBe("stopped");
 });
 
 it.each(["stale", "expired"])("blocks a delayed original HTTP arrival after %s closure, preserving original keys and explicit renewal", async fault => {
