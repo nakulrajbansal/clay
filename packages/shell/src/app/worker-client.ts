@@ -1822,8 +1822,13 @@ export class WorkerClient {
   initializeDailyHomeTimeZone(timeZone: string, context: WorkerMutationContext = createWorkerMutationContext()): Promise<string> {
     return this.mutationCall("dailyHomeInitializeTimeZone", { timeZone }, context);
   }
-  quickCapture(table: string, row: Record<string, unknown>, tableId: string, context: WorkerMutationContext = createWorkerMutationContext()): Promise<BatchReceipt> {
-    return this.mutationCall("dailyHomeQuickCapture", { table, row, tableId }, context);
+  async presentationSource(): Promise<import("@clay/schema/catalog").TargetEvidenceV1> {
+    const result = await this.ephemeralCall("presentationSource");
+    return (await import("@clay/schema/catalog")).TargetEvidenceV1.parse(result);
+  }
+  quickCapture(table: string, row: Record<string, unknown>, tableId: string, context: WorkerMutationContext, appInstanceId: string): Promise<BatchReceipt> {
+    const captured = captureWorkerMutationContext(context); const capturedRow = structuredClone(row);
+    return this.mutationCall("dailyHomeQuickCapture", { appInstanceId, table, row: capturedRow, tableId }, captured);
   }
   undoQuickCapture(batchId: string, context: WorkerMutationContext = createWorkerMutationContext()): Promise<BatchReceipt> {
     return this.mutationCall("dailyHomeUndoCapture", { batchId }, context);
@@ -1906,6 +1911,15 @@ export class WorkerClient {
     context: WorkerMutationContext,
   ): Promise<RelationConversionResult> {
     return this.mutationCall("convertTextToRelation", input, context);
+  }
+  undoRelationConversion(conversionRequestId: string, beforeVersion: number, context: WorkerMutationContext): Promise<{ undone: true; version: number }> {
+    return this.mutationCall("undoRelationConversion", { conversionRequestId, beforeVersion }, context);
+  }
+  async mutationOutcome(route: import("@clay/schema/catalog").PresentationIntentV1["route"], payload: unknown,
+    context: WorkerMutationContext): Promise<import("@clay/schema/catalog").PresentationMutationOutcomeV1> {
+    const captured = captureWorkerMutationContext(context); const input = structuredClone({ route, payload });
+    const result = await this.call(captured.requestId, "mutationOutcome", input);
+    return (await import("@clay/schema/catalog")).PresentationMutationOutcomeV1.parse(result);
   }
   addColumn(
     table: string,
@@ -2041,6 +2055,18 @@ export class WorkerClient {
   recordManualBackupDownload(record: import("@clay/schema/backup").ManualBackupDownloadV2, context: WorkerMutationContext): Promise<import("@clay/schema/backup").ManualBackupDownloadV2> {
     return this.mutationCall("recordManualBackupDownload", { record }, context);
   }
+  manualBackupDownloadOutcome(record: import("@clay/schema/backup").ManualBackupDownloadV2, context: WorkerMutationContext): Promise<{ status: "recorded" | "not_recorded" | "uncertain" }> {
+    const captured = captureWorkerMutationContext(context);
+    return this.call(captured.requestId, "manualBackupDownloadOutcome", { record: structuredClone(record) });
+  }
+  async validateManualBackupDownload(bytes: ArrayBuffer, record: import("@clay/schema/backup").ManualBackupDownloadV2): Promise<void> {
+    const capturedRecord = structuredClone(record);
+    const runtime = await this.trustedBackupRuntime();
+    const { serveArchiveVerification } = await import("./archive-verification");
+    const channel = new MessageChannel(); const stop = serveArchiveVerification(channel.port1, runtime.trust);
+    try { await this.ephemeralCall("validateManualBackupDownload", { bytes, record: capturedRecord }, [bytes, channel.port2]); }
+    finally { stop(); channel.port2.close(); }
+  }
   #backupRuntime: Promise<import("./trusted-backup-runtime").TrustedBackupRuntime> | null = null;
   private trustedBackupRuntime(): Promise<import("./trusted-backup-runtime").TrustedBackupRuntime> {
     return this.#backupRuntime ??= import("./trusted-backup-runtime").then(({ TrustedBackupRuntime }) => new TrustedBackupRuntime({
@@ -2066,7 +2092,16 @@ export class WorkerClient {
     return (await this.trustedBackupRuntime()).automatic.validateStage(new Uint8Array(bytes), expected);
   }
   async publishBackup(request: BackupPublicationRequest): Promise<BackupPublicationReceipt> {
-    return (await this.trustedBackupRuntime()).automatic.publish(request);
+    const captured = structuredClone(request);
+    return (await this.trustedBackupRuntime()).automatic.publish(captured);
+  }
+  async completeAutomaticBackup(result: import("@clay/schema/backup").BackupResultV1): Promise<void> {
+    const captured = structuredClone(result);
+    await (await this.trustedBackupRuntime()).automatic.complete(captured);
+  }
+  async retireAutomaticBackup(seriesId: string, backupId: string,
+    confirmation: "keep_existing_files_and_retire_unpublished_attempt"): Promise<void> {
+    await (await this.trustedBackupRuntime()).automatic.retire(seriesId, backupId, confirmation);
   }
   async backupTrustStatus(): Promise<BackupTrustRuntimeStatus> {
     return (await this.trustedBackupRuntime()).trust.status();

@@ -276,6 +276,7 @@ export type ProductionBackupWorker = Pick<
   | "prepareAutomaticBackup"
   | "validateBackupStage"
   | "publishBackup"
+  | "completeAutomaticBackup"
 >;
 
 export type ProductionBackupAdapter = Pick<
@@ -326,7 +327,7 @@ export async function runProductionAutomaticBackup(
 
   const archiveBytes = new Uint8Array(prepared.bytes);
   try {
-    return await runExternalBackup(prepared.run, archiveBytes, {
+    const result = await runExternalBackup(prepared.run, archiveBytes, {
       directory,
       authority: {
         readSelectedTarget: async (): Promise<ProductionBackupSelection["selected"]> =>
@@ -346,6 +347,8 @@ export async function runProductionAutomaticBackup(
       now,
       archiveBytesOwnership: "transferred",
     });
+    await worker.completeAutomaticBackup(result);
+    return result;
   } finally {
     if (archiveBytes.byteLength > 0) archiveBytes.fill(0);
   }

@@ -78,6 +78,19 @@ it("does not silently return a candidate for the old folder after explicit folde
   expect(f.records).toEqual([]);
 });
 
+it("recovers a retired reservation whose candidate cleanup failed, without reusing its generation", async () => {
+  const f = await fixture(); const first = await f.coordinator.prepare(f.folder, "backup_now");
+  const folder = { ...f.folder, targetId: id("tgt", "m") };
+  vi.spyOn(f.trust, "removeAutomaticBackupCandidate").mockResolvedValueOnce(false);
+  await expect(f.coordinator.prepare(folder, "retry")).rejects.toThrow(/changed|retry/);
+  expect(await f.trust.status()).toMatchObject({ status: "ready", pending: null });
+  const restarted = new AutomaticBackupWorkerCoordinator(f.authority, f.trust);
+  await expect(restarted.prepare(folder, "retry")).rejects.toThrow(/retired|retry/);
+  const fresh = await restarted.prepare(folder, "retry");
+  expect(fresh.run.backupId).not.toBe(first.run.backupId);
+  expect(BigInt(fresh.run.archive.authentication.generation)).toBeGreaterThan(BigInt(first.run.archive.authentication.generation));
+});
+
 it("reconciles a published candidate before changing apps even when trust commit previously failed", async () => {
   const f = await fixture(); const first = await f.coordinator.prepare(f.folder, "backup_now");
   await f.coordinator.validateStage(first.bytes.slice(), first.run.expected.target);
@@ -105,4 +118,59 @@ it("reopens the same staged file with a current selection after publication succ
   await f.coordinator.validateStage(retry.bytes.slice(), retry.run.expected.target);
   expect(await f.coordinator.publish(publication(retry.run))).toMatchObject({ publication: "already_published" });
   expect(f.records).toHaveLength(1); commit.mockRestore();
+});
+
+it("retains publication through interrupted retention and acknowledges only the exact completed result", async () => {
+  const f = await fixture(); const first = await f.coordinator.prepare(f.folder, "backup_now");
+  await f.coordinator.validateStage(first.bytes.slice(), first.run.expected.target);
+  const receipt = await f.coordinator.publish(publication(first.run));
+  const restarted = new AutomaticBackupWorkerCoordinator(f.authority, f.trust);
+  const retry = await restarted.prepare(f.folder, "retry");
+  expect(retry.run.backupId).toBe(first.run.backupId);
+  expect(retry.run.attempt).toBe("publication_reconcile");
+  await restarted.validateStage(retry.bytes.slice(), retry.run.expected.target);
+  expect(await restarted.publish(publication(retry.run))).toMatchObject({ publication: "already_published" });
+  const result = { schema: 1 as const, status: "published" as const, publication: receipt.publication,
+    record: receipt.record, rotation: { requested: 1, deleted: 0, failed: 1 } };
+  await restarted.complete(result);
+  expect(await f.trust.loadAutomaticBackupCandidate(first.run.archive.authentication.seriesId)).not.toBeNull();
+  await expect(restarted.complete({ ...result, record: { ...receipt.record, fileName: "different.clay" },
+    rotation: { requested: 0, deleted: 0, failed: 0 } })).rejects.toThrow();
+  await restarted.complete({ ...result, rotation: { requested: 0, deleted: 0, failed: 0 } });
+  expect(await f.trust.loadAutomaticBackupCandidate(first.run.archive.authentication.seriesId)).toBeNull();
+  expect((await restarted.prepare(f.folder, "backup_now")).run.backupId).not.toBe(first.run.backupId);
+});
+
+it("does not rotate the active trust series while publication owns the shared exclusion", async () => {
+  const f = await fixture();
+  const alternate = new BackupTrustRuntime(new MemoryBackupTrustStore()); const kit = alternate.beginEnrollment();
+  const imported = await f.trust.importRecoveryKit(kit.bytes); kit.bytes.fill(0);
+  const first = await f.coordinator.prepare(f.folder, "backup_now");
+  await f.coordinator.validateStage(first.bytes.slice(), first.run.expected.target);
+  let enter!: () => void; let release!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; }); const gate = new Promise<void>(resolve => { release = resolve; });
+  const original = f.authority.publishBackup;
+  vi.spyOn(f.authority, "publishBackup").mockImplementationOnce(async request => { enter(); await gate; return original(request); });
+  const publishing = f.coordinator.publish(publication(first.run)); await entered;
+  const activation = f.trust.activateImportedSeries({ seriesId: imported.seriesId,
+    expectedActiveSeriesId: first.run.archive.authentication.seriesId, confirmation: "use_imported_recovery_kit_for_future_backups" });
+  await new Promise<void>(resolve => setTimeout(resolve, 0));
+  const during = await f.trust.status(); release();
+  await publishing;
+  await expect(activation).rejects.toThrow(/pending|retention|finish/i);
+  expect(during).toMatchObject({ seriesId: first.run.archive.authentication.seriesId });
+});
+
+it("retires only the explicitly confirmed unpublished attempt, never a committed or different candidate", async () => {
+  const f = await fixture(); const first = await f.coordinator.prepare(f.folder, "backup_now");
+  const confirmation = "keep_existing_files_and_retire_unpublished_attempt";
+  await expect(f.coordinator.retire(first.run.archive.authentication.seriesId, id("bkp", "z"), confirmation)).rejects.toThrow(/changed/);
+  await f.coordinator.retire(first.run.archive.authentication.seriesId, first.run.backupId, confirmation);
+  const fresh = await f.coordinator.prepare(f.folder, "retry");
+  expect(fresh.run.backupId).not.toBe(first.run.backupId);
+  await f.coordinator.validateStage(fresh.bytes.slice(), fresh.run.expected.target);
+  vi.spyOn(f.trust, "commit").mockRejectedValueOnce(new Error("trust write failed"));
+  await expect(f.coordinator.publish(publication(fresh.run))).rejects.toThrow(/trust write/);
+  await expect(f.coordinator.retire(fresh.run.archive.authentication.seriesId, fresh.run.backupId, confirmation)).rejects.toThrow(/already published/);
+  expect(f.records).toHaveLength(1);
 });

@@ -1594,6 +1594,16 @@ export class ProductionStoreAuthority {
   backupRecords(allApps = false) {
     return this.#coordinator.backupRecords(allApps);
   }
+  mutationOutcome(input: unknown) { return this.#coordinator.mutationOutcome(input); }
+  presentationSource() { return this.#coordinator.serializeRead(async () => this.inspectAuthority().target); }
+
+  manualBackupDownloadOutcome(record: unknown, requestId: string) {
+    return this.#coordinator.serializeRead(async () => {
+      const current = this.inspectAuthority();
+      return (await import("./production-manual-backup")).manualBackupDownloadOutcome(this.#store, this.#driver,
+        current.catalog.authorityIncarnationId, current.target, record, requestId);
+    });
+  }
 
   manualBackupDownloads() {
     return this.#coordinator.serializeRead(async () => readManualBackupDownloads(this.#store)

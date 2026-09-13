@@ -392,7 +392,7 @@ describe("automatic backup worker coordinator", () => {
     const retry = await restarted.prepare(target, "retry");
     expect(exports).toBe(1);
     expect(retry.bytes).toEqual(first.bytes);
-    expect(retry.run).toEqual(first.run);
+      expect(retry.run).toEqual({ ...first.run, attempt: "write_reconcile" });
     expect(retry.run.backupId).toBe(id("bkp", "t"));
     expect(retry.run.generationId).toBe(id("backupgen", "u"));
   });

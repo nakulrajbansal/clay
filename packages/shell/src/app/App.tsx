@@ -20,6 +20,7 @@ import type {
 import { WorkerClient, type BootInfo, type RecoveryRecordCandidate } from "./worker-client";
 import { productionWorkerRouteAvailable } from "../worker/mutation-route-census";
 import { beginAppSetup, readAppSetup, saveAppSetup, finishAppSetup } from "./app-setup-intent";
+import { ManualDownloadRecovery, type ManualDownloadIntent } from "./manual-download-recovery";
 import {
   LatestRequestGate, beginLazySession, createRetryingLoader, runLatestRequest,
 } from "./async-lifecycle";
@@ -384,8 +385,8 @@ export function App(): React.JSX.Element {
     useState<ProductionBackupTargetState | null>(null);
   const [backupHistory, setBackupHistory] = useState<RecoveryBackupSummary[]>([]);
   const [manualDownloads, setManualDownloads] = useState<import("@clay/schema/backup").ManualBackupDownloadV2[]>([]);
-  const pendingDownloadRecord = useRef<{ record: import("@clay/schema/backup").ManualBackupDownloadV2;
-    context: import("./worker-client").WorkerMutationContext } | null>(null);
+  const [pendingDownloadRecord, setPendingDownloadRecord] = useState<ManualDownloadIntent | null>(null);
+  const downloadBusy = useRef(false);
   const [backupFailures, setBackupFailures] = useState<RecoveryFailureSummary[]>([]);
   const [recoveryBatches, setRecoveryBatches] = useState<BatchReceipt[]>([]);
   const [recoveryRecords, setRecoveryRecords] = useState<RecoveryRecordCandidate[]>([]);
@@ -1221,28 +1222,58 @@ export function App(): React.JSX.Element {
   };
 
   const exportArchive = async (): Promise<void> => {
-    let started = pendingDownloadRecord.current !== null;
+    if (downloadBusy.current || !currentIdRef.current) return;
+    downloadBusy.current = true;
+    const appId = currentIdRef.current;
     try {
-      if (!pendingDownloadRecord.current) {
+      const recovery = new ManualDownloadRecovery(sessionStorage, client());
+      if (!recovery.pending(appId)) {
         const { bytes, filename, download } = await client().exportArchive();
         try {
+          if (currentIdRef.current !== appId) throw new Error("Open app changed before download. No file was handed off.");
+          const pending = recovery.prepare(appId, { ...download, startedAt: new Date().toISOString() });
+          setPendingDownloadRecord(pending);
           startBrowserDownload(filename, bytes, "application/octet-stream");
-          started = true;
-          pendingDownloadRecord.current = { record: { ...download, startedAt: new Date().toISOString() }, context: mutationContext() };
+          recovery.handedOff(appId, pending.requestId);
         } finally { new Uint8Array(bytes).fill(0); }
       }
-      const pending = pendingDownloadRecord.current!;
-      await client().recordManualBackupDownload(pending.record, pending.context);
-      pendingDownloadRecord.current = null;
-      setManualDownloads(await client().manualBackupDownloads());
-      pushToast("Download started. Check the saved file; external storage is not verified.", "success");
+      if (currentIdRef.current !== appId) throw new Error("Switch back to the original app to reconcile its download request.");
+      await recovery.resume(appId);
+      const downloads = await client().manualBackupDownloads();
+      if (currentIdRef.current === appId) { setPendingDownloadRecord(null); setManualDownloads(downloads); }
+      pushToast("Download record checked. Check the saved file; external storage is not verified.", "success");
       recordPrivateMetric({ type: "backup_finished", action: "export", result: "success" });
     } catch (error) {
-      pushToast(started ? "Download started, but its local record needs retry. Check your saved file before relying on it."
-        : error instanceof Error ? error.message : String(error), "danger",
-      started ? { label: "Retry record", run: () => void exportArchive() } : undefined);
+      pushToast(error instanceof Error ? error.message : "Download recovery needs retry.", "danger",
+        { label: "Recovery Center", run: () => openRecoveryCenter() });
       recordPrivateMetric({ type: "backup_finished", action: "export", result: "failed" });
+    } finally { downloadBusy.current = false; }
+  };
+
+  const resumeManualDownload = async (file?: File): Promise<boolean> => {
+    const appId = currentIdRef.current; if (!appId || downloadBusy.current) return false;
+    downloadBusy.current = true;
+    let bytes: ArrayBuffer | undefined;
+    try {
+      if (file) bytes = await boundedFileBytes(file, (await loadProductionBackupRuntime()).MAX_BACKUP_ARCHIVE_BYTES, "Downloaded backup");
+      if (currentIdRef.current !== appId) throw new Error("Open app changed; return to the download's original app.");
+      const result = await new ManualDownloadRecovery(sessionStorage, client()).resume(appId, bytes);
+      await refreshRecoveryState(); return result;
+    } finally {
+      if (bytes?.byteLength) new Uint8Array(bytes).fill(0);
+      downloadBusy.current = false;
     }
+  };
+  const discardManualDownload = async (): Promise<boolean> => {
+    const appId = currentIdRef.current;
+    if (!appId || downloadBusy.current) return false;
+    downloadBusy.current = true;
+    try {
+      if (!(await askConfirm("Discard this unfinished download request? No file or saved backup record will be deleted."))) return false;
+      if (currentIdRef.current !== appId) throw new Error("Open app changed; nothing discarded.");
+      await new ManualDownloadRecovery(sessionStorage, client()).discard(appId);
+      await refreshRecoveryState(); return true;
+    } finally { downloadBusy.current = false; }
   };
 
   const refreshRecoveryState = async (): Promise<void> => {
@@ -1269,6 +1300,7 @@ export function App(): React.JSX.Element {
       return {
         trust,
         downloads,
+        pendingDownload: new ManualDownloadRecovery(sessionStorage, client()).pending(appId),
         storedTarget,
         authorizedTarget,
         history: recoveryBackupSummaries(records, appId),
@@ -1280,6 +1312,7 @@ export function App(): React.JSX.Element {
       if (currentIdRef.current !== appId) return;
       setBackupTrustStatus(snapshot.trust);
       setManualDownloads(snapshot.downloads);
+      setPendingDownloadRecord(snapshot.pendingDownload);
       setBackupTargetHint(snapshot.storedTarget);
       setBackupTarget(snapshot.authorizedTarget);
       setBackupHistory(snapshot.history);
@@ -2588,6 +2621,15 @@ export function App(): React.JSX.Element {
               onRewindStructure={rewindRecoveryStructure}
               onValidateRestore={productionWorkerRouteAvailable("validateRestoreArchive") ? validateRestore : undefined}
               manualDownloads={manualDownloads}
+              pendingManualDownload={pendingDownloadRecord}
+              onResumeManualDownload={resumeManualDownload}
+              onDiscardManualDownload={discardManualDownload}
+              onRetireBackup={async (seriesId, backupId) => {
+                if (!(await askConfirm("Retire this unfinished backup attempt? All existing files will be kept. An already published backup cannot be retired here.")))
+                  throw new Error("Backup retirement cancelled; existing files kept.");
+                await client().retireAutomaticBackup(seriesId, backupId, "keep_existing_files_and_retire_unpublished_attempt");
+                await refreshRecoveryState();
+              }}
               onRestoreAsNew={productionWorkerRouteAvailable("restoreAsNew") ? restoreAsNew : undefined}
             />
           </Suspense>
@@ -2746,6 +2788,7 @@ export function App(): React.JSX.Element {
         <LazySurfaceBoundary label="search and act" modal>
           <Suspense fallback={<SurfaceFallback label="search and act" modal />}>
             <CommandPalette
+              appInstanceId={currentId}
               worker={workerRef.current}
               store={dataStoreRef.current}
               tables={registryTables}

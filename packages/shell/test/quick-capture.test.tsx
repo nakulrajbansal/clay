@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { AsyncStore, BatchReceipt, RegTable } from "@clay/kernel";
 import {
   CommandPalette,
@@ -10,6 +10,8 @@ import {
 import { createWorkerMutationContext, type WorkerClient } from "../src/app/worker-client";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+afterEach(() => sessionStorage.clear()); // Owned jsdom storage only.
+const appInstanceId = `app_${"a".repeat(26)}`;
 
 async function settle(): Promise<void> {
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
@@ -32,6 +34,7 @@ describe("quick capture", () => {
     let resolutions = 0;
     const worker = {
       createMutationContext: createWorkerMutationContext, globalSearch: async () => [], getSetting: async () => tableId,
+      mutationOutcome: async () => ({ status: "not_invoked" }),
       resolveDailyHomeDate: async () => ++resolutions === 1 ? "2026-09-13" : "2026-09-14",
       quickCapture: async (...args: unknown[]) => {
         calls.push(structuredClone(args));
@@ -40,18 +43,20 @@ describe("quick capture", () => {
       },
     } as unknown as WorkerClient;
     const host = document.createElement("div"); document.body.replaceChildren(host);
-    const root = createRoot(host);
+    let root = createRoot(host);
+    const render = () => root.render(<CommandPalette worker={worker} appInstanceId={appInstanceId} store={{} as AsyncStore}
+      tables={tables} captureMode onClose={() => {}} onOpenRecord={() => {}} onOpenData={() => {}}
+      onWrite={() => {}} onError={() => {}} onInfo={() => {}} />);
     try {
-      await act(async () => root.render(<CommandPalette worker={worker} store={{} as AsyncStore}
-        tables={tables} captureMode onClose={() => {}} onOpenRecord={() => {}} onOpenData={() => {}}
-        onWrite={() => {}} onError={() => {}} onInfo={() => {}} />));
+      await act(async () => render());
       await settle();
       await act(async () => typeInto(document.querySelector<HTMLInputElement>('input[aria-label="Due"]')!, "tomorrow"));
       const submit = async () => {
         await act(async () => { document.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
         await settle();
       };
-      await submit(); await submit();
+      await submit(); await act(async () => root.unmount()); root = createRoot(host);
+      await act(async () => render()); await settle(); await submit();
       expect(calls).toHaveLength(2);
       expect(calls[1]).toEqual(calls[0]);
       expect(resolutions).toBe(1);
@@ -84,6 +89,7 @@ describe("quick capture", () => {
     };
     const worker = {
       createMutationContext: createWorkerMutationContext,
+      mutationOutcome: async () => ({ status: "not_invoked" }),
       globalSearch: async () => [],
       getSetting: async (key: string) => key === QUICK_CAPTURE_LAST_TABLE_SETTING ? taskTableId : null,
       resolveDailyHomeDate: async (value: string) => value === "tomorrow" ? "2026-09-07" : value,
@@ -109,6 +115,7 @@ describe("quick capture", () => {
 
     await act(async () => root.render(<CommandPalette
       worker={worker}
+      appInstanceId={appInstanceId}
       store={store}
       tables={tables}
       captureMode

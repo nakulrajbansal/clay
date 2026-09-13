@@ -290,26 +290,32 @@ export async function runExternalBackup(
     return failed("invalid_run");
   }
 
-  if (run.attempt === "fresh") {
-    let writer: ExternalBackupWriter;
+  if (run.attempt === "fresh" || run.attempt === "write_reconcile") {
+    let writer: ExternalBackupWriter | null = null;
     try {
       writer = await dependencies.directory.createNew(fileName);
     } catch (error) {
-      return failed(closedIoReason(error));
+      // Only an immutable recovery candidate can reconcile a collision. Never
+      // reopen for writing: the existing bytes still require exact readback,
+      // digest, authentication, source validation and fenced publication below.
+      if (run.attempt !== "write_reconcile" || closedIoReason(error) !== "destination_collision")
+        return failed(closedIoReason(error));
     }
-    let closeAttempted = false;
-    try {
-      await writer.write(archiveBytes);
-      closeAttempted = true;
-      await writer.close();
-    } catch (error) {
-      if (!closeAttempted) {
-        try {
-          closeAttempted = true;
-          await writer.close();
-        } catch { /* best-effort release; the first closed reason wins */ }
+    if (writer) {
+      let closeAttempted = false;
+      try {
+        await writer.write(archiveBytes);
+        closeAttempted = true;
+        await writer.close();
+      } catch (error) {
+        if (!closeAttempted) {
+          try {
+            closeAttempted = true;
+            await writer.close();
+          } catch { /* best-effort release; the first closed reason wins */ }
+        }
+        return failed(closedIoReason(error));
       }
-      return failed(closedIoReason(error));
     }
   }
 

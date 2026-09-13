@@ -1,6 +1,8 @@
 import { OperationId, RequestId } from "@clay/schema";
 import {
   TargetEvidenceV1,
+  RecoverablePresentationRouteV1,
+  type PresentationMutationOutcomeV1,
   type ProductionRequestReceiptV1 as ProductionRequestReceipt,
   type TargetEvidenceV1 as TargetEvidence,
   type WriteFenceV1 as WriteFence,
@@ -682,6 +684,7 @@ function captureMutation(input: unknown): CapturedProductionMutation {
       case "schema.addColumn":
       case "schema.renameColumn":
       case "schema.convertTextToRelation":
+      case "schema.undoRelationConversion":
       case "backup.manualDownload":
       case "schema.addRelationColumn": {
         const captured = captureCoreMutation(requestId, route, captureJsonRecord(payload));
@@ -1112,12 +1115,13 @@ function executeCapturedMutation(
   operationId: string,
   expectedTarget: TargetEvidence,
   transactionCapability: AutomationPhysicalTransactionCapability,
+  driver: DbDriver,
 ): CapturedMutationExecution {
   if (request.route === "archive.restore.samples" || request.route === "app.fork.samples")
     throw invalid("sample re-attestation requires the fresh-install capability");
   if (isCapturedCoreMutation(request))
     return capturedExecution(captureJsonValue(
-      executeCapturedCoreMutation(store, request, expectedTarget), new WeakSet(),
+      executeCapturedCoreMutation(store, request, expectedTarget, driver), new WeakSet(),
     ));
   switch (request.route) {
     case "store.insert":
@@ -1687,6 +1691,38 @@ export class ProductionMutationCoordinator {
     });
   }
 
+  /** Historical acknowledgement, NOT a mutation replay. It does not claim the
+   * effect is still current or authorize an Undo across intervening writes. */
+  mutationOutcome(input: unknown): Promise<PresentationMutationOutcomeV1> {
+    const captured = captureMutation(input); RecoverablePresentationRouteV1.parse(captured.route);
+    return this.serializeRead(async () => {
+      const catalog = DeviceCatalog.openExisting(this.#driver);
+      const current = TargetAuthorityStore.open(this.#driver).evidence();
+      if (!sameTarget(current, this.#target) || !sameTarget(catalog.selectedTargetStorage().target, current)
+          || catalog.snapshot().selectedAppInstanceId !== current.appInstanceId
+          || enumerateCanonicalStateV1(this.#driver, this.#store.validationRegistrySnapshot()).stateSha256 !== current.stateSha256)
+        throw invalid("Presentation recovery source is not the current canonical app");
+      const receipt = readProductionRequestReceipt(this.#driver, captured.requestId);
+      if (!receipt) return { status: "not_invoked" };
+      const expected = receiptTarget(receipt, false, current.digestSchema);
+      if (expected.appInstanceId !== current.appInstanceId || expected.activeGenerationId !== current.activeGenerationId
+          || expected.lineageEpoch !== current.lineageEpoch
+          || receipt.operationId !== productionOperationIdV2(catalog.snapshot().authorityIncarnationId, captured.requestId, captured.route)
+          || receipt.requestSha256 !== requestFingerprint(expected, captured))
+        throw invalid("Presentation request identity or payload binding is invalid");
+      if (receipt.state === "invoked" || receipt.state === "prepared") return { status: "uncertain" };
+      if (receipt.state === "failed") throw invalid("Presentation request failed previously; inspect recovery before a new request");
+      if (receipt.responseJson === null || receipt.resultingProtectionRevision === null || receipt.resultingStateSha256 === null)
+        throw invalid("Presentation receipt is incomplete");
+      const decoded = decodeProductionResponse(receipt.responseJson);
+      if (decoded.kind !== "envelope" || decoded.route !== captured.route) throw invalid("Presentation receipt route differs");
+      if (receipt.state === "committed") assertCommittedReceiptReservationBinding(receipt,
+        TargetAuthorityStore.open(this.#driver).reservations(), catalog.revisionReservations());
+      const target = receiptTarget(receipt, true, current.digestSchema);
+      return { status: "recorded", current: sameTarget(current, target), result: decoded.result, target };
+    });
+  }
+
   publishBackup(input: BackupPublicationRequest): Promise<BackupPublicationReceipt> {
     const captured = BackupPublicationRequestV1.parse(input);
     const run = this.#tail.then(() => {
@@ -1911,6 +1947,9 @@ export class ProductionMutationCoordinator {
       const preparedExecution = executeCapturedMutation(
         shadow, request, executionInstant, operationId, expected,
         automationPhysicalTransactionCapability(this.#driver),
+        // Request journals are not installed in disposable data previews.
+        // The bounded Undo reader uses the real mirrored receipt; it never writes it.
+        this.#driver,
       );
       if (isThenable(preparedExecution)) throw invalid(PRODUCTION_MUTATION_PREFIX + "must be synchronous");
       shadowResult = copyResult(preparedExecution.result);
@@ -2405,6 +2444,7 @@ export class ProductionMutationCoordinator {
         const execution = executeCapturedMutation(
           this.#store, request, executionInstant, operationId, expected,
           automationPhysicalTransactionCapability(this.#driver),
+          this.#driver,
         );
         if (isThenable(execution)) throw invalid(PRODUCTION_MUTATION_PREFIX + "must be synchronous");
         result = execution.result;

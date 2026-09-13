@@ -75,7 +75,7 @@ describe("Daily Workbench UI", () => {
       label: "Call Acme", secondary: "open", matchedFields: ["title"], score: 80,
       updatedAt: "2026-09-02T12:00:00.000Z",
     }] } as unknown as WorkerClient;
-    const { unmount } = await mount(<CommandPalette worker={worker} tables={[]}
+    const { unmount } = await mount(<CommandPalette appInstanceId={`app_${"a".repeat(26)}`} worker={worker} tables={[]}
       onClose={() => undefined} onOpenRecord={() => undefined}
       onOpenData={() => { openedData++; }} onWrite={() => undefined}
       onError={message => { throw new Error(message); }} onInfo={() => undefined} />);
@@ -95,7 +95,7 @@ describe("Daily Workbench UI", () => {
         score: 80, updatedAt: "2026-09-02T12:00:00.000Z",
       }],
     } as unknown as WorkerClient;
-    const { container, unmount } = await mount(<CommandPalette
+    const { container, unmount } = await mount(<CommandPalette appInstanceId={`app_${"a".repeat(26)}`}
       worker={worker} tables={[]} onClose={() => undefined}
       onOpenRecord={(table, id) => opened.push({ table, id })}
       onOpenData={() => undefined} onWrite={() => undefined}
@@ -158,7 +158,7 @@ describe("Daily Workbench UI", () => {
       label: "Alice task", secondary: "open", matchedFields: ["title"], score: 100,
       updatedAt: "2026-09-02T12:00:00.000Z",
     }] : [] } as unknown as WorkerClient;
-    const { unmount } = await mount(<CommandPalette worker={worker} tables={[table as never]}
+    const { unmount } = await mount(<CommandPalette appInstanceId={`app_${"a".repeat(26)}`} worker={worker} tables={[table as never]}
       onClose={() => undefined} onOpenRecord={(name, id) => opened.push({ table: name, id })}
       onOpenData={() => undefined} onWrite={() => undefined}
       onError={message => { throw new Error(message); }} onInfo={() => undefined} />);
@@ -179,6 +179,7 @@ describe("Daily Workbench UI", () => {
   it("reuses quick-create identity after a lost response", async () => {
     const table = {
       name: "tasks",
+      semantic: { tableId: "tbl_018f4c2a-7b31-7001-8000-000000000001" },
       columns: [{ name: "title", type: "text", required: true }],
     } as RegTable;
     const contexts: string[] = [];
@@ -191,17 +192,17 @@ describe("Daily Workbench UI", () => {
         minted++;
         return { requestId: `req_${"v".repeat(26)}` };
       },
-      applyBatch: async (
-        _summary: string,
-        _mutations: BatchMutation[],
+      mutationOutcome: async () => ({ status: "not_invoked" }),
+      quickCapture: async (
+        _table: string, _row: unknown, _tableId: string,
         context: { requestId: string },
       ) => {
         contexts.push(context.requestId);
         if (contexts.length === 1) throw new Error("response lost");
-        return { created: [{ table: "tasks", id: "task-1" }] };
+        return { id: "018f4c2a-7b31-7001-8000-000000000091", created: [{ table: "tasks", id: "task-1" }] };
       },
     } as unknown as WorkerClient;
-    const { unmount } = await mount(<CommandPalette
+    const { unmount } = await mount(<CommandPalette appInstanceId={`app_${"a".repeat(26)}`}
       worker={worker} tables={[table]} onClose={() => undefined}
       onOpenRecord={(_table, id) => opened.push(id)} onOpenData={() => undefined}
       onWrite={() => undefined} onError={message => errors.push(message)} onInfo={() => undefined}
@@ -212,12 +213,12 @@ describe("Daily Workbench UI", () => {
     const title = document.body.querySelector<HTMLInputElement>(".command-create-fields input")!;
     await act(async () => typeInto(title, "Only once"));
     const submit = (): void => [...document.body.querySelectorAll<HTMLButtonElement>("button")]
-      .find(button => button.textContent === "Create record")!.click();
+      .find(button => button.textContent === "Create record" || button.textContent === "Retry capture")!.click();
     await act(async () => submit());
     await waitFor(() => errors.length === 1);
     await act(async () => submit());
     await waitFor(() => opened.length === 1);
-    expect(minted).toBe(1);
+    expect(minted).toBe(2); // Original capture plus its independent Undo intent.
     expect(contexts).toEqual([`req_${"v".repeat(26)}`, `req_${"v".repeat(26)}`]);
     await unmount();
   });
@@ -438,7 +439,7 @@ describe("Daily Workbench UI", () => {
     const worker = { ...mutationIdentity, globalSearch: async () => {
       throw new Error("Global search is limited to 20,000 records; narrow the table first.");
     } } as unknown as WorkerClient;
-    const { unmount } = await mount(<CommandPalette worker={worker} tables={[]}
+    const { unmount } = await mount(<CommandPalette appInstanceId={`app_${"a".repeat(26)}`} worker={worker} tables={[]}
       onClose={() => undefined} onOpenRecord={() => undefined} onOpenData={() => undefined}
       onWrite={() => undefined} onError={message => errors.push(message)} onInfo={() => undefined} />);
     await waitFor(() => document.body.querySelector(".command-error") !== null);

@@ -4,6 +4,7 @@ import {
   AuthorityIncarnationId,
   ProtectionReasonCode,
   ReleaseId,
+  RequestId,
   Sha256,
   UInt64Decimal,
 } from "./index";
@@ -185,7 +186,7 @@ export const BackupRunV1 = z.object({
   expected: BackupSelectedTargetV1,
   fence: WriteFenceV1,
   reason: z.enum(["first_meaningful_write", "meaningful_write", "deadline", "backup_now", "retry"]),
-  attempt: z.enum(["fresh", "publication_reconcile"]),
+  attempt: z.enum(["fresh", "write_reconcile", "publication_reconcile"]),
   fileLabel: BackupFileLabel,
   createdAt: CanonicalInstant,
   archive: BackupSnapshotV1,
@@ -404,3 +405,8 @@ export const ManualBackupDownloadV2 = z.object({
   archiveSha256: Sha256, evidence: TargetEvidenceV1,
 }).strict();
 export type ManualBackupDownloadV2 = z.infer<typeof ManualBackupDownloadV2>;
+
+/** Shell retry metadata, never evidence of a verified external save. */
+export const ManualDownloadIntentV1 = z.object({ schema: z.literal(1), requestId: RequestId,
+  record: ManualBackupDownloadV2, phase: z.enum(["prepared", "handed_off"]) }).strict();
+export type ManualDownloadIntentV1 = z.infer<typeof ManualDownloadIntentV1>;

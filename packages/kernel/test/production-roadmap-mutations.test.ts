@@ -88,11 +88,31 @@ it("initializes a durable timezone, validates source selection, and uses navigat
   } finally { authority.close(); }
 });
 
+it("does not undo a conversion across any intervening record edit and keeps its historical receipt read-only", async () => {
+  const { authority, row } = await fixture();
+  try {
+    const preview = await authority.previewRelationConversion({ sourceTable: "tasks", sourceField: "person", targetTable: "people", displayField: "name" });
+    const request = { requestId: authority.createRequestId(), route: "schema.convertTextToRelation", payload: { ...preview, cardinality: "one" } };
+    await authority.executeMutation(request);
+    await authority.executeMutation({ requestId: authority.createRequestId(), route: "store.update",
+      payload: { table: "tasks", id: String(row.id), patch: { title: "Keep this later edit" } } });
+    const before = authority.inspectAuthority().target;
+    await expect(authority.executeMutation({ requestId: authority.createRequestId(), route: "schema.undoRelationConversion",
+      payload: { conversionRequestId: request.requestId, beforeVersion: preview.atVersion } })).rejects.toThrow(/bounded|intervening/);
+    expect(authority.inspectAuthority().target).toEqual(before);
+    expect(authority.query({ from: "tasks" })[0]?.title).toBe("Keep this later edit");
+    expect(await authority.mutationOutcome(request)).toMatchObject({ status: "recorded", current: false, result: { relationField: "person_link" } });
+    await expect(authority.executeMutation(request)).rejects.toThrow(/historical/);
+    await expect(authority.mutationOutcome({ ...request, payload: { ...request.payload, matchedRows: 0 } })).rejects.toThrow(/identity|payload/);
+  } finally { authority.close(); }
+});
+
 it("captures once through authority and bounds Undo to the unchanged captured record", async () => {
   const { authority } = await fixture();
   try {
     const tableId = authority.activeSemanticRegistry().get("tasks")!.semantic!.tableId;
     const request = { requestId: authority.createRequestId(), route: "daily.capture", payload: {
+      appInstanceId: authority.inspectAuthority().target.appInstanceId,
       table: "tasks", tableId, row: { title: "Captured", done: false },
     } };
     const receipt = (await authority.executeMutation(request)).result as { id: string; created: Array<{ id: string }> };

@@ -2,7 +2,8 @@ import { ClayError } from "./errors";
 import { deriveInverse, type ForwardOpT } from "./migrate";
 import { registryToJson } from "./registry";
 import { ClayStore, PRODUCTION_STORE_PRIMITIVES } from "./store";
-import { RelationKeepRequest, keepRelation, type CapturedRelationKeep } from "./production-relation";
+import { RelationKeepRequest, RelationUndoRequest, keepRelation, undoRelation, type CapturedRelationKeep, type CapturedRelationUndo } from "./production-relation";
+import type { DbDriver } from "./db";
 import type { TargetEvidenceV1 } from "@clay/schema/catalog";
 import { captureDaily, executeDaily, type CapturedDaily } from "./production-daily";
 import { ManualBackupDownloadV2 } from "@clay/schema/backup";
@@ -34,6 +35,7 @@ export type CapturedCoreMutation =
   | CapturedDaily
   | Readonly<{ requestId: string; route: "backup.manualDownload"; payload: ManualBackupDownloadV2 }>
   | Readonly<{ requestId: string; route: "schema.convertTextToRelation"; payload: CapturedRelationKeep }>
+  | Readonly<{ requestId: string; route: "schema.undoRelationConversion"; payload: CapturedRelationUndo }>
   | Readonly<{ requestId: string; route: "timeline.setCheckpoint";
       payload: Readonly<{ version: number; label: string }> }>
   | Readonly<{ requestId: string; route: "timeline.makeLatest";
@@ -190,6 +192,8 @@ export function captureCoreMutation(
       return captureDaily(requestId, route, input);
     case "schema.convertTextToRelation":
       return { requestId, route, payload: RelationKeepRequest.parse(input) };
+    case "schema.undoRelationConversion":
+      return { requestId, route, payload: RelationUndoRequest.parse(input) };
     case "timeline.setCheckpoint": {
       const payload = dataRecord(input, ["version", "label"]);
       if (!Number.isSafeInteger(payload.version) || (payload.version as number) < 0
@@ -258,6 +262,7 @@ export function isCapturedCoreMutation(
     case "daily.undoCapture":
     case "schema.convertTextToRelation":
     case "timeline.setCheckpoint":
+    case "schema.undoRelationConversion":
     case "timeline.makeLatest":
     case "panel.revert":
     case "panel.rename":
@@ -354,6 +359,7 @@ export function executeCapturedCoreMutation(
   store: ClayStore,
   request: CapturedCoreMutation,
   target?: TargetEvidenceV1,
+  driver?: DbDriver,
 ): unknown {
     switch (request.route) {
     case "backup.manualDownload":
@@ -364,10 +370,13 @@ export function executeCapturedCoreMutation(
     case "daily.timeZone":
     case "daily.capture":
     case "daily.undoCapture":
-      return executeDaily(store, request);
+      return executeDaily(store, request, target);
     case "schema.convertTextToRelation":
       if (!target) throw new ClayError("E_CONFLICT", "conversion requires an authority target");
       return keepRelation(store, request.payload, target);
+    case "schema.undoRelationConversion":
+      if (!target || !driver) throw new ClayError("E_CONFLICT", "conversion Undo requires authority");
+      return undoRelation(store, driver, request.payload, target);
     case "timeline.setCheckpoint":
       PRODUCTION_STORE_PRIMITIVES.setCheckpoint.call(
         store, request.payload.version, request.payload.label,

@@ -109,6 +109,23 @@ function snapshot(): DailyHomeSnapshot {
 }
 
 describe("Today home", () => {
+  it("never replaces a newer projection with a late result from an earlier refresh", async () => {
+    let release!: (value: DailyHomeSnapshot) => void;
+    const old = new Promise<DailyHomeSnapshot>(resolve => { release = resolve; });
+    const latest = snapshot(); latest.sections[1]!.page.items[0]!.title = "Current work";
+    const worker = { dailyHome: vi.fn().mockReturnValueOnce(old).mockResolvedValue(latest) } as unknown as WorkerClient;
+    const props = { worker, tables: [] as RegTable[], onOpenRecord: () => {}, onOpenAutomation: () => {},
+      onOpenSavedView: () => {}, onQuickCapture: () => {}, onSetup: () => {}, onCreateRecurring: () => {}, onError: () => {} };
+    const host = document.createElement("div"); document.body.replaceChildren(host); const root = createRoot(host);
+    try {
+      await act(async () => root.render(<TodayView {...props} refreshToken={1} />));
+      await act(async () => root.render(<TodayView {...props} refreshToken={2} />));
+      expect(document.body.textContent).toContain("Current work");
+      await act(async () => release(snapshot()));
+      expect(document.body.textContent).toContain("Current work");
+      expect(document.body.textContent).not.toContain("Overdue tax");
+    } finally { await act(async () => root.unmount()); }
+  });
   it("opens a projected due record through its stable table route", async () => {
     const opened: Array<{ table: string; id: string }> = [];
     const toggled: Array<{ tableId: string; rowId: string }> = [];

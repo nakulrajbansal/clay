@@ -77,17 +77,21 @@ it("executes Daily Home and relation Preview/Keep/replay through the production 
 
     const capture = client.createMutationContext();
     drop = "dailyHomeQuickCapture";
-    const lostCapture = client.quickCapture("tasks", { title: "Captured" }, tableId, capture).catch(error => error);
+    const lostCapture = client.quickCapture("tasks", { title: "Captured" }, tableId, capture, id("app", "a")).catch(error => error);
     await vi.waitFor(() => expect(dropped).toBe(true));
     client = new WorkerClient(transport as unknown as Worker);
     expect(await lostCapture).toMatchObject({ code: "E_INTERNAL", message: expect.stringContaining("outcome is unknown") });
     await client.boot({ requestedAppId: null, appCache: [] });
-    const receipt = await client.quickCapture("tasks", { title: "Captured" }, tableId, capture);
+    const receipt = await client.quickCapture("tasks", { title: "Captured" }, tableId, capture, id("app", "a"));
     expect(authority.query({ from: "tasks" })).toHaveLength(2);
     const undo = client.createMutationContext();
     expect(await client.undoQuickCapture(receipt.id, undo)).toMatchObject({ undone: true });
     expect(await client.undoQuickCapture(receipt.id, undo)).toMatchObject({ undone: true });
     expect(authority.query({ from: "tasks" })).toHaveLength(1);
+    const capturedOutcome = await client.mutationOutcome("daily.capture", { appInstanceId: id("app", "a"), table: "tasks", row: { title: "Captured" }, tableId }, capture);
+    expect(capturedOutcome).toMatchObject({ status: "recorded", current: false, result: { id: receipt.id } });
+    await expect(client.mutationOutcome("daily.capture", { appInstanceId: id("app", "a"), table: "tasks", row: { title: "Changed" }, tableId }, capture)).rejects.toThrow(/identity|payload/);
+    await expect(client.quickCapture("tasks", { title: "Wrong app" }, tableId, client.createMutationContext(), id("app", "z"))).rejects.toThrow(/another app/);
 
     const preview = await client.previewRelationConversion({ sourceTable: "tasks", sourceField: "person", targetTable: "people", displayField: "name" });
     expect(preview.authorityTarget).toEqual(authority.inspectAuthority().target);
@@ -96,9 +100,11 @@ it("executes Daily Home and relation Preview/Keep/replay through the production 
     expect(converted.convertedRows).toBe(1);
     expect(await client.convertTextToRelation({ ...preview, cardinality: "one" }, keep)).toEqual(converted);
     expect(authority.query({ from: "tasks" })[0]?.person_link).toMatchObject({ table: "people", label: "Alex" });
-    await client.makeLatest(1, client.createMutationContext());
+    const undoConversion = client.createMutationContext();
+    expect(await client.undoRelationConversion(keep.requestId, preview.atVersion, undoConversion)).toMatchObject({ undone: true });
+    expect(await client.undoRelationConversion(keep.requestId, preview.atVersion, undoConversion)).toMatchObject({ undone: true });
     expect(authority.query({ from: "tasks" })[0]?.person).toBe("Alex");
-    expect(requests.filter(request => request.op === "dailyHomeQuickCapture").map(request => request.requestId))
+    expect(requests.filter(request => request.op === "dailyHomeQuickCapture" && request.requestId === capture.requestId).map(request => request.requestId))
       .toEqual([capture.requestId, capture.requestId]);
     // Keys never travel over the ordinary DB-worker transport. Authenticated
     // readback uses a separate single-use verifier port before ZIP parsing.

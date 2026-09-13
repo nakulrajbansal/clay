@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { LatestRequestGate } from "./async-lifecycle";
 import {
   DAILY_SOURCE_LIBRARY_SETTING,
   loadDailySourceLibrary,
@@ -118,6 +119,8 @@ function sourceIssueMessage(
 }
 
 export function TodayView(props: TodayViewProps): React.JSX.Element {
+  const projectionGate = useRef(new LatestRequestGate());
+  const setupGate = useRef(new LatestRequestGate());
   const mutationsAvailable = props.dailyHomeMutationsAvailable === true;
   const [snapshot, setSnapshot] = useState<DailyHomeSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
@@ -190,22 +193,27 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
   }, [selectSetupTable, setupOptions, setupTableId]);
 
   const refresh = useCallback(async (): Promise<void> => {
+    const request = projectionGate.current.begin();
     setLoading(true);
     setError(null);
     try {
-      setSnapshot(await props.worker.dailyHome());
+      const next = await props.worker.dailyHome();
+      if (projectionGate.current.isCurrent(request)) setSnapshot(next);
     } catch (cause) {
+      if (!projectionGate.current.isCurrent(request)) return;
       const message = cause instanceof Error ? cause.message : String(cause);
       setError(message);
       props.onError(message);
     } finally {
-      setLoading(false);
+      if (projectionGate.current.isCurrent(request)) setLoading(false);
     }
   }, [props.worker, props.onError]);
 
   const loadSetup = useCallback(async (): Promise<void> => {
+    const request = setupGate.current.begin();
     try {
       const raw = await props.worker.getSetting<unknown>(DAILY_SOURCE_LIBRARY_SETTING);
+      if (!setupGate.current.isCurrent(request)) return;
       try {
         const library = loadDailySourceLibrary(raw);
         setSourceLibrary(library);
@@ -215,6 +223,7 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
         setSourceMalformed(true);
       }
     } catch (cause) {
+      if (!setupGate.current.isCurrent(request)) return;
       props.onError(cause instanceof Error ? cause.message : String(cause));
     }
   }, [props.worker, props.onError]);
@@ -304,7 +313,10 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
     } finally { setSavingSetup(false); }
   };
 
-  useEffect(() => { void refresh(); }, [refresh, props.refreshToken]);
+  useEffect(() => {
+    void refresh();
+    return () => { projectionGate.current.invalidate(); setupGate.current.invalidate(); };
+  }, [refresh, props.refreshToken]);
   useEffect(() => {
     if (!snapshot) return;
     const validUntil = Date.parse(snapshot.basis.projectionValidUntil);

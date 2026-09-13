@@ -1586,6 +1586,7 @@ export function DataView(props: {
       {showRelationDialog && table ? (
         <Suspense fallback={<div className="relation-dialog-loading" role="status">Preparing connection preview…</div>}>
         <RelationConversionDialog
+          appInstanceId={props.appInstanceId ?? null}
           sourceTable={table}
           tables={tables}
           worker={worker}
@@ -1593,7 +1594,6 @@ export function DataView(props: {
           onClose={() => setShowRelationDialog(false)}
           onError={props.onError}
           onCommitted={async result => {
-            setShowRelationDialog(false);
             const [nextTables, nextTrace] = await Promise.all([
               worker.registryTables(), worker.semanticTrace(),
             ]);
@@ -1601,7 +1601,8 @@ export function DataView(props: {
             await reload(table.name);
             props.onWrite(table.name);
             props.onSchemaChange?.();
-            props.onInfo(`Connected ${result.convertedRows} rows. Rewind the timeline to undo.`);
+            props.onInfo(result.historical ? "This connection request was recorded earlier. Current data and History were reloaded; no conversion was repeated."
+              : result.relationField ? `Connected ${result.convertedRows} rows. Undo is available in linked-record setup while this state is unchanged.` : "Undid the connection. Original text restored.");
           }}
         />
         </Suspense>

@@ -122,6 +122,39 @@ async function selectRestoreFile(fileName = "field-ops.clay"): Promise<void> {
 }
 
 describe("Release B Recovery Center", () => {
+  it("offers retirement only with an exact pending Backup Trust identity", async () => {
+    const retire = vi.fn(async () => {});
+    const props = { ...baseProps(), onRetireBackup: retire, backupTrustStatus: { status: "ready" as const,
+      freshness: "current" as const, keyId: "10".repeat(16), seriesId: "20".repeat(16), nextGeneration: "2",
+      pending: { backupId: id("bkp", "q"), generation: "1" }, committed: null } };
+    const { root } = await mount(props);
+    try {
+      await act(async () => button("Retire unfinished backup attempt").click());
+      expect(retire).toHaveBeenCalledWith(props.backupTrustStatus.seriesId, id("bkp", "q"));
+      await act(async () => root.render(<RecoveryCenter {...props} backupTrustStatus={{ ...props.backupTrustStatus, pending: null }} />));
+      expect(document.body.textContent).not.toContain("Retire unfinished backup attempt");
+    } finally { await act(async () => root.unmount()); }
+  });
+  it("offers exact download-record retry, file revalidation and explicit discard only for its source app", async () => {
+    const resume = vi.fn(async (_file?: File) => true);
+    const discard = vi.fn(async () => true);
+    const props = { ...baseProps(), pendingManualDownload: { schema: 1 as const, requestId: id("req", "q"), phase: "prepared" as const,
+      record: { schema: 2 as const, kind: "manual_download" as const, archiveFormat: 5 as const, fileName: "download.clay", byteLength: 3,
+        startedAt: grant.validatedAt, verification: "unverified_external_save" as const, authentication: grant.authentication,
+        archiveSha256: grant.archiveSha256, evidence: grant.archiveTarget } }, onResumeManualDownload: resume, onDiscardManualDownload: discard };
+    const { root } = await mount(props);
+    try {
+      await act(async () => button("Retry download record").click());
+      expect(resume).toHaveBeenCalledWith();
+      const file = new File([new Uint8Array([1, 2, 3])], "download.clay");
+      await selectFile(labelledFileInput("Check the downloaded file"), file);
+      expect(resume).toHaveBeenLastCalledWith(file);
+      await act(async () => button("Discard unfinished download request").click());
+      expect(discard).toHaveBeenCalledOnce();
+      await act(async () => root.render(<RecoveryCenter {...props} authoritativeAppInstanceId={otherAppInstanceId} />));
+      expect(document.body.textContent).not.toContain("Retry download record");
+    } finally { await act(async () => root.unmount()); }
+  });
   it("plainly shows OPFS-only custody, no verified backup, every recovery entry, and no false protection claim", async () => {
     const props = baseProps();
     const { root } = await mount(props);

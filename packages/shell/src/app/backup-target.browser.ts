@@ -401,7 +401,12 @@ class TargetDirectory implements BrowserBackupDirectory {
     const handle = await this.owner.reacquire(this.target);
     try {
       await requireReadWritePermission(handle);
-      await handle.removeEntry(fileName);
+      try { await handle.removeEntry(fileName); }
+      catch (error) {
+        // Exact absence after permission revalidation is a successful replay of
+        // retention, not permission to enumerate or delete any other path.
+        if (!(error instanceof DOMException) || error.name !== "NotFoundError") throw error;
+      }
     } catch (error) {
       throw mapIoFailure(error);
     }

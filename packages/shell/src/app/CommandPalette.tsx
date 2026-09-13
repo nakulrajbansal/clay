@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import type { AsyncStore, GlobalSearchResult, RegColumn, RegTable } from "@clay/kernel";
-import type { WorkerClient, WorkerMutationContext } from "./worker-client";
+import type { WorkerClient } from "./worker-client";
 import { ModalDialog } from "./ModalDialog";
+import { beginPresentationIntent, finishPresentationIntent, readPresentationIntent, reconcilePresentation } from "./presentation-intent";
 import "./Operations.css";
 
 const humanize = (name: string): string => name.replace(/_/g, " ")
@@ -20,6 +21,7 @@ function coerce(column: RegColumn, value: string): unknown {
 
 export function CommandPalette(props: {
   worker: WorkerClient;
+  appInstanceId: string | null;
   store?: AsyncStore;
   tables: RegTable[];
   captureMode?: boolean;
@@ -30,20 +32,21 @@ export function CommandPalette(props: {
   onError: (message: string) => void;
   onInfo: (message: string, action?: { label: string; run: () => void }) => void;
 }): React.JSX.Element {
+  const [recovery] = useState(() => {
+    try { return { pending: props.appInstanceId ? readPresentationIntent(sessionStorage, props.appInstanceId, "capture") : null, error: "" }; }
+    catch { return { pending: null, error: "The stored capture request needs recovery; no new capture can replace it." }; }
+  });
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<GlobalSearchResult[]>([]);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [busy, setBusy] = useState(true);
   const [active, setActive] = useState(0);
-  const [creating, setCreating] = useState<RegTable | null>(null);
-  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [creating, setCreating] = useState<RegTable | null>(recovery.pending
+    ? props.tables.find(table => table.name === recovery.pending!.payload.table && table.semantic?.tableId === recovery.pending!.payload.tableId) ?? null : null);
+  const [draft, setDraft] = useState<Record<string, string>>(() => recovery.pending
+    ? Object.fromEntries(Object.entries(recovery.pending.payload.row as Record<string, unknown>).map(([key, value]) => [key, value == null ? "" : String(value)])) : {});
   const submitting = useRef(false);
-  const pendingCreate = useRef<{
-    table: string;
-    tableId: string;
-    row: Record<string, unknown>;
-    context: WorkerMutationContext;
-  } | null>(null);
+  const pendingCreate = useRef(recovery.pending);
   const fields = useMemo(() => (creating?.columns ?? []).filter(column =>
     !column.hidden && !column.inactive && !isDerived(column)
       && column.type !== "relation" && column.type !== "attachment" && column.type !== "json"),
@@ -52,7 +55,7 @@ export function CommandPalette(props: {
   const quickCount = quickTables.length + 1;
 
   useEffect(() => {
-    if (!props.captureMode) return;
+    if (!props.captureMode || pendingCreate.current) return;
     let live = true;
     void props.worker.getSetting<string>(QUICK_CAPTURE_LAST_TABLE_SETTING)
       .then(saved => {
@@ -125,12 +128,12 @@ export function CommandPalette(props: {
 
   const create = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
-    if (!creating || submitting.current) return;
+    if (!creating || submitting.current || recovery.error || !props.appInstanceId) return;
     submitting.current = true;
     setBusy(true);
     try {
       const tableId = creating.semantic?.tableId;
-      if (props.captureMode && !tableId)
+      if (!tableId)
         throw new Error("Quick capture requires a stable record type identity");
       if (!pendingCreate.current) {
         const row: Record<string, unknown> = {};
@@ -139,25 +142,23 @@ export function CommandPalette(props: {
           if (value !== "") row[column.name] = column.type === "date"
             ? await props.worker.resolveDailyHomeDate(value) : coerce(column, value);
         }
-        pendingCreate.current = { table: creating.name, tableId: String(tableId), row,
-          context: props.worker.createMutationContext() };
+        pendingCreate.current = beginPresentationIntent(sessionStorage, props.appInstanceId, "capture", "daily.capture",
+          { appInstanceId: props.appInstanceId, table: creating.name, tableId: String(tableId), row }, () => props.worker.createMutationContext());
       }
       const intent = pendingCreate.current;
-      const receipt = props.captureMode
-        ? await props.worker.quickCapture(intent.table, intent.row, intent.tableId, intent.context)
-        : await props.worker.applyBatch(`Create ${humanize(intent.table)} record`,
-          [{ kind: "insert", table: intent.table, row: intent.row }], intent.context);
+      if (intent.appInstanceId !== props.appInstanceId) throw new Error("Return to this capture's original app");
+      const receipt = await reconcilePresentation(props.worker, intent, () => props.worker.quickCapture(
+        String(intent.payload.table), intent.payload.row as Record<string, unknown>, String(intent.payload.tableId),
+        { requestId: intent.requestId }, intent.appInstanceId));
       const created = receipt.created[0];
       if (!created || created.table !== creating.name)
         throw new Error("Quick capture did not return its durable created-record receipt");
       props.onWrite(creating.name);
       const undoContext = props.worker.createMutationContext();
-      props.onInfo(`Created in ${humanize(creating.name)} with a durable undo receipt.`, {
+      props.onInfo(`Capture recorded in ${humanize(creating.name)}. Recovery Center keeps its bounded Undo receipt.`, {
         label: "Undo",
         run: () => {
-          const undo = props.captureMode
-            ? props.worker.undoQuickCapture(receipt.id, undoContext)
-            : props.worker.undoBatch(receipt.id, undoContext);
+          const undo = props.worker.undoQuickCapture(receipt.id, undoContext);
           void undo.then(() => {
             props.onWrite(creating.name);
             props.onInfo(`Undid quick capture in ${humanize(creating.name)}.`);
@@ -168,6 +169,7 @@ export function CommandPalette(props: {
       });
       props.onClose();
       props.onOpenRecord(creating.name, created.id);
+      finishPresentationIntent(sessionStorage, intent.appInstanceId, "capture", intent.requestId);
       pendingCreate.current = null;
     } catch (error) {
       props.onError(error instanceof Error ? error.message : String(error));
@@ -178,6 +180,8 @@ export function CommandPalette(props: {
     <ModalDialog className="command-palette" backdropClassName="modal-backdrop command-backdrop"
       ariaLabel="Search and act" onClose={props.onClose}>
       <div className="command-search-row">
+        {recovery.error ? <p role="alert">{recovery.error}</p> : null}
+        {pendingCreate.current && !creating ? <p role="alert">The captured record type changed. Return to its original app and inspect Recovery Center; the request was kept.</p> : null}
         <span aria-hidden="true">⌕</span>
         <input autoFocus type="search" value={query} disabled={!!pendingCreate.current || submitting.current} onChange={event => setQuery(event.target.value)}
           onKeyDown={onKeyDown} placeholder="Find any record or choose an action…"
@@ -223,7 +227,7 @@ export function CommandPalette(props: {
           {pendingCreate.current && !busy && <p role="status">The outcome is not yet reconciled. Retry the same capture; closing does not cancel a committed record.</p>}
           <footer><button type="button" disabled={submitting.current}
             onClick={() => pendingCreate.current ? props.onClose() : setCreating(null)}>{pendingCreate.current ? "Close" : "Cancel"}</button>
-            <button className="primary" disabled={busy} type="submit">{busy ? "Creating…" : pendingCreate.current ? "Retry capture" : "Create record"}</button></footer>
+            <button className="primary" disabled={busy || !!recovery.error || !props.appInstanceId} type="submit">{busy ? "Creating…" : pendingCreate.current ? "Retry capture" : "Create record"}</button></footer>
         </form>
       ) : (
         <div id="command-results" className="command-results">

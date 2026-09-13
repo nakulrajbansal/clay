@@ -1179,3 +1179,29 @@ ADR-056 (2026-09-12) Source-bound restore jobs and exact copied-target receipts.
   outside the DB worker. Manual-download reload recovery, external partial-file
   recovery/retention completion and the integrated certification gates remain
   required; none is implied by these source changes or focused tests.
+
+ADR-057 (2026-09-12) Receipt acknowledgement is distinct from mutation replay.
+  CONTEXT: Retrying a modal after worker loss must not mint a second request or
+  mistake a later app edit for permission to repeat an earlier action. A lost
+  backup response also cannot certify that a browser download was saved.
+  DECISION: Trusted-shell session storage may retain bounded, immutable app-bound
+  request metadata before invocation. It grants no durable identity or authority.
+  A closed read-only outcome route independently captures the payload, validates
+  its request hash, operation, source lineage, mirrored receipt and reservation
+  bindings, and reports whether the recorded result is still the current target.
+  Historical acknowledgement never executes a mutation. Generic historical replay
+  remains fail-closed. Relation Undo uses its exact committed conversion receipt,
+  unchanged target and one-step history bound, with the same check in shadow and
+  live execution. It cannot rewind intervening edits. Capture carries the original
+  app ID and semantic table identity, including when restored from presentation
+  storage. UI text distinguishes a recorded outcome from current data.
+  Manual download acknowledgement additionally checks the bounded current
+  canonical download ledger. A lost unrecorded attempt must reauthenticate the
+  exact file before its first record after worker restart; it never claims that
+  external saving was verified. Backup candidates survive trust commit until
+  retention completion is acknowledged. Only a confirmed, authority-proven
+  unpublished candidate may be retired; all existing files are kept. Shared
+  exclusion prevents active-series rotation while publication/retention is pending.
+  CONSEQUENCE: These development recovery paths do not waive certification.
+  Durable per-file retention accounting, full Inbox actions, automation and intake
+  integration, and all integrated release gates remain required.

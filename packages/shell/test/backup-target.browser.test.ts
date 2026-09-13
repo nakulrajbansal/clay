@@ -640,6 +640,16 @@ describe("Chromium external-backup directory adapter", () => {
     expect(directory.events).toEqual(["query-readwrite"]);
   });
 
+  it("reconciles a previously removed exact retention file while still rechecking permission", async () => {
+    const directory = new FakeDirectory(); const store = new MemoryHandleStore(); await store.save(targetId, directory);
+    directory.removeEntry = async () => { throw new DOMException("missing", "NotFoundError"); };
+    const subject = adapter(directory, store);
+    await expect(subject.directory(target()).removeExact(fileName)).resolves.toBeUndefined();
+    expect(directory.events).toContain("query-readwrite");
+    directory.permissions.push("denied");
+    await expect(subject.directory(target()).removeExact(fileName)).rejects.toMatchObject({ reasonCode: "permission_required" });
+  });
+
   it("rejects an existing same-name file and caller path before any overwrite", async () => {
     const directory = new FakeDirectory();
     const existing = new Uint8Array([9, 8, 7]);

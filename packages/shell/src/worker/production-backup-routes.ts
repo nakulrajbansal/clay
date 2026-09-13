@@ -20,12 +20,39 @@ export async function validateProductionRestore(authority: ProductionStoreAuthor
 
 export async function recordProductionManualDownload(authority: ProductionStoreAuthority, input: unknown, requestId: string) {
   const record = ManualBackupDownloadV2.parse(input);
+  const outcome = await authority.manualBackupDownloadOutcome(record, requestId);
+  if (outcome.status === "recorded") return record;
+  if (outcome.status === "uncertain") throw new Error("Download outcome is uncertain; reopen for authority recovery");
   const proof = staged.get(authority)?.get(record.archiveSha256);
   if ((!proof || proof.bytes !== record.byteLength || !same(proof.stage.evidence, record.evidence)
       || JSON.stringify(proof.stage.authentication) !== JSON.stringify(record.authentication))
       && !authority.hasTerminalRequestReceipt(requestId))
     throw new Error("Download record requires authenticated archive read-back or an exact terminal receipt");
   return (await authority.executeMutation({ requestId, route: "backup.manualDownload", payload: record })).result;
+}
+
+export async function validateProductionManualDownload(authority: ProductionStoreAuthority, bytes: ArrayBuffer,
+  recordInput: unknown, verifier: MessagePort | undefined) {
+  if (!(bytes instanceof ArrayBuffer)) { verifier?.close(); throw new Error("Archive bytes are required"); }
+  const record = ManualBackupDownloadV2.parse(recordInput);
+  const before = authority.inspectAuthority().target;
+  if (record.evidence.appInstanceId !== before.appInstanceId || record.evidence.activeGenerationId !== before.activeGenerationId
+      || record.evidence.lineageEpoch !== before.lineageEpoch || BigInt(record.evidence.protectionRevision) > BigInt(before.protectionRevision))
+    throw new Error("Download file belongs to another selected app or lineage");
+  const verified = await verifyArchiveThroughPort(verifier, new Uint8Array(bytes));
+  try {
+    if (verified.archiveSha256 !== record.archiveSha256 || bytes.byteLength !== record.byteLength
+        || JSON.stringify(verified.authentication) !== JSON.stringify(record.authentication)) throw new Error("Choose the exact downloaded file");
+    const evidence = await authority.inspectArchiveSnapshot(verified.payload);
+    if (!same(evidence, record.evidence) || !same(before, authority.inspectAuthority().target))
+      throw new Error("Download source changed during authentication");
+    const stage = { schema: 1 as const, status: "valid" as const, evidence, authentication: verified.authentication };
+    const proofs = staged.get(authority) ?? new Map();
+    proofs.set(record.archiveSha256, { stage, bytes: record.byteLength });
+    while (proofs.size > 4) proofs.delete(proofs.keys().next().value!);
+    staged.set(authority, proofs);
+    return null;
+  } finally { verified.payload.fill(0); }
 }
 
 export async function validateProductionBackup(

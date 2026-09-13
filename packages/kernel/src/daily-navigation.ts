@@ -124,6 +124,7 @@ export async function rememberDailyRecordOpened(
   reference: DailyRecordReference,
   now: () => string = () => new Date().toISOString(),
 ): Promise<DailyNavigationState> {
+  reference = Object.freeze({ ...reference });
   validateReference(reference);
   const openedAt = nowInstant(now);
   return updateState(storage, current => ({
@@ -142,24 +143,25 @@ export async function toggleDailyFavorite(
   reference: DailyRecordReference,
   now: () => string = () => new Date().toISOString(),
 ): Promise<Readonly<{ state: DailyNavigationState; favorite: boolean }>> {
+  reference = Object.freeze({ ...reference });
   validateReference(reference);
   const pinnedAt = nowInstant(now);
-  let favorite = false;
+  let favorite: boolean | null = null;
   const state = await updateState(storage, current => {
     const exists = current.favorites.some(item =>
       item.tableId === reference.tableId && item.rowId === reference.rowId);
-    favorite = !exists;
+    favorite ??= !exists;
     return {
       schema: 1,
-      favorites: exists
+      favorites: !favorite
         ? current.favorites.filter(item =>
             item.tableId !== reference.tableId || item.rowId !== reference.rowId)
-        : Object.freeze([
+        : exists ? current.favorites : Object.freeze([
             Object.freeze({ ...reference, pinnedAt }),
             ...current.favorites,
           ].slice(0, MAX_FAVORITES)),
       recents: current.recents,
     };
   });
-  return Object.freeze({ state, favorite });
+  return Object.freeze({ state, favorite: favorite === true });
 }

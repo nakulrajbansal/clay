@@ -1,7 +1,7 @@
 import {
   DailySourceLibraryV1,
   type CompletionRuleV1,
-  type DailySourceProfileV1,
+  DailySourceProfileV1,
 } from "@clay/schema/daily-home";
 import type { RegColumn, RegTable, Registry } from "./registry";
 import { sha256HexSync } from "./state-digest";
@@ -195,10 +195,12 @@ export async function upsertReviewedDailySource(
   storage: DailySourceProfileStorage,
   input: ReviewedDailySourceProfile,
 ): Promise<DailySourceLibraryV1> {
+  input = structuredClone(input);
   let raw: unknown = await storage.getSetting<unknown>(DAILY_SOURCE_LIBRARY_SETTING);
+  const originalProfile = JSON.stringify(loadDailySourceLibrary(raw).profiles.find(profile => profile.tableId === input.tableId) ?? null);
   for (let attempt = 0; attempt < 3; attempt++) {
     const current = loadDailySourceLibrary(raw);
-    const profile: DailySourceProfileV1 = {
+    const profile = DailySourceProfileV1.parse({
       schema: 1,
       profileId: profileIdFor(input.tableId),
       tableId: input.tableId,
@@ -208,7 +210,10 @@ export async function upsertReviewedDailySource(
       enabled: true,
       ...(input.labelSnapshot ? { labelSnapshot: input.labelSnapshot } : {}),
       ...(input.dueLabelSnapshot ? { dueLabelSnapshot: input.dueLabelSnapshot } : {}),
-    };
+    });
+    const observed = JSON.stringify(current.profiles.find(candidate => candidate.tableId === input.tableId) ?? null);
+    if (observed === JSON.stringify(profile)) return current;
+    if (observed !== originalProfile) throw new Error("This source binding changed in another window; review its fields again");
     const existing = current.profiles.findIndex(candidate => candidate.tableId === input.tableId);
     const profiles = existing === -1
       ? [...current.profiles, profile]
@@ -233,8 +238,12 @@ export async function removeReviewedDailySource(
   profileId: string,
 ): Promise<DailySourceLibraryV1> {
   let raw: unknown = await storage.getSetting<unknown>(DAILY_SOURCE_LIBRARY_SETTING);
+  const originalProfile = JSON.stringify(loadDailySourceLibrary(raw).profiles.find(profile => profile.profileId === profileId) ?? null);
   for (let attempt = 0; attempt < 3; attempt++) {
     const current = loadDailySourceLibrary(raw);
+    const observed = current.profiles.find(profile => profile.profileId === profileId);
+    if (!observed) return current;
+    if (JSON.stringify(observed) !== originalProfile) throw new Error("This source changed in another window; review before removing it");
     const candidate = DailySourceLibraryV1.parse({
       schema: 1,
       revision: current.revision + 1,
@@ -257,20 +266,13 @@ export function recoverableDailySourceRevision(raw: unknown): number {
 export async function resetDailySourceLibrary(
   storage: DailySourceProfileStorage,
 ): Promise<DailySourceLibraryV1> {
-  let raw: unknown = await storage.getSetting<unknown>(DAILY_SOURCE_LIBRARY_SETTING);
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const parsed = DailySourceLibraryV1.safeParse(raw);
-    const expectedRevision = parsed.success ? parsed.data.revision : recoverableDailySourceRevision(raw);
-    if (expectedRevision >= Number.MAX_SAFE_INTEGER)
-      throw new Error("Today setup revision cannot be advanced safely");
-    const candidate = DailySourceLibraryV1.parse({
-      schema: 1,
-      revision: expectedRevision + 1,
-      profiles: [],
-    });
-    const result = await storage.compareAndSetDailySource(expectedRevision, candidate);
-    if (result.ok) return candidate;
-    raw = result.current;
-  }
-  throw new Error("Today setup changed in another window; try again");
+  const raw: unknown = await storage.getSetting<unknown>(DAILY_SOURCE_LIBRARY_SETTING);
+  const parsed = DailySourceLibraryV1.safeParse(raw);
+  const expectedRevision = parsed.success ? parsed.data.revision : recoverableDailySourceRevision(raw);
+  if (expectedRevision >= Number.MAX_SAFE_INTEGER)
+    throw new Error("Today setup revision cannot be advanced safely");
+  const candidate = DailySourceLibraryV1.parse({ schema: 1, revision: expectedRevision + 1, profiles: [] });
+  const result = await storage.compareAndSetDailySource(expectedRevision, candidate);
+  if (result.ok) return candidate;
+  throw new Error("Today setup changed in another window; review before resetting it");
 }

@@ -47,6 +47,9 @@ export type RecoveryCenterProps = {
   failures: RecoveryFailureSummary[];
   history: RecoveryBackupSummary[];
   manualDownloads?: import("@clay/schema/backup").ManualBackupDownloadV2[];
+  pendingManualDownload?: import("./manual-download-recovery").ManualDownloadIntent | null;
+  onResumeManualDownload?: (file?: File) => Promise<boolean>;
+  onDiscardManualDownload?: () => Promise<boolean>;
   structuralHistory: HistoryEntry[];
   recentBatches: BatchReceipt[];
   recordCandidates: RecoveryRecordCandidate[];
@@ -55,6 +58,7 @@ export type RecoveryCenterProps = {
   onClose: () => void;
   onRetry?: () => Promise<void>;
   onRetryBackupAdapter?: () => Promise<void>;
+  onRetireBackup?: (seriesId: string, backupId: string) => Promise<void>;
   onChooseFolder?: () => Promise<void>;
   onExportRecoveryKit?: () => Promise<void>;
   onConfirmRecoveryKit?: (file: File) => Promise<void>;
@@ -115,6 +119,18 @@ export function RecoveryCenter(props: RecoveryCenterProps): React.JSX.Element {
   const [kitMessage, setKitMessage] = useState<string | null>(null);
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null);
+  const manualBusy = useRef(false);
+  const [manualWorking, setManualWorking] = useState(false);
+  const [manualMessage, setManualMessage] = useState<string | null>(null);
+  const pendingDownload = props.pendingManualDownload?.record.evidence.appInstanceId === props.authoritativeAppInstanceId
+    ? props.pendingManualDownload : null;
+  const runManual = async (action: () => Promise<boolean>): Promise<void> => {
+    if (manualBusy.current) return;
+    manualBusy.current = true; setManualWorking(true); setManualMessage(null);
+    try { setManualMessage(await action() ? "Download request reconciled. External save remains unverified." : "Nothing changed."); }
+    catch (error) { setManualMessage(error instanceof Error ? error.message : "Download recovery needs retry."); }
+    finally { manualBusy.current = false; setManualWorking(false); }
+  };
 
   const retryGrant = restoreIntent && (restoreIntent.grant.preservedAppInstanceId === props.authoritativeAppInstanceId
     || restoreIntent.grant.destinationAppInstanceId === props.authoritativeAppInstanceId) ? restoreIntent.grant : null;
@@ -230,8 +246,8 @@ export function RecoveryCenter(props: RecoveryCenterProps): React.JSX.Element {
       ? "Download a Recovery Kit, keep it somewhere separate, then check the exact downloaded file."
       : props.backupTrustStatus.status === "needs_test_import"
         ? "Download started; choose the exact file you downloaded before automatic backup can start."
-        : props.backupTrustStatus.freshness === "current"
-          ? "Recovery Kit checked. The newest authenticated backup is current."
+          : props.backupTrustStatus.freshness === "current"
+            ? "Recovery Kit checked. The last authenticated generation is recorded on this device; file availability is checked separately."
           : "Recovery Kit checked. Archive authenticity can be verified; newest status is not yet known.";
 
   return (
@@ -344,7 +360,19 @@ export function RecoveryCenter(props: RecoveryCenterProps): React.JSX.Element {
                 : null}
         </section>
 
-        <section aria-labelledby="recovery-failures-title">
+          <section aria-labelledby="recovery-failures-title">
+            {props.backupTrustStatus?.status === "ready" && props.backupTrustStatus.pending ? (
+              <div>
+                <p>A backup attempt is unfinished. Retry to check its exact file. If that file is partial, retire this attempt and keep all existing files.</p>
+                <button disabled={kitBusy || !props.onRetireBackup} onClick={() => {
+                  const status = props.backupTrustStatus;
+                  if (status?.status === "ready" && status.pending) void runKitAction(
+                    () => props.onRetireBackup!(status.seriesId, status.pending!.backupId),
+                    "Unpublished attempt retired. Existing files kept. Retry backup to create a fresh copy.",
+                  );
+                }}>Retire unfinished backup attempt</button>
+              </div>
+            ) : null}
           <h3 id="recovery-failures-title">Recent backup problems</h3>
           {props.failures.length === 0 ? <p className="shape-evolution-empty">No backup failures recorded.</p> : (
             <ul>
@@ -444,6 +472,22 @@ export function RecoveryCenter(props: RecoveryCenterProps): React.JSX.Element {
         <section aria-labelledby="recovery-restore-title">
           <h3>Manual downloads</h3>
           <p>Download records do not prove a file was saved outside this browser.</p>
+          {pendingDownload ? <div>
+            <p>Unfinished download request: {pendingDownload.record.fileName}. Retry its local record or check the exact file.</p>
+            <div className="rail-actions">
+              <button disabled={manualWorking || !props.onResumeManualDownload}
+                onClick={() => void runManual(() => props.onResumeManualDownload!())}>Retry download record</button>
+              <label className="shape-history-open file-label">Check the downloaded file
+                <input type="file" accept=".clay" disabled={manualWorking || !props.onResumeManualDownload} onChange={event => {
+                  const file = event.target.files?.[0]; event.target.value = "";
+                  if (file) void runManual(() => props.onResumeManualDownload!(file));
+                }} />
+              </label>
+              <button disabled={manualWorking || !props.onDiscardManualDownload}
+                onClick={() => void runManual(() => props.onDiscardManualDownload!())}>Discard unfinished download request</button>
+            </div>
+          </div> : null}
+          {manualMessage ? <p role="status">{manualMessage}</p> : null}
           {!props.manualDownloads?.length ? <p>No download records yet.</p> : <ul>
             {props.manualDownloads.map((record, index) => <li key={`${record.archiveSha256}-${index}`}>
               {record.fileName} · {formatDate(record.startedAt)} · Authenticated format 5; external save unverified

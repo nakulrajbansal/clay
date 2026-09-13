@@ -3,6 +3,7 @@ import {
   AppInstanceId,
   AuthorityIncarnationId,
   GenerationId,
+  JsonValue,
   LeaseId,
   NamespaceId,
   OperationId,
@@ -21,6 +22,54 @@ export const TargetEvidenceV1 = z.object({
   stateSha256: Sha256,
 }).strict();
 export type TargetEvidenceV1 = z.infer<typeof TargetEvidenceV1>;
+
+const presentationName = z.string().regex(/^[a-z][a-z0-9_]{0,40}$/);
+const relationCount = z.number().int().nonnegative().max(5_000);
+export const RelationPreviewPayloadV1 = z.object({ sourceTable: presentationName, sourceField: presentationName,
+  targetTable: presentationName, displayField: presentationName }).strict();
+export const RelationKeepPayloadV1 = RelationPreviewPayloadV1.extend({
+  atVersion: z.number().int().nonnegative().safe(), fingerprint: Sha256,
+  matchedRows: relationCount, unmatchedRows: relationCount, ambiguousRows: relationCount, duplicateSourceRows: relationCount,
+  unmatchedSamples: z.array(z.string().max(64_000)).max(5), ambiguousSamples: z.array(z.string().max(64_000)).max(5),
+  cardinality: z.literal("one"), authorityTarget: TargetEvidenceV1,
+}).strict();
+export const RelationUndoPayloadV1 = z.object({ conversionRequestId: RequestId,
+  beforeVersion: z.number().int().nonnegative().safe() }).strict();
+export const DailyCapturePayloadV1 = z.object({ appInstanceId: AppInstanceId, table: presentationName,
+  tableId: z.string().regex(/^tbl_[0-9a-f-]{36}$/), row: z.record(JsonValue) }).strict();
+export const DailyCaptureUndoPayloadV1 = z.object({ batchId: z.string().uuid() }).strict();
+
+/** Presentation retry metadata is not authority. The worker independently
+ * captures the full payload and binds its hash to the mirrored request journal. */
+export const RecoverablePresentationRouteV1 = z.enum([
+  "schema.convertTextToRelation", "schema.undoRelationConversion", "daily.capture", "daily.undoCapture", "batch.apply", "batch.undo",
+]);
+export const PresentationIntentV1 = z.object({
+  schema: z.literal(1), appInstanceId: AppInstanceId, slot: z.enum(["relation", "capture", "conversionUndo", "captureUndo"]),
+  requestId: RequestId, route: RecoverablePresentationRouteV1, payload: z.record(JsonValue),
+}).strict().superRefine((value, context) => {
+  const contract = {
+    relation: { route: "schema.convertTextToRelation", payload: RelationKeepPayloadV1 },
+    conversionUndo: { route: "schema.undoRelationConversion", payload: RelationUndoPayloadV1 },
+    capture: { route: "daily.capture", payload: DailyCapturePayloadV1 },
+    captureUndo: { route: "daily.undoCapture", payload: DailyCaptureUndoPayloadV1 },
+  }[value.slot];
+  if (value.route !== contract.route || !contract.payload.safeParse(value.payload).success) {
+    context.addIssue({ code: "custom", message: "Stored retry payload or route is invalid for its slot" });
+    return;
+  }
+  const source = value.slot === "capture" ? value.payload.appInstanceId : value.slot === "relation"
+    ? (value.payload.authorityTarget as TargetEvidenceV1).appInstanceId : value.appInstanceId;
+  if (source !== value.appInstanceId)
+    context.addIssue({ code: "custom", message: "Stored retry payload is bound to another app" });
+});
+export type PresentationIntentV1 = z.infer<typeof PresentationIntentV1>;
+export const PresentationMutationOutcomeV1 = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("not_invoked") }).strict(),
+  z.object({ status: z.literal("uncertain") }).strict(),
+  z.object({ status: z.literal("recorded"), current: z.boolean(), result: JsonValue, target: TargetEvidenceV1 }).strict(),
+]);
+export type PresentationMutationOutcomeV1 = z.infer<typeof PresentationMutationOutcomeV1>;
 
 export const TargetAuthorityHeaderV1 = z.object({
   schema: z.literal(1),

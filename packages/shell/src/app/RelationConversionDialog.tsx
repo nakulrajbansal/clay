@@ -2,19 +2,29 @@ import { useMemo, useRef, useState } from "react";
 import type { RelationConversionPreview, RegTable } from "@clay/kernel";
 import type { WorkerClient } from "./worker-client";
 import { ModalDialog } from "./ModalDialog";
+import { beginPresentationIntent, finishPresentationIntent, readPresentationIntent, reconcilePresentation } from "./presentation-intent";
 
 const label = (name: string): string => name.replace(/_/g, " ")
   .replace(/^./, character => character.toUpperCase());
 
 export function RelationConversionDialog(props: {
   sourceTable: RegTable;
+  appInstanceId: string | null;
   tables: RegTable[];
   worker: WorkerClient;
   runWrite: <T>(operation: () => Promise<T>) => Promise<T>;
   onClose: () => void;
-  onCommitted: (result: { relationField: string; convertedRows: number }) => void | Promise<void>;
+  onCommitted: (result: { relationField: string; convertedRows: number; historical?: boolean }) => void | Promise<void>;
   onError: (message: string) => void;
 }): React.JSX.Element {
+  const [recovery] = useState(() => {
+    try { return { keep: props.appInstanceId ? readPresentationIntent(sessionStorage, props.appInstanceId, "relation") : null,
+      undo: props.appInstanceId ? readPresentationIntent(sessionStorage, props.appInstanceId, "conversionUndo") : null, error: "" }; }
+    catch { return { keep: null, undo: null, error: "Stored connection request needs recovery. No new request can replace it." }; }
+  });
+  const [undoIntent, setUndoIntent] = useState(recovery.undo);
+  const [completed, setCompleted] = useState(!!recovery.undo && !recovery.keep);
+  const working = useRef(false);
   const sourceFields = useMemo(() => props.sourceTable.columns.filter(column =>
     !column.hidden && !column.inactive
       && (column.type === "text" || column.type === "enum" || column.type === "rich_text")),
@@ -28,16 +38,14 @@ export function RelationConversionDialog(props: {
   const [displayField, setDisplayField] = useState("");
   const effectiveDisplay = displayFields.some(field => field.name === displayField)
     ? displayField : displayFields[0]?.name ?? "";
-  const [preview, setPreview] = useState<RelationConversionPreview | null>(null);
+  const [preview, setPreview] = useState<RelationConversionPreview | null>(recovery.keep?.payload as unknown as RelationConversionPreview ?? null);
   const [busy, setBusy] = useState(false);
-  const pendingKeep = useRef<{
-    input: RelationConversionPreview & { cardinality: "one" };
-    context: ReturnType<WorkerClient["createMutationContext"]>;
-  } | null>(null);
-  const [needsReconciliation, setNeedsReconciliation] = useState(false);
+  const pendingKeep = useRef(recovery.keep);
+  const [needsReconciliation, setNeedsReconciliation] = useState(!!recovery.keep);
 
   const analyze = async (): Promise<void> => {
-    if (!sourceField || !targetTable || !effectiveDisplay) return;
+    if (!sourceField || !targetTable || !effectiveDisplay || working.current || recovery.error || completed) return;
+    working.current = true;
     setBusy(true);
     try {
       setPreview(await props.worker.previewRelationConversion({
@@ -46,26 +54,46 @@ export function RelationConversionDialog(props: {
       }));
     } catch (error) {
       props.onError(error instanceof Error ? error.message : String(error));
-    } finally { setBusy(false); }
+    } finally { working.current = false; setBusy(false); }
   };
 
   const connect = async (): Promise<void> => {
-    if (!preview) return;
+    if (!preview || !props.appInstanceId || working.current || recovery.error) return;
+    working.current = true;
     setBusy(true);
-    const intent = pendingKeep.current ?? {
-      input: { ...preview, cardinality: "one" as const }, context: props.worker.createMutationContext(),
-    };
-    pendingKeep.current = intent;
     try {
+      const intent = pendingKeep.current ?? beginPresentationIntent(sessionStorage, props.appInstanceId, "relation",
+        "schema.convertTextToRelation", { ...preview, cardinality: "one" }, () => props.worker.createMutationContext());
+      pendingKeep.current = intent;
+      if (intent.appInstanceId !== props.appInstanceId) throw new Error("Return to the connection's original app");
       await props.runWrite(async () => {
-        const result = await props.worker.convertTextToRelation(
-          intent.input, intent.context);
-        await props.onCommitted(result);
+        let historical = false;
+        const result = await reconcilePresentation(props.worker, intent, () => props.worker.convertTextToRelation(
+          intent.payload as unknown as RelationConversionPreview & { cardinality: "one" }, { requestId: intent.requestId }), current => { historical = !current; });
+        const undo = beginPresentationIntent(sessionStorage, intent.appInstanceId, "conversionUndo", "schema.undoRelationConversion",
+          { conversionRequestId: intent.requestId, beforeVersion: intent.payload.atVersion }, () => props.worker.createMutationContext());
+        setUndoIntent(undo);
+        await props.onCommitted({ ...result, historical });
+        finishPresentationIntent(sessionStorage, intent.appInstanceId, "relation", intent.requestId);
+        pendingKeep.current = null; setCompleted(true); setNeedsReconciliation(false);
       });
     } catch (error) {
       props.onError(error instanceof Error ? error.message : String(error));
       setNeedsReconciliation(true);
-    } finally { setBusy(false); }
+    } finally { working.current = false; setBusy(false); }
+  };
+  const undo = async (): Promise<void> => {
+    if (!undoIntent || working.current || undoIntent.appInstanceId !== props.appInstanceId) return;
+    working.current = true; setBusy(true);
+    try {
+      let historical = false;
+      await props.runWrite(() => reconcilePresentation(props.worker, undoIntent, () => props.worker.undoRelationConversion(
+        String(undoIntent.payload.conversionRequestId), Number(undoIntent.payload.beforeVersion), { requestId: undoIntent.requestId }), current => { historical = !current; }));
+      await props.onCommitted({ relationField: "", convertedRows: 0, historical });
+      finishPresentationIntent(sessionStorage, undoIntent.appInstanceId, "conversionUndo", undoIntent.requestId);
+      setUndoIntent(null); setCompleted(false); setPreview(null);
+    } catch (error) { props.onError(error instanceof Error ? error.message : "Undo needs recovery"); }
+    finally { working.current = false; setBusy(false); }
   };
 
   return (
@@ -75,14 +103,15 @@ export function RelationConversionDialog(props: {
         <div>
           <span className="record-detail-kicker">Connected work</span>
           <h2 id="relation-dialog-title">Turn text into linked records</h2>
-          <p>Clay keeps the original text hidden, so rewind and redo stay exact.</p>
+          <p>Clay keeps the original text hidden. Undo is available only while the exact converted state is unchanged.</p>
         </div>
         <button aria-label="Close linked-record setup" onClick={props.onClose}>✕</button>
       </header>
 
       <div className="relation-dialog-grid">
+        {recovery.error ? <p role="alert">{recovery.error}</p> : null}
         <label>Text field
-          <select autoFocus value={sourceField} disabled={busy || needsReconciliation}
+          <select autoFocus value={sourceField} disabled={busy || needsReconciliation || completed}
             onChange={event => { setSourceField(event.target.value); setPreview(null); }}>
             {sourceFields.map(field => <option key={field.name} value={field.name}>
               {field.label ?? label(field.name)}
@@ -91,7 +120,7 @@ export function RelationConversionDialog(props: {
         </label>
         <span className="relation-arrow" aria-hidden="true">→</span>
         <label>Link to table
-          <select value={targetTable} disabled={busy || needsReconciliation}
+          <select value={targetTable} disabled={busy || needsReconciliation || completed}
             onChange={event => {
               setTargetTable(event.target.value); setDisplayField(""); setPreview(null);
             }}>
@@ -101,7 +130,7 @@ export function RelationConversionDialog(props: {
           </select>
         </label>
         <label>Match using
-          <select value={effectiveDisplay} disabled={busy || needsReconciliation}
+          <select value={effectiveDisplay} disabled={busy || needsReconciliation || completed}
             onChange={event => { setDisplayField(event.target.value); setPreview(null); }}>
             {displayFields.map(field => <option key={field.name} value={field.name}>
               {field.label ?? label(field.name)}
@@ -137,11 +166,17 @@ export function RelationConversionDialog(props: {
       <footer className="relation-dialog-actions">
         {needsReconciliation ? <p role="status">The Keep outcome needs checking. Retry the same request, or close and inspect History. No changes are discarded by closing.</p> : null}
         <button disabled={busy} onClick={props.onClose}>{needsReconciliation ? "Close" : preview ? "Discard preview" : "Cancel"}</button>
-        {!preview ? (
-          <button className="primary" disabled={busy || !sourceField || !targetTable || !effectiveDisplay}
+        {completed && undoIntent ? <>
+          <button disabled={busy} onClick={() => void undo()}>Undo this conversion</button>
+          <button disabled={busy} onClick={() => {
+            try { finishPresentationIntent(sessionStorage, undoIntent.appInstanceId, "conversionUndo", undoIntent.requestId);
+              setUndoIntent(null); props.onClose(); } catch (error) { props.onError(error instanceof Error ? error.message : "Cleanup needs retry"); }
+          }}>Keep linked records</button>
+        </> : !preview ? (
+          <button className="primary" disabled={busy || !!recovery.error || !props.appInstanceId || !sourceField || !targetTable || !effectiveDisplay}
             onClick={() => void analyze()}>{busy ? "Checking…" : "Preview matches"}</button>
         ) : (
-          <button className="primary" disabled={busy}
+          <button className="primary" disabled={busy || !!recovery.error || !props.appInstanceId}
             onClick={() => void connect()}>{busy ? "Connecting…" : needsReconciliation ? "Retry Keep" : `Keep — connect ${preview.matchedRows} rows`}</button>
         )}
       </footer>

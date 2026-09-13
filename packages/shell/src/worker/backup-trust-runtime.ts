@@ -10,6 +10,7 @@ import {
   type SecureRandomFill,
 } from "@clay/kernel/backup";
 import { ClayError } from "@clay/kernel/errors";
+import { withBackupTrustLock } from "./backup-operation-lock";
 
 const ENROLLMENT_ID = /^enroll_[a-z2-7]{26}$/;
 const MAX_ACTIVE_CAS_ATTEMPTS = 8;
@@ -184,6 +185,10 @@ export class BackupTrustRuntime {
     enrollmentId: string,
     readBackBytes: Uint8Array,
   ): Promise<Extract<BackupTrustRuntimeStatus, { status: "ready" }>> {
+    return withBackupTrustLock(() => this.#confirmEnrollment(enrollmentId, readBackBytes));
+  }
+
+  async #confirmEnrollment(enrollmentId: string, readBackBytes: Uint8Array): Promise<Extract<BackupTrustRuntimeStatus, { status: "ready" }>> {
     if (!ENROLLMENT_ID.test(enrollmentId) || !(readBackBytes instanceof Uint8Array))
       throw invalid("Recovery Kit read-back is malformed");
     const pending = this.#pending.get(enrollmentId);
@@ -226,6 +231,11 @@ export class BackupTrustRuntime {
   async activateImportedSeries(
     input: ImportedSeriesActivation,
   ): Promise<Extract<BackupTrustRuntimeStatus, { status: "ready" }>> {
+    const captured = structuredClone(input);
+    return withBackupTrustLock(() => this.#activateImportedSeries(captured));
+  }
+
+  async #activateImportedSeries(input: ImportedSeriesActivation): Promise<Extract<BackupTrustRuntimeStatus, { status: "ready" }>> {
     if (!input || typeof input !== "object" || Array.isArray(input)
         || Object.getPrototypeOf(input) !== Object.prototype
         || Object.keys(input).sort().join("\u0000")
@@ -319,6 +329,9 @@ export class BackupTrustRuntime {
     for (let attempt = 0; attempt < MAX_ACTIVE_CAS_ATTEMPTS; attempt++) {
       const active = await this.store.loadActiveSeries();
       if (active?.seriesId === seriesId) return;
+      if (active && ((await this.#coordinator.status(active.seriesId))?.pending
+          || (this.store.loadAutomaticBackupCandidate && await this.store.loadAutomaticBackupCandidate(active.seriesId))))
+        throw unavailable("Finish pending backup publication and retention before changing Recovery Kit series");
       if (expectedSeriesId !== undefined
           && (active?.seriesId ?? null) !== expectedSeriesId)
         throw unavailable("Active Backup Trust series changed before confirmed rotation");

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DailyCapturePayloadV1, DailyCaptureUndoPayloadV1, type TargetEvidenceV1 } from "@clay/schema/catalog";
 import { DailySourceLibraryV1 } from "@clay/schema/daily-home";
 import { ClayError } from "./errors";
 import { DAILY_TIME_ZONE_SETTING, localCalendarContext } from "./daily-calendar";
@@ -19,8 +20,8 @@ const dailyRequest = z.discriminatedUnion("route", [
   z.object({ route: z.literal("daily.source"), payload: z.object({ expectedRevision: revision, value: DailySourceLibraryV1 }).strict() }),
   z.object({ route: z.literal("daily.navigation"), payload: z.object({ expectedRevision: revision, value: z.unknown() }).strict() }),
   z.object({ route: z.literal("daily.timeZone"), payload: z.object({ timeZone: z.string().min(1).max(128) }).strict() }),
-  z.object({ route: z.literal("daily.capture"), payload: z.object({ table: name, tableId, row: z.record(z.unknown()) }).strict() }),
-  z.object({ route: z.literal("daily.undoCapture"), payload: z.object({ batchId: rowId }).strict() }),
+  z.object({ route: z.literal("daily.capture"), payload: DailyCapturePayloadV1 }),
+  z.object({ route: z.literal("daily.undoCapture"), payload: DailyCaptureUndoPayloadV1 }),
 ]);
 export type CapturedDaily = z.infer<typeof dailyRequest> & { requestId: string };
 
@@ -36,7 +37,7 @@ function conflict(message: string): never { throw new ClayError("E_CONFLICT", me
 function read(store: ClayStore, key: string): unknown { return storeOps.getSetting.call(store, key); }
 function write(store: ClayStore, key: string, value: unknown): void { storeOps.setSetting.call(store, key, value); }
 
-export function executeDaily(store: ClayStore, request: CapturedDaily): unknown {
+export function executeDaily(store: ClayStore, request: CapturedDaily, target?: TargetEvidenceV1): unknown {
   const registry = storeOps.validationRegistrySnapshot.call(store);
   switch (request.route) {
     case "daily.timeZone": {
@@ -87,6 +88,7 @@ export function executeDaily(store: ClayStore, request: CapturedDaily): unknown 
       return { ok: true, current: next };
     }
     case "daily.capture": {
+      if (!target || request.payload.appInstanceId !== target.appInstanceId) conflict("capture belongs to another app; reopen its original source");
       const { table, tableId: expectedId, row } = request.payload;
       const registered = registry.get(table);
       if (!registered || registered.inactive || registered.semantic?.tableId !== expectedId)

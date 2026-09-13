@@ -121,6 +121,7 @@ describe("production browser backup wiring", () => {
       return readExact(fileName);
     };
     const worker = {
+      completeAutomaticBackup: vi.fn(async () => {}),
       prepareAutomaticBackup: vi.fn(async () => {
         events.push("worker:prepare");
         return { run: structuredClone(run), bytes: preparedBytes };
@@ -170,6 +171,7 @@ describe("production browser backup wiring", () => {
     expect(worker.validateBackupStage).toHaveBeenCalledTimes(1);
     expect(worker.validateBackupStage.mock.calls[0]?.[0]).toBeInstanceOf(ArrayBuffer);
     expect(worker.publishBackup).toHaveBeenCalledTimes(1);
+    expect(worker.completeAutomaticBackup).toHaveBeenCalledWith(result);
     expect(events).toEqual([
       "worker:prepare",
       "worker:selection",
@@ -229,8 +231,8 @@ describe("production browser backup wiring", () => {
     expect(app).toContain("onConfirmRecoveryKit={confirmRecoveryKit}");
     expect(app).toContain("onImportRecoveryKit={importRecoveryKit}");
     expect(app).toContain("onActivateImportedSeries={activateImportedBackupSeries}");
-    expect(app).toContain("onValidateRestore={validateRestore}");
-    expect(app).toContain("onRestoreAsNew={restoreAsNew}");
+    expect(app.includes('onValidateRestore={productionWorkerRouteAvailable("validateRestoreArchive") ? validateRestore : undefined}')).toBe(true);
+    expect(app.includes('onRestoreAsNew={productionWorkerRouteAvailable("restoreAsNew") ? restoreAsNew : undefined}')).toBe(true);
     expect(app).toContain("onChooseFolder={backupAdapterAvailable ? chooseBackupFolder : undefined}");
     const confirmStart = app.indexOf("const confirmRecoveryKit");
     const importStart = app.indexOf("const importRecoveryKit", confirmStart);

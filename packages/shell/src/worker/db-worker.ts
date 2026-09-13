@@ -655,6 +655,7 @@ const DIRECT_AUTHORITY_ROUTES = Object.freeze({
   addColumn: { route: "schema.addColumn" },
   addRelationColumn: { route: "schema.addRelationColumn" },
   convertTextToRelation: { route: "schema.convertTextToRelation" },
+  undoRelationConversion: { route: "schema.undoRelationConversion" },
   dailyHomeSourceCompareAndSet: { route: "daily.source" },
   dailyHomeNavigationCompareAndSet: { route: "daily.navigation" },
   dailyHomeInitializeTimeZone: { route: "daily.timeZone" },
@@ -1466,8 +1467,17 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       return mustStore().rowHistory(String(p.table), String(p.id));
     case "previewRelationConversion":
       return mustAuthority().previewRelationConversion(rawPayload);
+    case "mutationOutcome": {
+      const input = captureLifecyclePayload(rawPayload, ["route", "payload"]);
+      return mustAuthority().mutationOutcome({ ...input, requestId: authorityRequestId(req) });
+    }
+    case "presentationSource":
+      captureLifecyclePayload(rawPayload ?? {}, []);
+      return mustAuthority().presentationSource();
     case "convertTextToRelation":
       return runAuthorityMutation("convertTextToRelation", rawPayload, req);
+    case "undoRelationConversion":
+      return runAuthorityMutation("undoRelationConversion", rawPayload, req);
     case "removeColumn":
       return runAuthorityMutation("removeColumn", p, req);
     case "addColumn":
@@ -1509,6 +1519,10 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       return mustAuthority().backupRecords(p.allApps === true);
     case "manualBackupDownloads":
       return mustAuthority().manualBackupDownloads();
+    case "manualBackupDownloadOutcome":
+      return mustAuthority().manualBackupDownloadOutcome(captureLifecyclePayload(rawPayload, ["record"]).record, authorityRequestId(req));
+    case "validateManualBackupDownload":
+      return (await import("./production-backup-routes")).validateProductionManualDownload(mustAuthority(), p.bytes as ArrayBuffer, p.record, ports[0]);
     case "recordManualBackupDownload":
       return runAuthorityMutation("recordManualBackupDownload", rawPayload, req);
     case "recoveryCandidates":

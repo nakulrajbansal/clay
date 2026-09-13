@@ -1,212 +1,269 @@
-# A-F development continuation - 2026-09-12
+# A-F development continuation - 2026-09-13
 
-This is a development checkpoint, not a release or certification report.
-Development is NOT complete. Continue the ordered code work below, not a formal
-review, browser matrix, budget campaign, or final regression.
+This is a source-development checkpoint, NOT a release or certification report.
+Development is NOT complete. Continue Exact continuation below; do not start full
+regression, builds, budgets, browser matrices, accessibility or independent review.
 
-## Workspace and workflow
+## Live workspace and scope
 
 - Sole writer in `D:\Clay`, branch `codex/clay-project`.
-- Starting and final live HEAD/local origin ref:
-  `ad76c940e18b31eff0b6d78c8c3dd18568b8ef55`. Starting tree was clean.
+- Starting clean HEAD and local origin tracking ref, also verified at handoff:
+  `97d8b932be6e4531488651ebfcd266e318234f37`.
+- New work is one uncommitted source/test/documentation diff on that base. The prior
+  handoff is in that commit. No Git metadata was written or remote readback performed.
 - No commit, push, fetch, merge, deployment, dependency download/install, production
-  configuration, or server start/stop was performed. Reserved ports untouched.
-- All new work below is an uncommitted source/test/documentation diff on that base.
-  The prior handoff and its finder results are preserved in the base commit.
-- Repository-local Node/Vitest/TypeScript binaries work. No newly verified
-  infrastructure blocker. Remaining development gaps are code/integration work.
-- Do not certify these bytes with historical reports. Existing red browser/budget
-  reports remain deferred; no new evidence report or immutable review cycle exists.
+  configuration, server start/stop or work in another checkout. Reserved ports and
+  user browser/storage contexts were untouched.
+- Local Node/Vitest/TypeScript work. No new infrastructure blocker. The root lacks
+  `node_modules/typescript/bin/tsc`; use package-local tsc.
+- Historical red certification/budget reports remain deferred and do not certify
+  these bytes. No browser evidence or immutable review fingerprint was generated.
+
+## Implemented in this continuation
+
+### B: download recovery and external-backup retry edges
+
+- New `ManualDownloadRecovery` stores immutable app/request/record metadata before
+  browser handoff, checks storage readback, and survives modal teardown and full
+  page reload in the same tab. It never stores archive/Recovery Kit bytes.
+  Recovery Center can reconcile the record, choose the exact file for private
+  reauthentication after worker restart, or explicitly discard only retry metadata.
+  Discard never removes a file or durable download record.
+- New read routes `manualBackupDownloadOutcome` and `validateManualBackupDownload`
+  check the current canonical ledger and mirrored receipt, exact operation/source/
+  request/reservation/response bindings. Historical acknowledgement does not repeat
+  a download or relax generic replay. Records still mean unverified external save.
+- Automatic candidates survive trust commit, response loss and candidate-removal
+  failure until successful runner completion is acknowledged. Staged/published
+  retries authenticate existing-file readback. A prepared retry uses closed
+  `write_reconcile`: exclusive create if absent; on collision, read only, never
+  reopen for writing or catch-delete a partial/ambiguous file.
+- Recovery Center can explicitly retire an authority-proven unpublished attempt,
+  preserving every file. Published attempts cannot use that path. Lost retirement
+  cleanup responses are reconciled before a fresh attempt.
+- Shared trusted-shell Web Lock covers trust enrollment/series activation and
+  prepare/stage/publish/retirement. Active-series changes are denied while a
+  candidate remains. Browser environments without exclusion fail closed; only
+  owned non-browser fixtures use the serialized fallback.
+- Retention retries treat an already-absent exact filename as idempotent, still
+  revalidating directory permission immediately before deletion. The trusted-shell
+  `completeAutomaticBackup` callback checks exact trust/catalog/candidate readback
+  before releasing a completed candidate. This is NOT durable per-file accounting.
+- Real WorkerClient/db-worker coverage now includes manual download recovery plus
+  Create -> starter -> Fork -> Delete -> authenticated export -> restore-as-new ->
+  reload, preserving panels/history and the unrelated original app.
+
+### C/D: presentation recovery and bounded Undo
+
+- New `presentation-intent.ts` retains immutable app/slot/request/payload metadata
+  in session storage, bounded to 2,000,000 UTF-8 bytes, with closed payload parsing
+  and readback. Corrupt/cross-slot/rebound metadata is retained and rejected before
+  rendering. It cannot mint durable identity or grant app authority.
+- `mutationOutcome` is a read-only worker/authority acknowledgement for a closed
+  route set. It checks current canonical selection and original request hash,
+  operation, source lineage, mirrored receipt and reservation binding, and reports
+  whether the recorded result is still current. It never executes an old mutation.
+  Generic stale historical replay remains fail-closed.
+- RelationConversionDialog persists Keep and bounded Undo requests before invocation/
+  presentation work. Closing/reloading retains exact intents. A lost presentation
+  response reads the receipt, not a second conversion. New `undoRelationConversion`
+  -> `schema.undoRelationConversion` requires the exact committed target and one-step
+  history bound. Any intervening canonical write denies Undo; later edits stay.
+- Shared relation/capture payload schemas validate both worker requests and shell
+  retry metadata. Historical Keep/Undo acknowledgements are labeled recorded earlier,
+  not claimed current. DataView refreshes before clearing request metadata; failed
+  presentation leaves retry intact.
+- CommandPalette quick creation uses `dailyHomeQuickCapture` with stable semantic
+  table ID and original app ID. Resolved dates, row and request survive remount/
+  reload unchanged. WorkerClient now requires explicit context and original app
+  argument; the worker rejects rebinding. Bounded receipts remain in Recovery
+  Center. Invocation identity for the toast Undo is still live-only.
+- Daily source CAS rejects concurrent changes to the same profile instead of
+  overwriting them, and explicit reset cannot silently retry a newer revision.
+  Favorite retries keep the original pin/unpin result. TodayView discards older
+  setup/projection responses after a newer refresh or unmount.
+
+Preserve committed A/P0, first-run import, header review, legacy OPFS adoption,
+fencing, authenticated restore lifecycle, destination freshness, sample re-attestation,
+exact copied-target receipts and private verifier channel. See ADR-055/056 and new
+ADR-057 in `specs/docs/10-decisions.md`.
 
 ## A-F development matrix
 
-Routes are DB-worker commands except where explicitly described as trusted-shell.
-Test names are paths under the indicated package's `test/` directory. "Connected"
-means source integration with focused coverage, NOT packaged certification.
+Routes are DB-worker commands unless marked trusted-shell. Tests are relative to
+the indicated package's `test/`. Connected means source integration with focused
+coverage, NOT packaged certification. Baseline rows are not new test-pass claims.
 
-| Phase / capability | Production route and UI | Recovery / authority behavior | Focused coverage and remaining development |
+| Phase / capability | Production route; UI | Recovery / boundary | Focused coverage; remaining code |
 | --- | --- | --- | --- |
-| A: blank/starter Create, Switch, Rename, Fork, Delete, legacy adoption | `boot`, `createApp`, `seed`, `switchApp`, `renameApp`, `forkApp`, `deleteApp`; App chooser/setup | P0 identities, isolated files, fencing, no-op/terminal receipts and legacy adoption preserved. Copied starter provenance is now re-attested atomically with its final receipt. | shell `worker-lifecycle-integration.test.ts`; kernel `production-restore-lifecycle.test.ts`. No new packaged proof. |
-| A/C: first-run import and import-as-new | `importNewApp`, `undoNewAppImport`; ImportReview | Target-bound first-use, header choice, Preview/Keep/Discard, immutable requests and bounded Undo preserved. | shell `worker-lifecycle-integration.test.ts`; prior header/acquisition coverage retained. |
-| B: reset/start over | `createApp` / `seed`; App setup | Creates a fresh app, retains old apps; unsafe direct reset/replacement remains retired. | Prior `start-over-boundary.test.ts`; no destructive fallback added. |
-| B: portable authenticated export | `collectArchiveSnapshot`, `validateBackupStage`; export action | Trusted-shell authentication, worker snapshot/readback, format 5 unchanged; all nonterminal jobs block collection. | shell `worker-restore-integration.test.ts`, `worker-daily-relation-integration.test.ts`, `archive-verification-channel.test.ts`. Connected. |
-| B: trust enrollment, Recovery Kit import/test/activation | Trusted-shell BackupTrustRuntime through WorkerClient; Recovery Center | Existing IndexedDB vault CAS; keys and Kit bytes never enter the DB worker. | Enrollment/private authentication exercised by real worker tests; existing trust-runtime coverage preserved. Activation race audit remains. |
-| B: folder selection and automatic backup | `backupSelection`, `validateBackupStage`, `publishBackup`, `backupRecords`; directory adapter/Recovery Center/scheduler | Permission checks remain immediately before writes. Cross-tab trust exclusion; exact candidate readback; lease-only refresh; folder/source change reconciles a published outcome before retirement; staged retries read the same file. | shell `automatic-backup-recovery.test.ts`, `automatic-backup-worker.test.ts`, real worker packet. Prepared-but-unvalidated partial files and final retention completion remain code work. |
-| B: retention | Catalog publication and external directory runner | Publication replay no longer drops rotation work. Keep newest 32 per app/folder/certification, return at most 64 deletions; never rotate the receipt's artifact or another target. | kernel `catalog-backup-recovery.test.ts`. Physical retry/acknowledgement after process loss still needs integration. |
-| B: manual download records | `recordManualBackupDownload` -> `backup.manualDownload`, `manualBackupDownloads`; export action and Recovery Center | Authenticated readback required before journaled, bounded 100-entry app ledger. Explicit unverified external-save status; download does not stamp verified-backup status. Same live retry retains record and request. | shell `worker-restore-integration.test.ts`. Modal/App teardown and full-reload recovery of pending download intent remain code work; not declared complete. |
-| B: archive validation and restore-as-new | `validateRestoreArchive` (ephemeral grant), `restoreAsNew` (lifecycle authority); Recovery Center controls connected | Private authentication before ZIP or target creation; exact source grant; fresh catalog reservation; fenced install/publication; closed terminal receipts. Restore never replaces source. Session retry intent survives modal/reload; interrupted cleanup requires fresh validation. | kernel `production-restore-lifecycle.test.ts`; shell `worker-restore-integration.test.ts`, `restore-intent.test.ts`, `recovery-center.test.tsx`. Connected; browser certification deferred. |
-| B: record/batch/structure recovery | `recoveryCandidates`, `restoreRow`, `undoBatch`, `makeLatest`; Recovery Center | Existing authority candidates and bounded recovery preserved; null creation-only history is not a before-image. | Real daily/relation worker journey; remaining staleness/presentation audit. |
-| C: CSV/TSV/XLSX migration | `beginImport`, `stageImportChunk`, `configureImport`, `previewImport`, `commitImport`, `cancelImport`, `undoImport`; ImportWizard | Preview-first bounded staging preserved; callerless `importTable` remains explicitly retired. Exact 2,000,000-byte full production JSON cap unchanged. | Existing import packets, P0 worker journey. No new dependency or XLSX parser installed. |
-| C: text-to-relation | `previewRelationConversion`, `convertTextToRelation`, `makeLatest`; RelationConversionDialog | Authority/semantic identity/SHA-256 bound shadow Preview, guarded Keep/replay, original text preserved; 5,000 rows per side. | Real worker conversion/rewind/archive coverage preserved; dedicated bounded Undo and durable modal intent still required. |
-| D: source/date/timezone, favorites and recents | `dailyHomeSourceCompareAndSet`, `dailyHomeInitializeTimeZone`, `dailyHomeNavigationCompareAndSet`, `dailyHome`; TodayView/RecordDetail | Prior guarded CAS, semantic field validation, durable local-calendar timezone and sample exclusion preserved. No hardcoded Daily mutation disable flag. | Real worker packet. Source/projection stale-action CAS and full presentation recovery audit remain. |
-| D: Quick Capture/date/Undo | `dailyHomeResolveDate`, `dailyHomeQuickCapture`, `dailyHomeUndoCapture`; CommandPalette | Prior immutable click payload/request, 200-receipt bound and unchanged-record Undo preserved. Lost-response client replacement now explicitly releases unknown-outcome waiters. | Real worker replay/Undo plus prior React midnight retry coverage. Full modal/reload intent persistence remains. |
-| D: Inbox / Complete / Snooze / Dismiss | Existing projection contracts only; new writers not yet connected | Follow ADR-054 and current roadmap; no guessed recovery identities or off-device reminder promises. | Still code work: disposition storage/archive transaction integration, source/action/projection CAS and UI. |
-| E: recipe/custom creation, draft/edit, simulation, enable/pause/delete | Existing `saveAutomationDraft`, `saveAutomationRecipeDraft`, `simulateAutomation`, `enableAutomation`, `pauseAutomation`, `deleteAutomation`; AutomationCenter | Authority baseline retained; both automation mutation flags remain false until the real journey is connected. | Still code work: lossless V2 editing, persistent draft/request identity, immutable retries, per-rule timezone UI. |
-| E: due/manual runs, history, notifications and Undo | Existing `runAutomations`, `runAutomationNow`, `automationRuns`, `automationRuntimeStatus`, `undoAutomationRun`, `markNotificationRead` | Preserve bounded engine, exact receipts, reversible effects and truthful foreground runtime status. | Still UI/worker journey work; no new completion claim. |
-| F: local Print/CSV | `projectPlaintextV1`, `cancelProjectionV1`; ExportDialog | Existing source-bound projection and egress fencing preserved. | Existing baseline tests; integrated campaign deferred. |
-| F: encrypted immutable sharing | Projection -> trusted-shell/backend sharing; App/export/share surfaces | No deployment or production values; maintain origin-bound default denial, read-only immutable payload and revocation. | Still custody/UI/configuration-boundary reconciliation; not newly exercised. |
-| F: intake, attachments, expiry/revocation, delivery/review/accept/reject | Existing `saveIntakeForm`, publication/revocation/expiry, staging/delivery failure, accept/reject authority routes; IntakeCenter | Preserve staged receipts/Undo and trusted-shell HTTP. Owner secret fields must be removed from durable app DB contracts before completion. | Still code work: trusted-shell custody, lifecycle/attachment/delivery wiring and failure recovery. |
-| F: auto-accept, simulation, receipts/Undo | Existing `simulateIntakeAutoAccept`, `enableIntakeAutoAccept`, `disableIntakeAutoAccept`, `processIntakeAutoAccept`, `intakeReceipts`, `undoIntakeReceipt` | Existing bounded primitives; no direct Store bypass or production configuration. | Still end-to-end local journey work. |
+| A: Create/starter/Switch/Rename/Fork/Delete/legacy adoption | `boot`, `createApp`, `seed`, `switchApp`, `renameApp`, `forkApp`, `deleteApp`; App chooser/setup | Existing isolated targets, fenced lifecycle, receipts/adoption preserved | shell `worker-lifecycle-integration.test.ts` baseline; new `worker-manual-download-integration.test.ts` multi-app archive roundtrip |
+| A/C: first-use and import-as-new | `importNewApp`, `undoNewAppImport`; ImportReview | Existing one-target first-use, header choice, Preview/Keep/Discard/Undo preserved | shell `worker-lifecycle-integration.test.ts` baseline |
+| B: safe start over | `createApp` / `seed`; App setup | Fresh app, old apps retained; direct reset retired | shell `start-over-boundary.test.ts` baseline |
+| B: authenticated export, enrollment, Kit import/activation | `collectArchiveSnapshot`, `validateBackupStage`; trusted-shell BackupTrustRuntime; Recovery Center | Format 5/private verifier unchanged; keys/Kit bytes outside worker; active-series exclusion | shell `backup-trust-runtime.test.ts`, `automatic-backup-recovery.test.ts`, `worker-restore-integration.test.ts` |
+| B: manual download records/reload recovery | `recordManualBackupDownload`, `manualBackupDownloads`, `manualBackupDownloadOutcome`, `validateManualBackupDownload`; App export/Recovery Center | Per-app immutable intent, receipt-first recovery, exact-file reauthentication; unverified external save | shell `manual-download-recovery.test.ts`, `worker-manual-download-integration.test.ts`, `recovery-center.test.tsx`; owned fixtures, not browser proof |
+| B: folder/automatic prepare, validate, publish | Trusted-shell prepare/complete/retire; `backupSelection`, `validateBackupStage`, `publishBackup`, `backupRecords`; folder action/scheduler/Recovery Center | Permission revalidation, lease-only refresh, exact trust/publication recovery, read-only collision recovery, unpublished retirement | shell `automatic-backup-recovery.test.ts`, `backup-target.browser.test.ts`, `production-backup.browser.test.ts`; combined real-worker/directory faults remain |
+| B: retention | Catalog rotation -> external runner -> trusted-shell completion | Exact missing-file retry and candidate acknowledgement; no unrelated deletion | kernel `catalog-backup-recovery.test.ts`, `external-backup.test.ts`; durable per-file accounting/pagination and old-folder work retention remain |
+| B: authenticated restore-as-new | `validateRestoreArchive`, `restoreAsNew`; Recovery Center | Existing authentication before ZIP, fresh reservation, fenced jobs/cleanup, exact receipt and retained intent | shell `worker-restore-integration.test.ts`, `worker-manual-download-integration.test.ts`; prior kernel restore fault suite preserved |
+| B: row/batch/structure recovery | `recoveryCandidates`, `restoreRow`, `undoBatch`, `makeLatest`; Recovery Center | Existing bounded candidates and authority writes preserved | shell `worker-daily-relation-integration.test.ts`; stale/presentation audit remains |
+| C: CSV/TSV/XLSX Preview/Keep/Discard/Undo | `beginImport`, `stageImportChunk`, `configureImport`, `previewImport`, `commitImport`, `cancelImport`, `undoImport`; ImportWizard | Bounds/semantics preserved; callerless `importTable` retired; no dependency installed | shell `release-c-import-coordinator.test.ts` baseline |
+| C: text-to-relation | `previewRelationConversion`, `convertTextToRelation`, `mutationOutcome`, `undoRelationConversion`; RelationConversionDialog | Immutable Keep/Undo, fingerprint/shadow, historical acknowledgement, exact unchanged-target Undo | shell `relation-conversion-recovery.test.tsx`, real worker; kernel `production-roadmap-mutations.test.ts`; stale/failed intent reset remains |
+| D: source/date/timezone/favorites/recents | `dailyHome`, source/navigation CAS, `dailyHomeInitializeTimeZone`; TodayView/RecordDetail | Same-profile conflicts denied, favorite retry stable, latest projection wins | kernel `daily-presentation-cas.test.ts`, shell `today-view.test.tsx`; persistent CAS intent/source-app recovery remains |
+| D: Quick Capture and Undo | `dailyHomeResolveDate`, `dailyHomeQuickCapture`, `dailyHomeUndoCapture`, `mutationOutcome`; CommandPalette/Recovery Center | Original app/semantic ID/date/row/request retained; exact receipt and bounded Undo | shell `quick-capture.test.tsx`, `presentation-intent.test.ts`, real worker; persisted Undo invocation/failed-intent recovery remain |
+| D: Inbox/Complete/Snooze/Dismiss | Read projection only; no action writer/UI yet | ADR-054 physical disposition/canonical/archive/action-CAS contract required | kernel `daily-home-projection.test.ts` baseline only; writers absent |
+| E: recipe/custom draft/create/edit/simulate/enable/pause/delete | Existing `saveAutomationDraft`, `saveAutomationRecipeDraft`, `simulateAutomation`, `enableAutomation`, `pauseAutomation`, `deleteAutomation`; AutomationCenter | Authority baseline; both automation disable flags remain | shell `automation-release-e-ui.test.tsx` baseline; lossless V2 editor, persistent requests/retries/timezone UI remain |
+| E: manual/due runs, history/status/notifications/Undo | Existing `runAutomations`, `runAutomationNow`, `automationRuns`, `automationRuntimeStatus`, `undoAutomationRun`, `markNotificationRead`; AutomationCenter | Preserve bounded effects/receipts and truthful foreground status | shell `automation-enable.test.tsx` baseline; enabled worker/UI journey required |
+| F: local Print/CSV | `projectPlaintextV1`, `cancelProjectionV1`; ExportDialog | Existing source-bound projection/egress fencing preserved | shell `export-dialog.test.tsx` baseline |
+| F: encrypted immutable sharing, attachments/expiry/revocation | Projection -> trusted-shell/backend; App/share | Default-denied origin configuration; no real values/deployment | shell `share-security-integration.test.ts` baseline; custody/UI/source/attachment reconciliation remains |
+| F: intake lifecycle/delivery/review/accept/reject | Existing `saveIntakeForm`, publication/revoke/expire/staging/delivery-failure/accept/reject routes; IntakeCenter | Staged authority; owner secret fields must leave app DB contracts | shell `intake-vertical.test.ts` baseline; trusted-shell custody/full local journey remain |
+| F: auto-accept/simulation/receipts/Undo | `simulateIntakeAutoAccept`, enable/disable/process auto-accept, `intakeReceipts`, `undoIntakeReceipt`; IntakeCenter | Bounded receipts, reversible outcomes, trusted-shell HTTP | shell `intake-ui.test.tsx` baseline; full local UI/worker integration remains |
 
-## New architecture to preserve
-
-- `production-restore.ts` is a worker-only lifecycle entry, exported through
-  `worker-authority.ts`, not generic/panel mutation dispatch. Its only production
-  staging caller consumes the private verifier port's authenticated payload.
-  At most four pending payload proofs live in memory; they are zeroed on eviction
-  or completed/failed declared installation. Presentation stores only the grant
-  and immutable request ID, never archive bytes or keys.
-- Closed `CatalogRestoreJobV2` adds install/cleanup phase, exact request hash,
-  source and fence. Legacy pending jobs remain readable for fenced cleanup.
-  A pre-existing destination file or sidecar is rejected before declaring a job;
-  it cannot become cleanup-owned merely because its name matches a fresh intent.
-  Boot reconciles job-explained orphan pairs/sidecars BEFORE strict inventory.
-  Cleanup atomically claims a job and revalidates it before each unlink. A live
-  receipt wins over cleanup; an ambiguous post-install result is never catch-deleted.
-- Catalog evidence retains restore and restore-aborted terminal receipts.
-  Nonterminal restore/lifecycle rows block format-5 collection. No authenticated
-  archive envelope weakening or version change.
-- `lifecycle-reattestation-evidence.ts` validates one exact reservation/commit suffix
-  for fresh restore/fork sample producer re-attestation. The install transaction
-  preserves user records, panels, prior history and sample coordinates while the
-  lifecycle receipt records both initial publication and the final target.
-- `production-manual-backup.ts` joins reserved-setting ownership and the guarded
-  request journal. Download metadata remains separate from verified folder records.
-- Trusted-shell automatic backup now serializes prepare/stage/publish/retirement
-  with Web Locks. Vault CAS and worker fences remain independent checks. A missing
-  response is NOT a cancellation. WorkerClient replacement rejects old waiters
-  with an unknown-outcome error, does not terminate the worker, and keeps transport
-  IDs monotonic so late responses cannot satisfy a different call.
-- Historical `src/worker/restore-as-new.ts` is still callerless in production
-  (legacy unit-test scaffold). Do not wire its key-bearing interface into the DB
-  worker; the production route uses the private verifier and new catalog lifecycle.
-- See ADR-056. Earlier ADR-055 and all committed A/C/D authority work still apply.
+The executable development census now lists 19 capabilities, both remaining
+automation disable flags, and retirement reasons for unavailable worker compatibility
+routes. It deliberately reports `developmentComplete: false`; it runs no tests/build
+and produces no browser proof.
 
 ## Actual finder-loop results
 
-These are real command results, not release evidence. Commands use local binaries.
-Broad suites, builds, budgets, browser/accessibility certification and independent
-review were deliberately NOT run.
+Commands used repository-local binaries, serially. Development feedback only.
+Documentation edits after these runs do not change executable source.
 
-Kernel (from `packages/kernel`):
-
-```text
-node node_modules/vitest/vitest.mjs run test/production-restore-lifecycle.test.ts test/catalog-backup-recovery.test.ts test/archive-authority.test.ts test/production-samples.test.ts test/sample-provenance-proof.test.ts --maxWorkers=1 --minWorkers=1 --reporter=dot
-5 files passed; 69 tests passed; 80.26s (before the final destination-footprint guard).
-```
-
-Shell (from `packages/shell`):
+Kernel, from `packages/kernel` (final executable source):
 
 ```text
-node node_modules/vitest/vitest.mjs run test/worker-restore-integration.test.ts test/worker-daily-relation-integration.test.ts test/recovery-center.test.tsx test/restore-intent.test.ts test/worker-client-replacement.test.ts test/automatic-backup-worker.test.ts test/automatic-backup-recovery.test.ts test/production-mutation-route-census.test.ts test/archive-verification-channel.test.ts --maxWorkers=1 --minWorkers=1 --reporter=dot
-9 files passed; 45 tests passed; 28.80s.
+node node_modules/vitest/vitest.mjs run test/production-roadmap-mutations.test.ts test/daily-presentation-cas.test.ts test/daily-source-profile.test.ts test/daily-navigation.test.ts test/external-backup.test.ts test/catalog-backup-recovery.test.ts --maxWorkers=1 --minWorkers=1 --reporter=dot
+6 files passed; 47 tests passed; 19.07s.
 ```
 
-Additional finder packets in this continuation:
+Shell, from `packages/shell` (final executable source):
 
-- After the final destination-footprint guard, kernel
-  `node node_modules/vitest/vitest.mjs run test/production-restore-lifecycle.test.ts
-  --maxWorkers=1 --minWorkers=1 --reporter=dot`: 1 file / 10 passed, 41.93s.
-  Kernel typecheck was rerun and exited 0.
-- After that guard, shell
-  `node node_modules/vitest/vitest.mjs run test/worker-restore-integration.test.ts
-  --maxWorkers=1 --minWorkers=1 --reporter=dot`: 1 file / 1 passed, 9.80s.
-- Shell `automatic-backup-recovery.test.ts automatic-backup-worker.test.ts
-  worker-client.test.ts worker-client-replacement.test.ts`: 4 files / 81 passed,
-  4.89s (before final buffer-release and error-storage handling edits).
-- Kernel `catalog-backup-recovery.test.ts device-catalog-metadata.test.ts`:
-  2 files / 3 passed, 2.31s.
-- Each of `packages/schema`, `packages/kernel`, `packages/shell`:
-  `node node_modules/typescript/bin/tsc --noEmit` exited 0 after fixes.
-- Shell `node node_modules/vitest/vitest.mjs run test/worker-client.test.ts
-  test/worker-client-cancellation.test.ts test/worker-lifecycle-integration.test.ts
-  --maxWorkers=1 --minWorkers=1 --reporter=dot`: 3 files / 77 passed, 46.00s.
-- `node scripts/roadmap-development-census.mjs`: exited 0; 18 capabilities,
-  developmentComplete=false, no tests or packaged proof claimed by the inventory.
-- `git diff --check`: no whitespace errors. HEAD and local origin tracking ref
-  still equal the starting commit; no remote write/readback was performed.
+```text
+node node_modules/vitest/vitest.mjs run test/today-view.test.tsx test/operations-ui.test.tsx test/quick-capture.test.tsx test/relation-conversion-recovery.test.tsx test/presentation-intent.test.ts --maxWorkers=1 --minWorkers=1 --reporter=dot
+5 files passed; 26 tests passed; 8.34s.
 
-RED loops actually reproduced missing restore routes/module, interrupted physical
-creation/install/publication, sample-provenance divergence on restore/fork, missing
-manual record route, stale lease/folder candidates, trust-commit failure recovery,
-staged retry using fresh-file creation, unknown-generation lease refresh, missing
-retention on publication replay, and restore intent/callback mismatches.
-A final deterministic collision test reproduced adoption of a pre-existing
-destination footprint. Restore now rejects it before opening or reserving that
-destination; the focused restore packet was rerun after this guard.
-A real worker test timed out at 60 seconds when a lost-response client held the new
-backup lock. The replacement regression first returned "still pending"; transport
-ownership fixed it. The initial transport property caused four credential-boundary
-tests to fail on circular JSON; it became native-private and that packet passed.
-Shell typecheck caught the Web Locks nested-Promise typing issue; it was fixed.
-No failed gate was relabeled a pass.
+node node_modules/vitest/vitest.mjs run test/worker-manual-download-integration.test.ts test/worker-daily-relation-integration.test.ts test/worker-restore-integration.test.ts test/worker-client-replacement.test.ts --maxWorkers=1 --minWorkers=1 --reporter=dot
+4 files passed; 4 tests passed; 45.68s.
+```
 
-All new integration storage is an owned in-memory SQLite/file fixture. It executes
-the actual WorkerClient, db-worker, catalog and ProductionStoreAuthority, but is
-NOT OPFS/browser certification. No external browser context or user OPFS namespaces
-were opened, cleared or deleted. No browser evidence paths were generated.
+Backup packet earlier in this continuation, before final shared relation/capture
+schema and historical Undo presentation changes (from `packages/shell`):
+
+```text
+node node_modules/vitest/vitest.mjs run test/automatic-backup-recovery.test.ts test/automatic-backup-worker.test.ts test/automatic-backup-trigger.browser.test.ts test/backup-trust-runtime.test.ts test/backup-target.browser.test.ts test/production-backup.browser.test.ts test/manual-download-recovery.test.ts test/recovery-center.test.tsx test/production-mutation-route-census.test.ts test/backup-entry-boundary.test.ts --maxWorkers=1 --minWorkers=1 --reporter=dot
+10 files passed; 80 tests passed; 6.08s.
+```
+
+- `node node_modules/typescript/bin/tsc --noEmit` in schema, kernel and shell each
+  exited 0 after final executable edits.
+- `node scripts/roadmap-development-census.mjs` exited 0: 19 capabilities,
+  `developmentComplete=false`, 2 hardcoded automation disable flags, 10 explicitly
+  retired unavailable compatibility routes. Counts are not product proof.
+- Initial root tsc failed `MODULE_NOT_FOUND`; package-local commands above worked
+  without downloading dependencies.
+- `git diff --check` has no whitespace errors at handoff.
+
+RED loops reproduced missing download/outcome methods; candidate loss after trust
+commit/cleanup failure; trust activation racing publication; retirement cleanup;
+prepared-file collision; missing-file retention retry; missing modal intent/outcome/
+Undo; shadow receipt-journal access; app-bound capture; source CAS overwrite/reset
+and favorite retoggle; late projection overwrite; malformed cached rendering; and
+historical Undo presented as current. Focused GREEN results above cover the fixes.
+Intermediate fixture/type errors were corrected, not relabeled passes.
+
+Integration fixtures execute actual WorkerClient -> db-worker -> catalog ->
+ProductionStoreAuthority against owned SQLite/file storage and private verifier
+ports. They do NOT certify browser OPFS or File System Access APIs. No user browser
+was attached or cleared; no browser evidence path exists. No full suite, production
+build, frozen budget, browser matrix, axe/NVDA or independent review was run.
 
 ## Exact continuation
 
-1. Re-read live status and this handoff in `D:\Clay`. Preserve this sole-writer
-   diff. Do not commit/push or regenerate final evidence. HEAD/origin may be moved
-   by the user's checkpoint-preservation workflow; inspect rather than assuming.
-2. Continue B recovery edges, not a rewrite of the now-connected restore lifecycle:
-   - Persist manual-download record intents per authority-owned app across App/
-     modal teardown and full reload. Current App ref survives live retries only.
-     Preserve immutable record/request identity; a download attempt must never
-     claim a saved or verified external backup. On worker restart, reconcile an
-     exact terminal receipt first; otherwise re-authenticate the exact file before
-     recording, without restarting a download or silently minting another request.
-     Add deterministic response-loss/storage-failure/source-switch UI tests first.
-   - A prepared (not staged) candidate may have an absent/partial/colliding file
-     after interrupted create/write/readback. Present explicit safe recovery;
-     never overwrite/delete an ambiguous external file or loop forever on "fresh".
-     Staged/published candidate retries now use publication_reconcile with current
-     selection, preserving bytes/identity and authenticating existing-file readback.
-   - If trust commit succeeds but candidate removal fails, next prepare currently
-     removes the orphan candidate and prepares fresh. Finish exact publication/
-     retention recovery through this edge, and audit trust-series activation/import
-     racing with publication. Preserve cross-tab exclusion and vault CAS.
-   - Complete physical retention acknowledgement/retry and truthful history after
-     interrupted removal (catalog records currently still describe validation,
-     not confirmed ongoing existence). Rotation replay alone is not full recovery.
-   - Exercise these through the production external runner with owned directory
-     faults and real worker transport; keep permission revalidation before writes.
-     Runtime/certification gating is not permission to falsify an adapter pass.
-3. Finish remaining C/D presentation recovery: retained immutable modal intents,
-   explicit bounded conversion Undo, source/projection CAS, and Inbox dispositions/
-   Complete/Snooze/Dismiss under the accepted physical/archive transaction contract.
-   Preserve semantic identity, local-calendar/timezone correctness and the exact
-   2,000,000 UTF-8 byte production JSON cap.
-4. Complete E via existing authority routes: lossless V2 editing (do not drop
-   unrepresented actions), persistent draft/request identity, immutable retries,
-   per-rule timezone UI, recipe/custom create, preview/validate/enable/pause/delete,
-   run now/due execution, history/notifications/Undo. Remove both hardcoded false
-   flags only after the actual client/worker/authority journey works.
-5. Complete F secret custody and source/UI wiring: remove owner private/token
-   material from app DB contracts, use trusted-shell custody and HTTP, preserve
-   source-bound immutable sharing, attachments, expiry/revocation, delivery recovery,
-   staged review/accept/reject, auto-accept simulation, receipts/Undo. Configuration
-   stays default-denied and origin-bound. No real production values or deployment.
-6. Run `node scripts/roadmap-development-census.mjs` as an inventory only. It now
-   includes manual records and enabled restore routes, but deliberately reports
-   developmentComplete=false. Keep status descriptions honest as code changes.
-7. Only when ALL A-F development is complete, begin the one integrated regression,
-   build, frozen-budget, cross-browser, accessibility and security/product review
-   campaign. Existing worker/closure/browser limits must be met without raising
-   them. Manual NVDA certification remains a human task.
+1. Inspect live status in `D:\Clay` and preserve the diff. User/Hermes may preserve a
+   checkpoint externally; do not commit/push or assume HEAD. Continue development,
+   not certification. No hard external blocker exists.
+2. Finish B durable retention accounting:
+   - `DeviceCatalog.backupRotation` still uses newest-32 exclusion / max-64 work from
+     records whose state stays `valid` after physical deletion. The new completion
+     callback is exact-candidate acknowledgement, not per-file catalog accounting.
+     Add interrupted remove/acknowledge/reload RED tests first, then an authority-
+     fenced receipt-bound contract with closed catalog/archive coverage. Do not
+     silently update `record_json`, reuse publication events for deletion, weaken
+     DDL checks or turn vault metadata into app/catalog authority. Existing catalogs
+     must remain adoptable.
+   - Paginate acknowledged work so missing files cannot occupy the 64-entry window
+     and starve older failed deletions. History must distinguish validation at
+     publication from current file availability.
+   - `AutomaticBackupCoordinator.#prepare` still reconciles/removes a published
+     candidate on folder/source change; this can drop prior-folder retention work.
+     Preserve/quarantine exact old-folder work with explicit recovery while keeping
+     all files. Do not delete another app/folder or block source data.
+   - Combine real WorkerClient transport and an owned directory fixture for lease
+     expiry, folder/source switch, staged/partial files, trust-commit failure and
+     removal faults. Separate coordinator/directory tests are not that combined
+     journey. Adapter certification stays deferred, never bypassed.
+3. Finish C/D recovery and Inbox:
+   - A rejected stale/failed Keep or Capture still locks its saved request. Add safe
+     recovery/re-preview/correction. Do not clear `not_invoked` while a non-cancelled
+     old invocation can still arrive. Terminalize/cancel or otherwise prove the old
+     request cannot execute before allowing a new intent. Corrupt metadata is now
+     rejected, but cache absence must not imply absence of a durable outcome.
+   - Persist Capture Undo invocation identity, not just the toast; audit original
+     source binding across app switching/forked receipts. Relation Undo is already
+     bounded/persistent, but historical acknowledgement must not advertise a
+     currently available inverse without a fresh bound check.
+   - Source/nav CAS detects concurrent same-profile changes, but still needs the
+     original reviewed-source/app binding and retained immutable CAS intent through
+     reload. Action CAS must bind original projection/semantic IDs, not reselect
+     current names after awaits.
+   - Implement Inbox/Complete/Snooze/Dismiss per ADR-054: closed physical disposition
+     storage, canonical/archive participation, source/action/projection CAS,
+     reversible outcomes and local-calendar semantics. Writers are absent; do not
+     hide them in generic settings or imply off-device runtime.
+4. Complete E through existing authority routes: lossless V2 editing (preserve all
+   unrepresented actions), recipe/custom drafts, persistent draft/request identity,
+   immutable retries, per-rule timezone UI, preview/validation, create/edit/enable/
+   pause/delete, manual/due runs, history/status/notifications and Undo. Both
+   `automationMutationsAvailable={false}` and `mutationsAvailable={false}` remain in
+   App; remove only after the actual WorkerClient/db-worker journey works.
+5. Complete F: move intake owner private/token fields out of app DB contracts
+   (`LocalIntakeForm` / `saveIntakeForm`) into trusted-shell custody; never inspect
+   real credentials. Wire immutable encrypted sharing, attachments, expiry/revoke,
+   intake delivery recovery, staged review/accept/reject, auto-accept simulation and
+   receipt Undo. Keep HTTP trusted-shell/backend and configuration default-denied/
+   origin-bound. No real production values or deployment.
+6. Update the development census/handoff as inventory. Only after ALL A-F code is
+   developed begin the single integrated regression/build/frozen-budget/cross-
+   browser/accessibility/security/product review campaign. Do not raise limits.
+   Manual NVDA certification remains a human task.
 
-This turn needs continuation at step 2. No hard external blocker was established.
-A-F development and shipment are not claimed complete.
+This turn needs continuation at step 2. Remaining blockers are code/integration,
+not a newly verified infrastructure failure. Release certification, human
+accessibility and hosted configuration/deployment remain separate later gates.
+A-F development, P0 shipment and full roadmap completion are NOT claimed.
 
 ## Changed-file scope
 
-The live diff has 40 files: 15 kernel source files (catalog/archive/authority,
-copied-sample evidence, restore and manual-download modules); 3 schema contracts
-(`archive.ts`, `backup.ts`, `catalog.ts`); 8 shell source files (App, RecoveryCenter,
-WorkerClient, restore intent, automatic backup, db-worker, backup routes, census);
-10 focused tests/owned fixtures; and this handoff, `CODEX_HANDOFF.md`, ADR-056 in
-`specs/docs/10-decisions.md`, and `scripts/roadmap-development-census.mjs`.
-No release-evidence artifact, dependency manifest/lockfile, production value or
-Git metadata was changed. Use the live diff for exact bytes, not a review fingerprint.
+- Schema: `backup.ts`, `catalog.ts` (closed download/presentation payload/outcome
+  schemas and automatic retry discriminator).
+- Kernel: `production-authority.ts`, `production-mutation-coordinator.ts`,
+  `production-core-routes.ts`, `production-daily.ts`, `production-relation.ts`,
+  `production-manual-backup.ts`, `external-backup.ts`, `daily-source-profile.ts`,
+  `daily-navigation.ts`; tests `production-roadmap-mutations.test.ts`,
+  `external-backup.test.ts`, new `daily-presentation-cas.test.ts`.
+- Shell app: `App.tsx`, `CommandPalette.tsx`, `DataView.tsx`, `RecoveryCenter.tsx`,
+  `RelationConversionDialog.tsx`, `TodayView.tsx`, `worker-client.ts`,
+  `backup-target.browser.ts`, `production-backup.browser.ts`, new
+  `manual-download-recovery.ts`, `presentation-intent.ts`.
+- Shell worker boundary / trusted-shell support: `db-worker.ts`,
+  `mutation-route-census.ts`, `production-backup-routes.ts`, `automatic-backup.ts`,
+  `backup-trust-runtime.ts`, new `backup-operation-lock.ts`. Historical folder names
+  do not mean the key-bearing runtime is imported into db-worker.
+- Shell tests: `automatic-backup-recovery.test.ts`, `automatic-backup-worker.test.ts`,
+  `backup-target.browser.test.ts`, `operations-ui.test.tsx`,
+  `production-backup.browser.test.ts`, `quick-capture.test.tsx`,
+  `recovery-center.test.tsx`, `today-view.test.tsx`,
+  `worker-daily-relation-integration.test.ts`; new `manual-download-recovery.test.ts`,
+  `presentation-intent.test.ts`, `relation-conversion-recovery.test.tsx`,
+  `worker-manual-download-integration.test.ts`.
+- This handoff, `scripts/roadmap-development-census.mjs` and ADR-057 in
+  `specs/docs/10-decisions.md`. No dependency, production-value or evidence artifact
+  changed. Use the live diff for exact files/bytes, not historical review reports.

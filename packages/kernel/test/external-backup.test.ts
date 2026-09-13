@@ -15,6 +15,18 @@ import {
 } from "./external-backup-fakes";
 
 describe("Release B2 automatic external-backup execution", () => {
+  it("reconciles an interrupted close on retry without overwriting the existing file", async () => {
+    const events: string[] = []; const bytes = new TextEncoder().encode("complete but unacknowledged archive");
+    const run = { ...backupRun(bytes), attempt: "write_reconcile" };
+    const directory = new DeterministicDirectory(TARGET.targetId, events);
+    const name = buildAutomaticBackupFileName(run.fileLabel, run.generationId, run.createdAt);
+    directory.files.set(name, bytes.slice());
+    const authority = new DeterministicBackupAuthority(run.expected, events); const stage = new DeterministicStageValidator(events);
+    const result = await runExternalBackup(run, bytes, { directory, authority, validateArchiveStage: stage.validate,
+      now: () => "2026-09-05T20:01:03.000Z" });
+    expect(result.status).toBe("published"); expect(directory.files.get(name)).toEqual(bytes);
+    expect(events.some(event => event.startsWith("directory:write:") || event.startsWith("directory:remove:"))).toBe(false);
+  });
   it("sanitizes presentation text into one unique bounded owned filename", () => {
     const name = buildAutomaticBackupFileName(
       " ../客户\\Quarterly Payroll 🚨 <script> ",
