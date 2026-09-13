@@ -1,13 +1,13 @@
 import { GenerationId, NamespaceId } from "@clay/schema";
 import { AppLifecycleReceiptV1, PendingTargetLifecycleJobV1 } from "@clay/schema/catalog";
-import { ArchivePendingJobV1, type ArchiveLifecycleReceiptV1 } from "@clay/schema/archive";
+import { ArchivePendingJobV1, CatalogRestoreJobV2, type CatalogRestoreJob, type ArchiveLifecycleReceiptV1 } from "@clay/schema/archive";
 import type { DbDriver } from "./db";
 import { ClayError } from "./errors";
 
 export const LIFECYCLE_PROVENANCE = "app-lifecycle-v1";
 export const LIFECYCLE_RECEIPT_PROVENANCE = "app-lifecycle-receipt-v1";
 type PendingRow =
-  | { kind: "restore"; value: ArchivePendingJobV1 }
+  | { kind: "restore"; value: CatalogRestoreJob }
   | { kind: "lifecycle"; value: PendingTargetLifecycleJobV1 }
   | { kind: "receipt"; value: AppLifecycleReceiptV1; generationId: string; namespaceId: string };
 
@@ -19,13 +19,18 @@ export function readCatalogPendingRows(driver: DbDriver): PendingRow[] {
     const parsed = rows.map((row): PendingRow => {
       let result: PendingRow;
       if (row.kind === "restore_as_new") {
-        const value = ArchivePendingJobV1.parse({
+        const columns = {
           schema: 1, jobId: row.job_id, authorityIncarnationId: row.authority_incarnation_id,
           appInstanceId: row.app_instance_id, generationId: row.generation_id,
           namespaceId: row.namespace_id, kind: row.kind, state: row.state,
           operationId: row.operation_id, sourceArchiveSha256: row.source_archive_sha256,
           sourceProvenanceId: row.source_provenance_id, createdAt: row.created_at, updatedAt: row.updated_at,
-        });
+        };
+        const value = row.state === "prepared" ? ArchivePendingJobV1.parse(columns)
+          : CatalogRestoreJobV2.parse(JSON.parse(String(row.state)));
+        if (value.schema === 2 && (JSON.stringify(value) !== row.state
+            || Object.entries(columns).some(([key, column]) => key !== "schema" && key !== "state"
+              && Reflect.get(value, key) !== column))) throw new Error("restore columns disagree");
         if (value.state !== "prepared" || value.appInstanceId === null || value.updatedAt < value.createdAt)
           throw new Error("invalid restore state");
         result = { kind: "restore", value };
@@ -59,9 +64,11 @@ export function readCatalogPendingRows(driver: DbDriver): PendingRow[] {
           || row.operation_id !== value.operationId || jobs.has(value.jobId) || operations.has(value.operationId))
         throw new Error("duplicate or mismatched pending identity");
       jobs.add(value.jobId); operations.add(value.operationId);
-      if (result.kind !== "restore") {
-        if (requests.has(result.value.requestId)) throw new Error("duplicate pending request");
-        requests.add(result.value.requestId);
+      const requestId = result.kind !== "restore" ? result.value.requestId
+        : result.value.schema === 2 ? result.value.intent?.requestId : undefined;
+      if (requestId) {
+        if (requests.has(requestId)) throw new Error("duplicate pending request");
+        requests.add(requestId);
       }
       return result;
     });
@@ -77,11 +84,11 @@ export function readCatalogPendingRows(driver: DbDriver): PendingRow[] {
 /** Legacy collector: callers without a lifecycle-evidence member must fail closed. */
 export function pendingRowsForArchive(driver: DbDriver): ArchivePendingJobV1[] {
   const rows = readCatalogPendingRows(driver);
-  if (rows.some(row => row.kind === "lifecycle"))
+  if (rows.some(row => row.kind === "lifecycle" || row.kind === "restore"))
     throw new ClayError("E_CATALOG_UNAVAILABLE", "archive blocked by unfinished lifecycle work");
   if (rows.some(row => row.kind === "receipt"))
     throw new ClayError("E_CATALOG_UNAVAILABLE", "archive format 5 cannot omit lifecycle receipts");
-  return rows.flatMap(row => row.kind === "restore" ? [row.value] : []);
+  return [];
 }
 
 /** One physical read, no kind filters and no dropped terminal history. */
@@ -89,10 +96,10 @@ export function catalogPendingEvidenceForArchive(driver: DbDriver): {
   pendingJobs: ArchivePendingJobV1[]; lifecycleReceipts: ArchiveLifecycleReceiptV1[];
 } {
   const rows = readCatalogPendingRows(driver);
-  if (rows.some(row => row.kind === "lifecycle"))
+  if (rows.some(row => row.kind === "lifecycle" || row.kind === "restore"))
     throw new ClayError("E_CATALOG_UNAVAILABLE", "archive blocked by unfinished lifecycle work");
   return {
-    pendingJobs: rows.flatMap(row => row.kind === "restore" ? [row.value] : []),
+    pendingJobs: [],
     lifecycleReceipts: rows.flatMap(row => row.kind === "receipt" ? [{
       receipt: row.value, generationId: row.generationId, namespaceId: row.namespaceId,
     }] : []),

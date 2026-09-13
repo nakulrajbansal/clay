@@ -12,6 +12,24 @@ import {
 } from "./store";
 
 export type SampleRowProvenance = Readonly<Record<string, readonly string[]>>;
+const STORE_SET_SETTING: ClayStore["setSetting"] = ClayStore.prototype.setSetting;
+
+/** Only the authenticated fresh-install transaction may rebind producer IDs. */
+export function executeCopiedSampleReattestation(store: ClayStore, operationId: string,
+  sourceSha256: string, sourceAuthorityIncarnationId: string, kind: "restore" | "fork") {
+  const source = verifiedProvenance(store);
+  if (!/^op_[a-z2-7]{26}$/.test(operationId) || !/^sha256:[0-9a-f]{64}$/.test(sourceSha256)
+      || !/^auth_[a-z2-7]{26}$/.test(sourceAuthorityIncarnationId) || !source.length)
+    throw invalid("restored sample re-attestation binding is invalid");
+  const entries = source.map(entry => ({ tableId: entry.tableId, rowId: entry.rowId, operationId }));
+  STORE_SET_SETTING.call(store, "sample_provenance_v1", { schema: 1, entries });
+  const persisted = verifiedProvenance(store);
+  if (persisted.length !== entries.length || persisted.some((entry, index) =>
+    entry.tableId !== entries[index]!.tableId || entry.rowId !== entries[index]!.rowId || entry.operationId !== operationId))
+    throw invalid("restored sample re-attestation failed read-back");
+  return { result: { rebound: entries.length, sourceSha256, sourceAuthorityIncarnationId, kind },
+    sampleProvenance: entries.map(({ tableId, rowId }) => ({ tableId, rowId })) };
+}
 export type SampleRemovalResult = Readonly<{
   affected: number;
   recovery: Readonly<{ kind: "soft_delete"; recoverable: number }>;

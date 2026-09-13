@@ -20,6 +20,8 @@ import {
 } from "./daily-navigation";
 import { DAILY_SOURCE_LIBRARY_SETTING } from "./daily-source-profile";
 import { DAILY_CAPTURE_LEDGER } from "./production-daily";
+import { MANUAL_BACKUP_LEDGER } from "./production-manual-backup";
+import { executeCopiedSampleReattestation } from "./production-samples";
 import {
   automationPhysicalTransactionCapability,
   isThenable,
@@ -133,6 +135,7 @@ const RESERVED_SETTING_OWNERS = new Map<string, string>([
   [DAILY_TIME_ZONE_SETTING, "Daily Home calendar authority"],
   [QUICK_CAPTURE_LAST_TABLE_SETTING, "Daily Home capture authority"],
   [DAILY_CAPTURE_LEDGER, "Daily Home capture authority"],
+  [MANUAL_BACKUP_LEDGER, "Manual download receipt authority"],
   ["sample_provenance_v1", "starter sample provenance authority"],
   ["sample_rows", "starter sample provenance authority"],
 ]);
@@ -168,6 +171,9 @@ type CapturedProductionMutation = CapturedCoreMutation | Readonly<{
   | { route: "planner.keep"; payload: PreparedMutationCommand }
   | { route: "table.import"; payload: CapturedTableImport }
   | { route: "samples.fill"; payload: CapturedSampleFill }
+  // No public capture/dispatch case. This request can only be created by the
+  // authenticated fresh-install helper below, inside its physical transaction.
+  | { route: "archive.restore.samples" | "app.fork.samples"; payload: Readonly<{ sourceSha256: string; sourceAuthorityIncarnationId: string; sourceTargetStateSha256: string }> }
   | { route: "samples.remove"; payload: Readonly<Record<string, never>> }
   | { route: "starter.seed"; payload: CapturedStarterSeedBundle }
   | {
@@ -676,6 +682,7 @@ function captureMutation(input: unknown): CapturedProductionMutation {
       case "schema.addColumn":
       case "schema.renameColumn":
       case "schema.convertTextToRelation":
+      case "backup.manualDownload":
       case "schema.addRelationColumn": {
         const captured = captureCoreMutation(requestId, route, captureJsonRecord(payload));
         if (captured) return captured;
@@ -1106,6 +1113,8 @@ function executeCapturedMutation(
   expectedTarget: TargetEvidence,
   transactionCapability: AutomationPhysicalTransactionCapability,
 ): CapturedMutationExecution {
+  if (request.route === "archive.restore.samples" || request.route === "app.fork.samples")
+    throw invalid("sample re-attestation requires the fresh-install capability");
   if (isCapturedCoreMutation(request))
     return capturedExecution(captureJsonValue(
       executeCapturedCoreMutation(store, request, expectedTarget), new WeakSet(),
@@ -1496,6 +1505,52 @@ function canonicalChanges(
   return changes;
 }
 
+export function commitCopiedSampleReattestation(input: Readonly<{
+  driver: DbDriver; store: ClayStore; fence: WriteFence; expectedCatalogGeneration: string;
+  expectedTarget: TargetEvidence; requestId: string; nowMs: number;
+  sourceSha256: string; sourceAuthorityIncarnationId: string; kind: "restore" | "fork";
+}>): TargetEvidence {
+  const expected = copyTarget(input.expectedTarget);
+  const request: CapturedProductionMutation = { requestId: RequestId.parse(input.requestId),
+    route: input.kind === "restore" ? "archive.restore.samples" : "app.fork.samples",
+    payload: { sourceSha256: input.sourceSha256,
+      sourceAuthorityIncarnationId: input.sourceAuthorityIncarnationId, sourceTargetStateSha256: expected.stateSha256 } };
+  assertCapturedMutationBytes(request);
+  const at = trustedInstant(() => input.nowMs);
+  const catalog = DeviceCatalog.openExisting(input.driver);
+  const target = TargetAuthorityStore.open(input.driver);
+  catalog.assertWriteFence(input.fence, at.milliseconds);
+  if (catalog.snapshot().catalogGeneration !== input.expectedCatalogGeneration
+      || !sameTarget(catalog.selectedTargetStorage().target, expected) || !sameTarget(target.evidence(), expected))
+    throw invalid("restored sample target is stale");
+  const before = enumerateCanonicalStateV1(input.driver, input.store.validationRegistrySnapshot());
+  if (before.stateSha256 !== expected.stateSha256) throw invalid("restored sample prestate is not canonical");
+  const operationId = productionOperationIdV2(input.fence.authorityIncarnationId, request.requestId, request.route);
+  const fingerprint = requestFingerprint(expected, request);
+  target.reserveProtectionRevision(operationId, at.instant, expected, fingerprint);
+  const reserved = catalog.reserveSelectedProtectionRevision({
+    expectedCatalogGeneration: input.expectedCatalogGeneration, expectedTarget: expected,
+    operationId, requestSha256: fingerprint, fence: input.fence, nowMs: at.milliseconds,
+  });
+  const prepared = preparedReceipt(request, fingerprint, expected, operationId, at.instant);
+  writeProductionRequestReceipt(input.driver, prepared, null, null);
+  const invoked = invokedReceipt(prepared, at.instant);
+  writeProductionRequestReceipt(input.driver, invoked, null, "prepared");
+  const execution = executeCopiedSampleReattestation(input.store, operationId, input.sourceSha256, input.sourceAuthorityIncarnationId, input.kind);
+  const after = enumerateCanonicalStateV1(input.driver, input.store.validationRegistrySnapshot());
+  const changes = canonicalChanges(before, after);
+  if (!changes.length) throw invalid("restored sample re-attestation changed no state");
+  const encoded = encodeProductionResponse(request.route, execution.result, execution.sampleProvenance);
+  const committed = target.commitReservedProtectionRevision({ operationId, expectedTarget: expected,
+    finalizedAt: at.instant, changes, requestSha256: fingerprint, mutate: () => undefined, registry: input.store.validationRegistrySnapshot() });
+  catalog.publishSelectedTarget({ expectedCatalogGeneration: reserved.reservedCatalogGeneration,
+    expectedTarget: expected, publishedTarget: committed, operationId, requestSha256: fingerprint,
+    fence: input.fence, nowMs: at.milliseconds });
+  writeProductionRequestReceipt(input.driver, terminalReceipt(invoked, "committed", committed, encoded.sha256, at.instant), encoded.json, "invoked");
+  assertLiveSampleProvenance(input.driver, input.store, committed);
+  return copyTarget(committed);
+}
+
 class SimulatedInvocationCrash extends Error {
   constructor() { super("simulated crash after durable invocation"); }
 }
@@ -1590,14 +1645,18 @@ export class ProductionMutationCoordinator {
     return run;
   }
 
-  backupSelection(): Promise<ProductionBackupSelection> {
+  backupSelection(expectedInput?: ProductionBackupSelection["selected"]): Promise<ProductionBackupSelection> {
+    const expected = expectedInput === undefined ? undefined : BackupSelectedTargetV1.parse(expectedInput);
     const run = this.#tail.then(() => {
       if (this.#poisoned)
         throw invalid("production authority is poisoned; reopen for reservation recovery");
       this.#ensureWriteFence();
       const catalog = DeviceCatalog.openExisting(this.#driver);
       const snapshot = catalog.snapshot();
-      const target = catalog.selectedTargetStorage().target;
+        const target = catalog.selectedTargetStorage().target;
+        if (expected && (expected.authorityIncarnationId !== snapshot.authorityIncarnationId
+            || !sameTarget(expected.target, target) || !catalog.hasOnlyLeaseSuffix(expected.catalogGeneration, target.appInstanceId)))
+          throw new ClayError("E_GENERATION_NOT_SELECTED", "backup candidate cannot cross a non-lease catalog change");
       if (snapshot.selectedAppInstanceId === null
           || snapshot.selectedAppInstanceId !== target.appInstanceId
           || snapshot.catalogGeneration !== this.#catalogGeneration
@@ -1621,10 +1680,10 @@ export class ProductionMutationCoordinator {
     return run;
   }
 
-  backupRecords(): Promise<BackupRecord[]> {
+  backupRecords(allApps = false): Promise<BackupRecord[]> {
     return this.serializeRead(async () => {
       const catalog = DeviceCatalog.openExisting(this.#driver);
-      return catalog.backupRecords(this.#target.appInstanceId);
+      return catalog.backupRecords(allApps ? undefined : this.#target.appInstanceId);
     });
   }
 

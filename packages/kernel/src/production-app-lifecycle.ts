@@ -36,7 +36,7 @@ import {
   productionLifecycleContext,
   assertLifecycleSurvivorReadable,
 } from "./production-authority";
-import { mintProductionAuthorityId } from "./production-mutation-coordinator";
+import { mintProductionAuthorityId, commitCopiedSampleReattestation } from "./production-mutation-coordinator";
 import { productionOperationIdV2 } from "./production-operation-id";
 import { captureTableImport } from "./production-import";
 import { readProductionRequestReceipt } from "./production-request-journal";
@@ -252,16 +252,25 @@ function initializeDeclaredBrowserTarget(
         protectionRevisionHighWater: "0",
         digestSchema: 1,
       }).evidence();
-      catalog.publishDeclaredAppGeneration({
+      const published = catalog.publishDeclaredAppGeneration({
         expectedCatalogGeneration: catalog.snapshot().catalogGeneration,
         jobId: job.jobId,
         publishedTarget: target,
         fence,
         nowMs,
       });
+      let finalTarget = target;
+      if (job.kind === "fork" && openedStore.sampleRowProvenance().length > 0) {
+        const reattestationRequestId = mintProductionAuthorityId("req");
+        finalTarget = commitCopiedSampleReattestation({ kind: "fork", driver: targetSession.driver,
+          store: openedStore, fence, expectedCatalogGeneration: published.catalogGeneration, expectedTarget: target,
+          requestId: reattestationRequestId, nowMs, sourceSha256: job.expectedTarget.stateSha256,
+          sourceAuthorityIncarnationId: job.authorityIncarnationId });
+        catalog.finalizeLifecycleReattestation(job.requestId, reattestationRequestId, nowMs);
+      }
       const audited = enumerateCanonicalStateV1(targetSession.driver, registry);
       const merkle = StateMerkleIndex.open(targetSession.driver).audit();
-      if (audited.stateSha256 !== target.stateSha256
+      if (audited.stateSha256 !== finalTarget.stateSha256
           || audited.stateSha256 !== merkle.stateSha256
           || audited.leaves.length !== merkle.leafCount)
         throw invalid("lifecycle target failed canonical read-back");

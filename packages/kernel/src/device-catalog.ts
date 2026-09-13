@@ -33,7 +33,8 @@ import {
 } from "@clay/schema/backup";
 import {
   ArchivePendingJobV1,
-  type ArchivePendingJobV1 as ArchivePendingJob,
+  CatalogRestoreJobV2,
+  type CatalogRestoreJob as ArchivePendingJob,
 } from "@clay/schema/archive";
 import type {
   AppLifecycleReceiptV1 as AppLifecycleReceipt,
@@ -53,6 +54,7 @@ import {
   type DurableNamespaceInventoryEntry,
 } from "./durable-inventory";
 import { ClayError } from "./errors";
+import { assertLifecycleReattestation } from "./lifecycle-reattestation-evidence";
 import { readCatalogPendingRows, LIFECYCLE_PROVENANCE, LIFECYCLE_RECEIPT_PROVENANCE } from "./catalog-pending";
 
 const CATALOG_DDL = [
@@ -760,6 +762,7 @@ function storeAppLifecycleReceipt(
   driver: DbDriver,
   receipt: AppLifecycleReceipt,
   selected: SelectedTargetStorage,
+  retainedRestoreJob = false,
 ): void {
   const existing = driver.select(
     "SELECT job_id FROM catalog.pending_jobs WHERE job_id = ?", [receipt.jobId],
@@ -767,11 +770,11 @@ function storeAppLifecycleReceipt(
   if (existing.length > 1)
     throw new ClayError("E_CATALOG_CONFLICT", "lifecycle receipt identity is ambiguous");
   if (existing.length === 0) {
-    if (driver.select(
+    if (!retainedRestoreJob && driver.select(
       "SELECT id_value FROM catalog.id_registry WHERE id_value = ?", [receipt.jobId],
     ).length !== 0)
       throw new ClayError("E_CATALOG_CONFLICT", "lifecycle request identity was reused");
-    driver.exec(
+    if (!retainedRestoreJob) driver.exec(
       "INSERT INTO catalog.id_registry(id_value,id_kind,retained_at) VALUES (?,'job',?)",
       [receipt.jobId, receipt.completedAt],
     );
@@ -1305,16 +1308,18 @@ function readValidatedCatalog(
         throw new Error("catalog backup publication event is missing");
     }
     for (const receipt of lifecycleReceipts) {
-      const event = eventByGeneration.get(receipt.completedCatalogGeneration);
-      const expectedKind = receipt.kind === "rename" ? "app_metadata"
-        : receipt.kind === "create" || receipt.kind === "fork" ? "app_seed"
+      const initial = receipt.schema === 2 ? receipt.initialPublication : undefined;
+      const event = eventByGeneration.get(initial?.catalogGeneration ?? receipt.completedCatalogGeneration);
+      const expectedKind = receipt.kind === "rename" || receipt.kind === "restore_aborted" ? "app_metadata"
+        : receipt.kind === "create" || receipt.kind === "fork" || receipt.kind === "restore" ? "app_seed"
           : "app_selected";
       const resultApp = apps.get(receipt.resultingSelectedAppInstanceId);
       if (!event || event.eventKind !== expectedKind
           || event.operationId !== receipt.operationId
           || event.appInstanceId !== receipt.resultingSelectedAppInstanceId
-          || event.at !== receipt.completedAt || !resultApp)
+          || (!initial && event.at !== receipt.completedAt) || !resultApp)
         throw new Error("lifecycle receipt does not match its catalog event");
+      assertLifecycleReattestation(receipt, readCatalogGenerationEvents(driver), readRevisionReservations(driver));
       if ((receipt.kind === "switch" || receipt.kind === "rename")
           && receipt.requestedAppInstanceId !== receipt.resultingSelectedAppInstanceId)
         throw new Error("lifecycle receipt selected the wrong requested app");
@@ -1355,6 +1360,15 @@ function readValidatedCatalog(
             .some(value => retained.has(value))
           || retained.get(job.jobId) !== "job")
         throw new Error("pending restore job relationship is invalid");
+      if (job.schema === 2 && job.intent) {
+        const source = snapshot.entries.find(entry => entry.appInstanceId === job.intent!.sourceTarget.appInstanceId);
+        if (!source || snapshot.selectedAppInstanceId !== source.appInstanceId
+            || source.activeGenerationId !== job.intent.sourceTarget.activeGenerationId
+            || source.currentLineageEpoch !== job.intent.sourceTarget.lineageEpoch
+            || source.currentProtectionRevision !== job.intent.sourceTarget.protectionRevision
+            || source.stateSha256 !== job.intent.sourceTarget.stateSha256)
+          throw new Error("pending restore source binding is stale");
+      }
       referenced.add(job.jobId);
     }
     const unfinishedLineages = driver.select(
@@ -1426,6 +1440,17 @@ export class DeviceCatalog {
     );
   }
 
+  hasOnlyLeaseSuffix(generation: string, appInstanceId: string): boolean {
+    if (!UInt64Decimal.safeParse(generation).success) return false;
+    const current = this.snapshot();
+    if (current.selectedAppInstanceId !== appInstanceId || BigInt(generation) > BigInt(current.catalogGeneration)) return false;
+    const events = readCatalogGenerationEvents(this.driver);
+    if (!events.some(event => event.catalogGeneration === generation)) return false;
+    return events.every(event =>
+      BigInt(event.catalogGeneration) <= BigInt(generation)
+      || (event.eventKind === "lease_issued" && event.appInstanceId === appInstanceId));
+  }
+
   pendingRestoreJobs(): ArchivePendingJob[] {
     if (!this.allowPendingRestore)
       readValidatedCatalog(this.driver);
@@ -1445,6 +1470,7 @@ export class DeviceCatalog {
     expectedSourceTarget: TargetEvidence;
     fence: WriteFence;
     nowMs: number;
+    intent?: CatalogRestoreJobV2["intent"];
   }>): ArchivePendingJob {
     const at = validClockValue(input.nowMs) ? new Date(input.nowMs).toISOString() : "";
     const jobResult = ArchivePendingJobV1.safeParse({
@@ -1466,6 +1492,8 @@ export class DeviceCatalog {
     if (!jobResult.success || !expected.success
         || !UInt64Decimal.safeParse(input.expectedCatalogGeneration).success)
       throw new ClayError("E_CATALOG_CONFLICT", "pending restore input is invalid");
+    const job = input.intent ? CatalogRestoreJobV2.parse({ ...jobResult.data, schema: 2,
+      phase: "install", fence: input.fence, intent: input.intent }) : jobResult.data;
     return this.driver.tx(() => {
       const before = readValidatedCatalog(this.driver);
       this.assertWriteFence(input.fence, input.nowMs);
@@ -1494,15 +1522,15 @@ export class DeviceCatalog {
         `INSERT INTO catalog.pending_jobs(
            job_id,authority_incarnation_id,app_instance_id,generation_id,namespace_id,
            kind,state,operation_id,source_archive_sha256,source_provenance_id,created_at,updated_at
-         ) VALUES (?,?,?,?,?,'restore_as_new','prepared',?,?,?,?,?)`,
+         ) VALUES (?,?,?,?,?,'restore_as_new',?,?,?,?,?,?)`,
         [jobResult.data.jobId, jobResult.data.authorityIncarnationId,
           jobResult.data.appInstanceId, jobResult.data.generationId, jobResult.data.namespaceId,
-          jobResult.data.operationId, jobResult.data.sourceArchiveSha256,
+          job.schema === 2 ? JSON.stringify(job) : "prepared", jobResult.data.operationId, jobResult.data.sourceArchiveSha256,
           jobResult.data.sourceProvenanceId, at, at],
       );
       readValidatedCatalog(this.driver, { allowPendingRestore: true });
       const stored = readPendingRestoreJobs(this.driver);
-      if (stored.length !== 1 || JSON.stringify(stored[0]) !== JSON.stringify(jobResult.data))
+      if (stored.length !== 1 || JSON.stringify(stored[0]) !== JSON.stringify(job))
         throw new ClayError("E_CATALOG_CONFLICT", "pending restore failed durable read-back");
       return Object.freeze({ ...stored[0]! });
     });
@@ -1517,6 +1545,51 @@ export class DeviceCatalog {
       if (jobs.length !== 1 || jobs[0]!.jobId !== jobId)
         throw new ClayError("E_CATALOG_CONFLICT", "pending restore cleanup target changed");
       this.driver.exec("DELETE FROM catalog.pending_jobs WHERE job_id = ?", [jobId]);
+      readValidatedCatalog(this.driver);
+    });
+  }
+
+  claimRestoreRecovery(expectedJob: ArchivePendingJob, fence: WriteFence, nowMs: number): CatalogRestoreJobV2 {
+    return this.driver.tx(() => {
+      this.assertWriteFence(fence, nowMs);
+      const job = this.pendingRestoreJobs().find(item => item.jobId === expectedJob.jobId);
+      if (!job || JSON.stringify(job) !== JSON.stringify(expectedJob))
+        throw new ClayError("E_CATALOG_CONFLICT", "restore recovery claim lost to publication or another recovery");
+      const claimed = CatalogRestoreJobV2.parse({ ...job, schema: 2, phase: "cleanup", fence });
+      this.driver.exec("UPDATE catalog.pending_jobs SET state = ? WHERE job_id = ?",
+        [JSON.stringify(claimed), job.jobId]);
+      this.assertRestoreClaim(claimed, fence, nowMs, "cleanup");
+      return claimed;
+    });
+  }
+
+  assertRestoreClaim(job: CatalogRestoreJobV2, fence: WriteFence, nowMs: number, phase: "install" | "cleanup"): void {
+    this.assertWriteFence(fence, nowMs);
+    const pending = this.pendingRestoreJobs().find(item => item.jobId === job.jobId);
+    if (!pending || JSON.stringify(pending) !== JSON.stringify(job) || job.phase !== phase
+        || JSON.stringify(job.fence) !== JSON.stringify(fence))
+      throw new ClayError("E_CATALOG_CONFLICT", "restore claim is stale; publication or recovery won");
+  }
+
+  finishRestoreCleanup(job: CatalogRestoreJobV2, fence: WriteFence, nowMs: number): void {
+    this.driver.tx(() => {
+      this.assertRestoreClaim(job, fence, nowMs, "cleanup");
+      const selected = this.selectedTargetStorage();
+      const before = this.snapshot();
+      const app = before.entries.find(entry => entry.appInstanceId === selected.target.appInstanceId)!;
+      this.clearPendingRestoreJob(job.jobId);
+      if (!job.intent) return; // Legacy job has no replayable user request.
+      const after = DeviceCatalog.openExisting(this.driver).updateSelectedAppMetadata({
+        recordNoop: true, expectedCatalogGeneration: before.catalogGeneration,
+        displayName: app.displayName, shellId: app.shellId, operationId: job.operationId, fence, nowMs,
+      });
+      storeAppLifecycleReceipt(this.driver, AppLifecycleReceiptV1.parse({
+        schema: 2, kind: "restore_aborted", jobId: job.jobId, authorityIncarnationId: before.authorityIncarnationId,
+        requestId: job.intent.requestId, requestSha256: job.intent.requestSha256, operationId: job.operationId,
+        requestedAppInstanceId: null, resultingSelectedAppInstanceId: selected.target.appInstanceId,
+        resultTarget: selected.target, resultDisplayName: app.displayName, resultShellId: app.shellId,
+        completedCatalogGeneration: after.catalogGeneration, completedAt: new Date(nowMs).toISOString(),
+      }), selected, true);
       readValidatedCatalog(this.driver);
     });
   }
@@ -1666,6 +1739,23 @@ export class DeviceCatalog {
           && (event.eventKind !== "lease_issued" || event.appInstanceId !== selected.appInstanceId)))
       throw new ClayError("E_CATALOG_CONFLICT", "lifecycle replay result is stale; reconcile the current catalog");
     return AppLifecycleReceiptV1.parse(stored);
+  }
+
+  finalizeLifecycleReattestation(requestId: string, reattestationRequestId: string, nowMs: number): void {
+    this.driver.tx(() => {
+      const receipt = this.appLifecycleReceipt(requestId);
+      if (!receipt || receipt.schema !== 2 || (receipt.kind !== "restore" && receipt.kind !== "fork") || receipt.initialPublication)
+        throw new ClayError("E_CATALOG_CONFLICT", "fresh lifecycle receipt is unavailable");
+      const target = this.selectedTargetStorage();
+      const final = AppLifecycleReceiptV1.parse({ ...receipt,
+        initialPublication: { catalogGeneration: receipt.completedCatalogGeneration, target: receipt.resultTarget, reattestationRequestId },
+        resultTarget: target.target, completedCatalogGeneration: this.snapshot().catalogGeneration,
+        completedAt: new Date(nowMs).toISOString(),
+      });
+      assertLifecycleReattestation(final, readCatalogGenerationEvents(this.driver), readRevisionReservations(this.driver));
+      storeAppLifecycleReceipt(this.driver, final, target);
+      readValidatedCatalog(this.driver);
+    });
   }
 
   recordAppLifecycleReceipt(
@@ -2207,6 +2297,19 @@ export class DeviceCatalog {
       .map(record => BackupRecordV1.parse(record));
   }
 
+  private backupRotation(record: BackupRecord): BackupRecord[] {
+    // Recompute from the live catalog on replay as well. A lost response must
+    // not suppress unfinished retention, and an old replay must never rotate
+    // its own artifact, another app/folder, or one of the newest 32 records.
+    return readBackupRecords(this.driver).map(entry => entry.record)
+      .filter(candidate => candidate.state === "valid" && candidate.targetId === record.targetId
+        && candidate.evidence.appInstanceId === record.evidence.appInstanceId
+        && candidate.adapterCertificationId === record.adapterCertificationId)
+      .sort((left, right) => right.validatedAt.localeCompare(left.validatedAt)
+        || right.backupId.localeCompare(left.backupId))
+      .slice(32).filter(candidate => candidate.backupId !== record.backupId).slice(0, 64);
+  }
+
   publishBackup(input: PublishBackupInput): BackupPublicationReceipt {
     const request = BackupPublicationRequestV1.safeParse(input.request);
     const operation = OperationId.safeParse(input.operationId);
@@ -2231,7 +2334,7 @@ export class DeviceCatalog {
             schema: 1,
             publication: "already_published",
             record: existing.record,
-            rotate: [],
+            rotate: this.backupRotation(existing.record),
           });
         }
 
@@ -2295,19 +2398,11 @@ export class DeviceCatalog {
             || JSON.stringify(persisted) !== JSON.stringify(record))
           throw new ClayError("E_CATALOG_CONFLICT", "backup publication failed read-back");
 
-        const rotate = readBackupRecords(this.driver)
-          .map(entry => entry.record)
-          .filter(candidate => candidate.state === "valid"
-            && candidate.targetId === record.targetId
-            && candidate.evidence.appInstanceId === record.evidence.appInstanceId)
-          .sort((left, right) => right.validatedAt.localeCompare(left.validatedAt)
-            || right.backupId.localeCompare(left.backupId))
-          .slice(32, 96);
         return BackupPublicationReceiptV1.parse({
           schema: 1,
           publication: "published",
           record,
-          rotate,
+          rotate: this.backupRotation(record),
         });
       });
     } catch (error) {
@@ -2592,6 +2687,8 @@ export class DeviceCatalog {
             || pendingRestore.sourceArchiveSha256 !== sourceArchive?.data
             || pendingRestore.sourceProvenanceId !== sourceProvenanceId))
           throw new ClayError("E_CATALOG_CONFLICT", "pending restore publication binding changed");
+        if (pendingRestore?.schema === 2)
+          this.assertRestoreClaim(pendingRestore, fence.data, input.nowMs, "install");
         const bootstrap = input.bootstrapStorageKey === undefined ? undefined
           : this.legacyBootstrapManifest().find(entry =>
             entry.storageKey === input.bootstrapStorageKey);
@@ -2685,9 +2782,17 @@ export class DeviceCatalog {
           "DELETE FROM catalog.legacy_bootstrap_manifest WHERE storage_key = ?",
           [bootstrap.storageKey],
         );
-        if (pendingRestore) this.driver.exec(
-          "DELETE FROM catalog.pending_jobs WHERE job_id = ?", [pendingRestore.jobId],
-        );
+        if (pendingRestore?.schema === 2 && pendingRestore.intent) {
+          storeAppLifecycleReceipt(this.driver, AppLifecycleReceiptV1.parse({
+            schema: 2, kind: "restore", jobId: pendingRestore.jobId,
+            authorityIncarnationId: before.authorityIncarnationId, requestId: pendingRestore.intent.requestId,
+            requestSha256: pendingRestore.intent.requestSha256, operationId: pendingRestore.operationId,
+            requestedAppInstanceId: null, resultingSelectedAppInstanceId: target.data.appInstanceId,
+            resultTarget: target.data, resultDisplayName: input.displayName, resultShellId: input.shellId,
+            completedCatalogGeneration: nextCatalogGeneration, completedAt: at,
+          }), { target: target.data, namespaceId: namespaceId.data, storageKey: input.storageKey });
+        } else if (pendingRestore) this.driver.exec(
+          "DELETE FROM catalog.pending_jobs WHERE job_id = ?", [pendingRestore.jobId]);
         const after = readValidatedCatalog(this.driver);
         const entry = after.entries.find(candidate =>
           candidate.appInstanceId === target.data.appInstanceId);
@@ -2992,7 +3097,7 @@ export class DeviceCatalog {
 
     try {
       return this.driver.tx(() => {
-        const before = readValidatedCatalog(this.driver);
+        const before = readValidatedCatalog(this.driver, { allowPendingRestore: this.allowPendingRestore });
         if (before.authorityIncarnationId !== authority.data)
           throw new ClayError("E_STALE_WRITE_EPOCH", "authority incarnation is stale");
         if (before.catalogGeneration !== catalogGeneration.data)
@@ -3031,7 +3136,7 @@ export class DeviceCatalog {
           [nextCatalogGeneration, nextWriteEpoch, before.authorityIncarnationId,
             before.catalogGeneration, before.writeEpoch],
         );
-        const after = readValidatedCatalog(this.driver);
+        const after = readValidatedCatalog(this.driver, { allowPendingRestore: this.allowPendingRestore });
         if (after.catalogGeneration !== nextCatalogGeneration || after.writeEpoch !== nextWriteEpoch)
           throw new ClayError("E_CATALOG_CONFLICT", "catalog lease CAS did not publish");
         return WriteFenceV1.parse({

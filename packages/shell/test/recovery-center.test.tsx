@@ -349,7 +349,7 @@ describe("Release B Recovery Center", () => {
     expect(button("Restore as new app").disabled).toBe(false);
     await act(async () => button("Restore as new app").click());
     expect(restore).toHaveBeenCalledTimes(1);
-    expect(restore).toHaveBeenCalledWith(grant);
+    expect(restore).toHaveBeenCalledWith(grant, { requestId: expect.stringMatching(/^req_[a-z2-7]{26}$/) });
     const delivered = restore.mock.calls[0]![0]!;
     expect(Object.isFrozen(delivered)).toBe(true);
     expect(Object.isFrozen(delivered.archiveTarget)).toBe(true);
@@ -357,6 +357,26 @@ describe("Release B Recovery Center", () => {
     expect(grant.installMode).toBe("new_app_only");
     expect(grant.destinationAppInstanceId).not.toBe(grant.preservedAppInstanceId);
     await act(async () => root.unmount());
+  });
+
+  it("retains the exact restore request across ambiguous failure and modal teardown", async () => {
+    sessionStorage.clear(); // jsdom-owned disposable storage only
+    const restore = vi.fn(async (_grant: typeof grant, _context: { requestId: string }) => {
+      throw new Error("lost response after durable publication");
+    });
+    const props = { ...baseProps(), onValidateRestore: vi.fn(async () => structuredClone(grant)), onRestoreAsNew: restore };
+    const first = await mount(props);
+    await selectRestoreFile();
+    await act(async () => button("Restore as new app").click());
+    expect(document.body.textContent).toContain("outcome needs reconciliation");
+    expect(labelledFileInput("Choose a .clay backup").disabled).toBe(true);
+    const invoked = restore.mock.calls[0]!;
+    await act(async () => first.root.unmount());
+    const second = await mount({ ...props, authoritativeAppInstanceId: grant.destinationAppInstanceId });
+    await act(async () => button("Retry restore outcome").click());
+    expect(restore.mock.calls[1]).toEqual(invoked);
+    await act(async () => second.root.unmount());
+    sessionStorage.clear();
   });
 
   it("revalidates the exact open app before restore and disables a stale grant", async () => {

@@ -3,6 +3,7 @@ import {
   BackupRunV1,
   BackupStageValidationV1,
   BackupTargetV1,
+  buildAutomaticBackupFileName,
   inspectAuthenticatedArchiveV5Header,
   type BackupPublicationReceipt,
   type BackupPublicationRequest,
@@ -33,7 +34,7 @@ type ArchiveSealMaterial = {
 };
 
 export interface AutomaticBackupWorkerAuthority {
-  backupSelection(): Promise<ProductionBackupSelection>;
+  backupSelection(expected?: ProductionBackupSelection["selected"]): Promise<ProductionBackupSelection>;
   backupMetadata(): { fileLabel: string; shapeHead: number; shapeCurrent: number };
   exportAuthenticatedArchive(material: ArchiveSealMaterial):
     Promise<ProductionAuthenticatedArchiveExport>;
@@ -175,6 +176,28 @@ function randomId(prefix: "bkp" | "backupgen", pattern: RegExp): string {
   return result;
 }
 
+let ownedTestTail = Promise.resolve();
+/** Serialize trust retirement with publication across tabs. File writes still
+ * revalidate folder permission independently immediately before each write. */
+async function withBackupTrustLock<T>(work: () => Promise<T>): Promise<T> {
+  if (typeof navigator !== "undefined" && navigator.locks)
+    return await navigator.locks.request("clay:backup-trust-publication:v1", { mode: "exclusive" }, work);
+  if (typeof window !== "undefined") return Promise.reject(unavailable("Cross-tab backup exclusion is unavailable"));
+  // Node-only owned unit fixtures. Browser production never uses this fallback.
+  const result = ownedTestTail.then(work); ownedTestTail = result.then(() => undefined, () => undefined); return result;
+}
+
+function matchesCandidate(record: BackupRecord, stored: StoredAutomaticBackupCandidate): boolean {
+  const run = stored.run;
+  return record.state === "valid" && record.backupId === run.backupId && record.generationId === run.generationId
+    && record.targetId === run.target.targetId && sameTarget(record.evidence, run.expected.target)
+    && record.fileName === buildAutomaticBackupFileName(run.fileLabel, run.generationId, run.createdAt)
+    && record.createdAt === run.createdAt && record.shapeHead === run.archive.shapeHead && record.shapeCurrent === run.archive.shapeCurrent
+    && record.byteLength === run.archive.byteLength && record.archiveSha256 === run.archive.archiveSha256
+    && JSON.stringify(record.authentication) === JSON.stringify(run.archive.authentication)
+    && record.adapterCertificationId === run.target.adapterCertificationId;
+}
+
 export class AutomaticBackupWorkerCoordinator {
   readonly #now: () => string;
   readonly #createBackupId: () => string;
@@ -201,6 +224,10 @@ export class AutomaticBackupWorkerCoordinator {
     targetInput: BackupTarget,
     reason: BackupRun["reason"],
   ): Promise<PreparedAutomaticBackup> {
+    return withBackupTrustLock(() => this.#prepare(targetInput, reason));
+  }
+
+  async #prepare(targetInput: BackupTarget, reason: BackupRun["reason"]): Promise<PreparedAutomaticBackup> {
     const target = BackupTargetV1.parse(targetInput);
     const trustStatus = await this.trust.status();
     if (trustStatus.status !== "ready")
@@ -219,6 +246,47 @@ export class AutomaticBackupWorkerCoordinator {
       const stored = parseStoredCandidate(storedInput, seriesId, trustStatus.pending);
       if (await sha256(stored.bytes) !== stored.run.archive.archiveSha256)
         throw unavailable("Durable automatic-backup candidate digest is invalid");
+      const records = await this.authority.backupRecords(); // all apps for trust reconciliation
+      const published = records.find(record => record.backupId === stored.backupId);
+      if (published && !matchesCandidate(published, stored)) throw unavailable("Published backup disagrees with its durable candidate");
+      const current = await this.authority.backupSelection();
+      const sameFolder = JSON.stringify(target) === JSON.stringify(stored.run.target);
+      const sameSource = sameTarget(current.selected.target, stored.run.expected.target)
+        && current.selected.authorityIncarnationId === stored.run.expected.authorityIncarnationId;
+      if (!sameFolder || !sameSource) {
+        // Never abandon an outcome-ambiguous publication: reconcile its exact
+        // catalog record first, under the same lock as every publisher.
+        if (published) await this.trust.commit(seriesId, stored.backupId, BigInt(stored.generation), stored.bytes);
+        else await this.trust.abandon(seriesId, stored.backupId, BigInt(stored.generation));
+        if (!(await this.trust.removeAutomaticBackupCandidate(seriesId, stored.revision)))
+          throw unavailable("Previous backup candidate changed during recovery; retry");
+        this.#staged.get(stored.run.archive.archiveSha256)?.fill(0);
+        this.#staged.delete(stored.run.archive.archiveSha256); stored.bytes.fill(0);
+        throw unavailable(published ? "Previous published backup reconciled. Retry for the selected app and folder."
+          : "Previous backup candidate is stale for this app or folder. Earlier files kept; retry.");
+      }
+      let refreshed = current;
+      if (!published) {
+        try { refreshed = await this.authority.backupSelection(stored.run.expected); }
+        catch (error) {
+          // Source-preserving non-lease changes require a fresh snapshot. Only
+          // a specific stale-selection rejection permits retiring this candidate.
+          if (!(error instanceof ClayError) || error.code !== "E_GENERATION_NOT_SELECTED") throw error;
+          await this.trust.abandon(seriesId, stored.backupId, BigInt(stored.generation));
+          if (!(await this.trust.removeAutomaticBackupCandidate(seriesId, stored.revision))) throw unavailable("Stale candidate cleanup needs retry");
+          stored.bytes.fill(0); throw unavailable("Backup catalog changed; stale candidate retired. Retry a fresh snapshot.");
+        }
+      }
+      const attempt = published || stored.phase === "staged" ? "publication_reconcile" : stored.run.attempt;
+      if (JSON.stringify(refreshed.selected) !== JSON.stringify(stored.run.expected)
+          || JSON.stringify(refreshed.fence) !== JSON.stringify(stored.run.fence) || attempt !== stored.run.attempt) {
+        const next = { ...stored, revision: nextCandidateRevision(stored.revision), run: BackupRunV1.parse({
+          ...stored.run, expected: refreshed.selected, fence: refreshed.fence, attempt,
+        }) };
+        if (!(await this.trust.compareAndSetAutomaticBackupCandidate(seriesId, stored.revision, next)))
+          throw unavailable("Backup lease refresh changed concurrently; retry");
+        return Object.freeze({ run: next.run, bytes: stored.bytes });
+      }
       return Object.freeze({ run: stored.run, bytes: stored.bytes });
     }
     if (storedInput !== null) {
@@ -308,6 +376,10 @@ export class AutomaticBackupWorkerCoordinator {
    * before ownership of the one envelope buffer is transferred to the UI.
    */
   async prepareManualDownload(): Promise<PreparedManualBackup> {
+    return withBackupTrustLock(() => this.#prepareManualDownload());
+  }
+
+  async #prepareManualDownload(): Promise<PreparedManualBackup> {
     const status = await this.trust.status();
     if (status.status !== "ready")
       throw unavailable("Portable export requires completed Recovery Kit enrollment");
@@ -383,6 +455,10 @@ export class AutomaticBackupWorkerCoordinator {
     bytesInput: Uint8Array,
     expectedInput: TargetEvidence,
   ): Promise<BackupStageValidation> {
+    return withBackupTrustLock(() => this.#validateStage(bytesInput, expectedInput));
+  }
+
+  async #validateStage(bytesInput: Uint8Array, expectedInput: TargetEvidence): Promise<BackupStageValidation> {
     if (!(bytesInput instanceof Uint8Array)
         || Object.getPrototypeOf(bytesInput) !== Uint8Array.prototype)
       throw unavailable("Automatic backup read-back bytes are malformed");
@@ -444,7 +520,20 @@ export class AutomaticBackupWorkerCoordinator {
   }
 
   async publish(requestInput: BackupPublicationRequest): Promise<BackupPublicationReceipt> {
+    return withBackupTrustLock(() => this.#publish(requestInput));
+  }
+
+  async #publish(requestInput: BackupPublicationRequest): Promise<BackupPublicationReceipt> {
     const request = BackupPublicationRequestV1.parse(requestInput);
+    const status = await this.trust.status();
+    const artifact = request.artifact;
+    const pending = status.status === "ready" && status.pending?.backupId === artifact.backupId
+      && status.pending.generation === artifact.authentication.generation;
+    const committed = status.status === "ready" && status.committed?.backupId === artifact.backupId
+      && status.committed.generation === artifact.authentication.generation && status.committed.envelopeSha256 === artifact.archiveSha256;
+    if (status.status !== "ready" || status.seriesId !== artifact.authentication.seriesId
+        || status.keyId !== artifact.authentication.keyId || (!pending && !committed))
+      throw unavailable("Backup Trust candidate changed before publication; stale effects are denied");
     const envelope = this.#staged.get(request.artifact.archiveSha256);
     if (!envelope) {
       // After a successful publication/response loss the byte cache may already

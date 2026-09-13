@@ -239,9 +239,15 @@ export const AppLifecycleReceiptV1 = z.discriminatedUnion("schema", [
   LegacyAppLifecycleReceiptV1,
   LegacyAppLifecycleReceiptV1.extend({
     schema: z.literal(2),
+    kind: z.enum(["create", "fork", "switch", "rename", "delete", "restore", "restore_aborted"]),
     resultTarget: TargetEvidenceV1,
     resultDisplayName: CatalogDisplayName,
     resultShellId: CatalogShellId,
+    initialPublication: z.object({
+      catalogGeneration: UInt64Decimal,
+      target: TargetEvidenceV1,
+      reattestationRequestId: RequestId,
+    }).strict().optional(),
   }).strict(),
 ]).superRefine((value, context) => {
   const explicitTarget = value.kind === "switch" || value.kind === "rename"
@@ -253,6 +259,8 @@ export const AppLifecycleReceiptV1 = z.discriminatedUnion("schema", [
     context.addIssue({ code: "custom", message: "lifecycle receipt selected target is inconsistent" });
   if (value.schema === 2 && value.resultTarget.appInstanceId !== value.resultingSelectedAppInstanceId)
     context.addIssue({ code: "custom", message: "lifecycle receipt result target is inconsistent" });
+  if (value.schema === 2 && value.initialPublication && value.kind !== "restore" && value.kind !== "fork")
+    context.addIssue({ code: "custom", message: "only a fresh copied target may re-attest sample provenance" });
 });
 export type AppLifecycleReceiptV1 = z.infer<typeof AppLifecycleReceiptV1>;
 

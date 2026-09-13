@@ -1,14 +1,15 @@
 import { z } from "zod";
 import {
   AppInstanceId, AuthorityIncarnationId, GenerationId, LeaseId, NamespaceId,
-  OperationId, ReleaseId, Sha256, UInt64Decimal,
+  OperationId, ReleaseId, RequestId, Sha256, UInt64Decimal,
 } from "./index";
 import {
   AppCatalogEntryV1, AppLifecycleReceiptV1, CanonicalInstant, CatalogGenerationEventV1,
   CatalogRevisionReservationV1, ImmutableAppGenerationV1,
-  ProductionRequestReceiptV1, TargetAuthorityHeaderV1, TargetEvidenceV1,
+  ProductionRequestReceiptV1, TargetAuthorityHeaderV1, TargetEvidenceV1, WriteFenceV1,
 } from "./catalog";
 import { BackupRecordV1 } from "./backup";
+import { AuthenticatedFormat5RestoreGrantV1 } from "./restore";
 
 const ArchiveCatalogDisplayName = z.string().min(1).max(40)
   .refine(value => value === value.trim(), "canonical display name required");
@@ -185,6 +186,34 @@ export const ArchivePendingJobV1 = z.object({
   updatedAt: CanonicalInstant,
 }).strict();
 export type ArchivePendingJobV1 = z.infer<typeof ArchivePendingJobV1>;
+
+/** Durable, non-secret install/cleanup claim. Never included in an export:
+ * collection is blocked until this job becomes a terminal lifecycle receipt. */
+export const CatalogRestoreJobV2 = ArchivePendingJobV1.extend({
+  schema: z.literal(2),
+  kind: z.literal("restore_as_new"),
+  state: z.literal("prepared"),
+  phase: z.enum(["install", "cleanup"]),
+  fence: WriteFenceV1,
+  intent: z.object({
+    requestId: RequestId,
+    requestSha256: Sha256,
+    sourceTarget: TargetEvidenceV1,
+    sourceCatalogGeneration: UInt64Decimal,
+    grant: AuthenticatedFormat5RestoreGrantV1,
+  }).strict().optional(),
+}).strict().superRefine((value, context) => {
+  const intent = value.intent;
+  if (value.appInstanceId === null || (value.phase === "install" && !intent)
+      || value.authorityIncarnationId !== value.fence.authorityIncarnationId
+      || (intent && (intent.grant.destinationAppInstanceId !== value.appInstanceId
+        || intent.grant.preservedAppInstanceId !== intent.sourceTarget.appInstanceId
+        || intent.grant.archiveSha256 !== value.sourceArchiveSha256
+        || intent.grant.validationId !== value.sourceProvenanceId)))
+    context.addIssue({ code: "custom", message: "restore intent binding is invalid" });
+});
+export type CatalogRestoreJobV2 = z.infer<typeof CatalogRestoreJobV2>;
+export type CatalogRestoreJob = ArchivePendingJobV1 | CatalogRestoreJobV2;
 
 export const ArchiveLineageReservationV1 = z.object({
   schema: z.literal(1),

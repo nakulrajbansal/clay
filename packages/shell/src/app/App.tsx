@@ -383,6 +383,9 @@ export function App(): React.JSX.Element {
   const [backupTargetHint, setBackupTargetHint] =
     useState<ProductionBackupTargetState | null>(null);
   const [backupHistory, setBackupHistory] = useState<RecoveryBackupSummary[]>([]);
+  const [manualDownloads, setManualDownloads] = useState<import("@clay/schema/backup").ManualBackupDownloadV2[]>([]);
+  const pendingDownloadRecord = useRef<{ record: import("@clay/schema/backup").ManualBackupDownloadV2;
+    context: import("./worker-client").WorkerMutationContext } | null>(null);
   const [backupFailures, setBackupFailures] = useState<RecoveryFailureSummary[]>([]);
   const [recoveryBatches, setRecoveryBatches] = useState<BatchReceipt[]>([]);
   const [recoveryRecords, setRecoveryRecords] = useState<RecoveryRecordCandidate[]>([]);
@@ -1218,19 +1221,26 @@ export function App(): React.JSX.Element {
   };
 
   const exportArchive = async (): Promise<void> => {
+    let started = pendingDownloadRecord.current !== null;
     try {
-      const { bytes, filename } = await client().exportArchive();
-      try {
-        startBrowserDownload(filename, bytes, "application/octet-stream");
-      } finally {
-        new Uint8Array(bytes).fill(0);
+      if (!pendingDownloadRecord.current) {
+        const { bytes, filename, download } = await client().exportArchive();
+        try {
+          startBrowserDownload(filename, bytes, "application/octet-stream");
+          started = true;
+          pendingDownloadRecord.current = { record: { ...download, startedAt: new Date().toISOString() }, context: mutationContext() };
+        } finally { new Uint8Array(bytes).fill(0); }
       }
-      try { localStorage.setItem("clay_last_backup", String(Date.now())); }
-      catch { /* private mode */ }
-      pushToast("Exported an authenticated portable copy", "success");
+      const pending = pendingDownloadRecord.current!;
+      await client().recordManualBackupDownload(pending.record, pending.context);
+      pendingDownloadRecord.current = null;
+      setManualDownloads(await client().manualBackupDownloads());
+      pushToast("Download started. Check the saved file; external storage is not verified.", "success");
       recordPrivateMetric({ type: "backup_finished", action: "export", result: "success" });
     } catch (error) {
-      pushToast(error instanceof Error ? error.message : String(error), "danger");
+      pushToast(started ? "Download started, but its local record needs retry. Check your saved file before relying on it."
+        : error instanceof Error ? error.message : String(error), "danger",
+      started ? { label: "Retry record", run: () => void exportArchive() } : undefined);
       recordPrivateMetric({ type: "backup_finished", action: "export", result: "failed" });
     }
   };
@@ -1240,11 +1250,12 @@ export function App(): React.JSX.Element {
     const appId = currentId;
     await runLatestRequest(recoveryRefreshGate, async () => {
       const runtime = await loadProductionBackupRuntime();
-      const [trust, records, batches, candidates] = await Promise.all([
+      const [trust, records, batches, candidates, downloads] = await Promise.all([
         client().backupTrustStatus(),
         client().backupRecords(),
         client().operationBatches(20),
         client().recoveryCandidates(),
+        client().manualBackupDownloads(),
       ]);
       let storedTarget: ProductionBackupTargetState | null = null;
       try { storedTarget = runtime.loadProductionBackupTarget(localStorage, appId); }
@@ -1257,6 +1268,7 @@ export function App(): React.JSX.Element {
       }
       return {
         trust,
+        downloads,
         storedTarget,
         authorizedTarget,
         history: recoveryBackupSummaries(records, appId),
@@ -1267,6 +1279,7 @@ export function App(): React.JSX.Element {
     }, snapshot => {
       if (currentIdRef.current !== appId) return;
       setBackupTrustStatus(snapshot.trust);
+      setManualDownloads(snapshot.downloads);
       setBackupTargetHint(snapshot.storedTarget);
       setBackupTarget(snapshot.authorizedTarget);
       setBackupHistory(snapshot.history);
@@ -1424,8 +1437,8 @@ export function App(): React.JSX.Element {
     return client().validateRestoreArchive(bytes);
   };
 
-  const restoreAsNew = async (grant: AuthenticatedFormat5RestoreGrant): Promise<void> => {
-    const boot = await client().restoreAsNew(grant);
+  const restoreAsNew = async (grant: AuthenticatedFormat5RestoreGrant, context: import("./worker-client").WorkerMutationContext): Promise<void> => {
+    const boot = await client().restoreAsNew(grant, context);
     replaceAppCache(boot.apps, boot.selectedAppInstanceId);
     setShowRecoveryCenter(false);
     reloadApp();
@@ -2574,6 +2587,7 @@ export function App(): React.JSX.Element {
               onUndoBatch={undoRecoveryBatch}
               onRewindStructure={rewindRecoveryStructure}
               onValidateRestore={productionWorkerRouteAvailable("validateRestoreArchive") ? validateRestore : undefined}
+              manualDownloads={manualDownloads}
               onRestoreAsNew={productionWorkerRouteAvailable("restoreAsNew") ? restoreAsNew : undefined}
             />
           </Suspense>

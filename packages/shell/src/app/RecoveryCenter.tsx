@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { BatchReceipt, HistoryEntry } from "@clay/kernel";
 import {
   parseAuthenticatedFormat5RestoreGrant,
@@ -6,7 +6,8 @@ import {
   type BackupFailureReasonCode,
 } from "@clay/kernel/recovery";
 import type { BackupTrustRuntimeStatus } from "../worker/backup-trust-runtime";
-import type { RecoveryRecordCandidate } from "./worker-client";
+import { createWorkerMutationContext, type WorkerMutationContext, type RecoveryRecordCandidate } from "./worker-client";
+import { beginRestoreIntent, finishRestoreIntent, readRestoreIntent, type RestoreIntent } from "./restore-intent";
 import { ModalDialog } from "./ModalDialog";
 
 export type RecoveryBackupSummary = {
@@ -45,6 +46,7 @@ export type RecoveryCenterProps = {
   lastVerifiedBackup: RecoveryBackupSummary | null;
   failures: RecoveryFailureSummary[];
   history: RecoveryBackupSummary[];
+  manualDownloads?: import("@clay/schema/backup").ManualBackupDownloadV2[];
   structuralHistory: HistoryEntry[];
   recentBatches: BatchReceipt[];
   recordCandidates: RecoveryRecordCandidate[];
@@ -64,10 +66,10 @@ export type RecoveryCenterProps = {
   /** Must call the authenticated format-5 worker boundary, never shape-check bytes here. */
   onValidateRestore?: (file: File) => Promise<unknown>;
   /** This callback receives only a new-app grant. No replace-current callback exists. */
-  onRestoreAsNew?: (grant: AuthenticatedFormat5RestoreGrant) => Promise<void>;
+  onRestoreAsNew?: (grant: AuthenticatedFormat5RestoreGrant, context: WorkerMutationContext) => Promise<void>;
 };
 
-type RestoreStatus = "idle" | "checking" | "invalid" | "ready";
+type RestoreStatus = "idle" | "checking" | "invalid" | "ready" | "uncertain" | "interrupted";
 
 function formatDate(value: string): string {
   return new Date(value).toLocaleDateString("en-US");
@@ -103,6 +105,10 @@ function exactGrant(
 }
 
 export function RecoveryCenter(props: RecoveryCenterProps): React.JSX.Element {
+  const [restoreIntent, setRestoreIntent] = useState<RestoreIntent | null>(() => {
+    try { return readRestoreIntent(sessionStorage); } catch { return null; }
+  });
+  const restoreBusy = useRef(false);
   const [restoreStatus, setRestoreStatus] = useState<RestoreStatus>("idle");
   const [restoreGrant, setRestoreGrant] = useState<AuthenticatedFormat5RestoreGrant | null>(null);
   const [kitBusy, setKitBusy] = useState(false);
@@ -110,9 +116,11 @@ export function RecoveryCenter(props: RecoveryCenterProps): React.JSX.Element {
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null);
 
-  const currentGrant = exactGrant(restoreGrant, props.authoritativeAppInstanceId);
+  const retryGrant = restoreIntent && (restoreIntent.grant.preservedAppInstanceId === props.authoritativeAppInstanceId
+    || restoreIntent.grant.destinationAppInstanceId === props.authoritativeAppInstanceId) ? restoreIntent.grant : null;
+  const currentGrant = retryGrant ?? exactGrant(restoreGrant, props.authoritativeAppInstanceId);
   const targetDrifted = restoreGrant !== null && currentGrant === null;
-  const canRestore = currentGrant !== null && props.onRestoreAsNew !== undefined;
+  const canRestore = currentGrant !== null && props.onRestoreAsNew !== undefined && restoreStatus !== "checking";
 
   const runKitAction = async (
     action: (() => Promise<void>) | undefined,
@@ -171,25 +179,41 @@ export function RecoveryCenter(props: RecoveryCenterProps): React.JSX.Element {
   };
 
   const restoreAsNew = async (): Promise<void> => {
+    if (restoreBusy.current) return;
     // Reparse and compare the exact open app immediately before the external
     // action. A stale, malformed, legacy, or same-destination grant is inert.
-    const revalidated = exactGrant(currentGrant, props.authoritativeAppInstanceId);
+    const revalidated = retryGrant ?? exactGrant(currentGrant, props.authoritativeAppInstanceId);
     if (!revalidated || !props.onRestoreAsNew) {
       setRestoreStatus("invalid");
       return;
     }
-    setRestoreGrant(null);
+    restoreBusy.current = true;
     setRestoreStatus("checking");
     try {
-      await props.onRestoreAsNew(revalidated);
+      const intent = beginRestoreIntent(sessionStorage, revalidated, createWorkerMutationContext);
+      setRestoreIntent(intent);
+      await props.onRestoreAsNew(intent.grant, { requestId: intent.requestId });
+      finishRestoreIntent(sessionStorage, intent.requestId);
+      setRestoreIntent(null);
+      setRestoreGrant(null);
       setRestoreStatus("idle");
-    } catch {
-      setRestoreStatus("invalid");
-    }
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "E_CANCELLED") {
+        try {
+          const pending = readRestoreIntent(sessionStorage);
+          if (pending) finishRestoreIntent(sessionStorage, pending.requestId);
+          setRestoreIntent(null); setRestoreGrant(null); setRestoreStatus("interrupted");
+        } catch { setRestoreStatus("uncertain"); } // Retain the intent if presentation storage is unavailable.
+      } else setRestoreStatus("uncertain");
+    } finally { restoreBusy.current = false; }
   };
 
   const restoreMessage = targetDrifted
     ? "The open app changed. Check the backup again."
+    : restoreStatus === "uncertain" || (restoreIntent && restoreStatus === "idle")
+      ? "Restore outcome needs reconciliation. Retry the same request; your original app is kept."
+    : restoreStatus === "interrupted"
+      ? "Restore was not published. Your original app is kept. Choose the backup again to retry."
     : restoreStatus === "checking"
       ? "Checking locally…"
       : restoreStatus === "ready"
@@ -418,12 +442,19 @@ export function RecoveryCenter(props: RecoveryCenterProps): React.JSX.Element {
         </section>
 
         <section aria-labelledby="recovery-restore-title">
+          <h3>Manual downloads</h3>
+          <p>Download records do not prove a file was saved outside this browser.</p>
+          {!props.manualDownloads?.length ? <p>No download records yet.</p> : <ul>
+            {props.manualDownloads.map((record, index) => <li key={`${record.archiveSha256}-${index}`}>
+              {record.fileName} · {formatDate(record.startedAt)} · Authenticated format 5; external save unverified
+            </li>)}
+          </ul>}
           <h3 id="recovery-restore-title">Restore as a new app</h3>
           <p>Format 5 creates a separate app. Your original app is never replaced.</p>
           <div className="rail-actions">
             <label className="shape-history-open file-label">
               Choose a .clay backup
-              <input type="file" accept=".clay" disabled={!props.onValidateRestore}
+              <input type="file" accept=".clay" disabled={!props.onValidateRestore || restoreIntent !== null || restoreStatus === "checking"}
                 onChange={event => {
                   const file = event.target.files?.[0];
                   if (file) void checkRestore(file);
@@ -432,7 +463,7 @@ export function RecoveryCenter(props: RecoveryCenterProps): React.JSX.Element {
             </label>
             <button className={canRestore ? "primary" : undefined} disabled={!canRestore}
               onClick={() => void restoreAsNew()}>{props.onValidateRestore && props.onRestoreAsNew
-                ? "Restore as new app" : "Restore as new app (not available yet)"}</button>
+                ? restoreIntent ? "Retry restore outcome" : "Restore as new app" : "Restore as new app (not available yet)"}</button>
           </div>
           <p role={restoreStatus === "invalid" || targetDrifted ? "alert" : "status"}>
             {restoreMessage}

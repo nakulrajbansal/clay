@@ -47,6 +47,8 @@ import {
 } from "./planner-authority";
 import { assertLiveSampleProvenance } from "./sample-provenance-proof";
 import { activeSampleRowCount } from "./production-samples";
+import { readProductionRequestReceipt } from "./production-request-journal";
+import { readManualBackupDownloads } from "./production-manual-backup";
 import { stateLeafHashV1 } from "./state-merkle";
 import { StateMerkleIndex, type StateMerkleChange } from "./state-merkle-index";
 import { ClayStore, exportStoreArchiveReadOnly, PRODUCTION_STORE_PRIMITIVES } from "./store";
@@ -352,10 +354,11 @@ type PendingPlannerAttempt = Readonly<{ id: string; intent: string }>;
 const PREFLIGHT_ROLLBACK = Object.freeze({ kind: "authenticated-target-preflight" });
 
 /** Worker-only destructive-lifecycle preflight. Inspection cannot persist repairs. */
-export function assertLifecycleSurvivorReadable(session: LiveWriteSession, expected: ActiveCatalogTarget): void {
+export function assertLifecycleSurvivorReadable(session: LiveWriteSession, expected: ActiveCatalogTarget, pendingRestore = false): void {
   try {
     session.authority.run(() => {
-      const current = DeviceCatalog.openExisting(session.driver).activeTargetStorageInventory()
+      const catalog = pendingRestore ? DeviceCatalog.openForRestoreRecovery(session.driver) : DeviceCatalog.openExisting(session.driver);
+      const current = catalog.activeTargetStorageInventory()
         .find(candidate => candidate.storageKey === expected.storageKey);
       if (!current || current.namespaceId !== expected.namespaceId || !sameTarget(current.target, expected.target))
         throw invalid("deletion fallback catalog identity changed");
@@ -885,6 +888,7 @@ export class ProductionStoreAuthority {
 
   static async bootBrowser(input: unknown): Promise<ProductionStoreAuthority> {
     const bootInput = captureBrowserBootInput(input);
+    await (await import("./production-restore")).reconcilePendingBrowserRestore();
     let inventory = await browserDurableInventory();
     if (inventory.state !== "complete") {
       // A declared lifecycle job can explain an interrupted file pair. Recovery
@@ -1583,12 +1587,25 @@ export class ProductionStoreAuthority {
     return this.#coordinator.mintRequestId();
   }
 
-  backupSelection() {
-    return this.#coordinator.backupSelection();
+  backupSelection(expected?: Parameters<ProductionMutationCoordinator["backupSelection"]>[0]) {
+    return this.#coordinator.backupSelection(expected);
   }
 
-  backupRecords() {
-    return this.#coordinator.backupRecords();
+  backupRecords(allApps = false) {
+    return this.#coordinator.backupRecords(allApps);
+  }
+
+  manualBackupDownloads() {
+    return this.#coordinator.serializeRead(async () => readManualBackupDownloads(this.#store)
+      .filter(record => record.evidence.appInstanceId === this.inspectAuthority().target.appInstanceId));
+  }
+
+  /** A missing ephemeral proof may only replay an already terminal mutation.
+   * The coordinator still checks its exact route, payload hash and mirrored receipt. */
+  hasTerminalRequestReceipt(requestId: string): boolean {
+    this.inspectAuthority();
+    const receipt = readProductionRequestReceipt(this.#driver, requestId);
+    return !!receipt && ["committed", "no_op", "failed"].includes(receipt.state);
   }
 
   publishBackup(request: Parameters<ProductionMutationCoordinator["publishBackup"]>[0]) {

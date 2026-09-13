@@ -11,7 +11,7 @@ finish A-F development first using targeted RED/GREEN tests and affected package
 typechecks. Defer broad regression, builds/budgets, browser/accessibility
 certification, and independent review to the single integrated test phase.
 Do not commit or push: `.git` is intentionally protected. Sole writer, `D:\Clay`,
-branch `codex/clay-project`, development base `f96f674059c806bcd8483344e1eda16b86b472cc`.
+branch `codex/clay-project`, development base `ad76c940e18b31eff0b6d78c8c3dd18568b8ef55`.
 The uncommitted development continuation, capability matrix, real finder-loop
 results, and next code tasks are recorded in `docs/CODEX_DEVELOPMENT_HANDOFF.md`.
 Neither development completion nor release completion is currently claimed.

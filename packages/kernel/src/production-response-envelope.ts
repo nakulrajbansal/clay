@@ -32,7 +32,7 @@ const MAX_PROVENANCE = 10_000;
 export const PRODUCTION_RESPONSE_PREFIX = "clay-response-v1:";
 
 export function isSampleProducingRoute(route: string): boolean {
-  return route === "starter.seed" || route === "samples.fill";
+  return route === "starter.seed" || route === "samples.fill" || route === "archive.restore.samples" || route === "app.fork.samples";
 }
 
 export function productionResponseRoutePrefix(route: string): string {

@@ -30,7 +30,6 @@ import type {
 } from "@clay/kernel/backup";
 import type { AuthenticatedFormat5RestoreGrant } from "@clay/kernel/recovery";
 import type {
-  ProductionAuthenticatedRestoreInspection,
   ProductionBackupSelection,
 } from "@clay/kernel/worker-authority";
 import { ClayError } from "@clay/kernel/errors";
@@ -839,6 +838,10 @@ function exactRecord(value: unknown, keys: readonly string[]): value is Record<s
   return actual.length === keys.length && actual.every(key => keys.includes(key));
 }
 
+// A transport has exactly one response owner. Retain its sequence across client
+// replacement so a late old response cannot satisfy a new client's request.
+const workerTransports = new WeakMap<Worker, { owner: WorkerClient; nextId: number }>();
+
 export class WorkerClient {
   #modelAccess: Readonly<ModelAccess> = Object.freeze({
     provider: "clay", apiKey: null, backendUrl: null, session: null,
@@ -853,12 +856,18 @@ export class WorkerClient {
   #shutdownPromise: Promise<void> | null = null;
   #activePlanners = new Set<ActivePlanner>();
   #authorityCommitListeners = new Set<(notice: AuthorityCommitNotice) => void>();
-  private nextId = 1;
+  readonly #transport: { owner: WorkerClient; nextId: number };
   private readonly pending = new Map<number, {
     resolve: (v: unknown) => void; reject: (e: Error) => void; cleanup: () => void;
   }>();
 
   constructor(private readonly worker: Worker) {
+    const previous = workerTransports.get(worker);
+    previous?.owner.closeClient(new ClayError("E_INTERNAL",
+      "Worker connection was replaced; durable outcome is unknown. Retry the same request to reconcile it."));
+    this.#transport = previous ?? { owner: this, nextId: 1 };
+    this.#transport.owner = this;
+    workerTransports.set(worker, this.#transport);
     worker.onmessage = (ev): void => {
       const event = ev.data as { event?: unknown; target?: unknown };
       if (event?.event === "authority_commit") {
@@ -910,7 +919,7 @@ export class WorkerClient {
         promise: Promise.reject(new TypeError("worker request identity is invalid")),
       };
     }
-    const id = this.nextId++;
+    const id = this.#transport.nextId++;
     const promise = new Promise<T>((resolve, reject) => {
       this.pending.set(id, {
         resolve: resolve as (v: unknown) => void,
@@ -1115,12 +1124,17 @@ export class WorkerClient {
 
   terminate(): void {
     if (this.#terminated) return;
+    this.closeClient(new Error("DB worker was terminated"));
+    try { this.worker.terminate(); } catch { /* already gone */ }
+  }
+
+  private closeClient(error: Error): void {
+    if (this.#terminated) return;
     this.#terminated = true;
     this.#accepting = false;
     this.#lifecycle++;
     this.#modelAccessPreparationGeneration++;
     this.#modelAccessGeneration++;
-    const error = new Error("DB worker was terminated");
     for (const entry of this.pending.values()) {
       entry.cleanup();
       entry.reject(error);
@@ -1137,7 +1151,6 @@ export class WorkerClient {
       active.port.close();
     }
     this.#activePlanners.clear();
-    try { this.worker.terminate(); } catch { /* already gone */ }
   }
 
   async boot(request: BootRequest): Promise<BootInfo> {
@@ -2022,10 +2035,18 @@ export class WorkerClient {
   backupRecords(): Promise<BackupRecord[]> {
     return this.ephemeralCall("backupRecords");
   }
+  manualBackupDownloads(): Promise<import("@clay/schema/backup").ManualBackupDownloadV2[]> {
+    return this.ephemeralCall("manualBackupDownloads");
+  }
+  recordManualBackupDownload(record: import("@clay/schema/backup").ManualBackupDownloadV2, context: WorkerMutationContext): Promise<import("@clay/schema/backup").ManualBackupDownloadV2> {
+    return this.mutationCall("recordManualBackupDownload", { record }, context);
+  }
   #backupRuntime: Promise<import("./trusted-backup-runtime").TrustedBackupRuntime> | null = null;
   private trustedBackupRuntime(): Promise<import("./trusted-backup-runtime").TrustedBackupRuntime> {
     return this.#backupRuntime ??= import("./trusted-backup-runtime").then(({ TrustedBackupRuntime }) => new TrustedBackupRuntime({
-      backupSelection: () => this.backupSelection(), backupRecords: () => this.backupRecords(),
+      backupSelection: expected => expected
+        ? this.mutationCall("backupSelection", { expected }, createWorkerMutationContext()) : this.backupSelection(),
+      backupRecords: () => this.ephemeralCall("backupRecords", { allApps: true }),
       collectArchiveSnapshot: () => this.ephemeralCall("collectArchiveSnapshot"),
       validateArchive: (bytes, expected, port) => this.ephemeralCall("validateBackupStage", { bytes, expected }, [bytes, port]),
       publishBackup: request => this.mutationCall("publishBackup", { request }, createWorkerMutationContext()),
@@ -2074,17 +2095,30 @@ export class WorkerClient {
   recoveryCandidates(): Promise<RecoveryRecordCandidate[]> {
     return this.ephemeralCall("recoveryCandidates");
   }
-  validateRestoreArchive(bytes: ArrayBuffer): Promise<ProductionAuthenticatedRestoreInspection> {
-    return this.ephemeralCall("validateRestoreArchive", { bytes }, [bytes]);
+  async validateRestoreArchive(bytes: ArrayBuffer): Promise<AuthenticatedFormat5RestoreGrant> {
+    const runtime = await this.trustedBackupRuntime();
+    const { serveArchiveVerification } = await import("./archive-verification");
+    const channel = new MessageChannel();
+    const stop = serveArchiveVerification(channel.port1, runtime.trust);
+    try { return await this.ephemeralCall("validateRestoreArchive", { bytes }, [bytes, channel.port2]); }
+    finally { stop(); channel.port2.close(); }
   }
-  restoreAsNew(grant: AuthenticatedFormat5RestoreGrant): Promise<BootInfo> {
+  restoreAsNew(grant: AuthenticatedFormat5RestoreGrant, context: WorkerMutationContext): Promise<BootInfo> {
     return this.mutationCall(
-      "restoreAsNew", { grant }, createWorkerMutationContext(),
+      "restoreAsNew", { grant }, context,
     );
   }
-  async exportArchive(): Promise<{ bytes: ArrayBuffer; filename: string }> {
+  async exportArchive(): Promise<{ bytes: ArrayBuffer; filename: string;
+    download: Omit<import("@clay/schema/backup").ManualBackupDownloadV2, "startedAt"> }> {
     const exported = await (await this.trustedBackupRuntime()).automatic.prepareManualDownload();
-    return { bytes: exported.bytes.slice().buffer, filename: exported.filename };
+    try {
+      const { archiveDigest } = await import("../worker/archive-verification-channel");
+      const archiveSha256 = await archiveDigest(exported.bytes);
+      return { bytes: exported.bytes.slice().buffer, filename: exported.filename,
+        download: { schema: 2, kind: "manual_download", archiveFormat: 5,
+          fileName: exported.filename, byteLength: exported.bytes.byteLength, archiveSha256,
+          authentication: exported.authentication, evidence: exported.target, verification: "unverified_external_save" } };
+    } finally { exported.bytes.fill(0); }
   }
   getSetting<T>(key: string): Promise<T | null> {
     return this.ephemeralCall("getSetting", { key });

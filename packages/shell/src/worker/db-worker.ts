@@ -527,7 +527,7 @@ function captureLifecyclePayload(
 }
 
 async function runAppLifecycle(
-  route: "createApp" | "forkApp" | "switchApp" | "renameApp" | "deleteApp",
+  route: "createApp" | "forkApp" | "switchApp" | "renameApp" | "deleteApp" | "restoreAsNew",
   payload: Record<string, unknown>,
   req: Request,
 ): Promise<WorkerBootProjection> {
@@ -552,6 +552,9 @@ async function runAppLifecycle(
     kind: "rename", requestId,
     ...captureLifecyclePayload(payload, ["appInstanceId", "displayName", "shellId"]),
   };
+  else if (route === "restoreAsNew") captured = {
+    requestId, ...captureLifecyclePayload(payload, ["grant"]),
+  };
   else captured = {
     kind: "delete", requestId,
     ...captureLifecyclePayload(payload, ["appInstanceId"]),
@@ -567,6 +570,12 @@ async function runAppLifecycle(
     }
     storePorts.clear();
     storeServers.clear();
+    // An interrupted restore can leave no open target in this worker. Normal
+    // catalog boot reconciles it before an exact receipt retry, never raw open.
+    if (route === "restoreAsNew" && !authority) {
+      authority = await (await import("@clay/kernel/worker-authority")).ProductionStoreAuthority.bootBrowser({ requestedAppId: null, appCache: [] });
+      store = authority.readStore();
+    }
     const target = mustAuthority();
     authority = null;
     store = null;
@@ -575,7 +584,9 @@ async function runAppLifecycle(
     importCoordinator = null;
     let next: ProductionStoreAuthority | null = null;
     try {
-      next = await target.executeAppLifecycle(captured);
+      next = route === "restoreAsNew"
+        ? await (await import("@clay/kernel/worker-authority")).executeProductionRestore(target, captured)
+        : await target.executeAppLifecycle(captured);
       authority = next;
       store = next.readStore();
       persistent = true;
@@ -661,7 +672,7 @@ type DirectAuthorityRoute = keyof typeof DIRECT_AUTHORITY_ROUTES;
 async function runAuthorityMutation(
   route:
     | DirectAuthorityRoute
-    | "backupSelection" | "publishBackup"
+    | "backupSelection" | "publishBackup" | "recordManualBackupDownload"
     | "seed" | "importTable" | "removeSamples" | "fillSamples"
     | "setSetting" | "deleteSetting" | "compareAndSetSetting" | "completeEverydayAction"
     | "commitLayout"
@@ -686,7 +697,14 @@ async function runAuthorityMutation(
 ): Promise<unknown> {
   const target = mustAuthority();
   const requestId = authorityRequestId(req);
-  if (route === "backupSelection") return target.backupSelection();
+  if (route === "backupSelection") {
+    const record = captureLifecyclePayload(payload ?? {}, payload && Object.keys(payload).length ? ["expected"] : []);
+    return target.backupSelection(record.expected as Parameters<ProductionStoreAuthority["backupSelection"]>[0]);
+  }
+  if (route === "recordManualBackupDownload") {
+    const captured = captureLifecyclePayload(payload, ["record"]);
+    return (await import("./production-backup-routes")).recordProductionManualDownload(target, captured.record, requestId);
+  }
   if (route === "publishBackup") {
     const captured = captureLifecyclePayload(payload, ["request"]);
     return (await import("./production-backup-routes")).publishProductionBackup(target, captured.request);
@@ -1487,13 +1505,22 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "backupSelection":
       return runAuthorityMutation("backupSelection", rawPayload, req);
     case "backupRecords":
-      return mustAuthority().backupRecords();
+      if (p.allApps !== undefined && typeof p.allApps !== "boolean") throw new ClayError("E_VALIDATION", "backup record scope is invalid");
+      return mustAuthority().backupRecords(p.allApps === true);
+    case "manualBackupDownloads":
+      return mustAuthority().manualBackupDownloads();
+    case "recordManualBackupDownload":
+      return runAuthorityMutation("recordManualBackupDownload", rawPayload, req);
     case "recoveryCandidates":
       return mustAuthority().recoveryCandidates();
     case "validateBackupStage":
       return (await import("./production-backup-routes")).validateProductionBackup(mustAuthority(), p.bytes as ArrayBuffer, p.expected, ports[0]);
     case "publishBackup":
       return runAuthorityMutation("publishBackup", rawPayload, req);
+    case "validateRestoreArchive":
+      return (await import("./production-backup-routes")).validateProductionRestore(mustAuthority(), p.bytes as ArrayBuffer, ports[0]);
+    case "restoreAsNew":
+      return runAppLifecycle("restoreAsNew", p, req);
     case "reset":
     case "exportArchive":
     case "importArchive":
@@ -1503,8 +1530,6 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     case "confirmBackupTrustEnrollment":
     case "importRecoveryKit":
     case "activateImportedBackupSeries":
-    case "validateRestoreArchive":
-    case "restoreAsNew":
       return failClosedMutation(req.op);
     case "status": {
       // navigator.storage.persist() requested at first commit (doc 04 §8),

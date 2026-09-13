@@ -121,11 +121,12 @@ it("executes isolated lifecycle and receipt-bound first-run import through the r
     expect(await client.history()).toEqual(firstHistory);
     const createContext = client.createMutationContext();
     dropResponseFor = "createApp";
-    const lostResponse = client.createApp("Second", "blank", createContext);
+    const lostResponse = client.createApp("Second", "blank", createContext).catch(error => error);
     await vi.waitFor(() => expect(dropped).toBe(true));
     expect(await Promise.race([lostResponse, new Promise(resolve => setTimeout(() => resolve("timeout-without-cancellation"), 1))]))
       .toBe("timeout-without-cancellation");
     client = new WorkerClient(transport as unknown as Worker);
+    expect(await lostResponse).toMatchObject({ code: "E_INTERNAL", message: expect.stringContaining("outcome is unknown") });
     const second = await client.createApp("Second", "blank", createContext);
     expect(second.apps).toHaveLength(2);
     expect(await client.history()).toEqual([]);

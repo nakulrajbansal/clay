@@ -395,3 +395,12 @@ export const ManualBackupDownloadV1 = z.object({
   verification: z.literal("unverified"),
 }).strict();
 export type ManualBackupDownloadV1 = z.infer<typeof ManualBackupDownloadV1>;
+
+/** Authentication of bytes is distinct from verification that a user saved them. */
+export const ManualBackupDownloadV2 = z.object({
+  schema: z.literal(2), kind: z.literal("manual_download"), archiveFormat: z.literal(5),
+  fileName: ManualDownloadFileName, byteLength: ArchiveByteLength, startedAt: CanonicalInstant,
+  verification: z.literal("unverified_external_save"), authentication: BackupAuthenticationV1,
+  archiveSha256: Sha256, evidence: TargetEvidenceV1,
+}).strict();
+export type ManualBackupDownloadV2 = z.infer<typeof ManualBackupDownloadV2>;

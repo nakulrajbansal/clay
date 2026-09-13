@@ -1,3 +1,4 @@
+import { assertLifecycleReattestation } from "./lifecycle-reattestation-evidence";
 import {
   ArchiveAuthorityEvidenceV1,
   ArchiveBootstrapEntryV1,
@@ -811,17 +812,19 @@ function validateLifecycleReceipts(evidence: ArchiveAuthorityEvidence): void {
   let previousJob = "";
   for (const row of catalog.lifecycleReceipts) {
     const receipt = row.receipt;
-    const event = catalog.generationEvents.find(item => item.catalogGeneration === receipt.completedCatalogGeneration);
-    const expectedKind = receipt.kind === "rename" ? "app_metadata"
-      : receipt.kind === "create" || receipt.kind === "fork" ? "app_seed" : "app_selected";
+    const initial = receipt.schema === 2 ? receipt.initialPublication : undefined;
+    const event = catalog.generationEvents.find(item => item.catalogGeneration === (initial?.catalogGeneration ?? receipt.completedCatalogGeneration));
+    const expectedKind = receipt.kind === "rename" || receipt.kind === "restore_aborted" ? "app_metadata"
+      : receipt.kind === "create" || receipt.kind === "fork" || receipt.kind === "restore" ? "app_seed" : "app_selected";
     const generation = catalog.generations.find(item => item.descriptor.generationId === row.generationId);
     if (receipt.jobId <= previousJob || jobs.has(receipt.jobId) || operations.has(receipt.operationId)
         || requests.has(receipt.requestId) || receipt.authorityIncarnationId !== catalog.authorityIncarnationId
         || !event || event.eventKind !== expectedKind || event.operationId !== receipt.operationId
-        || event.at !== receipt.completedAt || event.appInstanceId !== receipt.resultingSelectedAppInstanceId
+        || (!initial && event.at !== receipt.completedAt) || event.appInstanceId !== receipt.resultingSelectedAppInstanceId
         || !generation || generation.descriptor.namespaceId !== row.namespaceId
         || generation.descriptor.target.appInstanceId !== receipt.resultingSelectedAppInstanceId)
       throw invalid("lifecycle receipt identity or terminal event is inconsistent");
+    assertLifecycleReattestation(receipt, catalog.generationEvents, catalog.revisionReservations);
     previousJob = receipt.jobId;
     jobs.add(receipt.jobId); operations.add(receipt.operationId); requests.add(receipt.requestId);
     if (receipt.kind === "delete") {
@@ -844,7 +847,7 @@ function validateLifecycleReceipts(evidence: ArchiveAuthorityEvidence): void {
           && item.stateSha256 === result.stateSha256 && item.finalizedCatalogGeneration !== null
           && BigInt(item.finalizedCatalogGeneration) <= BigInt(receipt.completedCatalogGeneration));
       if (!targetKnown || result.activeGenerationId !== row.generationId
-          || (event.target !== null && !sameTarget(result, event.target))
+          || (event.target !== null && !sameTarget(initial?.target ?? result, event.target))
           || metadata?.displayName !== receipt.resultDisplayName || metadata?.shellId !== receipt.resultShellId)
         throw invalid("lifecycle receipt canonical result is inconsistent");
     }

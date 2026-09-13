@@ -99,6 +99,15 @@ function validateRouteResult(
     if (result !== null) throw invalid("starter seed provenance result is invalid");
     return;
   }
+  if (route === "archive.restore.samples" || route === "app.fork.samples") {
+    if (!exactObject(result, ["rebound", "sourceSha256", "sourceAuthorityIncarnationId", "kind"])
+        || result.rebound !== sampleProvenance.length || !sampleProvenance.length
+        || result.kind !== (route === "archive.restore.samples" ? "restore" : "fork")
+        || !/^sha256:[0-9a-f]{64}$/.test(String(result.sourceSha256))
+        || !/^auth_[a-z2-7]{26}$/.test(String(result.sourceAuthorityIncarnationId)))
+      throw invalid("restored sample provenance result is invalid");
+    return;
+  }
   const distinctTables = new Set<string>();
   for (let index = 0; index < sampleProvenance.length; index++)
     distinctTables.add(sampleProvenance[index]!.tableId);

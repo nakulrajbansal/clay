@@ -14,3 +14,4 @@ export {
 } from "./production-authority";
 export type { ProductionBackupSelection, ProductionMutationResult } from "./production-mutation-coordinator";
 export type { PlannerMutationAuthority } from "./planner-authority";
+export { stageProductionRestore, executeProductionRestore } from "./production-restore";

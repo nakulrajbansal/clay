@@ -5,6 +5,8 @@ import { ClayStore, PRODUCTION_STORE_PRIMITIVES } from "./store";
 import { RelationKeepRequest, keepRelation, type CapturedRelationKeep } from "./production-relation";
 import type { TargetEvidenceV1 } from "@clay/schema/catalog";
 import { captureDaily, executeDaily, type CapturedDaily } from "./production-daily";
+import { ManualBackupDownloadV2 } from "@clay/schema/backup";
+import { recordManualBackupDownload } from "./production-manual-backup";
 
 const IDENT = /^[a-z][a-z0-9_]{0,40}$/;
 const PANEL_ID = /^[a-z][a-z0-9_]{2,40}$/;
@@ -30,6 +32,7 @@ type CapturedRelationColumn = Readonly<{
 
 export type CapturedCoreMutation =
   | CapturedDaily
+  | Readonly<{ requestId: string; route: "backup.manualDownload"; payload: ManualBackupDownloadV2 }>
   | Readonly<{ requestId: string; route: "schema.convertTextToRelation"; payload: CapturedRelationKeep }>
   | Readonly<{ requestId: string; route: "timeline.setCheckpoint";
       payload: Readonly<{ version: number; label: string }> }>
@@ -177,7 +180,8 @@ export function captureCoreMutation(
   route: string,
   input: unknown,
 ): CapturedCoreMutation | null {
-  switch (route) {
+    switch (route) {
+    case "backup.manualDownload": return { requestId, route, payload: ManualBackupDownloadV2.parse(input) };
     case "daily.source":
     case "daily.navigation":
     case "daily.timeZone":
@@ -245,7 +249,8 @@ export function captureCoreMutation(
 export function isCapturedCoreMutation(
   request: Readonly<{ route: string }>,
 ): request is CapturedCoreMutation {
-  switch (request.route) {
+    switch (request.route) {
+    case "backup.manualDownload":
     case "daily.source":
     case "daily.navigation":
     case "daily.timeZone":
@@ -350,7 +355,10 @@ export function executeCapturedCoreMutation(
   request: CapturedCoreMutation,
   target?: TargetEvidenceV1,
 ): unknown {
-  switch (request.route) {
+    switch (request.route) {
+    case "backup.manualDownload":
+      if (!target) throw new ClayError("E_CONFLICT", "Download record requires an authority target");
+      return recordManualBackupDownload(store, request.requestId, request.payload, target);
     case "daily.source":
     case "daily.navigation":
     case "daily.timeZone":

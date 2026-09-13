@@ -1,12 +1,32 @@
-import { BackupPublicationRequestV1, BackupStageValidationV1 } from "@clay/schema/backup";
+import { BackupPublicationRequestV1, BackupStageValidationV1, ManualBackupDownloadV2 } from "@clay/schema/backup";
 import { TargetEvidenceV1 } from "@clay/schema/catalog";
-import type { ProductionStoreAuthority } from "@clay/kernel/worker-authority";
+import { stageProductionRestore, type ProductionStoreAuthority } from "@clay/kernel/worker-authority";
 import { verifyArchiveThroughPort } from "./archive-verification-channel";
 
 type Target = ReturnType<typeof TargetEvidenceV1.parse>;
 type Stage = Extract<ReturnType<typeof BackupStageValidationV1.parse>, { status: "valid" }>;
 const staged = new WeakMap<ProductionStoreAuthority, Map<string, { stage: Stage; bytes: number }>>();
 const same = (left: Target, right: Target) => JSON.stringify(TargetEvidenceV1.parse(left)) === JSON.stringify(TargetEvidenceV1.parse(right));
+
+export async function validateProductionRestore(authority: ProductionStoreAuthority, bytes: ArrayBuffer, verifier: MessagePort | undefined) {
+  if (!(bytes instanceof ArrayBuffer)) { verifier?.close(); throw new Error("Archive bytes are required"); }
+  const before = authority.inspectAuthority();
+  const verified = await verifyArchiveThroughPort(verifier, new Uint8Array(bytes));
+  try {
+    if (JSON.stringify(before) !== JSON.stringify(authority.inspectAuthority())) throw new Error("Restore source changed during authentication");
+    return await stageProductionRestore(authority, verified);
+  } finally { verified.payload.fill(0); }
+}
+
+export async function recordProductionManualDownload(authority: ProductionStoreAuthority, input: unknown, requestId: string) {
+  const record = ManualBackupDownloadV2.parse(input);
+  const proof = staged.get(authority)?.get(record.archiveSha256);
+  if ((!proof || proof.bytes !== record.byteLength || !same(proof.stage.evidence, record.evidence)
+      || JSON.stringify(proof.stage.authentication) !== JSON.stringify(record.authentication))
+      && !authority.hasTerminalRequestReceipt(requestId))
+    throw new Error("Download record requires authenticated archive read-back or an exact terminal receipt");
+  return (await authority.executeMutation({ requestId, route: "backup.manualDownload", payload: record })).result;
+}
 
 export async function validateProductionBackup(
   authority: ProductionStoreAuthority, bytes: ArrayBuffer, expectedInput: unknown, verifier: MessagePort | undefined,

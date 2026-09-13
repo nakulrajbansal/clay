@@ -1140,3 +1140,42 @@ ADR-055 (2026-09-12) Development reconciliation of lifecycle archives and secret
   CONSEQUENCE: Legacy secret-bearing DB commands are documented as retired, not
   re-enabled. Read-only OPFS status still means only Protected on this device.
   Development checkpoints are not shipping claims or regenerated review evidence.
+
+ADR-056 (2026-09-12) Source-bound restore jobs and exact copied-target receipts.
+  CONTEXT: ADR-055's restore prerequisite needs a worker-owned lifecycle, not the
+  old key-bearing coordinator or a direct replacement Store import. A copied
+  starter also cannot keep another authority's sample-producer attestation.
+  DECISION: The private verifier authenticates before ZIP parsing. A bounded
+  in-memory worker grant binds the verified payload to the exact selected source,
+  authority incarnation and catalog generation. Only lease-only suffixes may
+  precede Keep. The worker reserves a fresh destination and persists a closed
+  version-2 restore job containing non-secret request, grant, source and fence
+  evidence before creating any target file. Installation and publication must
+  reject a pre-existing destination footprint before declaring it job-owned and
+  retain that exact install claim. A terminal lifecycle receipt binds the result;
+  a lost response replays that receipt, never creates another app.
+  Boot recovery runs before strict inventory classification. Under physical
+  lifecycle exclusion it acquires a fresh fence, atomically claims the pending
+  job for cleanup, validates only exact job-explained files/sidecars, and proves
+  the selected survivor readable. Each unlink rechecks the claim. Publication
+  and cleanup cannot both win. Partial create/unlink is recoverable; committed
+  targets and source files are never catch-deleted. A cleaned-up invocation gets
+  an exact terminal not-published receipt; a fresh validation is needed to retry.
+  Restore/fork of samples adds one internal producer re-attestation in the fresh
+  install transaction. The receipt records both initial publication and the final
+  target; catalog/archive readers require the exact reservation/commit suffix.
+  Data, panels, prior history and sample coordinates remain intact. Generic
+  mutation dispatch cannot invoke these internal producer routes.
+  Manual format-5 download records are bounded app-owned journaled metadata,
+  require authenticated readback, and always mean unverified external save.
+  Starting a download cannot update verified-backup status. Trusted-shell backup
+  preparation/publication/retirement uses cross-tab exclusion plus vault CAS.
+  A lease-only refresh retains candidate bytes/identity; a staged or published
+  retry re-reads the existing file. A folder/source change reconciles the exact
+  catalog publication before retiring its candidate and never deletes a file.
+  CONSEQUENCE: This enables the source restore journey during development without
+  changing format-5 authentication or authorizing replacement. Legacy format-1
+  pending jobs remain readable for fenced cleanup only. Keys and Kit bytes stay
+  outside the DB worker. Manual-download reload recovery, external partial-file
+  recovery/retention completion and the integrated certification gates remain
+  required; none is implied by these source changes or focused tests.

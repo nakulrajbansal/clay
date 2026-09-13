@@ -77,9 +77,10 @@ it("executes Daily Home and relation Preview/Keep/replay through the production 
 
     const capture = client.createMutationContext();
     drop = "dailyHomeQuickCapture";
-    void client.quickCapture("tasks", { title: "Captured" }, tableId, capture);
+    const lostCapture = client.quickCapture("tasks", { title: "Captured" }, tableId, capture).catch(error => error);
     await vi.waitFor(() => expect(dropped).toBe(true));
     client = new WorkerClient(transport as unknown as Worker);
+    expect(await lostCapture).toMatchObject({ code: "E_INTERNAL", message: expect.stringContaining("outcome is unknown") });
     await client.boot({ requestedAppId: null, appCache: [] });
     const receipt = await client.quickCapture("tasks", { title: "Captured" }, tableId, capture);
     expect(authority.query({ from: "tasks" })).toHaveLength(2);
