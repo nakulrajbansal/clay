@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   IntakeAcceptanceReceipt, IntakeAutoAcceptSimulation, IntakeDeliveryFailure, IntakeInboxItem,
   RegColumn, RegTable, SemanticSchemaTraceV1,
@@ -14,6 +14,7 @@ import { IntakeOwnerClient } from "../intake/owner-client";
 import { IndexedDbIntakeOwnerVault } from "../intake/owner-custody.browser";
 import type { IntakeOwnerVault } from "../intake/owner-custody";
 import { ownerIntakeFetch } from "../intake/relay-owner-configuration";
+import { IndexedDbIntakeWorkflows, IntakeWorkflowSlot, UnfencedIntakeWorkflowError, type IntakeWorkflows } from "../intake/workflows";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type PreviewDraft = {
@@ -142,6 +143,7 @@ export function IntakeCenter(props: {
   worker: WorkerClient;
   appInstanceId: string;
   ownerVault?: IntakeOwnerVault;
+  workflows?: IntakeWorkflows;
   tables: RegTable[];
   semanticTrace: SemanticSchemaTraceV1;
   relayBaseUrl: string | null;
@@ -154,13 +156,14 @@ export function IntakeCenter(props: {
 }): React.JSX.Element {
   const session = useMemo(() => new IntakeSession(sessionStorage, props.worker, props.appInstanceId), [props.worker, props.appInstanceId]);
   const vault = useMemo(() => props.ownerVault ?? new IndexedDbIntakeOwnerVault(), [props.ownerVault]);
+  const workflows = useMemo(() => props.workflows ?? new IndexedDbIntakeWorkflows(), [props.workflows]);
   const configured = useMemo(() => {
     try {
       const configuration = { shellOrigin: location.origin, relayBaseUrl: props.relayBaseUrl, publicBaseUrl: props.publicBaseUrl };
       const fetchImpl = props.fetchImpl ?? (props.relayBaseUrl ? ownerIntakeFetch(props.relayBaseUrl) : undefined);
-      return { publication: new IntakePublication(session, vault, configuration, fetchImpl), owner: new IntakeOwnerClient(session, vault, configuration, fetchImpl), error: null };
+      return { publication: new IntakePublication(session, vault, configuration, fetchImpl, workflows), owner: new IntakeOwnerClient(session, vault, configuration, fetchImpl, workflows), error: null };
     } catch { return { publication: null, owner: null, error: "Secure relay configuration is unavailable for this origin. Local review remains available." }; }
-  }, [session, vault, props.relayBaseUrl, props.publicBaseUrl, props.fetchImpl]);
+  }, [session, vault, workflows, props.relayBaseUrl, props.publicBaseUrl, props.fetchImpl]);
   const [read, setRead] = useState<IntakeRead | null>(null);
   const trace = read?.trace ?? props.semanticTrace;
   const eligibleTables = useMemo(() => (read?.tables ?? props.tables).filter(table =>
@@ -188,12 +191,16 @@ export function IntakeCenter(props: {
   const [retainedPublication, setRetainedPublication] = useState(false);
   const [retainedRevocation, setRetainedRevocation] = useState(false);
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const workflowRecoveryError = useRef<string | null>(null);
   const [pendingRevoke, setPendingRevoke] = useState<string | null>(null);
+  const [confirmClosePublication, setConfirmClosePublication] = useState(false);
+  const [closingPublication, setClosingPublication] = useState(false);
   const ownsForm = (form: LocalIntakeFormV2 | undefined): boolean => !!form && !!read
     && form.ownerSource.appInstanceId === read.authorityTarget.appInstanceId
     && form.ownerSource.activeGenerationId === read.authorityTarget.activeGenerationId
     && form.ownerSource.lineageEpoch === read.authorityTarget.lineageEpoch;
   const updateRecovery = (): void => {
+    if (workflowRecoveryError.current) { setRecoveryError(workflowRecoveryError.current); return; }
     try {
       setRetained(session.pending() !== null);
       // Configuration may disappear while an invocation is still ambiguous.
@@ -201,6 +208,7 @@ export function IntakeCenter(props: {
       if ((!configured.publication && sessionStorage.getItem(`clay_intake_publication_v1:${props.appInstanceId}`) !== null)
           || (!configured.owner && sessionStorage.getItem(`clay_intake_revocation_v1:${props.appInstanceId}`) !== null)) throw new Error();
       setRetainedPublication(configured.publication?.pending() != null);
+      setClosingPublication(configured.publication?.pending()?.termination != null);
       setRetainedRevocation(configured.owner?.pendingRevocation() != null);
       setRecoveryError(null);
     } catch { setRecoveryError("Retained intake work needs its original source and configuration. It has not been discarded."); }
@@ -208,6 +216,15 @@ export function IntakeCenter(props: {
   const blocked = busy || !read || retained || retainedPublication || retainedRevocation || recoveryError !== null;
 
   const refresh = async (): Promise<void> => {
+    try {
+      if (configured.publication && configured.owner) { await configured.publication.recover(); await configured.owner.recover(); }
+      else for (const kind of ["publication", "revocation"] as const) await new IntakeWorkflowSlot(workflows, sessionStorage, location.origin, props.appInstanceId, kind).recover();
+      workflowRecoveryError.current = null;
+    } catch (cause) {
+      workflowRecoveryError.current = cause instanceof UnfencedIntakeWorkflowError ? cause.message
+        : "Retained intake work needs its original source and configuration. It has not been discarded.";
+      setRecoveryError(workflowRecoveryError.current); throw new Error("Intake workflow recovery is incomplete; new publication remains closed");
+    }
     const next = await session.read(); setRead(next);
     setForms(next.forms); setInbox(next.inbox); setReceipts(next.receipts);
     setDeliveryFailures(next.deliveryFailures); updateRecovery();
@@ -260,12 +277,12 @@ export function IntakeCenter(props: {
       if (!configured.publication.pending()) {
         if (!preview || JSON.stringify(preview.authorityTarget) !== JSON.stringify(session.reviewed?.authorityTarget)) throw new Error("Review the changed intake source before publication");
         const { authorityTarget: _source, ...proposal } = preview;
-        configured.publication.begin({ ...proposal, expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString() });
+        await configured.publication.begin({ ...proposal, expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString() });
       }
       const published = await configured.publication.resume();
       setShareLink(published.link); setPreview(null);
       await refresh();
-      configured.publication.finish();
+      await configured.publication.finish();
       props.onInfo("Secure form published. Only the submit capability is in the public link.");
     } catch (cause) { props.onError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setBusy(false); updateRecovery(); }
@@ -313,6 +330,15 @@ export function IntakeCenter(props: {
       await configured.owner.revoke(form); setPendingRevoke(null);
       await refresh(); props.onInfo("Form revoked. Its public link no longer accepts submissions.");
     } catch (cause) { props.onError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setBusy(false); updateRecovery(); }
+  };
+  const closePublication = async (): Promise<void> => {
+    if (!configured.publication || busy) return;
+    setBusy(true);
+    try {
+      await configured.publication.terminalize(); setConfirmClosePublication(false); setPreview(null); setShareLink("");
+      await refresh(); props.onInfo("Original publication closed. Data and custody are kept. Review a fresh source before creating another form.");
+    } catch (cause) { props.onError(cause instanceof Error ? cause.message : "Original intake closure needs recovery"); }
     finally { setBusy(false); updateRecovery(); }
   };
 
@@ -375,7 +401,11 @@ export function IntakeCenter(props: {
       {read?.legacyCustody === "quarantined" ? <p role="alert">Legacy intake custody is quarantined. Original forms, private material and historical receipts are untouched. Archive export remains blocked until safe custody adoption.</p> : null}
       {recoveryError ? <p role="alert">{recoveryError}</p> : null}
       {retainedPublication ? <p role="status">Publication has a retained original form and request.
-        <button disabled={busy} onClick={() => void publish()}>Resume original publication</button></p> : null}
+        {!closingPublication ? <button disabled={busy} onClick={() => void publish()}>Resume original publication</button> : null}
+        {confirmClosePublication || closingPublication ? <span>Close this original publication before reviewing a new source? Original data and custody will be kept.
+          <button disabled={busy} onClick={() => void closePublication()}>Confirm close original publication</button>
+          {!closingPublication ? <button onClick={() => setConfirmClosePublication(false)}>Keep original publication</button> : null}</span>
+          : <button disabled={busy} onClick={() => setConfirmClosePublication(true)}>Close original publication</button>}</p> : null}
       {retainedRevocation ? <p role="status">The form is closed locally; relay revocation needs acknowledgement.
         <button disabled={busy} onClick={() => void revoke()}>Resume original revocation</button></p> : null}
       {retained && !retainedRevocation ? <p role="status">An original intake request needs reconciliation.
@@ -437,9 +467,9 @@ export function IntakeCenter(props: {
                 setShareLink(await configured.owner!.link(form));
               }, "Original public link recovered from trusted-shell custody.")}>Show public link</button>
               {pendingRevoke === form.publicForm.formId ? <span>Stop accepting new submissions? Existing local records are kept.
-                <button disabled={blocked || !configured.owner} onClick={() => void revoke(form)}>Confirm revocation</button>
+                <button disabled={busy || retained || retainedRevocation || recoveryError !== null || (!closingPublication && blocked) || !configured.owner} onClick={() => void revoke(form)}>Confirm revocation</button>
                 <button onClick={() => setPendingRevoke(null)}>Keep form active</button></span>
-                : <button disabled={blocked || !configured.owner} onClick={() => setPendingRevoke(form.publicForm.formId)}>Revoke</button>}
+                : <button disabled={busy || retained || retainedRevocation || recoveryError !== null || (!closingPublication && blocked) || !configured.owner} onClick={() => setPendingRevoke(form.publicForm.formId)}>Revoke</button>}
               {read ? <AutoAcceptControls form={form} worker={session} authorityTarget={read.authorityTarget} disabled={blocked}
                 enabled={read?.rules.some(rule => rule.formId === form.publicForm.formId) ?? false} onChange={refresh}
                 onInfo={props.onInfo} onError={message => { updateRecovery(); props.onError(message); }} /> : null}

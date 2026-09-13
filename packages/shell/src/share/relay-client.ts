@@ -1,19 +1,21 @@
 import {
   ShareCreateRequestV1, ShareCreateResponseV1, ShareIdV1,
   ShareRelayErrorV1, ShareRelaySnapshotV1, ShareRevokeRequestV1,
-  ShareRevokeResponseV1,
+  ShareRevokeResponseV1, ShareTerminalRequestV1, ShareTerminalResponseV1,
   type ShareCreateRequestV1 as ShareCreateRequest,
   type ShareCreateResponseV1 as ShareCreateResponse,
   type ShareRelaySnapshotV1 as ShareRelaySnapshot,
   type ShareRevokeResponseV1 as ShareRevokeResponse,
 } from "@clay/schema/share";
 import { boundedRelayJson } from "../app/bounded-relay-response";
+import { relayRequestSha256 } from "../app/relay-request-identity";
 
 export type ShareRelayClient = Readonly<{
   baseUrl: string;
   create(request: ShareCreateRequest): Promise<ShareCreateResponse>;
   read(shareId: string): Promise<ShareRelaySnapshot>;
   revoke(shareId: string, revokeToken: string): Promise<ShareRevokeResponse>;
+  terminalize(request: ShareCreateRequest, revokeToken: string): Promise<ShareTerminalResponseV1>;
 }>;
 
 export class ShareRelayClientError extends Error {
@@ -117,7 +119,21 @@ export class BrowserShareRelayClient implements ShareRelayClient {
       cache: "no-store",
       referrerPolicy: "no-referrer",
     });
-    if (response.status === 404 || response.status === 410) return { schema: 1, shareId, revoked: true };
     return checked(response, ShareRevokeResponseV1);
+  }
+
+  async terminalize(input: ShareCreateRequest, revokeToken: string): Promise<ShareTerminalResponseV1> {
+    const body = ShareTerminalRequestV1.parse({ schema: 1, request: input, revokeToken });
+    const identity = await relayRequestSha256(body.request);
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (this.session) headers.authorization = `Bearer ${this.session}`;
+    const response = await this.fetcher(`${this.baseUrl}/shares/${body.request.shareId}/terminalize`, {
+      method: "POST", headers, body: JSON.stringify(body), credentials: "include", redirect: "error",
+      cache: "no-store", referrerPolicy: "no-referrer",
+    });
+    const receipt = await checked(response, ShareTerminalResponseV1);
+    if (receipt.shareId !== body.request.shareId || receipt.expiresAt !== body.request.expiresAt || receipt.requestSha256 !== identity)
+      throw new Error("Share terminal acknowledgement differs from the original identity");
+    return receipt;
   }
 }

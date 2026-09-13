@@ -12,7 +12,7 @@ export function ownedRelayApp(options: BackendOptions): ReturnType<typeof create
     if (!headers.has("origin")) headers.set("origin", "https://owner.example");
     const token = await session;
     const url = typeof input === "string" || input instanceof URL ? String(input) : input.url;
-    if (token && !headers.has("authorization") && /\/(?:shares|intake\/forms)$/.test(url)) headers.set("authorization", `Bearer ${token}`);
+    if (token && !headers.has("authorization") && /\/(?:shares|intake\/forms)(?:\/[a-z2-7_]+\/terminalize)?$/.test(url)) headers.set("authorization", `Bearer ${token}`);
     return raw(input, { ...init, headers }, ...rest);
   }) as typeof app.request;
   return app;

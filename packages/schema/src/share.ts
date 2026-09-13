@@ -44,6 +44,14 @@ export const ShareCreateResponseV1 = z.object({
 }).strict();
 export type ShareCreateResponseV1 = z.infer<typeof ShareCreateResponseV1>;
 
+// An absent-object read/revoke is not a fence against a delayed create. The
+// terminal operation retains the exact immutable request until its expiry.
+export const ShareTerminalRequestV1 = z.object({ schema: z.literal(1),
+  request: ShareCreateRequestV1, revokeToken: ShareRevokeTokenV1 }).strict();
+export const ShareTerminalResponseV1 = z.object({ schema: z.literal(1), shareId: ShareIdV1,
+  expiresAt: IsoInstantV1, requestSha256: z.string().regex(/^[0-9a-f]{64}$/), terminal: z.literal(true) }).strict();
+export type ShareTerminalResponseV1 = z.infer<typeof ShareTerminalResponseV1>;
+
 export const ShareRelaySnapshotV1 = z.object({
   schema: z.literal(1),
   shareId: ShareIdV1,

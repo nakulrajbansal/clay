@@ -12,6 +12,8 @@ export const IntakeCanonicalInstant = z.string().datetime({ offset: true }).refi
   try { return new Date(value).toISOString() === value; } catch { return false; }
 }, "exact UTC millisecond instant required");
 export const IntakeRelayFormRegistrationResultV1 = z.object({ formId: IntakeFormId, expiresAt: IntakeCanonicalInstant }).strict();
+export const IntakeRelayTerminalResultV1 = z.object({ schema: z.literal(1), formId: IntakeFormId,
+  expiresAt: IntakeCanonicalInstant, requestSha256: IntakeSha256, terminal: z.literal(true) }).strict();
 
 export const IntakeMimeType = z.enum([
   "application/pdf", "image/png", "image/jpeg", "text/plain",

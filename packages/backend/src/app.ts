@@ -24,7 +24,7 @@ import {
 import {
   SHARE_CREATE_BODY_BYTES_V1, SHARE_MAX_CIPHERTEXT_BYTES_V1,
   SHARE_MAX_LIFETIME_MS_V1, ShareCreateRequestV1, ShareIdV1,
-  ShareRevokeRequestV1,
+  ShareRevokeRequestV1, ShareTerminalRequestV1,
 } from "@clay/schema/share";
 import {
   IntakeRelayError,
@@ -415,6 +415,28 @@ export function createApp(opts: BackendOptions): Hono {
       } catch (error) { return relayFailure(c, error); }
     });
 
+    app.post("/intake/forms/:formId/terminalize", async (c) => {
+      c.header("Cache-Control", "no-store");
+      const publisherId = auth ? await sessionUser(c) : null;
+      if (!publisherId) return c.json({ error: "original publisher authority required" }, 401);
+      const origin = c.req.header("origin");
+      if (!origin || !origins.has(origin)) return c.json({ error: "intake publisher origin is not configured" }, 403);
+      if (!jsonContent(c)) return c.json({ error: "content-type must be application/json" }, 415);
+      let raw: unknown;
+      try { raw = await readBody(c, 8 * 1024); }
+      catch (error) { return error instanceof Response ? error : c.json({ error: "bad JSON" }, 400); }
+      const parsed = IntakeRelayFormRegistrationV1.safeParse(raw);
+      if (!parsed.success || parsed.data.formId !== c.req.param("formId")) return c.json({ error: "invalid terminal identity" }, 400);
+      try {
+        await intakeRelay.terminalize({ formId: parsed.data.formId,
+          ownerTokenSha256: tokenHash(parsed.data.ownerToken), submitTokenSha256: tokenHash(parsed.data.submitToken),
+          publisherIdSha256: tokenHash(publisherId), sourceSha256: tokenHash(requestSource(c)),
+          expiresAt: parsed.data.expiresAt, maxCiphertextBytes: parsed.data.maxCiphertextBytes });
+        return c.json({ schema: 1, formId: parsed.data.formId, expiresAt: parsed.data.expiresAt,
+          requestSha256: tokenHash(JSON.stringify(parsed.data)), terminal: true });
+      } catch (error) { return relayFailure(c, error); }
+    });
+
     app.post("/intake/forms/:formId/submissions", async (c) => {
       c.header("Cache-Control", "no-store");
       const form = IntakeFormId.safeParse(c.req.param("formId"));
@@ -656,7 +678,9 @@ export function createApp(opts: BackendOptions): Hono {
       revokeTokenHash: parsed.data.revokeTokenHash,
       envelope: parsed.data.envelope,
       ciphertextBytes: ciphertext.byteLength,
-    }, current);
+    }, now);
+    if (result === "expired")
+      return c.json({ schema: 1 as const, error: "expired" as const }, 400);
     if (result === "conflict")
       return c.json({ schema: 1 as const, error: "conflict" as const }, 409);
     if (result === "capacity")
@@ -665,7 +689,7 @@ export function createApp(opts: BackendOptions): Hono {
       schema: 1 as const,
       shareId: parsed.data.shareId,
       expiresAt: parsed.data.expiresAt,
-    }, 201);
+    }, result === "replayed" ? 200 : 201);
   });
 
   app.get("/shares/:shareId", async (c) => {
@@ -686,6 +710,34 @@ export function createApp(opts: BackendOptions): Hono {
       expiresAt: lookup.record.expiresAt,
       envelope: lookup.record.envelope,
     });
+  });
+
+  app.post("/shares/:shareId/terminalize", async (c) => {
+    noStore(c);
+    const ownerId = auth ? await sessionUser(c) : null;
+    if (!ownerId) return c.json({ schema: 1, error: "unauthorized" }, 401);
+    const origin = c.req.header("origin");
+    if (!origin || !origins.has(origin)) return c.json({ schema: 1, error: "forbidden" }, 403);
+    if (!jsonRequest(c)) return c.json({ schema: 1, error: "bad_request" }, 415);
+    let raw: unknown;
+    try { raw = await readBody(c, SHARE_CREATE_BODY_BYTES_V1); }
+    catch (error) { return error instanceof Response ? error : c.json({ schema: 1, error: "bad_request" }, 400); }
+    const parsed = ShareTerminalRequestV1.safeParse(raw);
+    if (!parsed.success || parsed.data.request.shareId !== c.req.param("shareId")) return c.json({ schema: 1, error: "bad_request" }, 400);
+    const request = parsed.data.request;
+    if (revokeHash(parsed.data.revokeToken) !== request.revokeTokenHash) return c.json({ schema: 1, error: "forbidden" }, 403);
+    const current = now(); const expiry = Date.parse(request.expiresAt);
+    const ciphertext = decodedBase64Url(request.envelope.ciphertext), iv = decodedBase64Url(request.envelope.iv);
+    if (!Number.isFinite(expiry) || expiry > current + SHARE_MAX_LIFETIME_MS_V1 || !ciphertext
+        || ciphertext.byteLength > SHARE_MAX_CIPHERTEXT_BYTES_V1 || !iv || iv.byteLength !== 12)
+      return c.json({ schema: 1, error: "bad_request" }, 400);
+    const result = await shares.terminalize({ shareId: request.shareId, expiresAt: request.expiresAt,
+      createdAt: new Date(current).toISOString(), ownerId, revokeTokenHash: request.revokeTokenHash,
+      envelope: request.envelope, ciphertextBytes: ciphertext.byteLength }, now);
+    if (result === "conflict") return c.json({ schema: 1, error: "conflict" }, 409);
+    if (result === "capacity") return c.json({ schema: 1, error: "capacity" }, 507);
+    return c.json({ schema: 1, shareId: request.shareId, expiresAt: request.expiresAt,
+      requestSha256: createHash("sha256").update(JSON.stringify(request)).digest("hex"), terminal: true });
   });
 
   app.post("/shares/:shareId/revoke", async (c) => {

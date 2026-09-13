@@ -8,21 +8,73 @@ regression/build/budget/browser/accessibility/review campaign yet.
 
 - Sole writer in `D:\Clay`, branch `codex/clay-project`.
 - HEAD and local origin tracking ref remain
-  `1f24f2898858deab40e7e63888fdc07f1aa27db7`. No fetch/remote-server readback.
-- The prior process's uncommitted 13-path intake diff was preserved and inspected,
-  not reset or assumed complete. Its kernel intake/V2 packet independently passed
-  11 tests and kernel typecheck before this continuation expanded the work.
+  `49d1b777c4d23df83af9ba0936e7d28bcbd88f7d`. Live location, clean starting
+  status, HEAD and local origin tracking ref were verified. No fetch or actual
+  remote-server readback. This continuation leaves one uncommitted diff on that base.
+- The earlier 13-path intake continuation and its expanded F implementation are
+  now committed baseline work. They were preserved, not reset or reimplemented.
 - A/P0, B recovery/retention/authenticated archives, C conversion, D Capture/Inbox/CAS
   and E editor/workspace/history/Undo are preserved. Their implementation details
   remain in this handoff at the starting commit and ADR-060/061/062.
 - One uncommitted source/test/documentation diff. No Git metadata writes, commits,
   pushes, installations/downloads, other checkout changes, server operations,
   deployment, production configuration or user-owned browser/storage access.
-- The requested external development-6 events.jsonl read returned Access is denied.
-  This was context-only, not an implementation blocker; no bypass was attempted.
+- The previous continuation's external development-6 context read was denied;
+  this continuation did not retry it or read real credentials/user-owned storage.
 - Package-local Node/Vitest/TypeScript binaries work. No current host blocker.
 - No build, bundle report, browser evidence, release fingerprint or independent
   review was generated. Historical certification failures remain deferred.
+
+## Current continuation: terminal publication and durable owner work
+
+- Added `POST /intake/forms/:formId/terminalize` and
+  `POST /shares/:shareId/terminalize`. Authentication and exact allowlisted shell
+  Origin precede body allocation. Both endpoints bind the original immutable
+  request, owner capabilities/account and expiry, and acknowledge its canonical
+  SHA-256 only after terminal persistence. Missing objects/404/410 are not proof.
+- Memory and Postgres adapters retain revoked identities until original expiry,
+  including absent-ID terminal allocations. Existing count/byte limits also count
+  tombstones; limits were not increased. Share create replay requires exact owner,
+  envelope, expiry and revocation hash. No second link is created. Intake IP/source
+  hashes remain original quota labels; changing network does not change owner
+  identity or rewrite those labels. Publisher and capability checks remain exact.
+- Postgres create/terminal operations serialize, and read the trusted clock after
+  locking. An expired terminal acknowledgement cannot be followed by a delayed
+  create that used a stale pre-lock clock. Transaction failure and acknowledgement
+  loss are never reported as terminal success. No hosted PostgreSQL was contacted;
+  the adapter tests use an owned transactional SQL protocol fixture.
+- `intake/workflows.ts` adds a bounded public-only shell IndexedDB CAS ledger,
+  separate from private custody and the app DB. New publication begin is async:
+  initial identity commits before presentation, custody, worker commands or HTTP.
+  Each subsequent intent/transition commits and reads back before its effect.
+  Completed slots can be reused; original custody, app metadata and worker receipts
+  are not deleted. Both publication and revocation recover without sessionStorage.
+- New publication closure claims the ledger, cancels/reconciles each exact original
+  worker invocation, validates outcome readback, and obtains the remote terminal
+  receipt where HTTP could have been invoked. A committed active local form needs
+  explicit local revocation before closure finishes. An inactive draft remains
+  intact. No source is silently renewed and no key/form/ciphertext is replaced.
+- IntakeCenter exposes confirmed Close original publication and retained closure
+  recovery. ShareDialog uses terminal receipts for revoke/abandon, disables retries
+  under the wrong relay/expired publication prerequisite, and offers Review a fresh
+  snapshot (which does not itself approve or publish anything). Both keep exact
+  private material in their existing trusted-shell vaults.
+- An old cache-only intake workflow is intentionally NOT adopted by copying it to
+  the new ledger. An older tab might still mint/send requests outside the ledger;
+  neither a read-only not_invoked result nor a newly added cache marker excludes
+  that work. These originals stay untouched/quarantined. Authority-level legacy
+  identity terminalization/adoption is still required (see Exact continuation).
+- The scheduler checks durable intake workflow presence before minting a new due
+  request; ledger read/conflict failure defers it. Retained due reconciliation is
+  unchanged. E's actual production OPFS capability was not relabeled or enabled.
+- RED/GREEN packets covered resurrection after revoke/cleanup, missing terminal
+  routes, identical share replay, stale pre-lock time, fabricated 404/410 success,
+  cache-loss persistence, stale-tab CAS, conflicting caches, cache-only legacy
+  non-fencing, and scheduler cache-loss behavior. Additional deterministic fault
+  tests cover delayed worker/HTTP, expiry/source/configuration changes, lost cancel
+  commits, SQL commit abort/lost acknowledgement and original custody preservation.
+- ADR-064 records the protocol and explicitly preserves the remaining legacy and
+  OPFS boundaries. This is source development, not certification.
 
 ## New F production intake path
 
@@ -99,10 +151,10 @@ regression/build/budget/browser/accessibility/review campaign yet.
 - The old transport-only refresh/revoke helpers and direct private-form creation/
   publication helpers are removed. Their lifecycle coverage now runs through
   OwnerClient/UI/real worker; retirement itself is tested.
-- Remaining: explicit recovery for stale/expired prepared publications, unknown
-  publication outcomes after source/configuration change, and recovery after loss
-  of the session-storage workflow (not merely modal teardown/same-tab reload).
-  Do not clear these jobs to unblock a new form.
+- New ledger-owned stale/expired publication and full cache-loss recovery are now
+  connected. Remaining: unfenced cache-only legacy work, source/generation recovery
+  where original authority is unavailable, and explicit renewal of a stale local
+  revocation that never committed. Never clear unknown work to unblock a new form.
 
 ## New F sharing and relay boundary
 
@@ -122,8 +174,8 @@ regression/build/budget/browser/accessibility/review campaign yet.
   Unpublished records are not presented as ready links.
 - Legacy localStorage share receipt load/replace/revoke helpers are removed.
   Existing records are left untouched and the UI reports legacy unbound custody.
-  Safe legacy access/revocation adoption and stale/expired prepared-share recovery
-  are still required. New custody is not silently bound to a fork.
+  Safe legacy access/revocation adoption is still required. New stale/expired
+  prepared shares use the exact terminal relay protocol; custody is never rebound.
 - `relay-owner-configuration.ts` denies unconfigured owner publication. App,
   DataView and IntakeCenter no longer guess a same-origin relay. Account tokens
   are hydrated only at the trusted-shell HTTP boundary and are origin-bound.
@@ -179,11 +231,11 @@ packaged-product certification claim.
 | E editor/recipes/custom/preview/enable/pause/delete | automationPresentation/automationCommand/simulateAutomation; AutomationCenter | Lossless retained V2 drafts, timezone and immutable retries | shell automation-retained-ui baseline; OPFS capability BLOCKED |
 | E manual/due/history/status/notifications/Undo | same read/command routes + mutationOutcome/cancelPresentation; AutomationCenter/App tick | Original due command terminalization, local runtime and exact bounded receipts/Undo | shell automation-tick and worker-automation-integration; OPFS capability BLOCKED |
 | F local Print/CSV | projectPlaintextV1/cancelProjectionV1; ExportDialog | Source/egress fences unchanged | shell export-dialog; preserved |
-| F encrypted sharing/files/expiry/revoke | presentationSource/projectPlaintextV1/attachmentsForRecord/readAttachment -> trusted-shell vault/relay; ShareDialog | Immutable ciphertext and owner CAS/readback before delivery, retained create/revoke retry | shell share-custody/share-owner-ui/share-security-integration and real worker; new path connected, legacy/stale recovery open |
-| F intake publication/delivery/review | intakePresentation/intakeCommand/mutationOutcome/cancelPresentation; IntakeCenter + shell owner custody | Original form/save/publish/revoke IDs, private hydration outside worker, bounded staging, accept/reject/reload | shell intake-publication/intake-ui/intake-delivery-boundary/worker-intake-integration; legacy/stale recovery open |
+| F encrypted sharing/files/expiry/revoke | presentationSource/projectPlaintextV1/attachmentsForRecord/readAttachment -> trusted-shell vault/relay; ShareDialog | Immutable ciphertext, owner CAS/readback, exact remote tombstones before replacement, explicit fresh preview | shell share-custody/share-terminal/share-owner-ui/share-security-integration and real worker; legacy adoption/source-loss recovery open |
+| F intake publication/delivery/review | intakePresentation/intakeCommand/mutationOutcome/cancelPresentation; IntakeCenter + shell owner custody/ledger | Original IDs, durable workflow CAS before effects, exact worker/relay terminal proofs, cache-loss recovery, bounded staging/review | shell intake-publication-terminal/intake-workflows/intake-ui/intake-delivery-boundary/worker-intake-integration; legacy/cache-only and stale local-revoke renewal open |
 | F auto-accept/receipts/Undo | same closed intake command/read routes; IntakeCenter | Receipt-target-bound simulation/enable, file review required, bounded inverse/history | shell intake-ui/worker-intake-integration; kernel intake/V2 authority |
 
-## Actual current finder-loop results
+## Previous checkpoint finder-loop results (historical, not rerun wholesale)
 
 All tests used package-local
 `node node_modules/vitest/vitest.mjs run <files> --maxWorkers=1 --minWorkers=1 --reporter=dot`.
@@ -225,74 +277,129 @@ These are targeted development packets, NOT full package/workspace regression.
 - No packaged-browser evidence, builds/budgets, full ordinary suites, accessibility,
   formal review, immutable fingerprint or release evidence was produced.
 
+## Current finder-loop results
+
+Package-local commands were used; no dependency download or Corepack cache access
+was needed. Test command in each package:
+`node node_modules/vitest/vitest.mjs run <files> --maxWorkers=1 --minWorkers=1 --reporter=dot`.
+
+| Directory / exact final selected files | Actual result |
+| --- | --- |
+| backend: test/intake-relay.test.ts test/share-relay.test.ts test/relay-publication-authority.test.ts test/relay-terminal.test.ts test/share-postgres.test.ts test/intake-terminal-postgres.test.ts | 6 files / 34 passed; 4.32s |
+| schema: test/intake.test.ts test/catalog.test.ts test/share.test.ts | 3 files / 15 passed; 1.33s |
+| kernel: test/intake.test.ts test/intake-v2-authority.test.ts test/intake-archive-boundary.test.ts | 3 files / 18 passed; 5.39s |
+| shell: test/intake-session.test.ts test/intake-publication.test.ts test/intake-workflows.test.ts test/intake-publication-terminal.test.ts test/intake-owner-custody.test.ts test/intake-owner-vault.browser.test.ts test/intake-ui.test.tsx test/intake-delivery-boundary.test.ts test/relay-owner-configuration.test.ts test/share-custody.test.ts test/share-terminal.test.ts test/share-owner-ui.test.tsx test/share-recipient-ui.test.tsx test/share-client.test.ts test/share-security-integration.test.ts test/automation-tick.test.ts test/production-mutation-route-census.test.ts | 17 files / 96 passed; 16.30s |
+| shell: test/worker-intake-integration.test.ts | 1 file / 1 passed; 29.99s |
+
+- Disjoint final packets: 164 passed in 30 files. Repeated finder runs above are
+  not counted again. This is NOT a full package/workspace regression campaign.
+- Final UI/ledger recovery-error recheck: test/intake-ui.test.tsx plus
+  test/intake-workflows.test.ts, 2 files / 16 passed; 3.34s. A cached read cannot
+  erase a failed durable-recovery prerequisite in the UI. These tests overlap
+  the selected shell packet and are not added to the disjoint total.
+- Real WorkerClient/db-worker fixture now additionally loses the entire owned
+  presentation cache during publication/revocation, changes the source while a
+  publication is retained, terminally cancels its exact original request, rejects
+  that delayed original WorkerClient invocation, and reopens the durable public
+  metadata. Original draft, private custody, data, attachments and receipt Undo
+  paths are preserved. Actual browser OPFS is not substituted by this fixture.
+- Earlier worker finder runs failed on a test helper excluding base32 digits from
+  authenticated terminal paths, then on the old /uncertain/ error assertion after
+  the new /unconfirmed/ response. Both were fixed; the final worker run passed.
+- TypeScript: `node node_modules/typescript/bin/tsc --noEmit` in schema, kernel,
+  shell and backend exited 0. Intermediate errors from missing new test-double
+  methods and a widened test parameter were fixed, not described as passing.
+- `git diff --check`: exit 0. No commit/push, network deployment, browser/profile,
+  production value, evidence artifact, bundle limit or Git metadata was touched.
+- Census remains a read-only inventory: developmentComplete=false. It executes
+  no tests/build and generates no release report. The command exited 0.
+
 ## Exact continuation
 
-1. Re-read live Git status/HEAD and preserve this entire uncommitted diff or its
-   externally saved checkpoint. One writer. No commits/pushes/downloads/production
-   actions. Do not restart A-D, the E editor, or the now-connected basic F migration.
-2. The next F code boundary is SAFE terminalization/recovery of stale/expired
-   retained publication, not enabling another UI flag:
-   - IntakePublication preserves original work and fails closed when the original
-     save/publication target becomes stale. It currently has Resume, not a complete
-     explicit re-review/abandonment protocol. Add deterministic stale source,
-     configuration switch, expiry, late original worker/HTTP completion, cache
-     teardown/loss and crash-between-cancel/readback/persist tests first.
-   - Prove or terminalize each original worker invocation before replacing any
-     request. A read-only not_invoked snapshot is insufficient. Never relabel
-     committed metadata or replace the retained form/key/ciphertext.
-   - An ambiguous POST may still arrive after a DELETE. A missing remote form is
-     not alone proof that a delayed publication cannot create it. Reconcile exact
-     original relay identity or use a verified tombstone/terminal protocol.
-   - Keep originals quarantined if safe terminalization cannot be established.
-     Explicit reviewed source renewal must not be automatic retargeting.
-   - Sharing has the corresponding stale/expired prepared-record boundary. Its
-     invoked path safely replays exact ciphertext, but prepared recovery/abandonment
-     and legacy receipt owner recovery are still open. Extend ShareOwnerSession/
-     ShareDialog without deleting custody or minting a replacement for unknown work.
-3. Finish safe legacy intake/receipt and old sharing receipt adoption:
-   - Originals stay untouched; never inspect real private values, silently strip/
-     delete state, rebind a fork/restore, archive legacy secrets or route them through
-     WorkerClient. Ordinary replay refuses historical private responses unchanged.
-   - Design the narrow trusted-shell adoption path with original authority/owner
-     evidence and custody commit/readback first. Test synthetic legacy state AND
-     historical responses/archives, wrong-source copies, lost commits and teardown.
-     Current quarantine/export denial is deliberate, not completed adoption.
-   - Extend the real worker/archive fixture to cover V2 metadata on create/fork/
-     delete/restore-as-new without granting copied metadata original owner custody.
-4. Finish E's actual production physical transaction/recovery capability:
-   - Preserve the current fail-closed guard. A new label or memory fixture is not
-     production authority. Inspect db.ts, durable-inventory.ts, boot ordering,
-     lifecycle/restore recovery, the pinned SAHPool VFS and observer-route guard.
-   - Add deterministic faults for user/sys/catalog commit, hot/super-journal,
-     flush/deletion/partial publication, worker loss and reopen before enabling.
-     Recovery must explain exact owned files under fencing/exclusion, rerun strict
-     catalog/canonical classification and preserve unrelated/legacy files.
-   - Establish real production runtime prerequisites before granting capability;
-     keep physical browser/release certification separately deferred. Scheduled
-     request reconciliation is implemented here; do not regress it.
-5. Update the census/handoff as inventory. Only when every A-F control, route,
-   durable readback and recovery path is implemented start the one integrated
-   regression/build/budget/browser/accessibility/security/product campaign.
-   Do not raise budgets. Human NVDA and real hosted configuration/deployment remain
-   later external gates, not fabricated local completion.
+1. Verify live Git status/HEAD and preserve this diff or its externally saved
+   checkpoint. Base is 49d1b777c4d23df83af9ba0936e7d28bcbd88f7d, not the older
+   1f24 checkpoint. One writer; no commits/pushes/downloads/production actions.
+   Keep development-first sequencing; do not start certification.
 
-Remaining development blockers are CODE: F legacy/stale workflow recovery and E
-production OPFS transaction capability. No verified environment blocker prevents
-continuation. This checkpoint does not claim development complete, P0 shipped or
-the roadmap shipped.
+2. Next F boundary: narrow authority-backed adoption/terminalization of legacy
+   cache-only work and stale local revoke renewal.
+   - New ledger-owned publication/sharing closure and cache-loss recovery are
+     connected and tested. Do not restart those primitives or revert terminal
+     HTTP to a DELETE/404 shortcut.
+   - IntakeWorkflowSlot.recover deliberately rejects a cache-only original with
+     no durable slot. A legacy client may still mint/send an unknown save/publish
+     request after a read-only snapshot. Copying its cache, adding a protocol flag,
+     or cancelling only known IDs does not exclude those later requests.
+   - Design an original-form/owner/source-bound authority terminal protocol (or
+     equivalently proven exclusion) before granting legacy workflow closure.
+     Preserve original metadata, keys, IDs and responses. Add deterministic old
+     client/new client, delayed unknown-ID and cancel/readback/persist faults first.
+   - A local revocation retained before invocation can become stale if another
+     canonical write wins. It currently fails closed and remains retained.
+     Add explicitly reviewed source renewal ONLY after the original request is
+     terminally cancelled/reconciled and the exact remote identity is terminal.
+     Preserve all prior invocation identities; do not mutate the old immutable
+     job/receipt, change a form's identity, or retarget unknown work.
+   - If a publication already committed locally, Close stops the relay but asks
+     the user to review/revoke the local form, then finish closure. That path is
+     intentional; never report a still-active local form as reconciled.
+   - Original app/generation loss/change remains quarantined. A narrow catalog/
+     owner-history recovery grant is needed where the original target cannot be
+     selected. Wrong-source copies must never gain owner custody. Keep source data
+     usable outside the quarantine and make recovery prerequisites explicit.
+
+3. Finish F legacy intake/private historical receipt and old share receipt adoption.
+   - Originals stay untouched. Do not inspect real private values, silently strip/
+     delete state, rebind copied/forked/restored metadata, archive legacy secrets,
+     or send private material through ordinary WorkerClient.
+   - Implement the narrow trusted-shell path with original authority/owner proof
+     and custody commit/readback BEFORE publication metadata/owner actions.
+     Test synthetic legacy state, responses/archives, wrong-source copies, lost
+     commits and teardown/reload. A possession-only old share URL/receipt without
+     app/source evidence must not be silently assigned to the currently open app.
+   - Extend real worker/catalog/archive fixtures through create/fork/delete/
+     restore-as-new. Metadata copies keep original source binding and cannot gain
+     the source vault's owner authority. Existing quarantine/export denial is not
+     a completed migration and must not be bypassed to enable UI.
+
+4. Finish E's real production physical transaction/recovery capability.
+   - Guard remains test_memory or unavailable in db.ts. No OPFS label/certificate
+     was added. Re-read durable-inventory, boot order, lifecycle/restore recovery,
+     observer guards and the pinned sqlite-wasm SAHPool VFS.
+   - Add deterministic user/system/catalog commit, hot/super-journal, flush/delete,
+     partial-publication, worker-loss and reopen faults before implementing.
+     Recovery must explain exact owned files under fencing/exclusion, then rerun
+     strict catalog/canonical classification; preserve unrelated and legacy files.
+   - SAHPool xSync flush and its xCheckReservedLock behavior need real VFS-level
+     investigation. A memory-driver fixture or route/UI label cannot grant OPFS
+     capability. Physical/browser certification remains the later campaign.
+   - Preserve retained scheduled-command reconciliation and the new durable intake
+     check before scheduling any replacement invocation.
+
+5. Update census/handoff as inventory. Once every A-F source/UI/custody/recovery
+   boundary is genuinely implemented, stop for the single integrated testing
+   phase. No full regression/build/budget/browser/accessibility/formal-review
+   campaign now; never raise frozen budgets or fabricate a passing certificate.
+
+Remaining development blockers are CODE: legacy/unfenced owner recovery and
+stale local-revoke renewal in F, and actual OPFS transaction capability in E.
+There is no verified host blocker. This is a coherent continuation checkpoint,
+not development-complete, certified, P0 shipped, or roadmap shipped.
 
 ## Changed-file scope
 
 Use `git status --short --untracked-files=all` for the exact current path list.
+This continuation currently changes 38 paths (including 8 new files).
 
-- Kernel: intake V2 primitives, Store/receipt retention, production coordinator/
-  authority, new source/private-response and archive boundaries, focused tests.
-- Schema: intake metadata/publication ack, closed catalog command/cancellation,
-  new public-only workflow contract and its package subpath export.
-- Shell: App/DataView/IntakeCenter/ShareDialog, WorkerClient/db-worker/census,
-  new intake session/publication/owner/relay configuration modules, new share
-  custody/vault, bounded relay parser, scheduler recovery and focused tests.
-- Backend: authenticated origin-allowlisted owner publication and owned relay tests.
-- Inventory/specification: development census, this handoff, ADR-063.
+- Kernel: no source changes in this continuation; preserved authority/archive
+  boundary finder tests and typecheck passed.
+- Schema: closed terminal acknowledgements/request and retained revocation/closure
+  job validation. No archive version, catalog identity or secret transport changes.
+- Shell: App scheduler, IntakeCenter, ShareDialog, original publication/revocation,
+  new public-only workflow ledger and terminal relay request helpers, shared request
+  digest, trusted-shell relay client/configuration, focused protocol/UI/worker tests.
+- Backend: immutable terminal relay endpoints, memory/Postgres identity retention,
+  serialized clock revalidation, exact share replay, owned SQL/HTTP fault tests.
+- Inventory/specification: development census, this handoff, ADR-064.
 - No dependency/lockfile, production configuration, generated release artifact,
   evidence report or Git metadata changes.

@@ -1,5 +1,6 @@
 import { TargetEvidenceV1 } from "@clay/schema/catalog";
-import { ShareApprovedScopeV1, ShareCreateRequestV1, ShareCreateResponseV1 } from "@clay/schema/share";
+import { ShareApprovedScopeV1, ShareCreateRequestV1, ShareCreateResponseV1, ShareTerminalResponseV1 } from "@clay/schema/share";
+import { relayRequestSha256 } from "../app/relay-request-identity";
 import { buildRecipientShareUrlV1, decryptShareSnapshotV1, hashShareRevokeTokenV1, parseRecipientShareLocationV1, type encryptApprovedShareV1 } from "./crypto";
 import { parseOwnerShareReceiptV1, type OwnerShareReceiptV1 } from "./owner-receipts";
 import type { ShareRelayClient } from "./relay-client";
@@ -111,7 +112,10 @@ export class ShareOwnerSession {
     if (row.state !== "revoke_pending") row = await this.write(row, { ...row, state: "revoke_pending", revocationAt: this.now().toISOString() });
     const capability = parseRecipientShareLocationV1(row.receipt.url);
     if (capability.shareId !== id) throw custodyError();
-    try { const response = await this.relay.revoke(id, row.receipt.revokeToken); if (response.shareId !== id || response.revoked !== true) throw new Error(); }
+    try {
+      const response = ShareTerminalResponseV1.parse(await this.relay.terminalize(structuredClone(row.request), row.receipt.revokeToken));
+      if (response.shareId !== id || response.expiresAt !== row.request.expiresAt || response.requestSha256 !== await relayRequestSha256(row.request)) throw new Error();
+    }
     catch { throw new Error("Share revocation is uncertain; retry the retained revocation"); }
     return this.write(row, { ...row, state: "revoked", receipt: { ...row.receipt, revokedAt: row.revocationAt } });
   }

@@ -23,6 +23,7 @@ import { productionWorkerRouteAvailable } from "../worker/mutation-route-census"
 import { beginAppSetup, readAppSetup, saveAppSetup, finishAppSetup } from "./app-setup-intent";
 import { ManualDownloadRecovery, type ManualDownloadIntent } from "./manual-download-recovery";
 import { runRetainedAutomationTick } from "./automation-tick";
+import { recoverIntakeWorkflows } from "../intake/workflows";
 import {
   LatestRequestGate, beginLazySession, createRetryingLoader, runLatestRequest,
 } from "./async-lifecycle";
@@ -594,7 +595,8 @@ export function App(): React.JSX.Element {
       if (running || !live || workerRef.current !== worker || currentIdRef.current !== app) return;
       running = true;
       try {
-        const tick = await runRetainedAutomationTick(sessionStorage, worker, app);
+        const tick = await runRetainedAutomationTick(sessionStorage, worker, app,
+          () => recoverIntakeWorkflows(sessionStorage, location.origin, app));
         const { runs, notifications: inbox } = tick;
         if (!live) return;
         setAutomationStorageAvailable(tick.available); setAutomationWaitReason(tick.reason);

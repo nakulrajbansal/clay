@@ -104,6 +104,7 @@ export function ShareDialog(props: Readonly<{
   }> | null>(null);
   const [approval, setApproval] = useState<ApprovalState | null>(null);
   const [needsReapproval, setNeedsReapproval] = useState(false);
+  const [previewRevision, setPreviewRevision] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<OwnerShareReceiptV1 | null>(null);
@@ -153,7 +154,7 @@ export function ShareDialog(props: Readonly<{
     return () => { active = false; controller.abort(); };
     // requestKey is the canonical UI selection snapshot.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.worker, requestKey]);
+  }, [props.worker, requestKey, previewRevision]);
 
   const invalidateApproval = (): void => {
     if (approval) setNeedsReapproval(true);
@@ -304,8 +305,10 @@ export function ShareDialog(props: Readonly<{
     {!owner ? <p role="status">Encrypted sharing requires explicit relay configuration bound to this origin. Local Print and CSV remain available.</p> : null}
     {storage.getItem("clay_owner_share_receipts_v1") !== null ? <p>Legacy share receipts remain untouched on this device. They are not rebound to this app.</p> : null}
     {pending.map(row => <section key={row.request.shareId} role="status"><p>{row.receipt.title}: {row.state === "revoke_pending" ? "revocation acknowledgement pending" : "original encrypted snapshot retained"}.</p>
-      <button disabled={busy} onClick={() => void resume(row)}>Retry original {row.state === "revoke_pending" ? "revocation" : "share"}</button>
-      {row.state !== "revoke_pending" ? <button disabled={busy} onClick={() => void revoke(row.receipt)}>Revoke retained snapshot</button> : null}
+      {row.receipt.relayBaseUrl !== props.relay?.baseUrl ? <p>Restore the original relay configuration to recover this snapshot. Its custody has not been moved.</p> : null}
+      <button disabled={busy || row.receipt.relayBaseUrl !== props.relay?.baseUrl || (row.state !== "revoke_pending" && Date.parse(row.request.expiresAt) <= clock().getTime())}
+        onClick={() => void resume(row)}>Retry original {row.state === "revoke_pending" ? "revocation" : "share"}</button>
+      {row.state !== "revoke_pending" ? <button disabled={busy || row.receipt.relayBaseUrl !== props.relay?.baseUrl} onClick={() => void revoke(row.receipt)}>Revoke retained snapshot</button> : null}
     </section>)}
 
     <section className="share-scope" aria-label="Share scope">
@@ -376,13 +379,16 @@ export function ShareDialog(props: Readonly<{
           <article key={receipt.shareId}>
             <span>{receipt.title} · expires {new Date(receipt.expiresAt).toLocaleDateString()}</span>
             {receipt.revokedAt ? <strong>Revoked</strong>
-              : <><button disabled={busy || pending.length > 0} onClick={() => setCreated(receipt)}>Show retained link</button><button type="button" disabled={busy}
+              : <><button disabled={busy || pending.length > 0} onClick={() => setCreated(receipt)}>Show retained link</button><button type="button" disabled={busy || receipt.relayBaseUrl !== props.relay?.baseUrl}
                   onClick={() => void revoke(receipt)}>Revoke</button></>}
           </article>)}
       </details> : null}
 
     <footer className="share-dialog-actions">
       <button type="button" onClick={props.onClose}>Cancel</button>
+      <button type="button" disabled={busy || pending.length > 0} onClick={() => {
+        invalidateApproval(); setPreviewRevision(value => value + 1);
+      }}>Review a fresh snapshot</button>
       <button type="button" disabled={!artifact || busy || !owner || !custodyReady || pending.length > 0}
         onClick={() => void approve()}>Approve this exact scope</button>
       <button type="button" className="primary" disabled={!approval || !artifact || busy || !owner || !custodyReady || pending.length > 0}

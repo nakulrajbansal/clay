@@ -37,6 +37,7 @@ export type IntakeRelayPutResult = Readonly<{
 
 export type IntakeRelayStore = {
   register(record: IntakeRelayRegistrationRecord): Promise<{ created: boolean }>;
+  terminalize(record: IntakeRelayRegistrationRecord): Promise<void>;
   authorizeSubmission(
     formId: string,
     tokenSha256: string,
@@ -166,7 +167,8 @@ export class MemoryIntakeRelayStore implements IntakeRelayStore {
     let submissions = 0;
     for (const [formId, form] of this.#forms) {
       submissions += this.#clean(form, now);
-      if (form.revokedAt === null && Date.parse(form.expiresAt) > now) continue;
+      // Revocation is an identity tombstone, not permission to reuse the ID.
+      if (Date.parse(form.expiresAt) > now) continue;
       for (const item of form.submissions.values()) {
         this.#totalBytes -= item.ciphertextBytes;
         submissions++;
@@ -195,10 +197,18 @@ export class MemoryIntakeRelayStore implements IntakeRelayStore {
   }
 
   async register(record: IntakeRelayRegistrationRecord): Promise<{ created: boolean }> {
+    return this.#register(record, false);
+  }
+
+  async terminalize(record: IntakeRelayRegistrationRecord): Promise<void> {
+    this.#register(record, true);
+  }
+
+  #register(record: IntakeRelayRegistrationRecord, terminal: boolean): { created: boolean } {
     const now = this.#now();
     this.#cleanAll(now);
     const expiry = Date.parse(record.expiresAt);
-    if (!Number.isFinite(expiry) || expiry <= now || expiry > now + 90 * 86_400_000)
+    if (!Number.isFinite(expiry) || (!terminal && expiry <= now) || expiry > now + 90 * 86_400_000)
       throw new IntakeRelayError("invalid", "intake form expiry must be within 90 days");
     if (!/^[0-9a-f]{64}$/u.test(record.ownerTokenSha256)
         || !/^[0-9a-f]{64}$/u.test(record.submitTokenSha256)
@@ -210,15 +220,23 @@ export class MemoryIntakeRelayStore implements IntakeRelayStore {
     if (prior) {
       if (!hashMatches(prior.ownerTokenSha256, record.ownerTokenSha256))
         throw new IntakeRelayError("conflict", "intake form identity is already registered");
+      // Network source is an allocation/rate label, not part of the retained
+      // owner's immutable registration. Keep its original accounting label.
       const same = prior.submitTokenSha256 === record.submitTokenSha256
         && prior.publisherIdSha256 === record.publisherIdSha256
-        && prior.sourceSha256 === record.sourceSha256
         && prior.expiresAt === record.expiresAt
         && prior.maxCiphertextBytes === record.maxCiphertextBytes
-        && prior.revokedAt === null;
+        && (terminal || prior.revokedAt === null);
       if (!same) throw new IntakeRelayError("conflict", "intake form registration does not match");
+      if (terminal) {
+        prior.revokedAt ??= new Date(now).toISOString();
+        for (const item of prior.submissions.values()) this.#totalBytes -= item.ciphertextBytes;
+        prior.submissions.clear();
+      }
       return { created: false };
     }
+    // All arrivals validate expiry inside this synchronous exclusion boundary.
+    if (terminal && expiry <= now) return { created: false };
     if (this.#forms.size >= this.#maxForms)
       throw new IntakeRelayError("capacity", "relay form capacity is full");
     const publisherForms = [...this.#forms.values()].filter(form =>
@@ -234,7 +252,7 @@ export class MemoryIntakeRelayStore implements IntakeRelayStore {
     if (recentSourceRegistrations >= this.#maxRegistrationsPerSourceWindow)
       throw new IntakeRelayError("capacity", "source intake form rate limit reached");
     this.#forms.set(record.formId, {
-      ...record, createdAt: new Date(now).toISOString(), revokedAt: null,
+      ...record, createdAt: new Date(now).toISOString(), revokedAt: terminal ? new Date(now).toISOString() : null,
       submissions: new Map(),
     });
     this.#registrationEvents.push({ sourceSha256: record.sourceSha256, at: now });
@@ -480,7 +498,7 @@ export class PostgresIntakeRelayStore implements IntakeRelayStore {
     );
     const forms = await client.query(
       `DELETE FROM intake_relay_forms
-       WHERE revoked_at IS NOT NULL OR expires_at <= $1 RETURNING form_id`,
+       WHERE expires_at <= $1 RETURNING form_id`,
       [at],
     );
     await client.query(
@@ -491,9 +509,9 @@ export class PostgresIntakeRelayStore implements IntakeRelayStore {
   }
 
   async #transaction<T>(
-    now: number,
     run: (
       client: IntakeRelayPgClient,
+      now: number,
       cleanup: { forms: number; submissions: number },
     ) => Promise<T>,
   ): Promise<T> {
@@ -501,8 +519,11 @@ export class PostgresIntakeRelayStore implements IntakeRelayStore {
     try {
       await client.query("BEGIN");
       await client.query("SELECT pg_advisory_xact_lock(1129072972)");
+      // Never reuse a pre-lock clock: a delayed create may resume after the
+      // terminal acknowledgement has relied on intrinsic request expiry.
+      const now = this.#now();
       const cleanup = await this.#cleanup(client, now);
-      const value = await run(client, cleanup);
+      const value = await run(client, now, cleanup);
       await client.query("COMMIT");
       return value;
     } catch (error) {
@@ -536,16 +557,23 @@ export class PostgresIntakeRelayStore implements IntakeRelayStore {
   }
 
   async register(record: IntakeRelayRegistrationRecord): Promise<{ created: boolean }> {
-    const now = this.#now();
+    return this.#register(structuredClone(record), false);
+  }
+
+  async terminalize(record: IntakeRelayRegistrationRecord): Promise<void> {
+    await this.#register(structuredClone(record), true);
+  }
+
+  async #register(record: IntakeRelayRegistrationRecord, terminal: boolean): Promise<{ created: boolean }> {
+    return this.#transaction(async (client, now) => {
     const expiry = Date.parse(record.expiresAt);
-    if (!Number.isFinite(expiry) || expiry <= now || expiry > now + 90 * 86_400_000
+    if (!Number.isFinite(expiry) || (!terminal && expiry <= now) || expiry > now + 90 * 86_400_000
         || !/^[0-9a-f]{64}$/u.test(record.ownerTokenSha256)
         || !/^[0-9a-f]{64}$/u.test(record.submitTokenSha256)
         || !/^[0-9a-f]{64}$/u.test(record.publisherIdSha256)
         || !/^[0-9a-f]{64}$/u.test(record.sourceSha256)
         || hashMatches(record.ownerTokenSha256, record.submitTokenSha256))
       throw new IntakeRelayError("invalid", "intake form registration is invalid");
-    return this.#transaction(now, async client => {
       const prior = (await client.query(
         "SELECT * FROM intake_relay_forms WHERE form_id = $1 FOR UPDATE", [record.formId],
       )).rows[0];
@@ -553,30 +581,35 @@ export class PostgresIntakeRelayStore implements IntakeRelayStore {
         if (!hashMatches(String(prior.owner_token_sha256), record.ownerTokenSha256)
             || String(prior.submit_token_sha256) !== record.submitTokenSha256
             || String(prior.publisher_id_sha256) !== record.publisherIdSha256
-            || String(prior.source_sha256) !== record.sourceSha256
             || pgInstant(prior.expires_at) !== record.expiresAt
             || Number(prior.max_ciphertext_bytes) !== record.maxCiphertextBytes
-            || (prior.revoked_at !== null && prior.revoked_at !== undefined))
+            || (!terminal && prior.revoked_at !== null && prior.revoked_at !== undefined))
           throw new IntakeRelayError("conflict", "intake form registration does not match");
+        if (terminal) {
+          await client.query(`UPDATE intake_relay_forms SET revoked_at = $2
+            WHERE form_id = $1 AND revoked_at IS NULL RETURNING form_id`, [record.formId, new Date(now).toISOString()]);
+          await client.query("DELETE FROM intake_relay_submissions WHERE form_id = $1", [record.formId]);
+        }
         return { created: false };
       }
+      if (terminal && expiry <= now) return { created: false };
       const at = new Date(now).toISOString();
       const count = Number((await client.query(
         `SELECT COUNT(*) AS n FROM intake_relay_forms
-         WHERE revoked_at IS NULL AND expires_at > $1`, [at],
+         WHERE expires_at > $1`, [at],
       )).rows[0]?.n ?? 0);
       if (!Number.isSafeInteger(count) || count >= this.#maxForms)
         throw new IntakeRelayError("capacity", "relay form capacity is full");
       const publisherCount = Number((await client.query(
         `SELECT COUNT(*) AS n FROM intake_relay_forms
-         WHERE publisher_id_sha256 = $1 AND revoked_at IS NULL AND expires_at > $2`,
+         WHERE publisher_id_sha256 = $1 AND expires_at > $2`,
         [record.publisherIdSha256, at],
       )).rows[0]?.n ?? 0);
       if (!Number.isSafeInteger(publisherCount) || publisherCount >= this.#maxFormsPerPublisher)
         throw new IntakeRelayError("capacity", "publisher intake form quota is full");
       const sourceCount = Number((await client.query(
         `SELECT COUNT(*) AS n FROM intake_relay_forms
-         WHERE source_sha256 = $1 AND revoked_at IS NULL AND expires_at > $2`,
+         WHERE source_sha256 = $1 AND expires_at > $2`,
         [record.sourceSha256, at],
       )).rows[0]?.n ?? 0);
       if (!Number.isSafeInteger(sourceCount) || sourceCount >= this.#maxFormsPerSource)
@@ -594,10 +627,10 @@ export class PostgresIntakeRelayStore implements IntakeRelayStore {
           form_id, owner_token_sha256, submit_token_sha256,
           publisher_id_sha256, source_sha256, expires_at,
           max_ciphertext_bytes, created_at, revoked_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL)`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [record.formId, record.ownerTokenSha256, record.submitTokenSha256,
          record.publisherIdSha256, record.sourceSha256, record.expiresAt,
-         record.maxCiphertextBytes, at],
+         record.maxCiphertextBytes, at, terminal ? at : null],
       );
       await client.query(
         `INSERT INTO intake_relay_registration_events(
@@ -613,8 +646,7 @@ export class PostgresIntakeRelayStore implements IntakeRelayStore {
     formId: string,
     tokenSha256: string,
   ): Promise<{ maxCiphertextBytes: number }> {
-    const now = this.#now();
-    return this.#transaction(now, async client => {
+    return this.#transaction(async (client, now) => {
       const form = await this.#lockedForm(client, formId, tokenSha256, "submit", now);
       const maxCiphertextBytes = Number(form.max_ciphertext_bytes);
       if (!Number.isSafeInteger(maxCiphertextBytes)
@@ -640,8 +672,7 @@ export class PostgresIntakeRelayStore implements IntakeRelayStore {
     tokenSha256: string,
     record: IntakeRelaySubmissionRecord,
   ): Promise<IntakeRelayPutResult> {
-    const now = this.#now();
-    return this.#transaction(now, async client => {
+    return this.#transaction(async (client, now) => {
       const form = await this.#lockedForm(client, record.formId, tokenSha256, "submit", now);
       if (record.ciphertextBytes > Number(form.max_ciphertext_bytes))
         throw new IntakeRelayError("item_too_large", "ciphertext exceeds this form's limit");
@@ -705,8 +736,7 @@ export class PostgresIntakeRelayStore implements IntakeRelayStore {
     if (!Number.isSafeInteger(maxWireBytes) || maxWireBytes < 1
         || maxWireBytes > MAX_INTAKE_DELIVERY_PAGE_BYTES)
       throw new IntakeRelayError("invalid", "delivery byte limit is invalid");
-    const now = this.#now();
-    return this.#transaction(now, async client => {
+    return this.#transaction(async (client, now) => {
       await this.#lockedForm(client, formId, ownerTokenSha256, "owner", now);
       let afterReceivedAt: string | null = null;
       if (after !== null) {
@@ -778,8 +808,7 @@ export class PostgresIntakeRelayStore implements IntakeRelayStore {
     submissionId: string,
     ownerTokenSha256: string,
   ): Promise<boolean> {
-    const now = this.#now();
-    return this.#transaction(now, async client => {
+    return this.#transaction(async (client, now) => {
       await this.#lockedForm(client, formId, ownerTokenSha256, "owner", now);
       const result = await client.query(
         `DELETE FROM intake_relay_submissions WHERE form_id = $1 AND submission_id = $2
@@ -790,8 +819,7 @@ export class PostgresIntakeRelayStore implements IntakeRelayStore {
   }
 
   async revokeForm(formId: string, ownerTokenSha256: string): Promise<boolean> {
-    const now = this.#now();
-    return this.#transaction(now, async client => {
+    return this.#transaction(async (client, now) => {
       const form = (await client.query(
         "SELECT * FROM intake_relay_forms WHERE form_id = $1 FOR UPDATE", [formId],
       )).rows[0];
@@ -811,7 +839,6 @@ export class PostgresIntakeRelayStore implements IntakeRelayStore {
   }
 
   async cleanupExpired(): Promise<{ forms: number; submissions: number }> {
-    const now = this.#now();
-    return this.#transaction(now, async (_client, cleanup) => cleanup);
+    return this.#transaction(async (_client, _now, cleanup) => cleanup);
   }
 }

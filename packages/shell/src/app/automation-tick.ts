@@ -6,7 +6,8 @@ import { executeAutomationIntent, readAutomationWorkspace } from "./automation-p
 type Cache = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 /** Local-session polling never mints a replacement for an ambiguous invocation.
  * Presentation caches may suppress a tick, never authorize its durable effects. */
-export async function runRetainedAutomationTick(cache: Cache, worker: WorkerClient, app: string) {
+export async function runRetainedAutomationTick(cache: Cache, worker: WorkerClient, app: string,
+  recoverIntake: () => Promise<boolean> = async () => { throw new Error("Trusted-shell intake recovery is required"); }) {
   const read = await worker.automationPresentation();
   if (read.authorityTarget.appInstanceId !== app) throw new Error("Scheduled source changed; nothing was invoked");
   const idle = (reason: string | null) => ({ available: read.availability.available, reason, runs: [] as AutomationRun[], notifications: read.notifications });
@@ -23,6 +24,10 @@ export async function runRetainedAutomationTick(cache: Cache, worker: WorkerClie
     }
   }
   if (!intent) {
+    // Loss of a presentation cache is not proof that durable owner publication
+    // is idle. The shell supplies the origin-bound workflow read, never secrets.
+    try { if (await recoverIntake()) return idle("pending_intake_delivery"); }
+    catch { return idle("intake_recovery_unavailable"); }
     for (const slot of ["capture", "captureUndo", "relation", "conversionUndo", "dailySource", "dailyNavigation", "dailyInbox", "dailyInboxUndo", "intake"] as const)
       if (readPresentationIntent(cache, app, slot)) return idle("pending_review_or_undo");
     if (cache.getItem(`clay_intake_publication_v1:${app}`) || cache.getItem(`clay_intake_revocation_v1:${app}`)) return idle("pending_intake_delivery");

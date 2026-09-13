@@ -90,7 +90,7 @@ describe("bounded ciphertext-only F1 relay", () => {
     });
   });
 
-  it("rejects plaintext, keys, malformed IDs, duplicate IDs, and non-JSON without storing", async () => {
+  it("rejects plaintext, keys, malformed or conflicting IDs and non-JSON; exact replay creates no second row", async () => {
     const store = new MemoryShareRelayStore();
     const target = app(store);
     for (const body of [
@@ -103,7 +103,8 @@ describe("bounded ciphertext-only F1 relay", () => {
     expect(store.size).toBe(0);
 
     expect((await createShare(target)).status).toBe(201);
-    expect((await createShare(target)).status).toBe(409);
+    expect((await createShare(target)).status).toBe(200);
+    expect((await createShare(target, { ...request, revokeTokenHash: "C".repeat(43) })).status).toBe(409);
     expect(store.size).toBe(1);
   });
 

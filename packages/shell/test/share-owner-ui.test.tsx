@@ -13,6 +13,7 @@ import { decryptShareSnapshotV1, parseRecipientShareLocationV1 } from "../src/sh
 import { assertShareOwnerTransition, validateShareOwnerRecord, type ShareOwnerRecord, type ShareOwnerVault } from "../src/share/owner-custody";
 import { ShareDialog, type ShareAttachmentChoiceV1 } from "../src/share/ShareDialog";
 import type { ShareRelayClient } from "../src/share/relay-client";
+import { relayRequestSha256 } from "../src/app/relay-request-identity";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -140,7 +141,7 @@ describe("F1 owner share preview and creation", () => {
       if (lose) { lose = false; throw new Error("Owned lost delivery"); }
       return { schema: 1 as const, shareId: request.shareId, expiresAt: request.expiresAt };
     });
-    const relay: ShareRelayClient = { baseUrl: "https://relay.example", create, read: vi.fn(), revoke: vi.fn() };
+    const relay: ShareRelayClient = { baseUrl: "https://relay.example", create, read: vi.fn(), terminalize: vi.fn(), revoke: vi.fn() };
     const projectExport = vi.fn(async (scope: ProjectionRequestV1) => artifactFor(scope));
     const props = { ownerVault: vault, worker: { presentationSource, projectExport, attachmentsForRecord: vi.fn(), readAttachment: vi.fn() },
       request, fieldChoices: choices, attachmentChoices: [], relay, viewerOrigin: "https://clay.example", now: () => new Date("2026-09-07T12:00:00.000Z"), onClose: () => {} };
@@ -173,6 +174,8 @@ describe("F1 owner share preview and creation", () => {
       revoke: vi.fn(async (shareId: string, _token: string) => ({
         schema: 1 as const, shareId, revoked: true as const,
       })),
+      terminalize: vi.fn(async (request, _token) => ({ schema: 1 as const, shareId: request.shareId, expiresAt: request.expiresAt,
+        requestSha256: await relayRequestSha256(request), terminal: true as const })),
     };
     const host = document.createElement("div");
     document.body.append(host);
@@ -257,7 +260,8 @@ describe("F1 owner share preview and creation", () => {
 
     await act(async () => button("Revoke link").click());
     await flush();
-    expect(relay.revoke).toHaveBeenCalledWith(sent!.shareId, expect.stringMatching(/^[A-Za-z0-9_-]{43}$/));
+    expect(vi.mocked(relay.terminalize).mock.calls.length).toBe(1);
+    expect(vi.mocked(relay.terminalize).mock.calls[0]?.[0].shareId).toBe(sent!.shareId);
     expect((await vault.list())[0]?.receipt.revokedAt).toBe(
       "2026-09-07T12:00:00.000Z",
     );
@@ -278,7 +282,7 @@ describe("F1 owner share preview and creation", () => {
       baseUrl: "https://relay.example",
       create,
       read: vi.fn(),
-      revoke: vi.fn(),
+      terminalize: vi.fn(), revoke: vi.fn(),
     };
     const host = document.createElement("div"); document.body.append(host);
     const root = createRoot(host);
@@ -319,7 +323,7 @@ describe("F1 owner share preview and creation", () => {
     const projectExport = vi.fn(async (scope: ProjectionRequestV1) => artifactFor(scope));
     const relay: ShareRelayClient = {
       baseUrl: "https://relay.example",
-      create: vi.fn(), read: vi.fn(), revoke: vi.fn(),
+      create: vi.fn(), read: vi.fn(), terminalize: vi.fn(), revoke: vi.fn(),
     };
     const host = document.createElement("div"); document.body.append(host);
     const root = createRoot(host);
@@ -342,6 +346,10 @@ describe("F1 owner share preview and creation", () => {
     await flush();
     expect(projectExport.mock.calls.at(-1)?.[0].fieldIds).toEqual([fieldA, fieldB]);
     expect(button("Create encrypted link").disabled).toBe(true);
+    const priorPreviews = projectExport.mock.calls.length;
+    await act(async () => button("Review a fresh snapshot").click()); await flush();
+    expect(projectExport).toHaveBeenCalledTimes(priorPreviews + 1);
+    expect(button("Create encrypted link").disabled).toBe(true); // Fresh preview is not approval.
     expect(document.body.textContent).not.toContain("MUST_NOT_LEAK");
     await act(async () => root.unmount());
   });

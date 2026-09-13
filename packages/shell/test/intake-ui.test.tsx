@@ -17,6 +17,11 @@ import {
 import type { WorkerClient } from "../src/app/worker-client";
 import { hydrateIntakeOwnerForm, type IntakeOwnerCustody, type IntakeOwnerVault } from "../src/intake/owner-custody";
 import { mintIntakeToken } from "../src/intake/client";
+import { IndexedDbIntakeWorkflows } from "../src/intake/workflows";
+import { OwnedFactory } from "./helpers/owned-idb";
+import { relayRequestSha256 } from "../src/app/relay-request-identity";
+import { IntakePublication } from "../src/intake/publication";
+import { IntakeSession } from "../src/intake/session";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -28,7 +33,8 @@ const target = { appInstanceId, activeGenerationId: `gen_${"b".repeat(26)}`, lin
 const ownerSource = { appInstanceId, activeGenerationId: target.activeGenerationId, lineageEpoch: target.lineageEpoch };
 const custody = new Map<string, IntakeOwnerCustody>();
 const vault: IntakeOwnerVault = { read: async key => custody.get(key) ?? null, insert: async row => { custody.set(row.key, structuredClone(row)); } };
-beforeEach(() => { custody.clear(); sessionStorage.clear(); }); // Owned jsdom only.
+let workflows: IndexedDbIntakeWorkflows;
+beforeEach(() => { custody.clear(); sessionStorage.clear(); workflows = new IndexedDbIntakeWorkflows(new OwnedFactory() as unknown as IDBFactory); }); // Owned jsdom only.
 
 // The UI protocol fixture transports public V2 metadata only; generated private
 // fixture material lives in the separate owned vault, just as at the shell boundary.
@@ -49,7 +55,12 @@ function protocol(methods: Record<string, (...args: any[]) => Promise<any>>): Wo
     intakePresentation: async () => ({ authorityTarget: current, legacyCustody: "none", forms: await methods.listIntakeForms!(), rules: [],
       inbox: await methods.intakeInbox!(), receipts: await methods.intakeReceipts!(), deliveryFailures: await methods.intakeDeliveryFailures!(), tables, trace: semanticTrace }),
     mutationOutcome: async (_route: string, _payload: unknown, context: { requestId: string }) => outcomes.get(context.requestId) ?? { status: "not_invoked" },
+    cancelPresentation: async (_route: string, _payload: unknown, context: { requestId: string }) => {
+      if (!outcomes.has(context.requestId)) outcomes.set(context.requestId, { status: "cancelled" });
+      return outcomes.get(context.requestId);
+    },
     intakeCommand: async (payload: any, context: { requestId: string }) => {
+      if ((outcomes.get(context.requestId) as { status?: string } | undefined)?.status === "cancelled") throw new Error("Owned invocation cancelled");
       expect(JSON.stringify(payload).match(/ownerPrivateKey|ownerToken|submitToken/)).toBeNull();
       expect(payload.authorityTarget).toEqual(current);
       const result = await handlers[payload.command.route]!(payload.command.payload);
@@ -122,6 +133,34 @@ function publishedForm(input: {
 }
 
 describe("public intake UI", () => {
+  it("recovers an interrupted publication without its cache and requires confirmation before closing the exact original work", async () => {
+    let forms: LocalIntakeFormV2[] = [];
+    const worker = protocol({ listIntakeForms: async () => forms, intakeInbox: async () => [], intakeReceipts: async () => [], intakeDeliveryFailures: async () => [],
+      saveIntakeForm: async form => { forms = [form]; return form; } });
+    const fetchImpl = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(url).endsWith("/terminalize")) throw new Error("Owned publication response loss");
+      const request = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ schema: 1, formId: request.formId, expiresAt: request.expiresAt, requestSha256: await relayRequestSha256(request), terminal: true }));
+    });
+    const session = new IntakeSession(sessionStorage, worker, appInstanceId); await session.read();
+    const publication = new IntakePublication(session, vault, { shellOrigin: location.origin, publicBaseUrl: location.origin, relayBaseUrl: "https://relay.example.test/" }, fetchImpl, workflows);
+    await publication.recover(); await publication.begin({ title: "Original draft", description: "", target: { tableId, expectedSchemaVersion: 3 }, expiresAt: "2030-01-01T00:00:00.000Z",
+      fields: [{ fieldId: nameFieldId, label: "Name", type: "text", required: true, maxLength: 100, options: [] }], fileRequests: [] });
+    await expect(publication.resume().then(() => "published")).rejects.toThrow(/uncertain/);
+    const original = publication.pending()!; sessionStorage.clear();
+    const errors: string[] = []; const host = document.createElement("div"); document.body.replaceChildren(host); const root = createRoot(host);
+    const button = (text: string) => [...document.body.querySelectorAll<HTMLButtonElement>("button")].find(row => row.textContent === text)!;
+    try {
+      await act(async () => root.render(<IntakeCenter workflows={workflows} appInstanceId={appInstanceId} ownerVault={vault} worker={worker} tables={tables} semanticTrace={semanticTrace}
+        relayBaseUrl="https://relay.example.test" publicBaseUrl={location.origin} fetchImpl={fetchImpl} onClose={() => {}} onError={message => errors.push(message)} onInfo={() => {}} />));
+      await flush(); expect(document.body.textContent).toContain("Resume original publication");
+      await act(async () => button("Close original publication").click()); expect(fetchImpl).toHaveBeenCalledTimes(1);
+      await act(async () => button("Confirm close original publication").click()); await flush();
+      expect(errors).toEqual([]); expect(document.body.textContent).not.toContain("Resume original publication");
+      expect(forms).toHaveLength(1); expect(forms[0]!.publicForm.formId).toBe(original.formId); expect(forms[0]!.publishedAt).toBeNull(); expect(custody.size).toBe(1);
+      expect((await worker.mutationOutcome(original.publish!.route, original.publish!.payload, { requestId: original.publish!.requestId })).status).toBe("cancelled");
+    } finally { await act(async () => root.unmount()); }
+  });
   it("binds auto-accept enable to the exact simulation receipt, not a later presentation read", async () => {
     const keys = await generateIntakeOwnerKeyPair();
     const form = publishedForm({ publicKey: keys.publicKey, privateKey: keys.privateKey,
@@ -145,7 +184,7 @@ describe("public intake UI", () => {
     const host = document.createElement("div"); document.body.replaceChildren(host); const root = createRoot(host);
     const button = (text: string) => [...document.body.querySelectorAll<HTMLButtonElement>("button")].find(row => row.textContent === text)!;
     try {
-      await act(async () => root.render(<IntakeCenter appInstanceId={appInstanceId} ownerVault={vault} worker={worker} tables={tables} semanticTrace={semanticTrace}
+      await act(async () => root.render(<IntakeCenter workflows={workflows} appInstanceId={appInstanceId} ownerVault={vault} worker={worker} tables={tables} semanticTrace={semanticTrace}
         relayBaseUrl="https://relay.example.test" publicBaseUrl="https://app.example.test" onClose={() => {}} onError={() => {}} onInfo={() => {}} />));
       await flush(); await act(async () => button("Preview auto-accept").click()); await flush();
       await act(async () => button("Enable this exact rule").click()); await flush();
@@ -161,7 +200,7 @@ describe("public intake UI", () => {
     const worker = protocol({ listIntakeForms: async () => [], intakeInbox: async () => [], intakeReceipts: async () => [], intakeDeliveryFailures: async () => [] });
     const host = document.createElement("div"); document.body.replaceChildren(host); const root = createRoot(host);
     try {
-      await act(async () => root.render(<IntakeCenter appInstanceId={appInstanceId} ownerVault={vault} worker={worker} tables={tables} semanticTrace={semanticTrace}
+      await act(async () => root.render(<IntakeCenter workflows={workflows} appInstanceId={appInstanceId} ownerVault={vault} worker={worker} tables={tables} semanticTrace={semanticTrace}
         relayBaseUrl={null} publicBaseUrl="https://app.example.test" onClose={() => {}} onError={() => {}} onInfo={() => {}} />));
       await flush();
       expect(document.body.textContent).toContain("Retained intake work needs its original source and configuration");
@@ -177,7 +216,7 @@ describe("public intake UI", () => {
     const worker = protocol({ listIntakeForms: async () => [copied], intakeInbox: async () => [], intakeReceipts: async () => [], intakeDeliveryFailures: async () => [] });
     const host = document.createElement("div"); document.body.replaceChildren(host); const root = createRoot(host);
     try {
-      await act(async () => root.render(<IntakeCenter appInstanceId={appInstanceId} ownerVault={vault} worker={worker} tables={tables} semanticTrace={semanticTrace}
+      await act(async () => root.render(<IntakeCenter workflows={workflows} appInstanceId={appInstanceId} ownerVault={vault} worker={worker} tables={tables} semanticTrace={semanticTrace}
         relayBaseUrl="https://relay.example.test" publicBaseUrl="https://app.example.test" onClose={() => {}} onError={() => {}} onInfo={() => {}} />));
       await flush();
       expect(document.body.textContent).toContain("Copied form metadata is read-only");
@@ -196,7 +235,7 @@ describe("public intake UI", () => {
       const [open, setOpen] = useState(false);
       return <div className="app">
         <button onClick={() => setOpen(true)}>Open public intake</button>
-        {open ? <IntakeCenter appInstanceId={appInstanceId} ownerVault={vault} worker={worker} tables={tables} semanticTrace={semanticTrace}
+        {open ? <IntakeCenter workflows={workflows} appInstanceId={appInstanceId} ownerVault={vault} worker={worker} tables={tables} semanticTrace={semanticTrace}
           relayBaseUrl="https://relay.example.test" publicBaseUrl="https://app.example.test"
           onClose={() => setOpen(false)} onError={() => undefined} onInfo={() => undefined} /> : null}
       </div>;
@@ -282,7 +321,7 @@ describe("public intake UI", () => {
     });
     const host = document.createElement("div"); document.body.replaceChildren(host);
     const root = createRoot(host);
-    await act(async () => root.render(<IntakeCenter appInstanceId={appInstanceId} ownerVault={vault} worker={worker} tables={tables}
+    await act(async () => root.render(<IntakeCenter workflows={workflows} appInstanceId={appInstanceId} ownerVault={vault} worker={worker} tables={tables}
       semanticTrace={semanticTrace} relayBaseUrl="https://relay.example.test"
       publicBaseUrl="https://app.example.test" fetchImpl={fetchImpl}
       onClose={() => undefined} onError={message => errors.push(message)} onInfo={() => undefined} />));
@@ -300,7 +339,7 @@ describe("public intake UI", () => {
     await act(async () => root.unmount());
   });
 
-  it("treats a terminal relay response as successful owner revocation", async () => {
+  it("retains a missing relay response until an exact terminal receipt closes the original revocation", async () => {
     const keys = await generateIntakeOwnerKeyPair();
     const form = publishedForm({ publicKey: keys.publicKey, privateKey: keys.privateKey,
       formId: "form_aaaaaaaaaaaaaaaaaaaaaaaaaa", title: "Customer request",
@@ -318,10 +357,16 @@ describe("public intake UI", () => {
         return forms[0]!;
       },
     });
-    const fetchImpl = vi.fn(async () => new Response("gone", { status: 410 }));
+    let terminal = false;
+    const fetchImpl = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      if (!terminal) return new Response("gone", { status: 410 });
+      const request = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ schema: 1, formId: request.formId, expiresAt: request.expiresAt,
+        requestSha256: await relayRequestSha256(request), terminal: true }));
+    });
     const host = document.createElement("div"); document.body.replaceChildren(host);
     const root = createRoot(host);
-    await act(async () => root.render(<IntakeCenter appInstanceId={appInstanceId} ownerVault={vault} worker={worker} tables={tables}
+    await act(async () => root.render(<IntakeCenter workflows={workflows} appInstanceId={appInstanceId} ownerVault={vault} worker={worker} tables={tables}
       semanticTrace={semanticTrace} relayBaseUrl="https://relay.example.test"
       publicBaseUrl="https://app.example.test" fetchImpl={fetchImpl}
       onClose={() => undefined} onError={message => errors.push(message)} onInfo={() => undefined} />));
@@ -332,7 +377,14 @@ describe("public intake UI", () => {
       .find(button => button.textContent === "Confirm revocation")!.click());
     await flush();
     expect(revoked).toEqual([form.publicForm.formId]);
-    expect(errors).toEqual([]);
+    expect(errors).toEqual([expect.stringMatching(/terminalization.*unconfirmed/i)]);
+    expect(document.body.textContent).toContain("Resume original revocation");
+    terminal = true;
+    await act(async () => [...document.body.querySelectorAll<HTMLButtonElement>("button")]
+      .find(button => button.textContent === "Resume original revocation")!.click());
+    await flush();
+    expect(revoked).toHaveLength(1);
+    expect(document.body.textContent).not.toContain("Resume original revocation");
     expect(document.body.textContent).toContain("Revoked");
     await act(async () => root.unmount());
   });
@@ -393,7 +445,7 @@ describe("public intake UI", () => {
     });
     const host = document.createElement("div"); document.body.replaceChildren(host);
     const root = createRoot(host);
-    await act(async () => root.render(<IntakeCenter appInstanceId={appInstanceId} ownerVault={vault} worker={worker} tables={tables}
+    await act(async () => root.render(<IntakeCenter workflows={workflows} appInstanceId={appInstanceId} ownerVault={vault} worker={worker} tables={tables}
       semanticTrace={semanticTrace} relayBaseUrl="https://relay.example.test"
       publicBaseUrl="https://app.example.test" fetchImpl={fetchImpl}
       onClose={() => undefined} onError={message => { throw new Error(message); }} onInfo={() => undefined} />));
@@ -444,7 +496,7 @@ describe("public intake UI", () => {
     });
     const host = document.createElement("div"); document.body.replaceChildren(host);
     const root = createRoot(host);
-    await act(async () => root.render(<IntakeCenter appInstanceId={appInstanceId} ownerVault={vault}
+    await act(async () => root.render(<IntakeCenter workflows={workflows} appInstanceId={appInstanceId} ownerVault={vault}
       worker={worker}
       tables={tables}
       semanticTrace={semanticTrace}

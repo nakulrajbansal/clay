@@ -3,9 +3,12 @@ import { IntakePublication } from "../src/intake/publication";
 import type { IntakeOwnerCustody, IntakeOwnerVault } from "../src/intake/owner-custody";
 import { IntakeSession } from "../src/intake/session";
 import type { WorkerClient } from "../src/app/worker-client";
+import { IndexedDbIntakeWorkflows } from "../src/intake/workflows";
+import { OwnedFactory } from "./helpers/owned-idb";
 
 it.each(["custody", "save", "relay", "publish", "acknowledgement"])("resumes the original secret-free publication after a lost %s response", async fault => {
   const cacheRows = new Map<string, string>(); const custody = new Map<string, IntakeOwnerCustody>();
+  const workflows = new IndexedDbIntakeWorkflows(new OwnedFactory() as unknown as IDBFactory);
   const cache = { getItem: (key: string) => cacheRows.get(key) ?? null, setItem: (key: string, value: string) => { cacheRows.set(key, value); }, removeItem: (key: string) => { cacheRows.delete(key); } };
   let lost = false; let serial = 0;
   const vault: IntakeOwnerVault = { read: async key => custody.get(key) ?? null, insert: async value => {
@@ -38,9 +41,9 @@ it.each(["custody", "save", "relay", "publish", "acknowledgement"])("resumes the
     return new Response(JSON.stringify({ formId: metadata.formId, expiresAt: metadata.expiresAt }), { status: 201 });
   });
   const make = () => new IntakePublication(new IntakeSession(cache, worker, initial.appInstanceId), vault,
-    { shellOrigin: "https://app.example.test", relayBaseUrl: "https://relay.example.test/", publicBaseUrl: "https://app.example.test" }, fetchImpl);
-  const first = make(); await first.session.read();
-  first.begin({ title: "Owned request", description: "", expiresAt: "2030-01-01T00:00:00.000Z", target: { tableId: "tbl_11111111-1111-7111-8111-111111111111", expectedSchemaVersion: 1 },
+    { shellOrigin: "https://app.example.test", relayBaseUrl: "https://relay.example.test/", publicBaseUrl: "https://app.example.test" }, fetchImpl, workflows);
+  const first = make(); await first.session.read(); await first.recover();
+  await first.begin({ title: "Owned request", description: "", expiresAt: "2030-01-01T00:00:00.000Z", target: { tableId: "tbl_11111111-1111-7111-8111-111111111111", expectedSchemaVersion: 1 },
     fields: [{ fieldId: "fld_22222222-2222-7222-8222-222222222222", label: "Name", type: "text", required: true, maxLength: 100, options: [] }], fileRequests: [] });
   const original = first.pending()!;
   expect(await first.resume().then(() => false, () => true)).toBe(true); // Never print capability-bearing successful results in RED output.
@@ -52,7 +55,7 @@ it.each(["custody", "save", "relay", "publish", "acknowledgement"])("resumes the
   expect(JSON.stringify(commands).match(/ownerPrivateKey|ownerToken|submitToken/)).toBeNull();
   expect([...cacheRows.values()].join("").match(/ownerPrivateKey|ownerToken|submitToken/)).toBeNull();
   expect(reloaded.pending()).not.toBeNull(); // Kept until the published link has been presented.
-  reloaded.finish(); expect(reloaded.pending()).toBeNull();
+  await reloaded.finish(); expect(reloaded.pending()).toBeNull();
 });
 
 it("denies unconfigured and non-origin-bound publication before custody or HTTP", () => {
@@ -71,8 +74,10 @@ it.each(["save_identity", "publish_identity", "publication_state"])("rejects ret
   const worker = { createMutationContext: () => ({ requestId: saveId }), intakeCommand: mutate, mutationOutcome: async () => ({ status: "not_invoked" }),
     intakePresentation: async () => ({ authorityTarget: source, forms: [], inbox: [], receipts: [], rules: [], deliveryFailures: [], tables: [], trace: {}, legacyCustody: "none" }) } as unknown as WorkerClient;
   const session = new IntakeSession(cache, worker, source.appInstanceId); await session.read();
-  const publication = new IntakePublication(session, vault, { shellOrigin: "https://app.example.test", publicBaseUrl: "https://app.example.test", relayBaseUrl: "https://relay.example.test/" }, fetchImpl);
-  publication.begin({ title: "Owned request", description: "", expiresAt: "2030-01-01T00:00:00.000Z", target: { tableId: "tbl_11111111-1111-7111-8111-111111111111", expectedSchemaVersion: 1 },
+  const publication = new IntakePublication(session, vault, { shellOrigin: "https://app.example.test", publicBaseUrl: "https://app.example.test", relayBaseUrl: "https://relay.example.test/" }, fetchImpl,
+    new IndexedDbIntakeWorkflows(new OwnedFactory() as unknown as IDBFactory));
+  await publication.recover();
+  await publication.begin({ title: "Owned request", description: "", expiresAt: "2030-01-01T00:00:00.000Z", target: { tableId: "tbl_11111111-1111-7111-8111-111111111111", expectedSchemaVersion: 1 },
     fields: [{ fieldId: "fld_22222222-2222-7222-8222-222222222222", label: "Name", type: "text", required: true, maxLength: 100, options: [] }], fileRequests: [] });
   expect(await publication.resume().then(() => false, () => true)).toBe(true);
   const job = publication.pending()!; const form = [...records.values()][0]!.form;

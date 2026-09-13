@@ -125,7 +125,7 @@ describe("account-free F1 recipient view", () => {
       envelope: encrypted.request.envelope,
     }));
     const relay: ShareRelayClient = {
-      baseUrl: "https://relay.example/api", create: vi.fn(), read, revoke: vi.fn(),
+      baseUrl: "https://relay.example/api", create: vi.fn(), read, terminalize: vi.fn(), revoke: vi.fn(),
     };
     const host = document.createElement("div"); document.body.append(host);
     const root = createRoot(host);
@@ -164,7 +164,7 @@ describe("account-free F1 recipient view", () => {
       return "blob:approved-share";
     });
     const relay: ShareRelayClient = {
-      baseUrl: "https://relay.example/api", create: vi.fn(), revoke: vi.fn(),
+      baseUrl: "https://relay.example/api", create: vi.fn(), terminalize: vi.fn(), revoke: vi.fn(),
       read: async () => ({ schema: 1, shareId: encrypted.request.shareId,
         expiresAt: encrypted.request.expiresAt, envelope: encrypted.request.envelope }),
     };
@@ -187,7 +187,7 @@ describe("account-free F1 recipient view", () => {
   ])("shows a safe terminal state for %s without stale output", async (code, message) => {
     const { href } = await encryptedFixture();
     const relay: ShareRelayClient = {
-      baseUrl: "https://relay.example/api", create: vi.fn(), revoke: vi.fn(),
+      baseUrl: "https://relay.example/api", create: vi.fn(), terminalize: vi.fn(), revoke: vi.fn(),
       read: vi.fn(async () => { throw new ShareRelayClientError(code, code === "not_found" ? 404 : 410); }),
     };
     const host = document.createElement("div"); document.body.append(host);
@@ -204,7 +204,7 @@ describe("account-free F1 recipient view", () => {
   it("does not contact any relay when the fragment capability is absent or malformed", async () => {
     const read = vi.fn();
     const factory = vi.fn((): ShareRelayClient => ({
-      baseUrl: "https://relay.example", create: vi.fn(), read, revoke: vi.fn(),
+      baseUrl: "https://relay.example", create: vi.fn(), read, terminalize: vi.fn(), revoke: vi.fn(),
     }));
     const host = document.createElement("div"); document.body.append(host);
     const root = createRoot(host);
@@ -222,7 +222,7 @@ describe("account-free F1 recipient view", () => {
   it("rejects an already expired relay response before exposing decrypted output", async () => {
     const { encrypted, href } = await encryptedFixture();
     const relay: ShareRelayClient = {
-      baseUrl: "https://relay.example/api", create: vi.fn(), revoke: vi.fn(),
+      baseUrl: "https://relay.example/api", create: vi.fn(), terminalize: vi.fn(), revoke: vi.fn(),
       read: vi.fn(async () => ({ schema: 1 as const, shareId: encrypted.request.shareId,
         expiresAt: encrypted.request.expiresAt, envelope: encrypted.request.envelope })),
     };

@@ -17,6 +17,7 @@ import { IndexedDbShareOwnerVault } from "../src/share/owner-custody.browser";
 import { OwnedFactory } from "./helpers/owned-idb";
 import { BrowserShareRelayClient } from "../src/share/relay-client";
 import { ownedRelayApp } from "../../backend/test/helpers/owned-relay-app";
+import { IndexedDbIntakeWorkflows } from "../src/intake/workflows";
 
 it("executes custody publication, delivery loss, partial attachments, review/Undo, auto-accept and revoke through WorkerClient/db-worker and reopens exact durable metadata", async () => {
   vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-09-13T12:00:00.000Z"));
@@ -44,9 +45,16 @@ it("executes custody publication, delivery loss, partial attachments, review/Und
   const rows = new Map<string, string>(); const cache = { getItem: (key: string) => rows.get(key) ?? null, setItem: (key: string, value: string) => { rows.set(key, value); }, removeItem: (key: string) => { rows.delete(key); } };
   const owners = new Map<string, IntakeOwnerCustody>(); const vault: IntakeOwnerVault = { read: async key => owners.get(key) ?? null, insert: async record => { owners.set(record.key, structuredClone(record)); } };
   const config = { shellOrigin: "https://app.example.test", publicBaseUrl: "https://app.example.test", relayBaseUrl: "https://relay.example.test/" };
+  const workflows = new IndexedDbIntakeWorkflows(new OwnedFactory() as unknown as IDBFactory);
   let registrationLost = true, deleteLost = false, revocationLost = false;
   const deliveries = new Map<string, any>(); const registered = new Map<string, string>(); let deleted = 0;
   const fetchImpl = async (url: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    if (String(url).endsWith("/terminalize")) {
+      if (revocationLost) { revocationLost = false; throw new Error("Owned revocation response loss"); }
+      const body = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ schema: 1, formId: body.formId, expiresAt: body.expiresAt,
+        requestSha256: createHash("sha256").update(JSON.stringify(body)).digest("hex"), terminal: true }));
+    }
     if (init?.method === "POST") {
       const body = JSON.parse(String(init.body)); const previous = registered.get(body.formId);
       if (previous) expect(previous === String(init.body)).toBe(true); registered.set(body.formId, String(init.body));
@@ -74,19 +82,20 @@ it("executes custody publication, delivery loss, partial attachments, review/Und
     fileRequests: [{ requestId: "document", fieldId: fileFieldId, label: "File", required: false, maxFiles: 2, maxBytes: 1000, allowedMimeTypes: ["text/plain" as const] }] };
   try {
     await import("../src/worker/db-worker"); await client.boot({ requestedAppId: null, appCache: [] });
-    let session = await openSession(); let publication = new IntakePublication(session, vault, config, fetchImpl);
-    publication.begin(proposal); const formId = publication.pending()!.formId;
+    let session = await openSession(); let publication = new IntakePublication(session, vault, config, fetchImpl, workflows);
+    await publication.recover(); await publication.begin(proposal); const formId = publication.pending()!.formId;
     await expect(publication.resume()).rejects.toThrow(/uncertain/);
     expect((await client.intakePresentation()).forms).toHaveLength(1);
-    publication = new IntakePublication(await openSession(), vault, config, fetchImpl);
+    rows.clear(); // Owned presentation cache loss; durable workflow/custody survives.
+    publication = new IntakePublication(await openSession(), vault, config, fetchImpl, workflows);
     drop = true;
     const lost = publication.resume().catch(error => error);
     await vi.waitFor(() => expect(dropped).toBe(true)); client = new WorkerClient(transport as unknown as Worker);
     expect(await lost).toMatchObject({ message: expect.stringContaining("outcome is unknown") });
     await client.boot({ requestedAppId: null, appCache: [] }); session = await openSession();
-    publication = new IntakePublication(session, vault, config, fetchImpl);
-    const published = await publication.resume(); publication.finish(); expect(published.localForm.publicForm.formId).toBe(formId);
-    let owner = new IntakeOwnerClient(session, vault, config, fetchImpl);
+    publication = new IntakePublication(session, vault, config, fetchImpl, workflows);
+    const published = await publication.resume(); await publication.finish(); expect(published.localForm.publicForm.formId).toBe(formId);
+    let owner = new IntakeOwnerClient(session, vault, config, fetchImpl, workflows);
     const hydrated = await owner.hydrate(published.localForm);
     const bytes = new TextEncoder().encode("Owned passive file");
     const file = { requestId: "document", uploadId: id("upl", "g"), name: "owned.txt", mime: "text/plain" as const, size: bytes.length,
@@ -100,7 +109,7 @@ it("executes custody publication, delivery loss, partial attachments, review/Und
     await enqueue(submission); deleteLost = true;
     await expect(owner.fetch(published.localForm)).rejects.toThrow(/acknowledgement/);
     expect((await client.intakePresentation()).inbox).toMatchObject([{ files: [{ status: "quarantined" }, { status: "rejected" }] }]);
-    owner = new IntakeOwnerClient(await openSession(), vault, config, fetchImpl); await owner.fetch(published.localForm);
+    owner = new IntakeOwnerClient(await openSession(), vault, config, fetchImpl, workflows); await owner.fetch(published.localForm);
     expect(deleted).toBe(1); expect((await client.intakePresentation()).inbox).toHaveLength(1);
     session = await openSession();
     expect(session.reviewed!.inbox[0]!.status).toBe("blocked");
@@ -108,7 +117,7 @@ it("executes custody publication, delivery loss, partial attachments, review/Und
     expect(await session.cancel()).toBe(true);
     await session.read(); await session.rejectIntakeSubmission(submission.submissionId);
     const validId = id("sub", "l"); await enqueue({ ...submission, submissionId: validId, files: [file] });
-    owner = new IntakeOwnerClient(session, vault, config, fetchImpl); await owner.fetch(published.localForm);
+    owner = new IntakeOwnerClient(session, vault, config, fetchImpl, workflows); await owner.fetch(published.localForm);
     const receipt = await session.acceptIntakeSubmission(validId, [file.uploadId]);
     expect(authority.query({ from: "requests" })).toHaveLength(1); expect(receipt.attachmentIds).toHaveLength(1);
     // The real worker's source-bound projection and attachment reads feed only
@@ -132,12 +141,12 @@ it("executes custody publication, delivery loss, partial attachments, review/Und
     await expect(shareRelay.read(shareRecord.request.shareId)).rejects.toMatchObject({ status: 410 });
     await session.undoIntakeReceipt(receipt.id); expect(authority.query({ from: "requests" })).toHaveLength(0);
     await enqueue({ ...submission, submissionId: id("sub", "j"), files: [] });
-    owner = new IntakeOwnerClient(await openSession(), vault, config, fetchImpl); await owner.fetch(published.localForm);
+    owner = new IntakeOwnerClient(await openSession(), vault, config, fetchImpl, workflows); await owner.fetch(published.localForm);
     session = await openSession(); await session.rejectIntakeSubmission(id("sub", "j"));
     expect(session.reviewed!.inbox.find(row => row.submissionId === id("sub", "j"))?.status).toBe("rejected");
-    publication = new IntakePublication(session, vault, config, fetchImpl); publication.begin({ ...proposal, title: "Owned auto form", fileRequests: [] });
-    const automatic = await publication.resume(); publication.finish();
-    owner = new IntakeOwnerClient(session, vault, config, fetchImpl); const autoHydrated = await owner.hydrate(automatic.localForm);
+    publication = new IntakePublication(session, vault, config, fetchImpl, workflows); await publication.recover(); await publication.begin({ ...proposal, title: "Owned auto form", fileRequests: [] });
+    const automatic = await publication.resume(); await publication.finish();
+    owner = new IntakeOwnerClient(session, vault, config, fetchImpl, workflows); const autoHydrated = await owner.hydrate(automatic.localForm);
     await enqueue({ ...submission, formId: automatic.localForm.publicForm.formId, submissionId: id("sub", "k"), files: [] }, autoHydrated.publicForm);
     await owner.fetch(automatic.localForm);
     const draft = { schema: 1 as const, formId: automatic.localForm.publicForm.formId, formRevision: 1, expectedSchemaVersion: proposal.target.expectedSchemaVersion,
@@ -147,11 +156,22 @@ it("executes custody publication, delivery loss, partial attachments, review/Und
     const accepted = await session.processIntakeAutoAccept(draft.formId); expect(accepted).toHaveLength(1);
     expect(await session.processIntakeAutoAccept(draft.formId)).toEqual([]);
     await session.undoIntakeReceipt(accepted[0]!.id); await session.disableIntakeAutoAccept(draft.formId);
-    revocationLost = true; await expect(owner.revoke(automatic.localForm)).rejects.toThrow(/uncertain/);
-    owner = new IntakeOwnerClient(await openSession(), vault, config, fetchImpl); await owner.revoke(); expect(owner.pendingRevocation()).toBeNull();
+    revocationLost = true; await expect(owner.revoke(automatic.localForm)).rejects.toThrow(/unconfirmed/);
+    rows.clear(); // Reopen from the original durable revoke invocation, not a fresh ID.
+    owner = new IntakeOwnerClient(await openSession(), vault, config, fetchImpl, workflows); await owner.revoke(); expect(owner.pendingRevocation()).toBeNull();
+    // A retained publication becomes stale after an unrelated original form's
+    // expiry write. Close its exact worker invocation before a delayed message.
+    publication = new IntakePublication(await openSession(), vault, config, fetchImpl, workflows);
+    await publication.recover(); await publication.begin({ ...proposal, title: "Owned interrupted publication" });
+    registrationLost = true; await expect(publication.resume()).rejects.toThrow(/uncertain/);
+    const delayedPublish = publication.pending()!.publish!;
     vi.setSystemTime(new Date("2026-10-02T00:00:00.000Z"));
-    owner = new IntakeOwnerClient(await openSession(), vault, config, fetchImpl); await owner.fetch(published.localForm);
-    expect((await client.intakePresentation()).forms.every(form => form.revokedAt !== null)).toBe(true);
+    owner = new IntakeOwnerClient(await openSession(), vault, config, fetchImpl, workflows); await owner.fetch(published.localForm);
+    rows.clear(); publication = new IntakePublication(await openSession(), vault, config, fetchImpl, workflows);
+    await publication.terminalize(); expect(publication.pending()).toBeNull();
+    await expect(client.intakeCommand(delayedPublish.payload as never, { requestId: delayedPublish.requestId })).rejects.toThrow();
+    expect((await client.mutationOutcome(delayedPublish.route, delayedPublish.payload, { requestId: delayedPublish.requestId })).status).toBe("cancelled");
+    expect((await client.intakePresentation()).forms.filter(form => form.publishedAt).every(form => form.revokedAt !== null)).toBe(true);
     expect(JSON.stringify(sent).match(/ownerPrivateKey|ownerToken|submitToken/)).toBeNull();
     // Reopen a byte-equivalent owned SQLite target with the same durable catalog.
     const copy = await driver.snapshot(); StateMerkleIndex.createSchema(copy); TargetAuthorityStore.createSchema(copy);
@@ -164,7 +184,7 @@ it("executes custody publication, delivery loss, partial attachments, review/Und
     await client.shutdown(); authority = ProductionStoreAuthority.openExisting(copy, { inventory: { ...inventory, catalogPresent: true }, storageKey: "default", releaseId: id("rel", "f"), nowMs: Date.now(), leaseTtlMs: 60_000 });
     const module = "../src/worker/db-worker.ts"; await import(`${module}?intake-reload`); client = new WorkerClient(transport as unknown as Worker);
     await client.boot({ requestedAppId: null, appCache: [] }); const reopened = await client.intakePresentation();
-    expect(reopened.forms).toHaveLength(2); expect(reopened.receipts).toHaveLength(2); expect(reopened.receipts.every(row => row.undone)).toBe(true);
+    expect(reopened.forms).toHaveLength(3); expect(reopened.receipts).toHaveLength(2); expect(reopened.receipts.every(row => row.undone)).toBe(true);
     expect(authority.query({ from: "requests" })).toHaveLength(0);
   } finally { await client.shutdown().catch(() => {}); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); }
 }, 90_000);

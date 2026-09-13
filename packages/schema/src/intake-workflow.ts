@@ -6,7 +6,9 @@ import { IntakeFormId, IntakePublicationProposalV1, LocalIntakeFormV2 } from "./
 export const IntakePublicationJobV1 = z.object({ schema: z.literal(1), formId: IntakeFormId, source: TargetEvidenceV1,
   configuration: z.object({ shellOrigin: z.string(), publicBaseUrl: z.string(), relayBaseUrl: z.string() }).strict(), proposal: IntakePublicationProposalV1,
   save: PresentationIntentV1.nullable(), publish: PresentationIntentV1.nullable(), complete: LocalIntakeFormV2.nullable(),
-  relayInvoked: z.boolean(), relayConfirmed: z.boolean() }).strict().superRefine((job, context) => {
+  relayInvoked: z.boolean(), relayConfirmed: z.boolean(),
+  termination: z.object({ requestedAt: z.string().datetime({ offset: true }), complete: z.boolean() }).strict().optional(),
+}).strict().superRefine((job, context) => {
     const invalid = () => context.addIssue({ code: "custom", message: "Retained intake publication identity or transition is inconsistent" });
     const identity = (target: { appInstanceId: string; activeGenerationId: string; lineageEpoch: string }) =>
       JSON.stringify([target.appInstanceId, target.activeGenerationId, target.lineageEpoch]);
@@ -42,5 +44,14 @@ export const IntakePublicationJobV1 = z.object({ schema: z.literal(1), formId: I
   });
 export type IntakePublicationJobV1 = z.infer<typeof IntakePublicationJobV1>;
 export const IntakeRevocationJobV1 = z.object({ schema: z.literal(1), form: LocalIntakeFormV2,
-  intent: PresentationIntentV1, relayConfirmed: z.boolean() }).strict();
+  intent: PresentationIntentV1, relayConfirmed: z.boolean() }).strict().superRefine((job, context) => {
+    const command = IntakeCommandPayloadV1.safeParse(job.intent.payload);
+    const invalid = () => context.addIssue({ code: "custom", message: "Original intake revocation identity is inconsistent" });
+    if (!command.success) { invalid(); return; }
+    const payload = z.object({ formId: IntakeFormId, revokedAt: z.string().datetime({ offset: true }) }).strict().safeParse(command.data.command.payload);
+    const source = command.data.authorityTarget, owner = job.form.ownerSource;
+    if (job.intent.slot !== "intake" || job.intent.route !== "intake.command" || job.intent.appInstanceId !== owner.appInstanceId
+        || source.appInstanceId !== owner.appInstanceId || source.activeGenerationId !== owner.activeGenerationId || source.lineageEpoch !== owner.lineageEpoch
+        || command.data.command.route !== "intake.revokeForm" || !payload.success || payload.data.formId !== job.form.publicForm.formId) invalid();
+  });
 export type IntakeRevocationJobV1 = z.infer<typeof IntakeRevocationJobV1>;

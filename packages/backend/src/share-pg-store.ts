@@ -2,7 +2,9 @@ import type { Queryable } from "./pg-store";
 import type {
   ShareRelayCreateResultV1, ShareRelayLookupV1, ShareRelayRecordV1,
   ShareRelayRevokeResultV1, ShareRelayStore,
+  ShareRelayTerminalResultV1,
 } from "./share-store";
+import { sameShareIdentity } from "./share-store";
 
 export const SHARE_RELAY_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS share_links (
@@ -58,7 +60,16 @@ type ShareTransactionalPoolV1 = Queryable & {
 export class PostgresShareRelayStore implements ShareRelayStore {
   constructor(private readonly pool: ShareTransactionalPoolV1) {}
 
-  async create(record: ShareRelayRecordV1, now: number): Promise<ShareRelayCreateResultV1> {
+  async create(record: ShareRelayRecordV1, clock: () => number): Promise<ShareRelayCreateResultV1> {
+    return this.allocate(structuredClone(record), clock, false);
+  }
+
+  async terminalize(record: ShareRelayRecordV1, clock: () => number): Promise<ShareRelayTerminalResultV1> {
+    const result = await this.allocate(structuredClone(record), clock, true);
+    return result === "conflict" || result === "capacity" ? result : "terminal";
+  }
+
+  private async allocate(record: ShareRelayRecordV1, clock: () => number, terminal: boolean): Promise<ShareRelayCreateResultV1> {
     if (!this.pool.connect)
       throw new Error("Postgres share relay requires a transaction-capable pool");
     const client = await this.pool.connect();
@@ -66,6 +77,10 @@ export class PostgresShareRelayStore implements ShareRelayStore {
     try {
       await client.query("BEGIN");
       transactionOpen = true;
+      // Both absent-ID terminalization and creation share one serialization
+      // point, including cross-owner identity conflicts. A tombstone is never
+      // briefly installed as a public link.
+      await client.query("SELECT pg_advisory_xact_lock(1129072973)");
       // A transaction-scoped owner lock serializes the subsequent fresh-snapshot
       // quota check. A single-statement advisory-lock CTE would retain a stale
       // snapshot after waiting and is deliberately not used.
@@ -73,6 +88,8 @@ export class PostgresShareRelayStore implements ShareRelayStore {
         "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
         [record.ownerId ?? "anonymous"],
       );
+      const now = clock();
+      if (!Number.isSafeInteger(now) || now < 0) throw new Error("invalid share relay clock");
       const at = new Date(now).toISOString();
       // Expired rows are reclaimed under the same owner lock. Revocation
       // tombstones remain until expiry so an opaque id cannot be reused.
@@ -81,11 +98,24 @@ export class PostgresShareRelayStore implements ShareRelayStore {
          WHERE expires_at <= $1 AND owner_id IS NOT DISTINCT FROM $2`,
         [at, record.ownerId],
       );
+      let outcome: ShareRelayCreateResultV1;
+      const prior = (await client.query(SELECT_SHARE + " FOR UPDATE", [record.shareId])).rows[0];
+      if (prior) {
+        const existing = recordFromRow(prior);
+        if (!sameShareIdentity(existing, record) || (!terminal && existing.revokedAt !== undefined)) outcome = "conflict";
+        else {
+          if (terminal && existing.revokedAt === undefined) await client.query(
+            `UPDATE share_links SET revoked_at = $3 WHERE id = $1 AND revoke_token_hash = $2
+             AND revoked_at IS NULL RETURNING id`, [record.shareId, record.revokeTokenHash, at]);
+          outcome = "replayed";
+        }
+      } else if (Date.parse(record.expiresAt) <= now) outcome = "expired";
+      else {
       const inserted = await client.query(
         `INSERT INTO share_links(
            id, ciphertext, iv, expires_at, created_at, owner_id,
            revoke_token_hash, ciphertext_bytes, revoked_at)
-         SELECT $1, $2, $3, $4, $5, $6, $7, $8, NULL
+         SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9
          WHERE (SELECT COUNT(*) FROM share_links
                 WHERE owner_id IS NOT DISTINCT FROM $6
                   AND expires_at > $5) < 100
@@ -95,13 +125,14 @@ export class PostgresShareRelayStore implements ShareRelayStore {
          ON CONFLICT (id) DO NOTHING RETURNING id`,
         [record.shareId, record.envelope.ciphertext, record.envelope.iv,
           record.expiresAt, record.createdAt, record.ownerId,
-          record.revokeTokenHash, record.ciphertextBytes],
+          record.revokeTokenHash, record.ciphertextBytes, terminal ? at : null],
       );
-      let outcome: ShareRelayCreateResultV1 = "created";
+      outcome = "created";
       if (!inserted.rows[0]) {
         const existing = await client.query(
           "SELECT id FROM share_links WHERE id = $1", [record.shareId]);
         outcome = existing.rows[0] ? "conflict" : "capacity";
+      }
       }
       await client.query("COMMIT");
       transactionOpen = false;

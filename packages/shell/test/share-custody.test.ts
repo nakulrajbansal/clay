@@ -7,6 +7,7 @@ import type { ShareRelayClient } from "../src/share/relay-client";
 import { IndexedDbShareOwnerVault } from "../src/share/owner-custody.browser";
 import { OwnedFactory } from "./helpers/owned-idb";
 import * as legacyReceipts from "../src/share/owner-receipts";
+import { relayRequestSha256 } from "../src/app/relay-request-identity";
 
 it("has no callerless legacy receipt writer that could replace owner custody", () => {
   for (const name of ["loadOwnerShareReceiptsV1", "saveOwnerShareReceiptV1", "markOwnerShareRevokedV1"])
@@ -38,12 +39,12 @@ it("keeps exact owner/source/ciphertext through custody, relay and revocation re
       if (lostDelivery) { lostDelivery = false; throw new Error("Owned relay response loss"); }
       return { schema: 1 as const, shareId: input.shareId, expiresAt: input.expiresAt };
     });
-    const revoke = vi.fn(async (shareId: string) => {
+    const revoke = vi.fn(async (request: typeof encrypted.request) => {
       expect(record?.state).toBe("revoke_pending");
       if (lostRevoke) { lostRevoke = false; throw new Error("Owned revocation response loss"); }
-      return { schema: 1 as const, shareId, revoked: true as const };
+      return { schema: 1 as const, shareId: request.shareId, expiresAt: request.expiresAt, requestSha256: await relayRequestSha256(request), terminal: true as const };
     });
-    const relay: ShareRelayClient = { baseUrl: "https://relay.example.test", create, revoke, read: vi.fn() };
+    const relay: ShareRelayClient = { baseUrl: "https://relay.example.test", create, terminalize: revoke, revoke: vi.fn(), read: vi.fn() };
     const open = () => new ShareOwnerSession(vault, relay, "https://app.example.test", "https://app.example.test", async () => current, () => new Date("2026-09-13T12:00:00.000Z"));
     const session = open();
     await expect(session.prepare({ encrypted, source, title: "Owned snapshot", approval })).rejects.toThrow(/custody/);

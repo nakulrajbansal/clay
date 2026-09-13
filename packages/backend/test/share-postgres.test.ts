@@ -50,7 +50,7 @@ function fakePool(): Queryable & {
         owner_id: params[5],
         revoke_token_hash: params[6],
         ciphertext_bytes: params[7],
-        revoked_at: null,
+        revoked_at: params[8] ?? null,
       });
       return { rows: [{ id }] };
     }
@@ -79,6 +79,32 @@ function fakePool(): Queryable & {
 }
 
 describe("Postgres F1 relay storage adapter", () => {
+  it("terminalizes before a delayed create, retaining exact identity across adapter reopen", async () => {
+    const pool = fakePool();
+    const a = new PostgresShareRelayStore(pool), b = new PostgresShareRelayStore(pool);
+    expect(await a.terminalize(record, () => NOW)).toBe("terminal");
+    expect(await b.create(record, () => NOW)).toBe("conflict");
+    expect(await b.terminalize(record, () => NOW)).toBe("terminal");
+    expect(await b.terminalize({ ...record, ownerId: "not-the-owner" }, () => NOW)).toBe("conflict");
+    expect(await b.lookup(shareId, NOW)).toEqual({ state: "revoked" });
+  });
+
+  it("refreshes expiry after the allocation lock, not before a suspended worker resumes", async () => {
+    const pool = fakePool(); const connect = pool.connect.bind(pool);
+    let clock = NOW; let locked = false;
+    pool.connect = async () => {
+      const client = await connect(); const query = client.query.bind(client);
+      return { ...client, query: async (sql: string, params?: unknown[]) => {
+        if (/pg_advisory_xact_lock/.test(sql)) { locked = true; clock = Date.parse(record.expiresAt); }
+        return query(sql, params);
+      } };
+    };
+    const store = new PostgresShareRelayStore(pool);
+    expect(await store.create(record, () => clock)).toBe("expired");
+    expect(locked).toBe(true);
+    expect(await store.lookup(shareId, NOW)).toEqual({ state: "not_found" });
+  });
+
   it("reclaims expired rows and bounds each owner's active ciphertext before insert", async () => {
     const calls: { sql: string; params: unknown[] }[] = [];
     const query = async (sql: string, params: unknown[] = []) => {
@@ -90,10 +116,10 @@ describe("Postgres F1 relay storage adapter", () => {
       query,
       connect: async () => ({ query, release }),
     };
-    expect(await new PostgresShareRelayStore(pool).create(record, NOW)).toBe("created");
+    expect(await new PostgresShareRelayStore(pool).create(record, () => NOW)).toBe("created");
     expect(calls[0]?.sql).toBe("BEGIN");
     expect(calls[1]?.sql).toMatch(/pg_advisory_xact_lock/);
-    expect(calls[2]?.sql).toMatch(/DELETE FROM share_links[\s\S]*expires_at/i);
+    expect(calls.findIndex(call => /DELETE FROM share_links[\s\S]*expires_at/i.test(call.sql))).toBeGreaterThan(1);
     const insert = calls.find(call => /INSERT INTO share_links/.test(call.sql))!;
     expect(insert.sql).toMatch(/COUNT\(\*\)[\s\S]*100/i);
     expect(insert.sql).toMatch(/SUM\(ciphertext_bytes\)[\s\S]*67108864/i);
@@ -115,17 +141,17 @@ describe("Postgres F1 relay storage adapter", () => {
     const pool = fakePool();
     const a = new PostgresShareRelayStore(pool);
     const b = new PostgresShareRelayStore(pool);
-    expect(await a.create(record, NOW)).toBe("created");
-    expect(await b.create(record, NOW)).toBe("conflict");
+    expect(await a.create(record, () => NOW)).toBe("created");
+    expect(await b.create(record, () => NOW)).toBe("replayed");
     expect(await b.lookup(shareId, NOW)).toEqual({ state: "active", record });
     expect(await b.revoke(shareId, "wrong".repeat(9).slice(0, 43), NOW)).toBe("forbidden");
     expect((await a.lookup(shareId, NOW)).state).toBe("active");
     expect(await b.revoke(shareId, record.revokeTokenHash, NOW)).toBe("revoked");
     expect(await a.lookup(shareId, NOW)).toEqual({ state: "revoked" });
-    expect(await a.create(record, NOW)).toBe("conflict");
+    expect(await a.create(record, () => NOW)).toBe("conflict");
 
     const expiring = { ...record, shareId: "shr_bcdefghijklmnopqrstuvwxyza" };
-    expect(await a.create(expiring, NOW)).toBe("created");
+    expect(await a.create(expiring, () => NOW)).toBe("created");
     expect(await b.lookup(expiring.shareId, Date.parse(expiring.expiresAt)))
       .toEqual({ state: "expired" });
     expect(await b.lookup("shr_cdefghijklmnopqrstuvwxyzab", NOW))

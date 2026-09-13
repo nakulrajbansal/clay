@@ -3,6 +3,16 @@ import { runRetainedAutomationTick } from "../src/app/automation-tick";
 import type { WorkerClient } from "../src/app/worker-client";
 import { beginPresentationIntent, readPresentationIntent } from "../src/app/presentation-intent";
 
+it("reconciles durable intake workflow presence before minting a scheduled ID after cache loss", async () => {
+  const app = `app_${"a".repeat(26)}`; const mint = vi.fn();
+  const worker = { createMutationContext: mint, automationPresentation: async () => ({ authorityTarget: { appInstanceId: app },
+    availability: { available: true }, rules: [{ enabled: true }], notifications: [] }) } as unknown as WorkerClient;
+  const cache = { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn() };
+  const recover = vi.fn(async () => true);
+  expect(await runRetainedAutomationTick(cache, worker, app, recover)).toMatchObject({ reason: "pending_intake_delivery", runs: [] });
+  expect(recover).toHaveBeenCalledOnce(); expect(mint).not.toHaveBeenCalled();
+});
+
 it("does not invoke uncertified storage, switch a scheduled intent to another app, or discard unknown work", async () => {
   const app = `app_${"a".repeat(26)}`; const command = vi.fn();
   const cache = { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn() };

@@ -13,7 +13,8 @@ export function ownerIntakeFetch(base: string, fetcher: typeof fetch = fetch): t
   return async (input, init) => {
     const url = new URL(typeof input === "string" || input instanceof URL ? String(input) : input.url);
     if (url.origin !== origin || url.username || url.password || url.hash || !url.pathname.startsWith("/intake/forms")) throw new Error("Intake HTTP origin is not authorized");
-    const headers = new Headers(init?.headers); const registration = url.pathname === "/intake/forms" && init?.method === "POST";
+    const headers = new Headers(init?.headers); const registration = init?.method === "POST"
+      && (url.pathname === "/intake/forms" || /^\/intake\/forms\/form_[a-z2-7]{26}\/terminalize$/.test(url.pathname));
     let credentials: RequestCredentials = "omit";
     if (registration) {
       const token = getSessionToken(base), ambient = isAmbientSessionAllowed(base);

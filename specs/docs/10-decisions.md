@@ -1391,3 +1391,47 @@ ADR-063 (2026-09-13) Production intake V2 and source-bound owner publication.
   Legacy adoption, stale publication recovery and E's actual OPFS transaction
   capability remain open. No production values, deployment, old private records,
   hosted account or user-owned browser storage were inspected or changed.
+
+ADR-064 (2026-09-13) Terminal relay identities and durable owner workflow fencing.
+  CONTEXT: A missing remote object does not rule out a delayed original POST.
+  Intake cleanup removed revoked identities, sharing treated 404/410 as terminal,
+  and intake publication request identity depended on a session-storage cache.
+  DECISION: Add authenticated, exact-origin-allowlisted terminalize endpoints for
+  the original intake registration and encrypted share request. Verify owner
+  capabilities and immutable request identity, atomically retain a revoked row
+  even if publication has not arrived, and return a closed acknowledgement bound
+  to the canonical request SHA-256 and expiry. Keep tombstones through original
+  expiry, include them in existing count/byte quotas, and never acknowledge
+  capacity, transaction, identity, or missing-response failures as terminal.
+  All create/terminal allocations share store exclusion; Postgres revalidates
+  trusted time after its transaction lock, so an expired acknowledgement cannot
+  be followed by a create using a stale pre-lock clock. Intrinsically expired
+  requests need no new allocation. Exact owner/ciphertext/expiry/token-hash share
+  replay returns its existing receipt, never a second link. Intake network-source
+  hashes remain original quota labels, not mutable-IP owner identity; exact
+  publisher and both capability hashes still bind registration and termination.
+  Trusted-shell clients validate terminal acknowledgements, including the exact
+  request hash. No private key enters this protocol, the worker, or app archives.
+  A separate public-only trusted-shell IndexedDB ledger uses closed records and
+  CAS before every intake workflow effect. Initial form/proposal identity commits
+  there before presentation; private custody still commits/readbacks before HTTP.
+  Cache loss recovers that original job. Cached conflicting identities fail
+  closed rather than being overwritten. Terminalization claims the ledger before
+  cancelling/reconciling each original worker request and fencing remote arrival.
+  A committed local publication requires explicit local revocation; an inactive
+  draft is retained, not deleted. A new source requires a fresh user preview,
+  not retargeting an old request. Closed slots may be reused; private custody,
+  original app metadata and worker receipts are not deleted by workflow cleanup.
+  An old cache-only workflow is NOT made safely fenced by copying it into the
+  ledger: an older tab may still mint/send requests outside that protocol. Such
+  workflows remain untouched and quarantined pending narrow authority-level
+  adoption/terminalization. This is separate from safe new-ledger reload recovery.
+  Scheduled new invocations consult the durable intake ledger before minting an
+  ID; unknown ledger state defers scheduling. Existing scheduled reconciliation
+  and the actual OPFS automation guard remain unchanged.
+  CONSEQUENCE: New owner delivery and closure have executable memory/Postgres
+  protocol/IndexedDB and real WorkerClient fault coverage. These are development
+  tests, not physical database/browser certification. Legacy custody/receipt and
+  unfenced-workflow adoption, stale local-revoke renewal, and E's physical OPFS
+  transaction capability remain required code work. No production values,
+  hosted requests, old private state or user-owned browser storage were accessed.
