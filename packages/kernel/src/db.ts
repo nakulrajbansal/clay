@@ -10,6 +10,7 @@ import {
 } from "./durable-inventory";
 import { ClayError } from "./errors";
 import { inboxDispositionTablePresent, createInboxDispositionTable, readInboxDispositions } from "./inbox-dispositions";
+import { initializePreservingSahpool, assertPreservedSahpoolHandles } from "./sahpool-initialization";
 
 export type SqlValue = string | number | bigint | Uint8Array | null;
 export type SqlRow = Record<string, SqlValue>;
@@ -576,6 +577,7 @@ type PoolUtil = {
   addCapacity?(n: number): Promise<number>;
 };
 let activePool: PoolUtil | null = null;
+let strictPoolPromise: Promise<PoolUtil> | null = null;
 
 // Every open app consumes 2 pool slots (user.db + system.db), and SQLite
 // briefly needs additional slots for journal files during writes. Without
@@ -609,25 +611,28 @@ async function openOnPool(s: Sqlite3Static, pool: PoolUtil, appId?: string): Pro
 
 const CATALOG_FILE = "/clay-device-catalog-v1.db";
 
+function assertNoUnprovenNativeJournals(pool: PoolUtil, files: readonly string[]): void {
+  if (!pool.getFileNames) throw new ClayError("E_CATALOG_UNAVAILABLE", "durable file inventory is unavailable");
+  const names = pool.getFileNames();
+  // A catalog read itself can trigger SQLite recovery. Until the boot recovery
+  // coordinator proves the original tuple BEFORE that read, even a nominally
+  // read-only ATTACH is forbidden. Lifecycle cleanup may still explain sidecars
+  // of its unpublished target without opening that target or weakening this gate.
+  if (names.some(name => /\.db-mj[^/]*$/.test(name)
+      || files.some(file => ["-journal", "-wal", "-shm"].some(suffix => name === file + suffix))))
+    throw new ClayError("E_CATALOG_UNAVAILABLE", "Native journal owner proof is required before opening durable databases; original files were kept");
+}
+
 async function strictBrowserPool(s: Sqlite3Static): Promise<PoolUtil> {
-  if (activePool) return activePool;
+  if (activePool) { assertPreservedSahpoolHandles(s, activePool); return activePool; }
   if (!opfsSupported())
     throw new ClayError("E_CATALOG_UNAVAILABLE", "durable browser storage is unavailable");
-  const withPool = s as unknown as {
-    installOpfsSAHPoolVfs(opts?: { name?: string; initialCapacity?: number }): Promise<PoolUtil>;
-  };
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try {
-      activePool = await withPool.installOpfsSAHPoolVfs({ initialCapacity: 24 });
-      return activePool;
-    } catch (error) {
-      lastError = error;
-      if (attempt < 4) await sleep(250 * (attempt + 1));
-    }
-  }
-  throw new ClayError("E_CATALOG_UNAVAILABLE",
-    `durable browser storage could not be opened: ${String(lastError)}`);
+  // One initialization per worker, including failed initialization. Do not call
+  // the SDK again after an uncertain header/handle outcome. A new worker can
+  // reacquire without resetting or deleting any pre-existing pool file.
+  return strictPoolPromise ??= initializePreservingSahpool(s, 24).then(pool => {
+    activePool = pool; return pool;
+  });
 }
 
 /** Trusted worker inventory names from the VFS itself. */
@@ -660,7 +665,8 @@ export async function browserDurableInventory(): Promise<DurableFileInventory> {
 /** Catalog-only probe. It is closed before the selected target is opened. */
 export async function openBrowserCatalogProbe(): Promise<DbDriver> {
   const s = await sqlite3();
-  await strictBrowserPool(s);
+  const pool = await strictBrowserPool(s);
+  assertNoUnprovenNativeJournals(pool, [CATALOG_FILE]);
   const db = new s.oo1.DB(":memory:");
   try {
     db.exec(`ATTACH 'file:${CATALOG_FILE}?vfs=opfs-sahpool' AS catalog`);
@@ -686,6 +692,7 @@ export async function openBrowserProductionTarget(
     throw new ClayError("E_CATALOG_UNAVAILABLE", "selected durable target inventory is invalid");
   const s = await sqlite3();
   const pool = await strictBrowserPool(s);
+  assertNoUnprovenNativeJournals(pool, [namespace.userFile, namespace.systemFile, CATALOG_FILE]);
   await ensureHeadroom(pool);
   const db = new pool.OpfsSAHPoolDb(namespace.userFile);
   try {

@@ -39,10 +39,14 @@ it("executes custody publication, delivery loss, partial attachments, review/Und
     queueMicrotask(() => transport.onmessage?.({ data: structuredClone(data) } as MessageEvent));
   } };
   let holdRevoke = false; let heldRevoke: unknown = null;
+  let holdClosure = false; let heldClosure: unknown = null;
   const transport = { onmessage: null as ((event: MessageEvent) => void) | null, postMessage: (data: { id: number; op: string; payload?: any }) => {
     sent.push(structuredClone(data));
     if (holdRevoke && data.op === "intakeCommand" && data.payload?.command?.route === "intake.revokeForm") {
       holdRevoke = false; heldRevoke = structuredClone(data); return;
+    }
+    if (holdClosure && data.op === "intakeCommand" && data.payload?.command?.route === "intake.closePublication") {
+      holdClosure = false; heldClosure = structuredClone(data); return;
     }
     queueMicrotask(() => scope.onmessage?.({ data: structuredClone(data) } as MessageEvent));
   }, terminate: () => {} };
@@ -192,7 +196,25 @@ it("executes custody publication, delivery loss, partial attachments, review/Und
     vi.setSystemTime(new Date("2026-10-02T00:00:00.000Z"));
     owner = new IntakeOwnerClient(await openSession(), vault, config, fetchImpl, workflows); await owner.fetch(published.localForm);
     publication = new IntakePublication(await openSession(), vault, config, fetchImpl, workflows);
-    await publication.terminalizeLegacy(); expect(publication.pending()).toBeNull();
+    holdClosure = true;
+    const delayedClosureResult = publication.terminalizeLegacy().then(() => "unexpectedly closed", () => "cancelled original");
+    await vi.waitFor(() => expect(heldClosure !== null).toBe(true));
+    const originalClosure = publication.pending()!.termination!.authorityClosure!;
+    await client.intakeCommand({ authorityTarget: (await client.intakePresentation()).authorityTarget, command: { route: "intake.recordDeliveryFailure", payload: {
+      failure: { formId: legacyPublication.formId, submissionId: id("sub", "w"), envelopeSha256: "8".repeat(64), failedAt: new Date().toISOString() } } } }, client.createMutationContext());
+    rows.clear(); publication = new IntakePublication(await openSession(), vault, config, fetchImpl, workflows);
+    await publication.renewClosure((await client.intakePresentation()).authorityTarget, originalClosure.requestId);
+    const renewedClosure = publication.pending()!.termination!.renewals![0]!.intent;
+    expect(renewedClosure.requestId).not.toBe(originalClosure.requestId);
+    expect(publication.pending()!.termination!.authorityClosure).toEqual(originalClosure);
+    scope.onmessage!({ data: heldClosure } as MessageEvent);
+    expect(await delayedClosureResult).toBe("cancelled original");
+    rows.clear(); publication = new IntakePublication(await openSession(), vault, config, fetchImpl, workflows);
+    await publication.terminalize(); expect(publication.pending()).toBeNull();
+    const closureRecord = workflowFactory.rows.get(JSON.stringify([1, config.shellOrigin, id("app", "a"), "publication"])) as any;
+    expect(closureRecord.job.termination.authorityClosure).toEqual(originalClosure);
+    expect(closureRecord.job.termination.closureReceipt.requestId).toBe(renewedClosure.requestId);
+    expect(closureRecord.job.termination.relayTerminal.terminal).toBe(true);
     await expect(client.intakeCommand(delayedPublish.payload as never, { requestId: delayedPublish.requestId })).rejects.toThrow();
     expect((await client.mutationOutcome(delayedPublish.route, delayedPublish.payload, { requestId: delayedPublish.requestId })).status).toBe("cancelled");
     await expect(client.intakeCommand({ authorityTarget: (await client.intakePresentation()).authorityTarget,

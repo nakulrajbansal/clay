@@ -42,7 +42,8 @@ function protocol(methods: Record<string, (...args: any[]) => Promise<any>>): Wo
   let serial = 0; let current = structuredClone(target); const outcomes = new Map<string, unknown>();
   const handlers: Record<string, (p: any) => Promise<unknown>> = {
     "intake.saveForm": p => methods.saveIntakeForm!(p.form),
-    "intake.closePublication": async p => ({ schema: 1, form: p.form, terminal: true, closedAt: new Date().toISOString() }),
+    "intake.closePublication": async p => methods.closeIntakePublication ? methods.closeIntakePublication(p.form)
+      : ({ schema: 1, form: p.form, terminal: true, closedAt: new Date().toISOString() }),
     "intake.markPublished": p => methods.markIntakeFormPublished!(p.formId, p.publishedAt),
     "intake.markExpired": p => methods.markIntakeFormExpired!(p.formId, p.expiredAt),
     "intake.revokeForm": p => methods.revokeIntakeForm!(p.formId, p.revokedAt),
@@ -179,10 +180,13 @@ describe("public intake UI", () => {
       expect((await worker.mutationOutcome(original.route, original.payload, { requestId: original.requestId })).status).toBe("cancelled");
     } finally { await act(async () => root.unmount()); }
   });
-  it.each(["ledger", "legacy"])("recovers %s interrupted publication and requires confirmation before closing the exact original work", async mode => {
-    let forms: LocalIntakeFormV2[] = [];
+  it.each(["ledger", "legacy", "stale_closure"])("recovers %s interrupted publication and requires confirmation before closing the exact original work", async mode => {
+    let forms: LocalIntakeFormV2[] = [], closureFailed = false;
     const worker = protocol({ listIntakeForms: async () => forms, intakeInbox: async () => [], intakeReceipts: async () => [], intakeDeliveryFailures: async () => [],
-      saveIntakeForm: async form => { forms = [form]; return form; } });
+      saveIntakeForm: async form => { forms = [form]; return form; }, closeIntakePublication: async form => {
+        if (mode === "stale_closure" && !closureFailed) { closureFailed = true; throw new Error("Owned closure needs recovery"); }
+        return { schema: 1, form, terminal: true, closedAt: new Date().toISOString() };
+      } });
     const fetchImpl = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
       if (!String(url).endsWith("/terminalize")) throw new Error("Owned publication response loss");
       const request = JSON.parse(String(init?.body));
@@ -195,6 +199,10 @@ describe("public intake UI", () => {
     await expect(publication.resume().then(() => "published")).rejects.toThrow(/uncertain/);
     const original = publication.pending()!;
     if (mode === "ledger") sessionStorage.clear(); else workflows = new IndexedDbIntakeWorkflows(new OwnedFactory() as unknown as IDBFactory);
+    if (mode === "stale_closure") {
+      const recovered = new IntakePublication(session, vault, { shellOrigin: location.origin, publicBaseUrl: location.origin, relayBaseUrl: "https://relay.example.test/" }, fetchImpl, workflows);
+      await expect(recovered.terminalizeLegacy()).rejects.toThrow(/closure/); sessionStorage.clear();
+    }
     const errors: string[] = []; const host = document.createElement("div"); document.body.replaceChildren(host); const root = createRoot(host);
     const button = (text: string) => [...document.body.querySelectorAll<HTMLButtonElement>("button")].find(row => row.textContent === text)!;
     try {
@@ -203,8 +211,14 @@ describe("public intake UI", () => {
       await flush();
       if (mode === "ledger") expect(document.body.textContent).toContain("Resume original publication");
       else expect(document.body.textContent).not.toContain("Resume original publication");
-      await act(async () => button("Close original publication").click()); expect(fetchImpl).toHaveBeenCalledTimes(1);
-      await act(async () => button("Confirm close original publication").click());
+      if (mode === "stale_closure") {
+        await act(async () => button("Review closure recovery").click());
+        await waitForUi(() => !!button("Confirm renewed publication closure")); expect(fetchImpl).toHaveBeenCalledTimes(1);
+        await act(async () => button("Confirm renewed publication closure").click());
+      } else {
+        await act(async () => button("Close original publication").click()); expect(fetchImpl).toHaveBeenCalledTimes(1);
+        await act(async () => button("Confirm close original publication").click());
+      }
       await waitForUi(() => !!button("Review form") && !button("Review form").matches(":disabled"));
       expect(errors).toEqual([]); expect(document.body.textContent).not.toContain("Resume original publication");
       expect(forms).toHaveLength(1); expect(forms[0]!.publicForm.formId).toBe(original.formId); expect(forms[0]!.publishedAt).toBeNull(); expect(custody.size).toBe(1);

@@ -14,11 +14,14 @@ type OwnedFile = { live: Uint8Array; durable: Uint8Array; locked: boolean };
 export class OwnedSahDirectory {
   readonly files: OwnedFile[] = [];
   readonly events: Io[] = [];
+  readonly reads: Array<{ path: string; at: number; size: number }> = [];
+  readonly handles: Array<{ kind: "acquire" | "close"; file: number; epoch: number }> = [];
   readonly root: OwnedDirectoryHandle;
   epoch = 1;
   dead = false;
   writeThrough = false;
   fault: ((event: Io) => boolean) | null = null;
+  readFault: ((event: { path: string; at: number; size: number }) => boolean) | null = null;
   constructor() { this.root = new OwnedDirectoryHandle(this); }
   path(file: OwnedFile): string {
     const end = file.live.subarray(0, 512).indexOf(0);
@@ -29,7 +32,7 @@ export class OwnedSahDirectory {
     if (this.fault?.(event)) { this.dead = true; throw new Error("Owned power interruption"); }
   }
   reopen(): void {
-    this.epoch++; this.dead = false; this.fault = null;
+    this.epoch++; this.dead = false; this.fault = null; this.readFault = null;
     for (const file of this.files) { file.live = file.durable.slice(); file.locked = false; }
   }
   installGlobals(): void {
@@ -50,14 +53,17 @@ class OwnedFileHandle extends OwnedHandle {
   async createSyncAccessHandle() {
     if (this.file.locked) throw new Error("Owned exclusive handle already held");
     this.file.locked = true; const epoch = this.owned.epoch; let closed = false;
+    this.owned.handles.push({ kind: "acquire", file: this.owned.files.indexOf(this.file), epoch });
     const check = () => { if (closed || this.owned.dead || epoch !== this.owned.epoch) throw new Error("Owned handle is unavailable"); };
     const resize = (size: number) => { const next = new Uint8Array(size); next.set(this.file.live.subarray(0, size)); this.file.live = next; };
     const bytes = (view: ArrayBufferView) => new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
     return {
-      close: () => { check(); closed = true; this.file.locked = false; },
+      close: () => { check(); closed = true; this.file.locked = false; this.owned.handles.push({ kind: "close", file: this.owned.files.indexOf(this.file), epoch }); },
       getSize: () => { check(); return this.file.live.length; },
       read: (out: ArrayBufferView, options: { at: number }) => {
-        check(); const input = this.file.live.subarray(options.at, options.at + out.byteLength); bytes(out).set(input); return input.length;
+        check(); const event = { path: this.owned.path(this.file), at: options.at, size: out.byteLength }; this.owned.reads.push(event);
+        if (this.owned.readFault?.(event)) throw new Error("Owned read fault");
+        const input = this.file.live.subarray(options.at, options.at + out.byteLength); bytes(out).set(input); return input.length;
       },
       write: (input: ArrayBufferView, options: { at: number }) => {
         check(); const previousPath = this.owned.path(this.file);
@@ -77,7 +83,7 @@ class OwnedDirectoryHandle extends OwnedHandle {
   async getDirectoryHandle(name: string, options?: { create?: boolean }) {
     let result = this.children.get(name);
     if (!result && options?.create) { result = new OwnedDirectoryHandle(this.owned); this.children.set(name, result); }
-    if (!(result instanceof OwnedDirectoryHandle)) throw new Error("Owned directory is unavailable"); return result;
+    if (!(result instanceof OwnedDirectoryHandle)) throw Object.assign(new Error("Owned directory is unavailable"), { name: "NotFoundError" }); return result;
   }
   async getFileHandle(name: string, options?: { create?: boolean }) {
     let result = this.children.get(name);
@@ -85,18 +91,22 @@ class OwnedDirectoryHandle extends OwnedHandle {
       const file = { live: new Uint8Array(), durable: new Uint8Array(), locked: false }; this.owned.files.push(file);
       result = new OwnedFileHandle(this.owned, file); this.children.set(name, result);
     }
-    if (!(result instanceof OwnedFileHandle)) throw new Error("Owned file is unavailable"); return result;
+    if (!(result instanceof OwnedFileHandle)) throw Object.assign(new Error("Owned file is unavailable"), { name: "NotFoundError" }); return result;
   }
   async removeEntry(name: string) { this.children.delete(name); }
   async *[Symbol.asyncIterator]() { yield* this.children.entries(); }
 }
 
-export async function installedSahpool(owned: OwnedSahDirectory): Promise<{ sqlite: any; pool: any }> {
+export async function initializedSahpool(owned: OwnedSahDirectory): Promise<any> {
   owned.installGlobals();
   const require = createRequire(import.meta.url), directory = dirname(require.resolve("@sqlite.org/sqlite-wasm"));
   const moduleUrl = pathToFileURL(join(directory, "index.mjs")).href;
   const init = (await import(/* @vite-ignore */ moduleUrl)).default;
-  const sqlite = await init({ wasmBinary: readFileSync(join(directory, "sqlite3.wasm")), print: () => {}, printErr: () => {} });
-  const pool = await sqlite.installOpfsSAHPoolVfs({ name: "opfs-sahpool", directory: "owned-clay-faults", initialCapacity: 16, verbosity: 0 });
+  return init({ wasmBinary: readFileSync(join(directory, "sqlite3.wasm")), print: () => {}, printErr: () => {} });
+}
+
+export async function installedSahpool(owned: OwnedSahDirectory, directory = "owned-clay-faults"): Promise<{ sqlite: any; pool: any }> {
+  const sqlite = await initializedSahpool(owned);
+  const pool = await sqlite.installOpfsSAHPoolVfs({ name: "opfs-sahpool", directory, initialCapacity: 16, verbosity: 0 });
   return { sqlite, pool };
 }

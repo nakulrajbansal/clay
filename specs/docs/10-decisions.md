@@ -1493,3 +1493,32 @@ ADR-066 (2026-09-13) Scoped SAHPool recovery development, no production grant ye
   CONSEQUENCE: Actual installed native VFS crash tests are not a production OPFS
   runtime capability or browser durability certificate. Integration remains code
   work; physical certification remains the later integrated campaign.
+
+ADR-067 (2026-09-13) Retained closure renewal and preserving native initialization.
+  CONTEXT: A legacy publication's permanent authority-closure request can itself
+  become stale before delivery. Its original ID cannot be replaced on a cache hint.
+  Separately, pinned SAHPool initialization repairs invalid association metadata
+  and may recursively remove the pool after handle acquisition failure. Neither
+  its post-init filename map nor a new recovery adapter proves pre-init ownership.
+  DECISION: Trusted-shell reviewed closure renewal binds the exact prior request
+  and original target. Cancel/read back that invocation, authenticate the exact
+  relay terminal identity, recheck the reviewed target, then persist/read back a
+  new immutable closure invocation. Keep up to eight renewals, original closure
+  and exact receipts, without eviction/rebinding. Committed or ambiguous prior
+  outcomes reconcile rather than renew. Cache-only adoption and physical ledger
+  parsing preserve/cross-validate the entire original termination history.
+  Production SAHPool initialization now pre-acquires all existing exclusive handles,
+  validates bounded pinned association metadata, rejects duplicated/malformed names
+  and ambiguous retained payload, and transfers the SAME handles to the SDK through
+  a narrowly scoped worker storage facade. It forbids old-file repair, collisions
+  and recursive SDK failure cleanup, restores the original storage method, and
+  rejects pre-installed VFS instances or uncertain handoff. It does not read user
+  pages or establish catalog ownership. Relevant journals and any super-journal
+  block catalog/target SQLite open before migration/restore probes can read them.
+  CONSEQUENCE: Owned actual-WASM/SAH and ProductionStoreAuthority fault tests prove
+  preservation and fail-closed boot, not successful native crash recovery. Cleared
+  association headers with retained payload still need exact owned unlink proof.
+  A catalog-proven recovery coordinator, native rollback, all-target canonical/
+  Merkle readback and runtime capability remain CODE work. No automation guard,
+  archive authentication, private legacy quarantine or frozen budget is weakened.
+  Physical browser certification and the integrated campaign remain deferred.

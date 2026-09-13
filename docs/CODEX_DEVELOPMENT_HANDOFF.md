@@ -4,7 +4,100 @@ Development checkpoint only. Development is NOT complete. No certification or
 shipping claim. Continue from Exact continuation; do not start the integrated
 regression/build/budget/browser/accessibility/review campaign yet.
 
-## Latest development continuation on ad6d9db0
+## Latest development continuation on 6dc0e3f4
+
+This section and Exact continuation supersede the historical notes below. A-D,
+E editor/scheduler and the committed F custody/terminal protocols were preserved.
+Development is NOT complete; there is no new certificate or release evidence.
+
+- Completed bounded reviewed `IntakePublication.renewClosure(target, requestId)`:
+  recover the retained ledger, match the reviewed ORIGINAL invocation and target,
+  prove existing original-source private custody in shell, cancel/read back that
+  exact request, verify its exact relay tombstone, recheck source, then commit/read
+  back a new immutable closure intent. At most eight renewals; no retargeting,
+  eviction, key generation or replacement under an ambiguous/committed outcome.
+  Original `authorityClosure` and every renewal remain retained. Closure/relay
+  receipts commit before finish and are immutable. Cancellation, readback, relay,
+  ledger commit, cache acknowledgement and reload faults preserve prior work.
+- IntakeCenter exposes Review closure recovery -> Confirm renewed publication
+  closure / Keep original closure. It captures both target and prior request ID
+  during review. Retry uses the retained replacement; active local forms still
+  require explicit revoke, not a misleading completion message.
+- Fixed a separate cache-only recovery regression: claiming an already-closing
+  job preserves its existing termination/invocation rather than creating a new
+  one. Physical ledger parsing now also cross-validates the original termination
+  chain; independently valid jobs cannot discard an original closure ID/receipt.
+- Real WorkerClient/db-worker coverage holds a closure message, advances the
+  source through another authority mutation, reviews/renews/cancels the original,
+  delivers the cancelled message, clears presentation cache, reads exact closure
+  receipts, and reopens SQLite/catalog. Existing sharing, intake attachments,
+  review, auto-accept and Undo parts of that journey remain intact.
+- Production `db.ts` now uses `sahpool-initialization.ts` before installing the
+  pinned VFS. It acquires and validates every existing association under exclusive
+  handles before any SDK repair; the same handles are handed directly to the SDK
+  without an unlock/reacquire gap. The scoped worker-only storage facade denies
+  recursive pool cleanup, unexpected header writes and collisions, then restores
+  the original storage method. Malformed/doubled associations, unassociated retained
+  payload, pre-existing VFS, acquisition/read failure and uncertain init fail closed
+  with static errors and original files preserved. Capacity is bounded at 4096 slots.
+- This fixed reproduced native SDK behavior: malformed headers were disassociated
+  and failed handle acquisition deleted the existing `.opaque` directory. The
+  owned fixture now observes actual handle acquire/close and read callbacks.
+  Both failure paths have executable regressions through the production initializer.
+- Catalog probe and production-target open now reject unresolved relevant child
+  journals/WAL/SHM or super-journals BEFORE SQLite opens/reads them. This includes
+  the migration/restore probes at the beginning of `bootBrowser`. Pending lifecycle
+  target sidecars remain eligible for existing exact job-fenced cleanup without
+  opening the unpublished target. No general native rollback is permitted yet.
+- Actual production authority boots and reopens on the installed browser WASM /
+  owned SAH protocol fixture with data/identity persistence. Faults in real authority
+  user/system/catalog commits preserve all bytes on reopen before any SQL page read.
+  This proves FAIL-CLOSED behavior, NOT successful crash recovery. The existing
+  native journal adapter remains unconnected and the automation capability remains
+  `unavailable`; no observer or paired UI guard was weakened.
+- Remaining F private legacy adoption was investigated, not implemented. V1 form
+  rows lack ownerSource; old share receipts lack app/generation/lineage. Production
+  request receipts can contain source metadata, but their historical responses may
+  contain private fields and copied source metadata is not sufficient. Existing
+  archive/quarantine boundaries stay closed. See the concrete next proof boundary
+  below; no real secret, app storage or private historical value was inspected.
+
+### Current focused finder-loop results
+
+Commands use package-local Node binaries, serialized, with no downloads:
+`node node_modules/vitest/vitest.mjs run <files> --maxWorkers=1 --minWorkers=1 --reporter=dot`.
+
+| Package / exact files | Actual latest result |
+| --- | --- |
+| shell: test/intake-publication-terminal.test.ts test/intake-workflows.test.ts test/intake-revocation-renewal.test.ts test/intake-ui.test.tsx | 4 files / 57 passed; 13.46s |
+| shell: test/worker-intake-integration.test.ts | 1 file / 1 passed; 41.21s (test 38.42s) |
+| kernel: test/sahpool-initialization.test.ts test/sahpool-recovery.test.ts | 2 files / 45 passed; 9.70s |
+| kernel: test/app-lifecycle.test.ts test/production-restore-lifecycle.test.ts test/lifecycle-recovery-inventory.test.ts test/durable-inventory.test.ts test/intake-v2-authority.test.ts test/intake-archive-boundary.test.ts | 6 files / 55 passed; 57.99s |
+| schema: test/intake.test.ts test/catalog.test.ts test/share.test.ts | 3 files / 15 passed; 1.51s |
+| shell: test/intake-session.test.ts test/intake-publication.test.ts test/automation-tick.test.ts test/production-mutation-route-census.test.ts | 4 files / 38 passed; 2.89s |
+
+- Disjoint selected packets: **211 tests passed across 20 files**. Repeated
+  finder-loop runs are not added. This is not the integrated regression campaign.
+- `node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json`, run in schema,
+  kernel and shell: exit 0, no diagnostics, after the source/test edits.
+- `git diff --check`: exit 0. Live location is D:\Clay; HEAD and local tracking
+  ref remain 6dc0e3f4bf40cf8dc20a6be7509fd684280f4411. No remote-server readback.
+- The uncommitted checkpoint has 15 paths (13 tracked modifications, 2 new).
+  No Git metadata, dependency, lockfile, server, real storage, production value,
+  release artifact/evidence or frozen limit changed. No build/certification run.
+- `node scripts/roadmap-development-census.mjs`: exit 0, 19 capability entries,
+  developmentComplete=false, zero scanned hardcoded false UI flags, 25 unavailable
+  routes all explicitly retired. Preserving initialization has a production caller;
+  the native recovery adapter still has none and capabilityGranted=false. This is
+  a read-only inventory, not executable evidence of product completion.
+
+Earlier RED runs reproduced missing closure renewal/UI, discarded original closure
+identity, eight initializer failures and premature hot-catalog reads. Finder-loop
+fixture/type errors were corrected and rerun, never reported as passes. One root
+TypeScript invocation failed with MODULE_NOT_FOUND for `D:\Clay\node_modules\typescript\bin\tsc`;
+package-local TypeScript works. No host blocker or escalation was needed.
+
+## Historical development continuation on ad6d9db0
 
 This section and Exact continuation supersede the preserved earlier checkpoint
 notes below. A-D and the committed E/F baseline were preserved. No certification.
@@ -71,7 +164,7 @@ Latest focused command results are recorded in the final finder-loop section.
 
 - Sole writer in `D:\Clay`, branch `codex/clay-project`.
 - HEAD and local origin tracking ref remain
-  `ad6d9db0a4ae37cba2953dd572b304c0cf07292b`. Live location, clean starting
+  `6dc0e3f4bf40cf8dc20a6be7509fd684280f4411`. Live location, clean starting
   status, HEAD and local origin tracking ref were verified. No fetch or actual
   remote-server readback. This continuation leaves one uncommitted diff on that base.
 - The earlier 13-path intake continuation and its expanded F implementation are
@@ -296,13 +389,13 @@ packaged-product certification claim.
 | D Capture/Undo | dailyHomeResolveDate/dailyHomeQuickCapture/dailyHomeUndoCapture/mutationOutcome/cancelPresentation; CommandPalette | Original producer-bound immutable Undo and receipt | shell quick-capture/presentation-intent and real worker; preserved |
 | D Inbox/actions/Undo | dailyPresentation/dailyInboxAction/dailyInboxUndo; Today/Inbox | Closed physical dispositions, item/action/source/projection CAS, local-calendar Snooze, bounded inverse | kernel daily-inbox-authority; shell today-view/real worker; preserved |
 | E editor/recipes/custom/preview/enable/pause/delete | automationPresentation/automationCommand/simulateAutomation; AutomationCenter | Lossless retained V2 drafts, timezone and immutable retries | shell automation-retained-ui baseline; OPFS capability BLOCKED |
-| E manual/due/history/status/notifications/Undo | same read/command routes + mutationOutcome/cancelPresentation; AutomationCenter/App tick | Original due command terminalization, local runtime and exact bounded receipts/Undo; scoped native recovery adapter is not boot-connected | shell automation-tick, worker-automation-integration; kernel sahpool-recovery (owned pinned WASM); OPFS capability BLOCKED |
+| E manual/due/history/status/notifications/Undo | same read/command routes + mutationOutcome/cancelPresentation; AutomationCenter/App tick | Original due command terminalization; preserving SAHPool init and pre-SQL journal guard connected, native rollback/capability still not connected | shell automation-tick, worker-automation-integration; kernel sahpool-initialization/sahpool-recovery (owned pinned WASM); OPFS capability BLOCKED |
 | F local Print/CSV | projectPlaintextV1/cancelProjectionV1; ExportDialog | Source/egress fences unchanged | shell export-dialog; preserved |
 | F encrypted sharing/files/expiry/revoke | presentationSource/projectPlaintextV1/attachmentsForRecord/readAttachment -> trusted-shell vault/relay; ShareDialog | Immutable ciphertext, owner CAS/readback, exact remote tombstones before replacement, explicit fresh preview | shell share-custody/share-terminal/share-owner-ui/share-security-integration and real worker; legacy adoption/source-loss recovery open |
-| F intake publication/delivery/review | intakePresentation/intakeCommand/mutationOutcome/cancelPresentation, inner intake.closePublication; IntakeCenter + shell custody/ledger | Permanent publication exclusion, original-custody cache-only recovery, explicitly reviewed stale-revoke renewal, terminal proof/history, bounded staging/review | shell intake-publication-terminal/intake-revocation-renewal/intake-workflows/intake-ui/worker-intake-integration; private legacy/source-loss and stale closure-intent renewal remain |
+| F intake publication/delivery/review | intakePresentation/intakeCommand/mutationOutcome/cancelPresentation, inner intake.closePublication; IntakeCenter + shell custody/ledger | Permanent publication exclusion, original-custody cache-only recovery, explicitly reviewed bounded stale-revoke AND closure renewal, immutable terminal proof/history, bounded staging/review | shell intake-publication-terminal/intake-revocation-renewal/intake-workflows/intake-ui/worker-intake-integration; private legacy/source-loss remain |
 | F auto-accept/receipts/Undo | same closed intake command/read routes; IntakeCenter | Receipt-target-bound simulation/enable, file review required, bounded inverse/history | shell intake-ui/worker-intake-integration; kernel intake/V2 authority |
 
-## Final finder-loop results for this continuation
+## Historical finder-loop results on ad6d9db0 (not current-tree certification)
 
 These are selected development packets, not full package/workspace regression.
 Package-local command:
@@ -426,20 +519,16 @@ was needed. Test command in each package:
 ## Exact continuation
 
 1. Verify live status/HEAD and preserve the entire diff or Hermes-saved checkpoint
-   on ad6d9db0a4ae37cba2953dd572b304c0cf07292b. One writer, D:\Clay only; no
+   on 6dc0e3f4bf40cf8dc20a6be7509fd684280f4411. One writer, D:\Clay only; no
    commits/pushes/downloads/production actions. Continue finder loops, not certification.
 
 2. Finish the remaining F owner-recovery edges, not the completed cache-only V2
    protocol again. Existing original-custody cache-only publication/revoke recovery
-   and stale local-revoke renewal now have UI/worker/fault coverage. Never replace
+   and stale local-revoke AND authority-closure renewal have UI/worker/fault coverage.
+   Preserve the reviewed prior request ID, immutable chains/receipts, exact physical
+   ledger adoption cross-check and original termination on cache-only re-adoption.
+   Never replace
    their exact tombstone/cancellation protocols with absence or a cache marker.
-   - Exact next small code boundary: a persisted publication authorityClosure
-     invocation can itself become stale before invocation. It is retained and fails
-     closed today. Add a bounded, explicit reviewed closure-renewal chain analogous
-     to revocation renewal: cancel/read back the previous exact request, prove exact
-     relay terminal identity, then retain a new immutable closure request against the
-     reviewed original target. Keep all prior closure IDs/receipts. Test delayed
-     original, cancellation/readback/persist loss and reload before wiring UI.
    - Original app/generation loss or missing original custody remains quarantined.
      It requires a narrow catalog/owner-history proof, not assignment to another
      selected app or minting replacement keys. A missing app is not proof that a
@@ -458,6 +547,21 @@ was needed. Test command in each package:
      fork copies. Neither key/URL possession nor a matching table proves original
      authority. First establish a narrow original catalog/history/owner proof and
      custody commit/readback protocol; ordinary private-form routes stay retired.
+   - Exact next investigation/code boundary: `production-request-journal.ts` has
+     metadata-only `parseProductionRequestReceiptRow` and source/operation/request/
+     response hashes mirrored into catalog. `readProductionRequestReceipt`, however,
+     uses SELECT * and selects response_json; it must NOT become an ordinary legacy
+     worker read. `productionOperationIdV2` anchors a route to authority incarnation
+     and request; V1 operation IDs do not anchor a route. Investigate a narrow public
+     original-owner witness using closed catalog + original target/history/receipt
+     evidence, before any sealed trusted-shell custody transfer. Validate historical
+     response bytes without exposing private values or changing their identity.
+     No such witness/transfer/adoption implementation was added this turn.
+   - `share/owner-receipts.ts` confirms the legacy receipt has no source proof.
+     `ShareOwnerSession` V2 records do have an original target but this cannot be
+     inferred for an old receipt using matching semantic scope or possession. Where
+     original evidence genuinely does not exist, retain quarantine explicitly. Do
+     not turn a synthetic positive fixture into authority for arbitrary old data.
    - Existing prefixed public response envelopes now export correctly; malformed
      or private historical envelopes still fail before values are selected. Do not
      change old response IDs/bytes to make them public or weaken format 5.
@@ -465,8 +569,9 @@ was needed. Test command in each package:
      copies, teardown/reload and create/fork/delete/restore-as-new ownership. Copied
      metadata must not acquire original vault authority.
 
-4. Integrate real production physical transaction/recovery capability. The new
-   low-level adapter is not connected to db.ts or boot; production remains unavailable.
+4. Integrate real production physical transaction/recovery capability. Preserving
+   initialization IS connected to db.ts; the native recovery adapter is NOT.
+   Automation production capability remains unavailable, not merely uncertified.
    - Read sahpool-journal-recovery.ts and its actual pinned-WASM owned-file fault
      tests. They are not memory DbDriver substitutes, but also not a physical browser
      certificate. All callback correction is scoped; do not make xCheckReservedLock
@@ -477,47 +582,62 @@ was needed. Test command in each package:
      assembled solely from filenames or super-journal members is not owner proof.
      A separately validated shadow/preflight recovery may be needed; no such proof
      implementation exists yet. Do not silently recover an unadopted legacy app.
-   - Pinned SAHPool installation may disassociate invalid association headers before
-     getFileNames. Account for that initialization behavior and exclusive-handle
-     prerequisites; don't mistake the resulting filename map for pre-init inventory.
-     The adapter tracks main handles opened after installation; install/preflight
-     must also prove there were no earlier handles. It cannot retroactively grant
-     unopened-pool authority from its own initially empty tracking map.
+   - Preserve `sahpool-initialization.ts`: original `.opfs-sahpool/.opaque` handles
+     acquired/validated before SDK code, exact entry readback, same handles handed
+     off, original storage method restored, pre-existing VFS rejected, destructive
+     SDK cleanup denied. `assertPreservedSahpoolHandles` is only handle provenance,
+     not catalog ownership or a native rollback grant. Do not replace this with
+     a preflight which closes/reacquires handles, nor use a post-init empty adapter
+     tracking map as proof that older handles never existed.
+   - Important extra recovery case found: SAHPool setAssociatedPath clears and
+     flushes the association BEFORE truncating its old payload, with no separate
+     post-truncate flush. A crash can leave a valid empty header plus retained bytes.
+     Startup now preserves/rejects that slot; it does NOT hand it to SDK reuse.
+     Its missing name is not proof that the bytes are disposable. Define durable
+     owned unlink/association proof or quarantine that excludes reuse without data
+     loss. Include flush-only and write-through faults; do not silently discard it.
    - bootBrowser currently runs catalog-retention migration and restore recovery
      before normal strict inventory, then lifecycle recovery. Resolve hot/super-
      journals BEFORE those paths can read/write partial state, while preserving exact
      job-fenced partial-file recovery. Re-run strict catalog/canonical/Merkle/target
      classification for every active target after native recovery. Do not create or
      unlink unexplained files, acknowledge uncertain cleanup, or publish partial data.
-   - Add real ProductionStoreAuthority/boot faults for user/system/catalog commits,
-     worker loss/reopen and lifecycle/restore partial publication around that new
-     coordinator. Only then implement a genuine runtime capability predicate and
-     wire observer/paired availability. Preserve scheduler reconciliation/intake deferral.
+   - `openBrowserCatalogProbe` and `openBrowserProductionTarget` currently fail
+     before SQL if a relevant journal/WAL/SHM or any super-journal is present. Do
+     not remove this barrier to get a green boot. Supply an unforgeable coordinator
+     grant only after original ownership is proven; native rollback then reclassifies.
+   - Existing sahpool-initialization tests now run actual ProductionStoreAuthority
+     clean boot/reopen and real user/system/catalog commit interruption. They prove
+     no pre-proof page reads or writes on failed reopen, NOT successful recovery.
+     Extend with deterministic successful native/canonical recovery and lifecycle/
+     restore partial publication faults around the new coordinator. Only then grant
+     a genuine runtime capability and wire observer/paired availability.
+     Preserve scheduler reconciliation/intake deferral.
 
 5. Update inventory/handoff. Once all A-F source/UI/custody/recovery boundaries really
    exist, stop for the single integrated testing campaign. No full regression,
    build/budget, browser/accessibility or formal-review campaign in development.
 
 Remaining blockers are CODE: private legacy owner adoption and original-source
-recovery/closure-renewal edges in F; catalog-proven production OPFS recovery and
+recovery in F; catalog-proven production OPFS recovery and
 capability in E. No verified host blocker. This checkpoint is not development-
 complete, certified, P0 shipped or roadmap shipped.
 
 ## Changed-file scope
 
 Use `git status --short --untracked-files=all` for the exact current path list.
-This continuation has 27 changed paths (23 tracked modifications, 4 new files):
+This continuation leaves one coherent source/test/documentation diff:
 kernel/schema/shell code and focused tests plus inventory and ADR/handoff documents.
 Use live Git status for any subsequent externally saved checkpoint.
 
-- Kernel: canonical intake publication exclusion, terminal metadata immutability,
-  prefixed public receipt/archive validation; UNCONNECTED scoped SAHPool native
-  recovery adapter and owned native-WASM fault fixture/tests.
-- Schema: sixteenth intake inner command, closure metadata, bounded renewal chain
-  and closed public terminal proof. No private transport or archive version change.
-- Shell: IntakeCenter, owner publication/revocation/custody readback, immutable
-  workflow history and exact-source UI/protocol/real-worker tests. Sharing/backend
-  and scheduler source are preserved; no hosted configuration changes.
-- Inventory/specification: census, this handoff, ADR-065/066.
+- Kernel: production preserving SAHPool initializer/pre-SQL journal gate, owned
+  native-WASM initializer/handle/boot/commit faults; existing native recovery adapter
+  stays unconnected. No production capability grant.
+- Schema: bounded closure-renewal chain and immutable terminal proof validation.
+  No new private transport or archive version change.
+- Shell: IntakeCenter reviewed closure renewal, retained original closure history,
+  adoption readback validation, protocol/UI/real-worker regressions. Sharing/backend,
+  scheduler and A-D sources are preserved; no hosted configuration changes.
+- Inventory/specification: census, this handoff, ADR-067.
 - No dependency/lockfile, production configuration, generated release artifact,
   evidence report or Git metadata changes.

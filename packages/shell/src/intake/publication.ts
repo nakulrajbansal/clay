@@ -1,4 +1,4 @@
-import { type TargetEvidenceV1, PresentationIntentV1, IntakeCommandPayloadV1 } from "@clay/schema/catalog";
+import { TargetEvidenceV1, PresentationIntentV1, IntakeCommandPayloadV1 } from "@clay/schema/catalog";
 import { IntakePublicationProposalV1 as Proposal, IntakeRelayFormRegistrationResultV1, LocalIntakeFormV2, IntakePublicationClosureV1 } from "@clay/schema/intake";
 import { IntakePublicationJobV1 as Job } from "@clay/schema/intake-workflow";
 import { hydrateIntakeOwnerForm, prepareIntakeOwnerForm, recoverIntakeOwnerForm, type IntakeOwnerVault } from "./owner-custody";
@@ -9,6 +9,7 @@ import { IndexedDbIntakeWorkflows, IntakeWorkflowSlot, UnfencedIntakeWorkflowErr
 import { intakeRegistration, terminalizeIntakeRelay } from "./relay-terminal";
 
 type FetchLike = typeof fetch;
+const activeClosure = (job: Job) => job.termination?.renewals?.at(-1)?.intent ?? job.termination?.authorityClosure;
 export type IntakeConfiguration = { shellOrigin: string; relayBaseUrl: string | null; publicBaseUrl: string };
 export function intakeConfiguration(input: IntakeConfiguration): { shellOrigin: string; relayBaseUrl: string; publicBaseUrl: string } {
   const allowed = (value: string): string => {
@@ -134,6 +135,34 @@ export class IntakePublication {
     }
     await this.terminalize();
   }
+  /** Explicit new source review. The previous invocation and remote identity
+   * must be terminal before a new immutable closure ID may enter the ledger. */
+  async renewClosure(reviewedInput: TargetEvidenceV1, reviewedRequestId?: string): Promise<void> {
+    const reviewed = TargetEvidenceV1.parse(reviewedInput);
+    const cached = this.pending(), expectedRequestId = reviewedRequestId ?? (cached && activeClosure(cached)?.requestId);
+    await this.recover(); const job = this.pending(), original = job && activeClosure(job);
+    if (!job?.termination || !original || job.termination.complete || job.termination.closureReceipt || (job.termination.renewals?.length ?? 0) >= 8)
+      throw new Error("Original closure cannot be renewed or its bounded renewal limit was reached; work was kept");
+    if (!expectedRequestId || expectedRequestId !== original.requestId) throw new Error("Reviewed closure invocation changed; review its retained identity again");
+    const current = await this.session.read();
+    if (JSON.stringify(current.authorityTarget) !== JSON.stringify(reviewed) || reviewed.appInstanceId !== job.source.appInstanceId
+        || reviewed.activeGenerationId !== job.source.activeGenerationId || reviewed.lineageEpoch !== job.source.lineageEpoch)
+      throw new Error("Reviewed original source changed; no closure renewal was invoked");
+    const draft = await recoverIntakeOwnerForm(job.source, job.formId, this.configuration.shellOrigin, this.configuration.relayBaseUrl, this.vault);
+    if (JSON.stringify(LocalIntakeFormV2.parse(IntakeCommandPayloadV1.parse(original.payload).command.payload.form)) !== JSON.stringify(draft))
+      throw new Error("Original closure differs from custody; work was kept");
+    const privateForm = await hydrateIntakeOwnerForm(draft, reviewed, this.configuration.shellOrigin, this.vault);
+    const outcome = await this.session.worker.cancelPresentation(original.route, original.payload, { requestId: original.requestId });
+    const readback = await this.session.worker.mutationOutcome(original.route, original.payload, { requestId: original.requestId });
+    if ((outcome.status !== "cancelled" && outcome.status !== "failed") || readback.status !== outcome.status)
+      throw new Error("Original closure is not terminal without effects; reconcile its existing receipt before renewal");
+    const relay = await terminalizeIntakeRelay(privateForm, this.configuration.relayBaseUrl, this.fetchImpl);
+    if (JSON.stringify((await this.session.read()).authorityTarget) !== JSON.stringify(reviewed))
+      throw new Error("Reviewed source changed during closure terminalization; original identities were kept");
+    const intent = this.intent(reviewed, "intake.closePublication", { form: draft });
+    await this.persist({ ...job, termination: { ...job.termination, renewals: [...(job.termination.renewals ?? []),
+      { previousRequestId: original.requestId, terminalStatus: outcome.status, relay, intent }] } });
+  }
   /** Explicit abandonment, never source renewal. Each original worker request
    * is terminally cancelled/reconciled; remote absence alone grants nothing. */
   async terminalize(): Promise<void> {
@@ -158,16 +187,24 @@ export class IntakePublication {
         job = await this.persist({ ...job, termination: { ...job.termination!,
           authorityClosure: this.intent(reviewed.authorityTarget, "intake.closePublication", { form: draft }) } });
       }
-      const closure = await executeIntakeIntent(this.session.worker, job.termination!.authorityClosure!);
-      if (JSON.stringify(IntakePublicationClosureV1.parse(closure.result).form) !== JSON.stringify(draft))
+      const intent = activeClosure(job)!, closure = await executeIntakeIntent(this.session.worker, intent);
+      const result = IntakePublicationClosureV1.parse(closure.result);
+      if (JSON.stringify(result.form) !== JSON.stringify(draft))
         throw new Error("Original authority closure differs; work was kept");
+      const receipt = { requestId: intent.requestId, result, target: closure.target };
+      if (job.termination!.closureReceipt && JSON.stringify(job.termination!.closureReceipt) !== JSON.stringify(receipt))
+        throw new Error("Original closure receipt changed; all identities were kept");
+      if (!job.termination!.closureReceipt) job = await this.persist({ ...job, termination: { ...job.termination!, closureReceipt: receipt } });
       // The authority tombstone, not the ledger claim or cancel snapshots, now
       // excludes every late save/publish ID, including those unknown to this tab.
     }
     if (job.publish || this.workflow.requiresAuthorityClosure()) {
       const draft = await recoverIntakeOwnerForm(job.source, job.formId, this.configuration.shellOrigin, this.configuration.relayBaseUrl, this.vault);
       const hydrated = await hydrateIntakeOwnerForm(draft, job.source, this.configuration.shellOrigin, this.vault);
-      await terminalizeIntakeRelay(hydrated, this.configuration.relayBaseUrl, this.fetchImpl);
+      const relay = await terminalizeIntakeRelay(hydrated, this.configuration.relayBaseUrl, this.fetchImpl);
+      if (job.termination!.relayTerminal && JSON.stringify(job.termination!.relayTerminal) !== JSON.stringify(relay))
+        throw new Error("Original relay terminal proof changed; work was kept");
+      if (!job.termination!.relayTerminal) job = await this.persist({ ...job, termination: { ...job.termination!, relayTerminal: relay } });
     }
     const current = await this.session.read(); const form = current.forms.find(row => row.publicForm.formId === job!.formId);
     if (form?.publishedAt !== null && form?.publishedAt !== undefined && form.revokedAt === null)

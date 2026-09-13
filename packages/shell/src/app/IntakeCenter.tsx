@@ -195,6 +195,8 @@ export function IntakeCenter(props: {
   const [pendingRevoke, setPendingRevoke] = useState<string | null>(null);
   const [confirmClosePublication, setConfirmClosePublication] = useState(false);
   const [closingPublication, setClosingPublication] = useState(false);
+  const [closureRenewable, setClosureRenewable] = useState(false);
+  const [closureReview, setClosureReview] = useState<{ target: IntakeRead["authorityTarget"]; requestId: string } | null>(null);
   const [legacyPublication, setLegacyPublication] = useState(false);
   const [legacyRevocation, setLegacyRevocation] = useState(false);
   const [revocationId, setRevocationId] = useState<string | null>(null);
@@ -213,6 +215,10 @@ export function IntakeCenter(props: {
           || (!configured.owner && sessionStorage.getItem(`clay_intake_revocation_v1:${props.appInstanceId}`) !== null)) throw new Error();
       setRetainedPublication(configured.publication?.pending() != null);
       setClosingPublication(configured.publication?.pending()?.termination != null);
+      const publication = configured.publication?.pending(), source = session.reviewed?.authorityTarget;
+      setClosureRenewable(!!publication?.termination?.authorityClosure && !publication.termination.complete && !publication.termination.closureReceipt
+        && (publication.termination.renewals?.length ?? 0) < 8 && publication.source.appInstanceId === source?.appInstanceId
+        && publication.source.activeGenerationId === source.activeGenerationId && publication.source.lineageEpoch === source.lineageEpoch);
       setRetainedRevocation(configured.owner?.pendingRevocation() != null);
       setRevocationId(configured.owner?.pendingRevocation()?.form.publicForm.formId ?? null);
       setRecoveryError(null);
@@ -362,6 +368,26 @@ export function IntakeCenter(props: {
     } catch (cause) { props.onError(cause instanceof Error ? cause.message : "Original intake closure needs recovery"); }
     finally { await refresh().catch(() => {}); setBusy(false); updateRecovery(); }
   };
+  const reviewClosure = async (): Promise<void> => {
+    setBusy(true); setClosureReview(null);
+    try {
+      await refresh(); const job = configured.publication?.pending();
+      const intent = job?.termination?.renewals?.at(-1)?.intent ?? job?.termination?.authorityClosure;
+      if (!intent || !session.reviewed) throw new Error();
+      setClosureReview({ target: session.reviewed.authorityTarget, requestId: intent.requestId });
+    } catch { props.onError("Original publication closure is unavailable; retained work was kept."); }
+    finally { setBusy(false); }
+  };
+  const renewClosure = async (): Promise<void> => {
+    if (!configured.publication || !closureReview || busy) return;
+    setBusy(true);
+    try {
+      await configured.publication.renewClosure(closureReview.target, closureReview.requestId); setClosureReview(null);
+      await configured.publication.terminalize(); setConfirmClosePublication(false); setPreview(null); setShareLink("");
+      props.onInfo("Original publication closure recovered. Prior requests, receipts and custody were kept; review a fresh source before another form.");
+    } catch (cause) { props.onError(cause instanceof Error ? cause.message : "Original closure recovery is incomplete"); }
+    finally { await refresh().catch(() => {}); setBusy(false); updateRecovery(); }
+  };
   const reviewRevocation = async (mode: "adopt" | "renew"): Promise<void> => {
     setBusy(true); setRenewalReview(null);
     try { await refresh(); setRenewalReview({ target: session.reviewed!.authorityTarget, mode }); }
@@ -447,7 +473,12 @@ export function IntakeCenter(props: {
         {confirmClosePublication || closingPublication ? <span>Close this original publication before reviewing a new source? Original data and custody will be kept.
           <button disabled={busy} onClick={() => void closePublication()}>Confirm close original publication</button>
           {!closingPublication ? <button onClick={() => setConfirmClosePublication(false)}>Keep original publication</button> : null}</span>
-          : <button disabled={busy} onClick={() => setConfirmClosePublication(true)}>Close original publication</button>}</p> : null}
+          : <button disabled={busy} onClick={() => setConfirmClosePublication(true)}>Close original publication</button>}
+        {closingPublication && closureRenewable ? <span>
+          <button disabled={busy} onClick={() => void reviewClosure()}>Review closure recovery</button>
+          {closureReview ? <span>Terminalize the reviewed original request and relay identity, then close this same publication against the reviewed source? All prior identities remain kept.
+            <button disabled={busy} onClick={() => void renewClosure()}>Confirm renewed publication closure</button>
+            <button disabled={busy} onClick={() => setClosureReview(null)}>Keep original closure</button></span> : null}</span> : null}</p> : null}
       {retainedRevocation ? <div role="status">Original revocation is retained. Local and relay outcomes still need reconciliation.
         {!legacyRevocation ? <button disabled={busy} onClick={() => void revoke()}>Resume original revocation</button> : null}
         <button disabled={busy || !read || !configured.owner || !forms.some(form => form.publicForm.formId === revocationId && ownsForm(form)

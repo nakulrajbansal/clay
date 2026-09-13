@@ -21,10 +21,14 @@ async function fixture(pause: "save" | "http" | "none" = "none") {
   const custody = new Map<string, IntakeOwnerCustody>(); const vault: IntakeOwnerVault = { read: async key => custody.get(key) ?? null, insert: async row => { if (!custody.has(row.key)) custody.set(row.key, structuredClone(row)); } };
   const results = new Map<string, any>(); const forms: any[] = []; const invoked: string[] = [], cancelled: string[] = [];
   const closed = new Set<string>();
-  const paused = latch(), release = latch(); let serial = 0; let loseCancel = false, loseClosure = false;
+  const paused = latch(), release = latch(), closurePaused = latch(), closureRelease = latch();
+  let serial = 0, loseCancel = false, loseClosure = false, holdClosure = false, heldClosure = false, loseReadback = false, loseTerminal = false, failRenewCommit = false;
   const worker = { createMutationContext: () => ({ requestId: `req_${String.fromCharCode(97 + ++serial).repeat(26)}` }),
     intakePresentation: async () => ({ authorityTarget: target, forms, inbox: [], receipts: [], rules: [], deliveryFailures: [], tables: [], trace: {}, legacyCustody: "none" }),
-    mutationOutcome: async (_route: string, _payload: unknown, context: { requestId: string }) => results.get(context.requestId) ?? { status: "not_invoked" },
+    mutationOutcome: async (_route: string, _payload: unknown, context: { requestId: string }) => {
+      if (loseReadback) { loseReadback = false; throw new Error("Owned cancellation readback lost"); }
+      return results.get(context.requestId) ?? { status: "not_invoked" };
+    },
     cancelPresentation: async (_route: string, _payload: unknown, context: { requestId: string }) => {
       cancelled.push(context.requestId);
       if (!results.has(context.requestId)) results.set(context.requestId, { status: "cancelled" });
@@ -34,6 +38,7 @@ async function fixture(pause: "save" | "http" | "none" = "none") {
     intakeCommand: async (payload: any, context: { requestId: string }) => {
       invoked.push(context.requestId);
       if (pause === "save" && payload.command.route === "intake.saveForm") { paused.release(); await release.promise; }
+      if (holdClosure && !heldClosure && payload.command.route === "intake.closePublication") { heldClosure = true; closurePaused.release(); await closureRelease.promise; }
       if (results.get(context.requestId)?.status === "cancelled") throw new Error("Original invocation terminally cancelled");
       if (JSON.stringify(payload.authorityTarget) !== JSON.stringify(target)) { results.set(context.requestId, { status: "failed" }); throw new Error("Original source changed"); }
       let result;
@@ -55,7 +60,12 @@ async function fixture(pause: "save" | "http" | "none" = "none") {
   const fetcher: typeof fetch = async (url, init) => {
     const path = new URL(String(url)).pathname;
     if (path === "/intake/forms") { posts++; if (pause === "http") { paused.release(); await release.promise; } }
-    return backend.request(path, init);
+    const response = await backend.request(path, init);
+    if (path.endsWith("/terminalize")) {
+      if (loseTerminal) { loseTerminal = false; throw new Error("Owned terminal acknowledgement lost"); }
+      if (failRenewCommit) { failRenewCommit = false; factory.failCommit = true; }
+    }
+    return response;
   };
   const open = async (relayUrl = relayBaseUrl) => {
     const session = new IntakeSession(cache, worker, app); await session.read();
@@ -67,9 +77,113 @@ async function fixture(pause: "save" | "http" | "none" = "none") {
     fields: [{ fieldId: "fld_22222222-2222-7222-8222-222222222222", label: "Title", type: "text" as const, required: true, maxLength: 100, options: [] }], fileRequests: [] };
   await publication.begin(proposal); const originalId = publication.pending()!.formId;
   return { publication, open, proposal, originalId, originalTarget, cacheRows, custody, results, invoked, cancelled, forms, paused, release, relay, backend, worker, workflows, factory, closed,
-    posts: () => posts, loseCancel: () => { loseCancel = true; }, loseClosure: () => { loseClosure = true; }, bump: () => { target = { ...target, protectionRevision: "8" }; },
+    posts: () => posts, loseCancel: () => { loseCancel = true; }, loseClosure: () => { loseClosure = true; }, bump: () => { target = { ...target, protectionRevision: String(Number(target.protectionRevision) + 1) }; },
+    holdClosure: () => { holdClosure = true; }, closurePaused, closureRelease, loseReadback: () => { loseReadback = true; },
+    loseTerminal: () => { loseTerminal = true; }, failRenewCommit: () => { failRenewCommit = true; },
     changeGeneration: () => { target = { ...target, activeGenerationId: `gen_${"z".repeat(26)}` }; } };
 }
+
+async function staleClosure() {
+  const f = await fixture("http");
+  const publish = f.publication.resume().then(() => "published", () => "stopped"); await f.paused.promise;
+  f.factory.rows.clear(); f.holdClosure();
+  const close = f.publication.terminalizeLegacy().then(() => "closed", () => "stopped"); await f.closurePaused.promise;
+  const original = f.publication.pending()!.termination!.authorityClosure!; f.bump();
+  return { ...f, publish, close, original, target: async () => structuredClone((await f.worker.intakePresentation()).authorityTarget) };
+}
+
+it("renews only an explicitly reviewed stale closure after cancelling its delayed original and retaining the exact relay proof", async () => {
+  const f = await staleClosure(), next = await f.open();
+  await next.renewClosure(await f.target());
+  const job = next.pending()!, renewal = job.termination!.renewals![0]!;
+  expect(job.termination!.authorityClosure).toEqual(f.original); expect(renewal.previousRequestId).toBe(f.original.requestId);
+  expect(renewal.terminalStatus).toBe("cancelled"); expect(renewal.relay.terminal).toBe(true); expect(f.closed.size).toBe(0);
+  f.closureRelease.release(); expect(await f.close).toBe("stopped");
+  f.cacheRows.clear(); await (await f.open()).terminalize();
+  f.release.release(); expect(await f.publish).toBe("stopped");
+  const record = [...f.factory.rows.values()][0] as any;
+  expect(record.closed).toBe(true); expect(record.job.termination.renewals).toHaveLength(1);
+  expect(record.job.termination.closureReceipt.requestId).toBe(renewal.intent.requestId);
+  expect(record.job.termination.relayTerminal).toEqual(renewal.relay); expect(f.custody.size).toBe(1);
+  expect((await f.open()).pending()).toBeNull();
+});
+
+it("rejects a physical adoption record which discarded the cache-only original's already-retained closure ID", async () => {
+  const f = await staleClosure();
+  // Model a syntactically valid old-client adoption envelope, not secret data.
+  // Both jobs parse independently; their original closure identity must also be
+  // cross-validated when the ledger is read after a full cache teardown.
+  const [key, row] = [...f.factory.rows.entries()][0]! as [string, any];
+  const original = structuredClone(row.job);
+  const replaced = { ...row, legacyOriginal: original, job: { ...row.job, termination: { ...row.job.termination,
+    authorityClosure: { ...f.original, requestId: `req_${"z".repeat(26)}` } } } };
+  f.factory.rows.set(key, replaced); f.cacheRows.clear();
+  // Reduce to a boolean before asserting: never dump a custody-owning session.
+  expect(await f.open().then(() => false, error => /readback is invalid/.test(error.message))).toBe(true);
+  expect(JSON.stringify(f.factory.rows.get(key)) === JSON.stringify(replaced)).toBe(true);
+  f.closureRelease.release(); await f.close; f.release.release(); await f.publish;
+});
+
+it.each(["cancel", "readback", "relay", "persist"])("keeps the original closure after %s loss and resumes the same retained chain on reload", async fault => {
+  const f = await staleClosure(), next = await f.open();
+  if (fault === "cancel") f.loseCancel(); else if (fault === "readback") f.loseReadback();
+  else if (fault === "relay") f.loseTerminal(); else f.failRenewCommit();
+  await expect(next.renewClosure(await f.target())).rejects.toThrow();
+  f.cacheRows.clear(); const recovered = await f.open();
+  expect(recovered.pending()?.termination?.authorityClosure).toEqual(f.original);
+  expect(recovered.pending()?.termination?.renewals ?? []).toHaveLength(0);
+  await recovered.renewClosure(await f.target());
+  f.closureRelease.release(); expect(await f.close).toBe("stopped"); await recovered.terminalize();
+  f.release.release(); expect(await f.publish).toBe("stopped"); expect(f.closed.size).toBe(1);
+});
+
+it.each(["review", "generation", "configuration"])("does not renew a closure after the reviewed %s changes", async fault => {
+  const f = await staleClosure(), target = await f.target(), before = f.cancelled.length;
+  if (fault === "review") f.bump(); else if (fault === "generation") f.changeGeneration();
+  await expect((async () => (await f.open(fault === "configuration" ? "https://changed.example/" : undefined)).renewClosure(target))()).rejects.toThrow();
+  expect(f.cancelled).toHaveLength(before); expect(f.closed.size).toBe(0);
+  f.closureRelease.release(); await f.close; f.release.release(); await f.publish;
+});
+
+it("bounds closure renewal without dropping any earlier identities or retrying a committed closure under a new ID", async () => {
+  const f = await staleClosure(), next = await f.open();
+  for (let index = 0; index < 8; index++) { await next.renewClosure(await f.target()); f.bump(); }
+  expect(next.pending()?.termination?.renewals).toHaveLength(8);
+  const before = JSON.stringify(next.pending());
+  await expect(next.renewClosure(await f.target())).rejects.toThrow(/bound|limit|renew/i);
+  expect(JSON.stringify(next.pending())).toBe(before);
+  f.closureRelease.release(); await f.close; f.release.release(); await f.publish;
+});
+
+it("recovers the renewed ID after ledger commit succeeds but presentation persistence is lost", async () => {
+  const f = await staleClosure(), next = await f.open(); const cache = next.session.cache, set = cache.setItem;
+  let lost = false;
+  cache.setItem = (key, value) => { if (!lost && JSON.parse(value).termination?.renewals?.length === 1) { lost = true; throw new Error("Owned presentation loss after commit"); } set(key, value); };
+  await expect(next.renewClosure(await f.target())).rejects.toThrow(/presentation/);
+  const committed = ([...f.factory.rows.values()][0] as any).job.termination.renewals[0].intent;
+  f.cacheRows.clear(); const reopened = await f.open(); expect(reopened.pending()?.termination?.renewals?.[0]?.intent).toEqual(committed);
+  f.closureRelease.release(); await f.close; await reopened.terminalize(); f.release.release(); await f.publish;
+  expect(f.invoked.filter(id => id === committed.requestId)).toHaveLength(1);
+});
+
+it("refuses renewal when the original closure committed but its response was lost", async () => {
+  const f = await fixture("http"), publish = f.publication.resume().then(() => "published", () => "stopped"); await f.paused.promise;
+  f.factory.rows.clear(); f.loseClosure(); await expect(f.publication.terminalizeLegacy()).rejects.toThrow(/response loss/);
+  const original = f.publication.pending()!.termination!.authorityClosure!; f.cacheRows.clear(); const reopened = await f.open();
+  await expect(reopened.renewClosure((await f.worker.intakePresentation()).authorityTarget)).rejects.toThrow(/existing receipt/);
+  expect(reopened.pending()?.termination?.authorityClosure).toEqual(original); expect(reopened.pending()?.termination?.renewals).toBeUndefined();
+  await reopened.terminalize(); f.release.release(); await publish;
+  expect(f.invoked.filter(id => id === original.requestId)).toHaveLength(1);
+});
+
+it("keeps an already-retained legacy closure invocation when only its ledger is lost", async () => {
+  const f = await staleClosure(); f.factory.rows.clear();
+  await expect(f.publication.terminalizeLegacy()).rejects.toThrow(/source/);
+  expect(f.publication.pending()?.termination?.authorityClosure).toEqual(f.original);
+  expect(f.closed.size).toBe(0);
+  const reopened = await f.open(); await reopened.renewClosure(await f.target());
+  f.closureRelease.release(); await f.close; await reopened.terminalize(); f.release.release(); await f.publish;
+});
 
 it("fences a delayed original save across cache loss and never invokes it after terminal acknowledgement", async () => {
   const f = await fixture("save"); const pending = f.publication.resume().then(() => "published", () => "stopped");

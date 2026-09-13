@@ -34,6 +34,10 @@ function parse(input: unknown): IntakeWorkflowRecord {
       if ("formId" in legacyOriginal && "formId" in job) {
         if (!job.termination || !same({ ...legacyOriginal, termination: null }, { ...job, termination: null })
             || (job.termination.complete && !job.termination.authorityClosure)) throw new Error();
+        // Independent schema validity does not prove that adoption preserved an
+        // already-retained original closure. Validate the entire monotonic
+        // termination history on physical readback, not only on new CAS writes.
+        assertClosureHistory(legacyOriginal, job, false);
       } else if (!("formId" in legacyOriginal) && !("formId" in job)) {
         const original = legacyOriginal.renewals ?? [], current = job.renewals ?? [];
         if (!same([legacyOriginal.form, legacyOriginal.intent], [job.form, job.intent]) || current.length < original.length
@@ -51,6 +55,18 @@ function parse(input: unknown): IntakeWorkflowRecord {
     return { schema: 1, key: row.key, shellOrigin: row.shellOrigin, appInstanceId: row.appInstanceId, kind: row.kind, closed: row.closed, job,
       ...(legacyOriginal ? { legacyOriginal } : {}), ...(history ? { history } : {}) };
   } catch { throw new Error("Intake workflow custody is invalid; originals were kept"); }
+}
+function assertClosureHistory(a: IntakePublicationJobV1, b: IntakePublicationJobV1, singleAppend: boolean): void {
+  if (a.termination && (!b.termination || a.termination.requestedAt !== b.termination.requestedAt
+      || (a.termination.complete && !b.termination.complete))) throw new Error("Original closure state is immutable");
+  if (a.termination?.authorityClosure && !same(a.termination.authorityClosure, b.termination?.authorityClosure))
+    throw new Error("Original authority closure is immutable");
+  const prior = a.termination?.renewals ?? [], next = b.termination?.renewals ?? [];
+  if (next.length < prior.length || (singleAppend && next.length > prior.length + 1) || !same(prior, next.slice(0, prior.length))
+      || ((a.termination?.complete || a.termination?.closureReceipt) && !same(prior, next)))
+    throw new Error("Original closure renewal history is immutable");
+  for (const proof of ["closureReceipt", "relayTerminal"] as const)
+    if (a.termination?.[proof] && !same(a.termination[proof], b.termination?.[proof])) throw new Error("Original closure proof is immutable");
 }
 function transition(before: IntakeWorkflowRecord | null, after: IntakeWorkflowRecord): void {
   if (!before) { if (after.closed) throw new Error("Original intake workflow required"); return; }
@@ -72,8 +88,7 @@ function transition(before: IntakeWorkflowRecord | null, after: IntakeWorkflowRe
         || (a.termination && (!b.termination || a.termination.requestedAt !== b.termination.requestedAt
           || (a.termination.complete && !b.termination.complete) || !same({ ...a, termination: null }, { ...b, termination: null }))))
       throw new Error("Original intake workflow payload is immutable");
-    if (a.termination?.authorityClosure && !same(a.termination.authorityClosure, b.termination?.authorityClosure))
-      throw new Error("Original authority closure is immutable");
+    assertClosureHistory(a, b, true);
   } else if (!("formId" in a) && !("formId" in b)) {
     if (!same([a.form, a.intent], [b.form, b.intent]) || (a.relayConfirmed && !b.relayConfirmed)) throw new Error("Original revocation is immutable");
     const prior = a.renewals ?? [], next = b.renewals ?? [];
@@ -168,7 +183,7 @@ export class IntakeWorkflowSlot<K extends Kind> {
    * form exclusion and the exact relay tombstone are required before finish. */
   async claimLegacyClosure(original: IntakePublicationJobV1): Promise<void> {
     if (this.kind !== "publication") throw new Error("Legacy publication closure required");
-    await this.claimLegacy(original, { ...original, termination: { requestedAt: new Date().toISOString(), complete: false } });
+    await this.claimLegacy(original, { ...original, termination: original.termination ?? { requestedAt: new Date().toISOString(), complete: false } });
   }
   async claimLegacyRevocation(original: IntakeRevocationJobV1): Promise<void> {
     if (this.kind !== "revocation") throw new Error("Legacy revocation recovery required");

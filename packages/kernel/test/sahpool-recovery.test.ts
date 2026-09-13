@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { installedSahpool, OwnedSahDirectory } from "./helpers/owned-sahpool";
+import { initializedSahpool, installedSahpool, OwnedSahDirectory } from "./helpers/owned-sahpool";
 import { classifyDurableFileInventory } from "../src/durable-inventory";
 import { automationPhysicalTransactionCapability } from "../src/db";
 import { installSahpoolJournalRecovery } from "../src/sahpool-journal-recovery";
@@ -101,10 +101,11 @@ it("refuses missing tuples, duplicate recovery installs, concurrent opens and fo
 });
 
 it("does not grant the real production driver automation capability merely because the recovery adapter exists", async () => {
-  const owned = new OwnedSahDirectory(), { sqlite, pool } = await installedSahpool(owned), initial = open(pool); initial.close();
-  const recovery = installSahpoolJournalRecovery(sqlite, pool);
+  const owned = new OwnedSahDirectory(), sqlite = await initializedSahpool(owned);
   vi.resetModules(); vi.doMock("@sqlite.org/sqlite-wasm", () => ({ default: async () => sqlite }));
   const runtime = await import("../src/db");
+  expect(await runtime.browserDurableFileNames()).toEqual([]);
+  const pool = await sqlite.installOpfsSAHPoolVfs(), recovery = installSahpoolJournalRecovery(sqlite, pool);
   const driver = await runtime.openBrowserProductionTarget({ storageKey: "default", userFile: "/user.db", systemFile: "/system.db", kind: "legacy" });
   try {
     expect(runtime.automationPhysicalTransactionCapability(driver)).toEqual({ kind: "unavailable", releaseCertificate: false });
