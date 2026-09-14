@@ -655,7 +655,7 @@ export function DataView(props: {
     commit?: () => void): React.JSX.Element => {
     if (c.type === "boolean") {
       return (
-        <select value={value} autoFocus={commit !== undefined} aria-label={c.name}
+        <select value={value} autoFocus={commit !== undefined} aria-label={c.name} data-modal-escape-owner="true"
           onChange={e => onChange(e.target.value)} onBlur={commit}
           onKeyDown={e => {
             if (e.key === "Enter" && commit) commit();
@@ -667,7 +667,7 @@ export function DataView(props: {
     }
     if (c.type === "enum") {
       return (
-        <select value={value} autoFocus={commit !== undefined} aria-label={c.name}
+        <select value={value} autoFocus={commit !== undefined} aria-label={c.name} data-modal-escape-owner="true"
           onChange={e => { onChange(e.target.value); }} onBlur={commit}
           onKeyDown={e => {
             if (e.key === "Enter" && commit) commit();
@@ -684,7 +684,7 @@ export function DataView(props: {
           : c.type === "number" || c.type === "integer" ? "number" : "text"}
         value={value}
         autoFocus={commit !== undefined}
-        aria-label={c.name}
+        aria-label={c.name} data-modal-escape-owner="true"
         onChange={e => onChange(e.target.value)}
         onBlur={commit}
         onKeyDown={e => {
@@ -1179,7 +1179,7 @@ export function DataView(props: {
             </details>
             {savingView ? (
               <span className="save-work-view">
-                <input autoFocus value={viewName} placeholder="View name"
+                <input autoFocus value={viewName} placeholder="View name" data-modal-escape-owner="true"
                   onChange={event => setViewName(event.target.value)}
                   onKeyDown={event => {
                     if (event.key === "Enter") void saveCurrentView();
@@ -1244,6 +1244,7 @@ export function DataView(props: {
                     {renamingCol?.from === c.name ? (
                       <input
                         className="dataview-col-edit"
+                        data-modal-escape-owner="true"
                         autoFocus
                         value={renamingCol.value}
                         onChange={e => setRenamingCol({ from: c.name, value: e.target.value })}
@@ -1286,7 +1287,7 @@ export function DataView(props: {
                       <input
                         className="dataview-col-edit"
                         autoFocus
-                        aria-label="new column name"
+                        aria-label="new column name" data-modal-escape-owner="true"
                         placeholder="column name"
                         value={addingCol.name}
                         onChange={e => setAddingCol({ ...addingCol, name: e.target.value })}
@@ -1296,7 +1297,7 @@ export function DataView(props: {
                         }}
                       />
                       <select
-                        aria-label="new column type"
+                        aria-label="new column type" data-modal-escape-owner="true"
                         value={addingCol.type}
                         onChange={e => setAddingCol({ ...addingCol, type: e.target.value })}
                         onKeyDown={cancelAddingColumn}
@@ -1311,7 +1312,7 @@ export function DataView(props: {
                       </select>
                       {addingCol.type === "relation" ? (
                         <>
-                          <select aria-label="linked table"
+                          <select aria-label="linked table" data-modal-escape-owner="true"
                             value={addingCol.targetTable ?? tables.find(candidate => candidate.name !== selected)?.name ?? ""}
                             onChange={event => setAddingCol({ ...addingCol, targetTable: event.target.value })}
                             onKeyDown={cancelAddingColumn}>
@@ -1319,7 +1320,7 @@ export function DataView(props: {
                               <option key={candidate.name} value={candidate.name}>{candidate.name}</option>
                             ))}
                           </select>
-                          <select aria-label="linked record cardinality"
+                          <select aria-label="linked record cardinality" data-modal-escape-owner="true"
                             value={addingCol.cardinality ?? "one"}
                             onChange={event => setAddingCol({ ...addingCol,
                               cardinality: event.target.value as "one" | "many" })}

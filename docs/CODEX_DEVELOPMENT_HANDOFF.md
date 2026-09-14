@@ -1,3 +1,159 @@
+# Shell renderer preflight - 2026-09-14 (dependency provisioning BLOCKED)
+
+Started CLEAN at `a75c9bf8af68aa1efefb6b6679844160fa665226`, `D:\Clay`,
+`codex/clay-project`; local origin tracking ref matches (no network remote
+readback). The requested Preact/CSS phase is NOT complete. This is a bounded,
+uncommitted renderer-contract/modal-fix checkpoint, not a size certificate.
+Preserve all three previous optimization checkpoints and all A-F functionality.
+
+## Verified new environment blocker
+
+`corepack.cmd pnpm --version` exited 1 with:
+`EPERM: operation not permitted, opendir
+'C:\Users\nakul\AppData\Local\node\corepack\v1\pnpm'`.
+
+The exact requested install was also attempted using an isolated repository-local
+Corepack cache (the environment override applied only to that command):
+
+```powershell
+$env:COREPACK_HOME = 'D:\Clay\node_modules\.cache\corepack'
+corepack.cmd pnpm --filter @clay/shell add preact@10.29.8 --save-exact --ignore-scripts
+```
+
+Exit 1 BEFORE pnpm ran. Corepack cannot obtain the repository's already-pinned
+pnpm 11.9.0: request to `https://registry.npmjs.org/pnpm/-/pnpm-11.9.0.tgz`
+failed with `AggregateError [EACCES]`, including
+`connect EACCES 104.16.3.34:443`. The local-cache `--version` probe failed for the
+same reason. No installed Preact package exists under this repository's `.pnpm`.
+No package manifest, lockfile, dependency, production alias, or collector was
+changed. Do not fake a Preact resolution, vendor an unverified copy, fabricate a
+lockfile checksum, or bypass the sandbox network restriction.
+
+An asynchronous request asked the parent to provision the exact dependencies in
+an accessible repository-local cache without source changes. This is an
+environment dependency, NOT a proven Preact product incompatibility. Parent-side
+provisioning is required before the renderer swap and its equivalence checks can
+run. No restart or weaker sandbox is requested.
+
+## Completed safe preflight work
+
+- Added `packages/shell/test/renderer-compatibility.test.tsx`, executing the
+  installed React runtime: controlled text/checkbox/select input, blur/focusout,
+  native capture/bubble, refs and layout effects, external-store updates and
+  unsubscribe, sandboxed iframe mount/unmount, lazy/Suspense, class error recovery,
+  portal drag/drop payload/preventDefault, nested modal/feedback portals, Tab,
+  Escape, background inert/aria-hidden, scroll locking and trigger restoration.
+  These are baseline contracts, NOT evidence of Preact equivalence.
+- RED: Escape from an ordinary nested-modal control that stops propagation did
+  not close the child; the parent remained inert. `ModalDialog` now uses one
+  native capture trap for ALL content instead of a synthetic path plus a special
+  native feedback-only path. Only the top layer can dismiss through its backdrop.
+- Preserved intentional Escape-to-cancel editors using explicit trusted-shell
+  `data-modal-escape-owner="true"` markers on the nine DataView editor sites and
+  the two RecordDetail editor sites. These editors retain their existing handlers;
+  the marker exempts only Escape, never Tab. A focused test verifies cancellation
+  does not dismiss the modal or escape its focus trap. No durable write path or
+  retained request/receipt behavior changed.
+- RED: lazy modal failure had no alertdialog/scroll-lock contract. Added the
+  non-dismissible mode to `ModalDialog`; `LazySurfaceBoundary` now reuses it,
+  removing its duplicate modal focus/inert/key handling. The recovery button and
+  error label remain; modal failure uses `role="alertdialog"`, whereas non-modal
+  failure remains `role="alert"`. Escape/backdrop clicks cannot dismiss a failed
+  surface. No fallback exposes raw authority or retries a durable operation.
+- Read-only CSS diagnostic `test-results/fix-batch/css-primitives-plan.mjs`
+  enumerates repeated declarations from 393 simple, top-level class rules in
+  main/Operations styles. It made NO source rewrite; all CSS, themes, responsive,
+  reduced-motion, print and lazy-style behavior is untouched. CSS consolidation,
+  the full A-F accessible-control census and the production renderer-module guard
+  remain required; none is claimed complete by this preflight packet.
+
+## Actual verification
+
+- Initial renderer/modal packet: 9 passed, one failure from a stale test-held
+  portal DOM node. Fixed the fixture to requery the live relocated feedback node.
+- Deterministic ordinary-child Escape RED: 4 passed, one failed. Native capture
+  fix GREEN: 10 passed across renderer/modal/lazy-boundary files.
+- Added explicit editor-cancellation test: 10 passed across renderer/modal files.
+- Lazy modal failure RED: 6 passed, one failed. Shared non-dismissible modal GREEN:
+  12 passed across 3 files, 3.75 s, exit 0.
+- First full shell run: 849 passed / one failed, 394.84 s, exit 1;
+  `test-results/fix-batch/shell-renderer-preflight.json`. Existing
+  `operations-ui.test.tsx` correctly caught add-column Escape closing DataView.
+  Four delegated add-column cancellation handlers needed the same explicit marker;
+  all nine DataView editor sites are now covered. No assertion was weakened.
+- Corrected operations/renderer/modal packet: 24 passed across 3 files, 5.48 s,
+  exit 0. Command (from shell): `node node_modules/vitest/vitest.mjs run
+  test/operations-ui.test.tsx test/renderer-compatibility.test.tsx
+  test/modal-dialog.test.tsx --maxWorkers=1 --minWorkers=1 --reporter=dot`.
+- Shell `node node_modules/typescript/bin/tsc --noEmit`: exit 0. No other package's
+  source/API/dependencies changed; their full suites/typechecks were not rerun.
+- Panel `node node_modules/vite/bin/vite.js build`: exit 0, 664 ms. Root
+  `node scripts/bundle-module-report.mjs`: exit 0, 14.41 s; ordinary static/dynamic
+  import and >500 KB warnings remain. The actual module report still contains
+  React/ReactDOM/Scheduler, with no Preact: no renderer swap was certified by this
+  build. Prior Acorn/shared SQLite/shared Zod assets are preserved.
+- `node --test scripts/bundle-budget.test.mjs`: 19 passed, exit 0.
+- `node scripts/bundle-diagnostic.mjs`: exit 1; four red aggregate boundaries.
+  `node scripts/bundle-budget.mjs`: exit 1, freshness and entry/boot/lazy checks
+  pass, then `total shell JavaScript: 1137878 B raw / 342872 B gzip exceeds
+  980000 B / 290000 B`. Fresh reports: `test-results/fix-batch/bundles.json` and
+  `bundle-modules.json`. This is not release evidence.
+- `node scripts/roadmap-development-census.mjs`: exit 0, 21 capabilities,
+  `developmentComplete: true`, no disabled UI flags, 25 explicitly retired
+  unavailable compatibility routes. This preserves the prior A-F inventory; it
+  does NOT mean the new renderer/CSS optimization phase is complete, or constitute
+  the requested rendered accessible-control census.
+- Final full shell rerun: 850 passed across 130 files, 394.83 s, exit 0; no
+  unhandled-error report. Actual JSON:
+  `test-results/fix-batch/shell-renderer-preflight-green.json`. Both full runs used
+  `node node_modules/vitest/vitest.mjs run --maxWorkers=1 --minWorkers=1
+  --reporter=dot --reporter=json --outputFile.json=../../test-results/fix-batch/<name>.json`
+  from `packages/shell`, serially with other broad work.
+
+| Boundary | Current raw / gzip | Frozen limit | Remaining raw / gzip |
+| --- | --- | --- | --- |
+| Shell JavaScript | 1,137,878 / 342,872 | 980,000 / 290,000 | 157,878 / 52,872 |
+| Application styles | 78,807 / 20,198 | 67,000 / 17,000 | 11,807 / 3,198 |
+| Complete browser | 3,577,700 / 1,178,465 | 3,250,000 / 1,100,000 | 327,700 / 78,465 |
+| Complete worker | 1,434,879 / 387,588 | 1,010,000 / 280,000 | 424,879 / 107,588 |
+
+No material budget reduction occurred: shell raw changed by -66 bytes, styles and
+worker bytes are unchanged, and tiny gzip/hash variation is not an architectural
+saving. Other measured boundaries remain green; DataView is 43,797 / 12,821
+(45,000 / 14,000 limit), so monitor its own headroom when adding class tokens.
+
+Six changed paths: this handoff; shell `src/app/ModalDialog.tsx`,
+`src/app/LazySurfaceBoundary.tsx`, `src/app/DataView.tsx`,
+`src/app/RecordDetail.tsx`, and new `test/renderer-compatibility.test.tsx`.
+`git diff --check` and the targeted changed-code safety scan passed. No new
+unsafe HTML/dynamic evaluation/provider HTTP/credential-shaped literal was found.
+Manifests, lockfile, CSS, collectors, authority packages and `evidence/` are
+unchanged. No review fingerprint or formal evidence was generated. No Git writes,
+other worktree access, server stops, deployment or production changes occurred.
+
+## Exact continuation
+
+1. Parent must provision pinned pnpm 11.9.0 and preact 10.29.8 accessibly. Then use
+   the exact Corepack command above; inspect package/lock diff for only the
+   requested change. Keep the sandbox intact and existing preview servers alone.
+2. Finish the A-F rendered accessible-control census and renderer-module report
+   rejection tests BEFORE aliasing. The new baseline contract packet and existing
+   modal/editor tests must remain green under the proposed runtime, not merely
+   under React. Cover the literal JSX runtimes and reject mixed/duplicate renderers.
+3. Alias production AND Vitest as requested; use Preact test-utils act where needed,
+   measure the real closure, and fix observed product incompatibilities. No alias
+   has been landed while its target dependency is unavailable.
+4. Continue modal/surface and zero-specificity CSS primitives only with cascade,
+   editor, focus and responsive finder tests. The remaining PrivateMetrics/ShapeMap/
+   ImportWizard scaffolds have distinct Escape/restore behavior: preserve inline
+   confirmations and intentional focus handoff when migrating them. Do not infer
+   CSS savings from the declaration inventory or run broad redesign blindly.
+5. Close shell JS and styles, then hand off the separately red worker engine and
+   final parent browser campaign. No commits, pushes, deployment, production
+   configuration, credentials, budget edits, formal review or browser launch.
+
+---
+
 # Aggregate bundle FIX continuation - 2026-09-14
 
 Started clean at `5043099b407d0af7523af298e1e894d0db88487f` in `D:\Clay`,

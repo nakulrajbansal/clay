@@ -1,6 +1,6 @@
 import {
   useEffect, useRef, useSyncExternalStore,
-  type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject,
+  type ReactNode, type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
 
@@ -72,6 +72,7 @@ export function ModalDialog(props: {
   className: string;
   backdropClassName: string;
   onClose: () => void;
+  dismissible?: boolean;
   returnFocusRef?: RefObject<HTMLElement | null>;
   children: ReactNode;
 }): React.JSX.Element {
@@ -82,6 +83,8 @@ export function ModalDialog(props: {
   );
   const closeRef = useRef(props.onClose);
   closeRef.current = props.onClose;
+  const dismissibleRef = useRef(props.dismissible !== false);
+  dismissibleRef.current = props.dismissible !== false;
 
   // Native capture is intentional: feedback may be portalled here from a
   // different React branch, whose synthetic events follow that owner branch
@@ -90,10 +93,14 @@ export function ModalDialog(props: {
     const top = modalLayers.at(-1);
     if (top && top.dialog !== dialogRef.current) return;
     if (event.key === "Escape") {
+      // Trusted inline editors own cancellation before dismissing their dialog.
+      // This is explicit, not dependent on renderer-specific bubbling behavior.
+      if (event.target instanceof Element
+          && event.target.closest('[data-modal-escape-owner="true"]')) return;
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
-      closeRef.current();
+      if (dismissibleRef.current) closeRef.current();
       return;
     }
     if (event.key !== "Tab") return;
@@ -119,13 +126,7 @@ export function ModalDialog(props: {
     const dialog = dialogRef.current;
     const layer = backdrop && dialog ? { backdrop, dialog } : null;
     if (layer) { modalLayers.push(layer); syncModalLayers(); }
-    const onScopedPortalKeyDown = (event: globalThis.KeyboardEvent): void => {
-      const target = event.target;
-      if (!(target instanceof Element)
-          || !target.closest("[data-modal-scoped-feedback]")) return;
-      trapKeyDown(event);
-    };
-    backdrop?.addEventListener("keydown", onScopedPortalKeyDown, true);
+    backdrop?.addEventListener("keydown", trapKeyDown, true);
     if (modalScrollLocks++ === 0) {
       priorBodyOverflow = document.body.style.overflow;
       document.body.style.overflow = "hidden";
@@ -141,7 +142,7 @@ export function ModalDialog(props: {
     });
     return () => {
       cancelAnimationFrame(frame);
-      backdrop?.removeEventListener("keydown", onScopedPortalKeyDown, true);
+      backdrop?.removeEventListener("keydown", trapKeyDown, true);
       if (layer) {
         const index = modalLayers.indexOf(layer);
         if (index >= 0) modalLayers.splice(index, 1);
@@ -165,8 +166,10 @@ export function ModalDialog(props: {
 
   return createPortal(
     <div ref={backdropRef} className={props.backdropClassName}
-      onKeyDown={(event: ReactKeyboardEvent<HTMLDivElement>) => trapKeyDown(event.nativeEvent)}
-      onClick={event => { if (event.target === event.currentTarget) props.onClose(); }}>
+      onClick={event => {
+        if (props.dismissible !== false && event.target === event.currentTarget
+            && modalLayers.at(-1)?.dialog === dialogRef.current) props.onClose();
+      }}>
       <section ref={dialogRef} className={props.className} role={props.role ?? "dialog"}
         aria-modal="true" aria-label={props.ariaLabel}
         aria-labelledby={props.ariaLabelledBy} aria-describedby={props.ariaDescribedBy}

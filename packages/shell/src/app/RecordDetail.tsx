@@ -161,7 +161,7 @@ function RichNoteEditor(props: {
       {props.value.split("\n").map((line, index) => line.startsWith("- ")
         ? <div className="rich-note-bullet" key={index}>• {inlineMarkdown(line.slice(2))}</div>
         : <p key={index}>{line ? inlineMarkdown(line) : " "}</p>)}
-    </div> : <textarea ref={ref} rows={8} value={props.value} disabled={props.disabled}
+    </div> : <textarea ref={ref} rows={8} value={props.value} disabled={props.disabled} data-modal-escape-owner="true"
       aria-label={`${props.label} rich note`}
       onChange={event => {
         props.onChange(event.target.value, true);
@@ -698,7 +698,7 @@ export function RecordDetail(props: {
               return (
                 <div className="record-field" key={column.name}>
                   <label htmlFor={`record-${column.name}`}>{label}</label>
-                  <input id={`record-${column.name}`}
+                  <input id={`record-${column.name}`} data-modal-escape-owner="true"
                     type={column.type === "date" ? "date"
                       : column.type === "number" || column.type === "integer" ? "number" : "text"}
                     value={scalarDrafts[column.name] ?? ""} disabled={saving.has(column.name)}
