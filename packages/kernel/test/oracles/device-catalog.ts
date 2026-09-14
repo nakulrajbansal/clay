@@ -1,4 +1,5 @@
-import { AuthorityGraph, AuthorityReferences, graphLifecycleEvent, graphLifecycleStorage, sameGraphTarget as sameTarget } from "./authority-graph";
+// Frozen test oracle from 28db0b9ed11eb6e169325d4cfc9250bdf83e1414.
+// Only relative imports are relocated. Never imported by production.
 import {
   AppInstanceId,
   AuthorityIncarnationId,
@@ -53,18 +54,18 @@ import type {
   TargetEvidenceV1 as TargetEvidence,
   WriteFenceV1 as WriteFence,
 } from "@clay/schema/catalog";
-import type { DbDriver, SqlRow } from "./db";
+import type { DbDriver, SqlRow } from "../../src/db";
 import {
   physicalNamespaceEntry,
   type DurableNamespaceInventoryEntry,
-} from "./durable-inventory";
-import { ClayError } from "./errors";
-import { assertLifecycleReattestation } from "./lifecycle-reattestation-evidence";
-import { readCatalogPendingRows, LIFECYCLE_PROVENANCE, LIFECYCLE_RECEIPT_PROVENANCE } from "./catalog-pending";
+} from "../../src/durable-inventory";
+import { ClayError } from "../../src/errors";
+import { assertLifecycleReattestation } from "../../src/lifecycle-reattestation-evidence";
+import { readCatalogPendingRows, LIFECYCLE_PROVENANCE, LIFECYCLE_RECEIPT_PROVENANCE } from "../../src/catalog-pending";
 import { BACKUP_RETENTION_DDL, assertBackupRetentionHistory, backupRemovalHash, backupRemovalRequestId,
-  planBackupRetention, readBackupRetentionHistory, retentionEligible } from "./backup-retention";
-import { productionOperationIdV2 } from "./production-operation-id";
-import { parseProductionRequestReceiptRow } from "./production-request-journal";
+  planBackupRetention, readBackupRetentionHistory, retentionEligible } from "../../src/backup-retention";
+import { productionOperationIdV2 } from "../../src/production-operation-id";
+import { parseProductionRequestReceiptRow } from "../../src/production-request-journal";
 
 const LEGACY_CATALOG_DDL = [
   `CREATE TABLE catalog.catalog_root(
@@ -630,6 +631,14 @@ function readBackupRecords(driver: DbDriver): StoredBackupRecord[] {
     });
 }
 
+function sameTarget(left: TargetEvidence, right: TargetEvidence): boolean {
+  return left.appInstanceId === right.appInstanceId
+    && left.activeGenerationId === right.activeGenerationId
+    && left.lineageEpoch === right.lineageEpoch
+    && left.protectionRevision === right.protectionRevision
+    && left.digestSchema === right.digestSchema
+    && left.stateSha256 === right.stateSha256;
+}
 
 function catalogTables(driver: DbDriver): string[] {
   try {
@@ -818,7 +827,7 @@ function readValidatedCatalog(
   const snapshot = readSnapshotClosed(driver);
   try {
     const retained = new Map<string, string>();
-
+    const referenced = new Set<string>();
     for (const row of driver.select("SELECT id_value, id_kind FROM catalog.id_registry")) {
       const value = String(row.id_value);
       const kind = String(row.id_kind);
@@ -834,8 +843,10 @@ function readValidatedCatalog(
       } else throw new Error("unknown retained identity kind");
       retained.set(value, kind);
     }
-    const references = new AuthorityReferences(options.allowPendingRestore ? "recovery" : "live", retained);
-    const requireRetained = references.require.bind(references);
+    const requireRetained = (value: string, kind: string): void => {
+      if (retained.get(value) !== kind) throw new Error(`missing retained ${kind} identity`);
+      referenced.add(value);
+    };
     requireRetained(snapshot.authorityIncarnationId, "authority");
 
     const appRows = driver.select("SELECT * FROM catalog.app_entries ORDER BY app_instance_id");
@@ -884,8 +895,6 @@ function readValidatedCatalog(
       generationOperations.set(descriptor.generationId, operationId);
     }
 
-    const graph = new AuthorityGraph({ kind: options.allowPendingRestore ? "recovery" : "live" },
-      snapshot, apps, generations, generationOperations);
     const lifecycleJobs = readPendingLifecycleJobs(driver);
     if (lifecycleJobs.length > 1)
       throw new Error("multiple pending lifecycle targets are unsupported");
@@ -962,7 +971,17 @@ function readValidatedCatalog(
     }
     if (lifecycleJobs.some(job => lifecycleRequestIds.has(job.requestId)))
       throw new Error("lifecycle request is both pending and complete");
-    for (const app of apps.values()) graph.active(app);
+    for (const app of apps.values()) {
+      const generation = generations.get(app.activeGenerationId);
+      if (!generation
+          || generation.target.appInstanceId !== app.appInstanceId
+          || generation.target.lineageEpoch !== app.currentLineageEpoch
+          || BigInt(generation.target.protectionRevision) > BigInt(app.currentProtectionRevision)
+          || generation.target.digestSchema !== app.digestSchema
+          || (generation.target.protectionRevision === app.currentProtectionRevision
+            && generation.target.stateSha256 !== app.stateSha256))
+        throw new Error("active generation does not match app entry");
+    }
 
     const leases = new Map<string, {
       authorityIncarnationId: string;
@@ -1010,8 +1029,49 @@ function readValidatedCatalog(
     for (const reservation of reservations) {
       requireRetained(reservation.operationId, "operation");
       requireRetained(reservation.leaseId, "lease");
-      graph.reservation(reservation, leases);
-      if (reservation.finalizedAt !== null) requireRetained(reservation.finalizedLeaseId!, "lease");
+      const lease = leases.get(reservation.leaseId);
+      const app = apps.get(reservation.appInstanceId);
+      const generation = generations.get(reservation.activeGenerationId);
+      if (reservation.authorityIncarnationId !== snapshot.authorityIncarnationId
+          || !lease
+          || lease.authorityIncarnationId !== reservation.authorityIncarnationId
+          || lease.writeEpoch !== reservation.writeEpoch
+          || lease.releaseId !== reservation.releaseId
+          || !app || !generation
+          || generation.target.appInstanceId !== reservation.appInstanceId
+          || generation.target.lineageEpoch !== reservation.lineageEpoch
+          || BigInt(Date.parse(reservation.reservedAt)) < BigInt(lease.issuedAtMs)
+          || BigInt(Date.parse(reservation.reservedAt)) >= BigInt(lease.expiresAtMs)
+          || BigInt(reservation.reservedCatalogGeneration) > BigInt(snapshot.catalogGeneration)
+          || (reservation.finalizedCatalogGeneration !== null
+            && BigInt(reservation.finalizedCatalogGeneration) > BigInt(snapshot.catalogGeneration)))
+        throw new Error("revision reservation relationship is invalid");
+      if (reservation.finalizedAt !== null) {
+        requireRetained(reservation.finalizedLeaseId!, "lease");
+        const finalizedLease = leases.get(reservation.finalizedLeaseId!);
+        const reservedAtMs = BigInt(Date.parse(reservation.reservedAt));
+        const finalizedAtMs = BigInt(Date.parse(reservation.finalizedAt));
+        const reservedEpoch = BigInt(reservation.writeEpoch);
+        const finalizedEpoch = BigInt(reservation.finalizedWriteEpoch!);
+        if (!finalizedLease
+            || finalizedLease.authorityIncarnationId !== reservation.authorityIncarnationId
+            || finalizedLease.writeEpoch !== reservation.finalizedWriteEpoch
+            || finalizedLease.releaseId !== reservation.finalizedReleaseId
+            || finalizedAtMs < reservedAtMs
+            || finalizedAtMs < BigInt(finalizedLease.issuedAtMs)
+            || finalizedAtMs >= BigInt(finalizedLease.expiresAtMs)
+            || finalizedEpoch < reservedEpoch
+            || (finalizedEpoch === reservedEpoch
+              && (reservation.finalizedLeaseId !== reservation.leaseId
+                || reservation.finalizedReleaseId !== reservation.releaseId))
+            || (finalizedEpoch > reservedEpoch
+              && (reservation.state !== "abandoned"
+                || finalizedEpoch !== reservedEpoch + 1n
+                || !lease.revoked
+                || BigInt(finalizedLease.issuedAtMs) < BigInt(lease.expiresAtMs)
+                || finalizedAtMs !== BigInt(finalizedLease.issuedAtMs))))
+          throw new Error("revision finalization authority is invalid");
+      }
       for (const generation of [
         reservation.reservedCatalogGeneration,
         reservation.finalizedCatalogGeneration,
@@ -1020,33 +1080,242 @@ function readValidatedCatalog(
         if (catalogEvents.has(generation)) throw new Error("catalog generation event is reused");
         catalogEvents.add(generation);
       }
-      if (reservation.state === "reserved") activeReservationCount++;
-      graph.activeReservation(reservation);
+      if (reservation.state === "reserved") {
+        activeReservationCount++;
+        const expected: TargetEvidence = {
+          appInstanceId: app.appInstanceId,
+          activeGenerationId: app.activeGenerationId,
+          lineageEpoch: app.currentLineageEpoch,
+          protectionRevision: app.currentProtectionRevision,
+          digestSchema: app.digestSchema,
+          stateSha256: app.stateSha256,
+        };
+        if (snapshot.selectedAppInstanceId !== app.appInstanceId
+            || !sameTarget(expected, {
+              appInstanceId: reservation.appInstanceId,
+              activeGenerationId: reservation.activeGenerationId,
+              lineageEpoch: reservation.lineageEpoch,
+              protectionRevision: reservation.expectedProtectionRevision,
+              digestSchema: app.digestSchema,
+              stateSha256: reservation.expectedStateSha256,
+            })
+            || reservation.revision !== app.revisionHighWater
+            || reservation.reservedCatalogGeneration !== snapshot.catalogGeneration)
+          throw new Error("active revision reservation is not current");
+      }
     }
     if (activeReservationCount > 1) throw new Error("multiple active revision reservations");
-    for (const app of apps.values()) graph.chain(app, reservations);
+    for (const app of apps.values()) {
+      const genesis = generations.get(app.journalGenesisGenerationId);
+      if (!genesis
+          || genesis.target.appInstanceId !== app.appInstanceId
+          || genesis.target.lineageEpoch !== app.journalGenesisLineageEpoch
+          || genesis.target.protectionRevision !== app.journalGenesisProtectionRevision
+          || genesis.target.digestSchema !== app.digestSchema
+          || genesis.target.stateSha256 !== app.journalGenesisStateSha256)
+        throw new Error("app journal genesis is invalid");
+      const anchor = genesis.target;
+      const journal = reservations.filter(reservation => reservation.appInstanceId === app.appInstanceId);
+      const expectedCount = BigInt(app.revisionHighWater) - BigInt(anchor.protectionRevision);
+      if (expectedCount < 0n || BigInt(journal.length) !== expectedCount)
+        throw new Error("revision reservation high-water is inconsistent");
+      let chained = anchor;
+      let previousCatalogEvent = -1n;
+      for (let index = 0; index < journal.length; index++) {
+        const reservation = journal[index]!;
+        const reservedGeneration = BigInt(reservation.reservedCatalogGeneration);
+        const finalizedGeneration = reservation.finalizedCatalogGeneration === null
+          ? null : BigInt(reservation.finalizedCatalogGeneration);
+        if (BigInt(reservation.revision) !== BigInt(anchor.protectionRevision) + BigInt(index + 1)
+            || reservedGeneration <= previousCatalogEvent
+            || (finalizedGeneration !== null && finalizedGeneration !== reservedGeneration + 1n)
+            || reservation.activeGenerationId !== chained.activeGenerationId
+            || reservation.lineageEpoch !== chained.lineageEpoch
+            || reservation.expectedProtectionRevision !== chained.protectionRevision
+            || reservation.expectedStateSha256 !== chained.stateSha256
+            || (reservation.state === "reserved" && index !== journal.length - 1))
+          throw new Error("revision reservation chain is invalid");
+        previousCatalogEvent = finalizedGeneration ?? reservedGeneration;
+        if (reservation.state === "committed") {
+          const publishedGeneration = generations.get(reservation.publishedActiveGenerationId!);
+          if (!publishedGeneration
+              || reservation.publishedActiveGenerationId !== reservation.activeGenerationId
+              || reservation.publishedLineageEpoch !== reservation.lineageEpoch
+              || publishedGeneration.target.appInstanceId !== app.appInstanceId
+              || publishedGeneration.target.lineageEpoch !== reservation.publishedLineageEpoch!
+              || BigInt(publishedGeneration.target.protectionRevision) > BigInt(reservation.revision))
+            throw new Error("committed revision generation is invalid");
+          chained = {
+            appInstanceId: app.appInstanceId,
+            activeGenerationId: reservation.publishedActiveGenerationId!,
+            lineageEpoch: reservation.publishedLineageEpoch!,
+            protectionRevision: reservation.revision,
+            digestSchema: app.digestSchema,
+            stateSha256: reservation.stateSha256!,
+          };
+        }
+      }
+      const current: TargetEvidence = {
+        appInstanceId: app.appInstanceId,
+        activeGenerationId: app.activeGenerationId,
+        lineageEpoch: app.currentLineageEpoch,
+        protectionRevision: app.currentProtectionRevision,
+        digestSchema: app.digestSchema,
+        stateSha256: app.stateSha256,
+      };
+      if (!sameTarget(chained, current)) throw new Error("catalog head does not match reservation chain");
+    }
 
     const storedBackups = readBackupRecords(driver);
+    const backupByOperation = new Map<string, StoredBackupRecord>();
+    const backupSeriesGenerations = new Set<string>();
+    const backupGenerationIds = new Set<string>();
+    const backupFileNames = new Set<string>();
+    for (const stored of storedBackups) {
+      const { record, operationId } = stored;
+      requireRetained(operationId, "operation");
+      const app = apps.get(record.evidence.appInstanceId);
+      const generation = generations.get(record.evidence.activeGenerationId);
+      const matchesGeneration = generation !== undefined
+        && sameTarget(record.evidence, generation.target);
+      const matchesRevision = reservations.some(reservation =>
+        reservation.state === "committed"
+        && reservation.appInstanceId === record.evidence.appInstanceId
+        && reservation.publishedActiveGenerationId === record.evidence.activeGenerationId
+        && reservation.publishedLineageEpoch === record.evidence.lineageEpoch
+        && reservation.revision === record.evidence.protectionRevision
+        && reservation.stateSha256 === record.evidence.stateSha256);
+      const seriesGeneration = `${record.authentication.seriesId}:${record.authentication.generation}`;
+      if (!app || !generation || generation.target.appInstanceId !== app.appInstanceId
+          || (!matchesGeneration && !matchesRevision)
+          || BigInt(record.publicationCatalogGeneration) > BigInt(snapshot.catalogGeneration)
+          || backupByOperation.has(operationId)
+          || backupSeriesGenerations.has(seriesGeneration)
+          || backupGenerationIds.has(record.generationId)
+          || backupFileNames.has(record.fileName)
+          || catalogEvents.has(record.publicationCatalogGeneration))
+        throw new Error("backup record relationship is invalid");
+      backupByOperation.set(operationId, stored);
+      backupSeriesGenerations.add(seriesGeneration);
+      backupGenerationIds.add(record.generationId);
+      backupFileNames.add(record.fileName);
+      catalogEvents.add(record.publicationCatalogGeneration);
+    }
+
     const generationEvents = readCatalogGenerationEvents(driver);
-    for (const stored of storedBackups) requireRetained(stored.operationId, "operation");
-    const backupByOperation = graph.backupHistory(storedBackups, reservations, generationEvents, catalogEvents);
-    for (const event of generationEvents) {
+    if (BigInt(generationEvents.length) !== BigInt(snapshot.catalogGeneration))
+      throw new Error("catalog generation event high-water is inconsistent");
+    const eventByGeneration = new Map<string, CatalogGenerationEvent>();
+    let previousEventEpoch = 0n;
+    for (let index = 0; index < generationEvents.length; index++) {
+      const event = generationEvents[index]!;
+      if (BigInt(event.catalogGeneration) !== BigInt(index + 1)
+          || BigInt(event.writeEpoch) < previousEventEpoch
+          || BigInt(event.writeEpoch) > BigInt(snapshot.writeEpoch))
+        throw new Error("catalog generation event chain is invalid");
+      previousEventEpoch = BigInt(event.writeEpoch);
+      eventByGeneration.set(event.catalogGeneration, event);
       if (event.appInstanceId !== null) requireRetained(event.appInstanceId, "app");
       if (event.operationId !== null) requireRetained(event.operationId, "operation");
+      const reservation = event.operationId === null ? undefined
+        : reservations.find(candidate => candidate.operationId === event.operationId);
+      if (event.eventKind === "app_seed") {
+        const app = apps.get(event.appInstanceId!);
+        const genesis = app && generations.get(app.journalGenesisGenerationId);
+        if (!app || !genesis
+            || event.operationId !== generationOperations.get(genesis.generationId)
+            || event.at !== genesis.sealedAt || event.target === null
+            || !sameTarget(event.target, genesis.target))
+          throw new Error("catalog app seed event is invalid");
+      } else if (event.eventKind === "app_selected") {
+        const selectedTarget = event.target;
+        const generation = selectedTarget
+          ? generations.get(selectedTarget.activeGenerationId) : undefined;
+        const matchesGenesis = generation !== undefined && selectedTarget !== null
+          && sameTarget(selectedTarget, generation.target);
+        const matchesCommit = selectedTarget !== null && reservations.some(item =>
+          item.state === "committed"
+          && item.appInstanceId === selectedTarget.appInstanceId
+          && item.publishedActiveGenerationId === selectedTarget.activeGenerationId
+          && item.publishedLineageEpoch === selectedTarget.lineageEpoch
+          && item.revision === selectedTarget.protectionRevision
+          && item.stateSha256 === selectedTarget.stateSha256);
+        if (!matchesGenesis && !matchesCommit)
+          throw new Error("catalog app selection event is invalid");
+      } else if (event.eventKind === "app_metadata") {
+        if (!apps.has(event.appInstanceId!))
+          throw new Error("catalog metadata event references an unknown app");
+      } else if (event.eventKind === "backup_published") {
+        const stored = backupByOperation.get(event.operationId!);
+        if (!stored || stored.record.evidence.appInstanceId !== event.appInstanceId
+            || stored.record.publicationCatalogGeneration !== event.catalogGeneration
+            || stored.record.validatedAt !== event.at)
+          throw new Error("catalog backup publication event is invalid");
+      } else if (event.eventKind === "lease_issued") {
+        const matches = [...leases.values()].filter(lease =>
+          lease.writeEpoch === event.writeEpoch
+          && new Date(Number(lease.issuedAtMs)).toISOString() === event.at);
+        if (matches.length !== 1) throw new Error("catalog lease event is invalid");
+      } else if (!reservation || reservation.appInstanceId !== event.appInstanceId) {
+        throw new Error("catalog revision event is orphaned");
+      } else if (event.eventKind === "revision_reserved") {
+        if (reservation.reservedCatalogGeneration !== event.catalogGeneration
+            || reservation.writeEpoch !== event.writeEpoch
+            || reservation.reservedAt !== event.at)
+          throw new Error("catalog reservation event is invalid");
+      } else {
+        const expectedState = event.eventKind === "revision_committed" ? "committed" : "abandoned";
+        const reservedEpoch = BigInt(reservation.writeEpoch);
+        const finalizedEpoch = BigInt(reservation.finalizedWriteEpoch!);
+        const isTakeover = event.eventKind === "recovery_takeover";
+        if (reservation.state !== expectedState
+            || reservation.finalizedCatalogGeneration !== event.catalogGeneration
+            || reservation.finalizedWriteEpoch !== event.writeEpoch
+            || reservation.finalizedAt !== event.at
+            || (isTakeover && finalizedEpoch !== reservedEpoch + 1n)
+            || (!isTakeover && finalizedEpoch !== reservedEpoch))
+          throw new Error("catalog finalization event is invalid");
+      }
     }
-    const eventByGeneration = graph.eventHistory(generationEvents, reservations, leases, backupByOperation);
     if ((generationEvents.at(-1)?.writeEpoch ?? "0") !== snapshot.writeEpoch)
       throw new Error("catalog event write epoch does not match root");
-    graph.selectedApp(generationEvents);
+    const latestSelection = generationEvents.filter(event =>
+      event.eventKind === "app_seed" || event.eventKind === "app_selected").at(-1);
+    if ((latestSelection?.appInstanceId ?? null) !== snapshot.selectedAppInstanceId)
+      throw new Error("catalog selected app does not match its latest event");
 
-    for (const app of apps.values()) graph.metadata(app, generationEvents);
+    for (const app of apps.values()) {
+      const latestMetadata = [...generationEvents].reverse().find(event =>
+        event.appInstanceId === app.appInstanceId && event.displayName !== null);
+      if (!latestMetadata || latestMetadata.displayName !== app.displayName
+          || latestMetadata.shellId !== app.shellId)
+        throw new Error("catalog app metadata does not match its latest event");
+    }
     for (const app of apps.values()) {
       const seeds = generationEvents.filter(event => event.eventKind === "app_seed"
         && event.appInstanceId === app.appInstanceId);
       if (seeds.length !== 1) throw new Error("catalog app seed event is missing");
     }
-    for (const lease of leases.values()) graph.leaseIssuance(lease);
-    for (const reservation of reservations) graph.reservationEvents(reservation, eventByGeneration);
+    for (const lease of leases.values()) {
+      const issuedAt = new Date(Number(lease.issuedAtMs)).toISOString();
+      const events = generationEvents.filter(event =>
+        (event.eventKind === "lease_issued" || event.eventKind === "recovery_takeover")
+        && event.writeEpoch === lease.writeEpoch && event.at === issuedAt);
+      if (events.length !== 1) throw new Error("catalog lease issuance event is missing");
+    }
+    for (const reservation of reservations) {
+      const reservedEvent = eventByGeneration.get(reservation.reservedCatalogGeneration);
+      if (!reservedEvent || reservedEvent.eventKind !== "revision_reserved"
+          || reservedEvent.operationId !== reservation.operationId)
+        throw new Error("catalog reservation event is missing");
+      if (reservation.finalizedCatalogGeneration !== null) {
+        const finalizedEvent = eventByGeneration.get(reservation.finalizedCatalogGeneration);
+        if (!finalizedEvent || finalizedEvent.operationId !== reservation.operationId
+            || !["revision_committed", "revision_abandoned", "recovery_takeover"]
+              .includes(finalizedEvent.eventKind))
+          throw new Error("catalog finalization event is missing");
+      }
+    }
     for (const stored of storedBackups) {
       const event = eventByGeneration.get(stored.record.publicationCatalogGeneration);
       if (!event || event.eventKind !== "backup_published"
@@ -1056,8 +1325,14 @@ function readValidatedCatalog(
     for (const receipt of lifecycleReceipts) {
       const initial = receipt.schema === 2 ? receipt.initialPublication : undefined;
       const event = eventByGeneration.get(initial?.catalogGeneration ?? receipt.completedCatalogGeneration);
+      const expectedKind = receipt.kind === "rename" || receipt.kind === "restore_aborted" ? "app_metadata"
+        : receipt.kind === "create" || receipt.kind === "fork" || receipt.kind === "restore" ? "app_seed"
+          : "app_selected";
       const resultApp = apps.get(receipt.resultingSelectedAppInstanceId);
-      if (!graphLifecycleEvent(receipt, event) || !resultApp)
+      if (!event || event.eventKind !== expectedKind
+          || event.operationId !== receipt.operationId
+          || event.appInstanceId !== receipt.resultingSelectedAppInstanceId
+          || (!initial && event.at !== receipt.completedAt) || !resultApp)
         throw new Error("lifecycle receipt does not match its catalog event");
       assertLifecycleReattestation(receipt, readCatalogGenerationEvents(driver), readRevisionReservations(driver));
       if ((receipt.kind === "switch" || receipt.kind === "rename")
@@ -1080,7 +1355,9 @@ function readValidatedCatalog(
       );
       const storedGeneration = receiptRows[0]
         ? generations.get(String(receiptRows[0].generation_id)) : undefined;
-      if (receiptRows.length !== 1 || !graphLifecycleStorage(receipt, String(receiptRows[0]!.namespace_id), storedGeneration))
+      if (receiptRows.length !== 1 || !storedGeneration
+          || storedGeneration.namespaceId !== String(receiptRows[0]!.namespace_id)
+          || storedGeneration.target.appInstanceId !== receipt.resultingSelectedAppInstanceId)
         throw new Error("lifecycle receipt storage relationship is invalid");
     }
     if (!options.legacyRetentionMigration) {
@@ -1100,7 +1377,10 @@ function readValidatedCatalog(
       // path; the guarded additive migration repairs only these exact rows.
       if (receipt.state === "no_op" && retained.has(receipt.operationId)) requireRetained(receipt.operationId, "operation");
     }
-    references.finish();
+    for (const [value, kind] of retained) {
+      if (kind !== "job" && !referenced.has(value))
+        throw new Error(`unreferenced retained ${kind} identity`);
+    }
     const pendingRestores = readPendingRestoreJobs(driver);
     if (pendingRestores.length > (options.allowPendingRestore ? 1 : 0)
         || (pendingRestores.length > 0 && lifecycleJobs.length > 0))
@@ -1121,7 +1401,7 @@ function readValidatedCatalog(
             || source.stateSha256 !== job.intent.sourceTarget.stateSha256)
           throw new Error("pending restore source binding is stale");
       }
-      requireRetained(job.jobId, "job");
+      referenced.add(job.jobId);
     }
     const unfinishedLineages = driver.select(
       "SELECT count(*) AS count FROM catalog.lineage_reservations",
@@ -3497,3 +3777,5 @@ export class DeviceCatalog {
   }
 
 }
+
+export { readValidatedCatalog as readCatalogOracle };

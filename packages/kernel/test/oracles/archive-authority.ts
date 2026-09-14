@@ -1,6 +1,7 @@
-import { AuthorityGraph, AuthorityReferences, graphLifecycleEvent, graphLifecycleStorage, sameGraphTarget as sameTarget } from "./authority-graph";
-import { assertLifecycleReattestation } from "./lifecycle-reattestation-evidence";
-import { assertBackupRetentionHistory } from "./backup-retention";
+// Frozen test oracle from 28db0b9ed11eb6e169325d4cfc9250bdf83e1414.
+// Only relative imports are relocated. Never imported by production.
+import { assertLifecycleReattestation } from "../../src/lifecycle-reattestation-evidence";
+import { assertBackupRetentionHistory } from "../../src/backup-retention";
 import {
   ArchiveAuthorityEvidenceV1,
   ArchiveBootstrapEntryV1,
@@ -40,24 +41,24 @@ import {
   verifyAuthenticatedArchiveV5Owned,
   type AuthenticatedArchiveHeaderV1,
   type BackupTrustKeyResolver,
-} from "./archive-authentication";
-import { enumerateCanonicalStateV1, verifyCanonicalStateV1 } from "./canonical-state";
-import type { DbDriver, SqlRow } from "./db";
-import { openDriverFromBytes } from "./db";
+} from "../../src/archive-authentication";
+import { enumerateCanonicalStateV1, verifyCanonicalStateV1 } from "../../src/canonical-state";
+import type { DbDriver, SqlRow } from "../../src/db";
+import { openDriverFromBytes } from "../../src/db";
 import { DeviceCatalog, expectedCatalogSchemaObjects } from "./device-catalog";
-import { ClayError } from "./errors";
-import type { RegTable, Registry } from "./registry";
+import { ClayError } from "../../src/errors";
+import type { RegTable, Registry } from "../../src/registry";
 import {
   assertAuthenticatedSampleProvenance,
   type SampleProvenanceLedgerEntry,
-} from "./sample-provenance-proof";
-import { isUuidV7 } from "./rows";
-import { isTableId } from "./semantic";
-import { sha256HexSync } from "./state-digest";
-import { StateMerkleIndex } from "./state-merkle-index";
-import { ClayStore, type ClayManifest } from "./store";
-import { TargetAuthorityStore } from "./target-authority";
-import { zipRead, zipWrite } from "./zip";
+} from "../../src/sample-provenance-proof";
+import { isUuidV7 } from "../../src/rows";
+import { isTableId } from "../../src/semantic";
+import { sha256HexSync } from "../../src/state-digest";
+import { StateMerkleIndex } from "../../src/state-merkle-index";
+import { ClayStore, type ClayManifest } from "../../src/store";
+import { TargetAuthorityStore } from "../../src/target-authority";
+import { zipRead, zipWrite } from "../../src/zip";
 
 const MAX_ARCHIVE_BYTES = 384 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 64 * 1024;
@@ -149,6 +150,14 @@ function canonicalBytes(value: unknown): Uint8Array {
   return textEncoder.encode(JSON.stringify(value));
 }
 
+function sameTarget(left: TargetEvidence, right: TargetEvidence): boolean {
+  return left.appInstanceId === right.appInstanceId
+    && left.activeGenerationId === right.activeGenerationId
+    && left.lineageEpoch === right.lineageEpoch
+    && left.protectionRevision === right.protectionRevision
+    && left.digestSchema === right.digestSchema
+    && left.stateSha256 === right.stateSha256;
+}
 
 function registryFromDriver(driver: DbDriver): Registry {
   try {
@@ -320,7 +329,7 @@ function collectBootstrapManifest(driver: DbDriver) {
   }));
 }
 
-import { catalogPendingEvidenceForArchive } from "./catalog-pending";
+import { catalogPendingEvidenceForArchive } from "../../src/catalog-pending";
 
 function collectLineageReservations(driver: DbDriver) {
   return driver.select(
@@ -741,7 +750,7 @@ function validateCatalogIdentityRegistry(evidence: ArchiveAuthorityEvidence): vo
   const byId = new Map(retained.map(entry => [entry.idValue, entry.idKind]));
   if (byId.size !== retained.length)
     throw invalid("catalog retained identity history is duplicated");
-  const references = new AuthorityReferences(catalog.schema === 1 ? "archive-v1" : catalog.schema === 2 ? "archive-v2" : "archive-v3", byId);
+  const referenced = new Set<string>();
   const expectedPrefix: Record<(typeof retained)[number]["idKind"], string> = {
     authority: "auth", app: "app", generation: "gen", namespace: "ns",
     lease: "lease", operation: "op", job: "job",
@@ -750,7 +759,11 @@ function validateCatalogIdentityRegistry(evidence: ArchiveAuthorityEvidence): vo
     if (!new RegExp(`^${expectedPrefix[entry.idKind]}_[a-z2-7]{26}$`).test(entry.idValue))
       throw invalid("catalog retained identity has the wrong kind");
   }
-  const requireId = references.require.bind(references);
+  const requireId = (value: string | null, kind: (typeof retained)[number]["idKind"]): void => {
+    if (value !== null && byId.get(value) !== kind)
+      throw invalid("catalog retained identity evidence is incomplete");
+    if (value !== null) referenced.add(value);
+  };
   requireId(catalog.authorityIncarnationId, "authority");
   for (const entry of catalog.entries) requireId(entry.appInstanceId, "app");
   for (const generation of catalog.generations) {
@@ -795,7 +808,10 @@ function validateCatalogIdentityRegistry(evidence: ArchiveAuthorityEvidence): vo
     requireId(reservation.appInstanceId, "app");
     requireId(reservation.operationId, "operation");
   }
-  references.finish();
+  for (const [value, kind] of byId) {
+    if (kind !== "job" && !referenced.has(value))
+      throw invalid(`catalog contains an unreferenced retained ${kind} identity`);
+  }
 }
 
 function validateLifecycleReceipts(evidence: ArchiveAuthorityEvidence): void {
@@ -809,11 +825,15 @@ function validateLifecycleReceipts(evidence: ArchiveAuthorityEvidence): void {
     const receipt = row.receipt;
     const initial = receipt.schema === 2 ? receipt.initialPublication : undefined;
     const event = catalog.generationEvents.find(item => item.catalogGeneration === (initial?.catalogGeneration ?? receipt.completedCatalogGeneration));
+    const expectedKind = receipt.kind === "rename" || receipt.kind === "restore_aborted" ? "app_metadata"
+      : receipt.kind === "create" || receipt.kind === "fork" || receipt.kind === "restore" ? "app_seed" : "app_selected";
     const generation = catalog.generations.find(item => item.descriptor.generationId === row.generationId);
     if (receipt.jobId <= previousJob || jobs.has(receipt.jobId) || operations.has(receipt.operationId)
         || requests.has(receipt.requestId) || receipt.authorityIncarnationId !== catalog.authorityIncarnationId
-        || !graphLifecycleEvent(receipt, event)
-        || !graphLifecycleStorage(receipt, row.namespaceId, generation?.descriptor))
+        || !event || event.eventKind !== expectedKind || event.operationId !== receipt.operationId
+        || (!initial && event.at !== receipt.completedAt) || event.appInstanceId !== receipt.resultingSelectedAppInstanceId
+        || !generation || generation.descriptor.namespaceId !== row.namespaceId
+        || generation.descriptor.target.appInstanceId !== receipt.resultingSelectedAppInstanceId)
       throw invalid("lifecycle receipt identity or terminal event is inconsistent");
     assertLifecycleReattestation(receipt, catalog.generationEvents, catalog.revisionReservations);
     previousJob = receipt.jobId;
@@ -831,14 +851,14 @@ function validateLifecycleReceipts(evidence: ArchiveAuthorityEvidence): void {
       const metadata = catalog.generationEvents.filter(item => item.appInstanceId === result.appInstanceId
         && item.displayName !== null
         && BigInt(item.catalogGeneration) <= BigInt(receipt.completedCatalogGeneration)).at(-1);
-      const targetKnown = sameTarget(result, generation!.descriptor.target)
+      const targetKnown = sameTarget(result, generation.descriptor.target)
         || catalog.revisionReservations.some(item => item.state === "committed"
           && item.appInstanceId === result.appInstanceId && item.publishedActiveGenerationId === result.activeGenerationId
           && item.publishedLineageEpoch === result.lineageEpoch && item.revision === result.protectionRevision
           && item.stateSha256 === result.stateSha256 && item.finalizedCatalogGeneration !== null
           && BigInt(item.finalizedCatalogGeneration) <= BigInt(receipt.completedCatalogGeneration));
       if (!targetKnown || result.activeGenerationId !== row.generationId
-          || (event!.target !== null && !sameTarget(initial?.target ?? result, event!.target))
+          || (event.target !== null && !sameTarget(initial?.target ?? result, event.target))
           || metadata?.displayName !== receipt.resultDisplayName || metadata?.shellId !== receipt.resultShellId)
         throw invalid("lifecycle receipt canonical result is inconsistent");
     }
@@ -901,10 +921,6 @@ function validateAuthorityHistory(evidence: ArchiveAuthorityEvidence): void {
   const generationById = new Map(generations.map(generation => [
     generation.descriptor.generationId, generation,
   ]));
-  const graph = new AuthorityGraph({ kind: catalog.schema === 1 ? "archive-v1" : catalog.schema === 2 ? "archive-v2" : "archive-v3",
-    targetRevisions: targetRevisionByRevision }, catalog, entryByApp,
-    new Map(generations.map(g => [g.descriptor.generationId, g.descriptor])),
-    new Map(generations.map(g => [g.descriptor.generationId, g.operationId])));
   if (entryByApp.size !== entries.length || generationById.size !== generations.length
       || new Set(generations.map(generation => generation.storageKey)).size !== generations.length)
     throw invalid("catalog app or generation inventory is duplicated");
@@ -912,7 +928,22 @@ function validateAuthorityHistory(evidence: ArchiveAuthorityEvidence): void {
     if (!entryByApp.has(generation.descriptor.target.appInstanceId))
       throw invalid("catalog generation refers to a missing app");
   }
-  for (const candidate of entries) { graph.genesis(candidate); graph.active(candidate); }
+  for (const candidate of entries) {
+    const candidateGenesis = generationById.get(candidate.journalGenesisGenerationId);
+    const candidateActive = generationById.get(candidate.activeGenerationId);
+    if (!candidateGenesis || !candidateActive
+        || candidateGenesis.descriptor.target.appInstanceId !== candidate.appInstanceId
+        || candidateGenesis.descriptor.target.lineageEpoch !== candidate.journalGenesisLineageEpoch
+        || candidateGenesis.descriptor.target.protectionRevision
+          !== candidate.journalGenesisProtectionRevision
+        || candidateGenesis.descriptor.target.digestSchema !== candidate.digestSchema
+        || candidateGenesis.descriptor.target.stateSha256 !== candidate.journalGenesisStateSha256
+        || candidateActive.descriptor.target.appInstanceId !== candidate.appInstanceId
+        || candidateActive.descriptor.target.lineageEpoch !== candidate.currentLineageEpoch
+        || BigInt(candidateActive.descriptor.target.protectionRevision)
+          > BigInt(candidate.currentProtectionRevision))
+      throw invalid("catalog generation history is incomplete or mismatched");
+  }
   const genesis = generationById.get(catalog.entry.journalGenesisGenerationId);
   const active = generationById.get(catalog.entry.activeGenerationId);
   if (!genesis || !active
@@ -941,21 +972,217 @@ function validateAuthorityHistory(evidence: ArchiveAuthorityEvidence): void {
       !== reservations.length)
     throw invalid("catalog revision operation history is duplicated");
   let activeReservationCount = 0;
-  for (const candidate of entries) activeReservationCount += graph.chain(candidate, reservations);
+  for (const candidate of entries) {
+    const candidateGenesis = generationById.get(candidate.journalGenesisGenerationId)!;
+    const journal = reservations.filter(reservation =>
+      reservation.appInstanceId === candidate.appInstanceId);
+    const genesisRevision = BigInt(candidate.journalGenesisProtectionRevision);
+    const catalogHighWater = BigInt(candidate.revisionHighWater);
+    if (catalogHighWater < genesisRevision
+        || BigInt(journal.length) !== catalogHighWater - genesisRevision)
+      throw invalid("catalog revision history is incomplete");
+    let chained: TargetEvidence = candidateGenesis.descriptor.target;
+    let previousCatalogGeneration = -1n;
+    for (let index = 0; index < journal.length; index++) {
+      const reservation = journal[index]!;
+      const expectedRevision = genesisRevision + BigInt(index + 1);
+      const reservedGeneration = BigInt(reservation.reservedCatalogGeneration);
+      const finalizedGeneration = reservation.finalizedCatalogGeneration === null
+        ? null : BigInt(reservation.finalizedCatalogGeneration);
+      if (BigInt(reservation.revision) !== expectedRevision
+          || reservedGeneration <= previousCatalogGeneration
+          || reservedGeneration > BigInt(catalog.catalogGeneration)
+          || (finalizedGeneration !== null
+            && (finalizedGeneration !== reservedGeneration + 1n
+              || finalizedGeneration > BigInt(catalog.catalogGeneration)))
+          || reservation.authorityIncarnationId !== catalog.authorityIncarnationId
+          || reservation.appInstanceId !== chained.appInstanceId
+          || reservation.activeGenerationId !== chained.activeGenerationId
+          || reservation.lineageEpoch !== chained.lineageEpoch
+          || reservation.expectedProtectionRevision !== chained.protectionRevision
+          || reservation.expectedStateSha256 !== chained.stateSha256
+          || (reservation.state === "reserved" && index !== journal.length - 1))
+        throw invalid("catalog revision history is mismatched or reordered");
+      previousCatalogGeneration = finalizedGeneration ?? reservedGeneration;
+      if (reservation.state === "reserved") activeReservationCount++;
+      if (reservation.state === "committed") {
+        const published = reservation.publishedActiveGenerationId === null
+          ? undefined : generationById.get(reservation.publishedActiveGenerationId);
+        if (!published || reservation.publishedLineageEpoch === null
+            || reservation.stateSha256 === null
+            || reservation.publishedActiveGenerationId !== reservation.activeGenerationId
+            || reservation.publishedLineageEpoch !== reservation.lineageEpoch
+            || published.descriptor.target.appInstanceId !== candidate.appInstanceId
+            || published.descriptor.target.lineageEpoch !== reservation.publishedLineageEpoch
+            || BigInt(published.descriptor.target.protectionRevision)
+              > BigInt(reservation.revision))
+          throw invalid("committed catalog revision has no matching generation evidence");
+        chained = {
+          appInstanceId: reservation.appInstanceId,
+          activeGenerationId: reservation.publishedActiveGenerationId,
+          lineageEpoch: reservation.publishedLineageEpoch,
+          protectionRevision: reservation.revision,
+          digestSchema: candidate.digestSchema,
+          stateSha256: reservation.stateSha256,
+        };
+      }
+      if (candidate.appInstanceId === catalog.selectedAppInstanceId) {
+        const targetMirror = targetRevisionByRevision.get(reservation.revision);
+        if (!targetMirror
+            || targetMirror.operationId !== reservation.operationId
+            || targetMirror.expectedProtectionRevision !== reservation.expectedProtectionRevision
+            || targetMirror.expectedStateSha256 !== reservation.expectedStateSha256
+            || targetMirror.requestSha256 !== reservation.requestSha256
+            || targetMirror.state !== reservation.state
+            || targetMirror.stateSha256 !== reservation.stateSha256
+            || targetMirror.reservedAt !== reservation.reservedAt
+            || targetMirror.finalizedAt !== reservation.finalizedAt)
+          throw invalid("target and catalog revision histories disagree");
+      }
+    }
+    const current: TargetEvidence = {
+      appInstanceId: candidate.appInstanceId,
+      activeGenerationId: candidate.activeGenerationId,
+      lineageEpoch: candidate.currentLineageEpoch,
+      protectionRevision: candidate.currentProtectionRevision,
+      digestSchema: candidate.digestSchema,
+      stateSha256: candidate.stateSha256,
+    };
+    if (!sameTarget(chained, current))
+      throw invalid("catalog revision history does not reach an app target");
+  }
   if (activeReservationCount > 1)
     throw invalid("catalog contains multiple active revision reservations");
 
+  const backupRecords = catalog.backupRecords;
+  const backupByOperation = new Map<string, (typeof backupRecords)[number]>();
+  const backupGenerationIds = new Set<string>();
+  const backupSeriesGenerations = new Set<string>();
+  const backupFileNames = new Set<string>();
+  for (let index = 0; index < backupRecords.length; index++) {
+    const backup = backupRecords[index]!;
+    if (index > 0 && backupRecords[index - 1]!.backupId >= backup.backupId)
+      throw invalid("catalog backup records are reordered or duplicated");
+    const backupEvent = catalog.generationEvents.find(event =>
+      event.eventKind === "backup_published"
+      && event.catalogGeneration === backup.publicationCatalogGeneration);
+    const generation = generationById.get(backup.evidence.activeGenerationId);
+    const matchesGeneration = generation !== undefined
+      && sameTarget(backup.evidence, generation.descriptor.target);
+    const matchesRevision = reservations.some(reservation =>
+      reservation.state === "committed"
+      && reservation.appInstanceId === backup.evidence.appInstanceId
+      && reservation.publishedActiveGenerationId === backup.evidence.activeGenerationId
+      && reservation.publishedLineageEpoch === backup.evidence.lineageEpoch
+      && reservation.revision === backup.evidence.protectionRevision
+      && reservation.stateSha256 === backup.evidence.stateSha256);
+    const seriesGeneration = `${backup.authentication.seriesId}:${backup.authentication.generation}`;
+    if (!entryByApp.has(backup.evidence.appInstanceId)
+        || !generation
+        || generation.descriptor.target.appInstanceId !== backup.evidence.appInstanceId
+        || (!matchesGeneration && !matchesRevision)
+        || BigInt(backup.publicationCatalogGeneration) > BigInt(catalog.catalogGeneration)
+        || !backupEvent || backupEvent.operationId === null
+        || backupEvent.appInstanceId !== backup.evidence.appInstanceId
+        || backupEvent.at !== backup.validatedAt
+        || backupByOperation.has(backupEvent.operationId)
+        || backupGenerationIds.has(backup.generationId)
+        || backupSeriesGenerations.has(seriesGeneration)
+        || backupFileNames.has(backup.fileName))
+      throw invalid("catalog backup history is incomplete or inconsistent");
+    backupByOperation.set(backupEvent.operationId, backup);
+    backupGenerationIds.add(backup.generationId);
+    backupSeriesGenerations.add(seriesGeneration);
+    backupFileNames.add(backup.fileName);
+  }
+
   const events = catalog.generationEvents;
-  const backupByOperation = graph.backupHistory(catalog.backupRecords.map(record => ({ record,
-    operationId: events.find(e => e.eventKind === "backup_published" && e.catalogGeneration === record.publicationCatalogGeneration)?.operationId ?? null,
-  })), reservations, events, new Set());
-  const eventByGeneration = graph.eventHistory(events, reservations, new Map(catalog.leases.map(lease => [lease.leaseId, lease])), backupByOperation);
-  for (const reservation of reservations) graph.reservationEvents(reservation, eventByGeneration);
+  const eventByGeneration = new Map<string, CatalogGenerationEvent>();
+  let previousEventEpoch = 0n;
+  for (let index = 0; index < events.length; index++) {
+    const event = events[index]!;
+    const eventEpoch = BigInt(event.writeEpoch);
+    if (BigInt(event.catalogGeneration) !== BigInt(index + 1)
+        || BigInt(event.catalogGeneration) > BigInt(catalog.catalogGeneration)
+        || eventEpoch < previousEventEpoch || eventEpoch > BigInt(catalog.writeEpoch))
+      throw invalid("catalog event history is reordered, duplicated, or incomplete");
+    previousEventEpoch = eventEpoch;
+    eventByGeneration.set(event.catalogGeneration, event);
+    const reservation = event.operationId === null ? undefined
+      : reservations.find(candidate => candidate.operationId === event.operationId);
+    if (event.eventKind === "app_selected") {
+      const selectedTarget = event.target!;
+      const generation = generationById.get(selectedTarget.activeGenerationId);
+      const matchesGenesis = generation !== undefined
+        && sameTarget(selectedTarget, generation.descriptor.target);
+      const matchesCommit = reservations.some(candidate =>
+        candidate.state === "committed"
+        && candidate.appInstanceId === selectedTarget.appInstanceId
+        && candidate.publishedActiveGenerationId === selectedTarget.activeGenerationId
+        && candidate.publishedLineageEpoch === selectedTarget.lineageEpoch
+        && candidate.revision === selectedTarget.protectionRevision
+        && candidate.stateSha256 === selectedTarget.stateSha256);
+      if (!matchesGenesis && !matchesCommit)
+        throw invalid("catalog app selection event is invalid");
+    } else if (event.eventKind === "app_metadata") {
+      if (!entryByApp.has(event.appInstanceId!))
+        throw invalid("catalog metadata event references an unknown app");
+    } else if (event.eventKind === "backup_published") {
+      const backup = event.operationId === null ? undefined : backupByOperation.get(event.operationId);
+      if (!backup || backup.publicationCatalogGeneration !== event.catalogGeneration
+          || backup.evidence.appInstanceId !== event.appInstanceId
+          || backup.validatedAt !== event.at)
+        throw invalid("catalog backup publication event is invalid");
+    } else if (event.eventKind !== "app_seed" && event.eventKind !== "lease_issued") {
+      if (!reservation || reservation.appInstanceId !== event.appInstanceId)
+        throw invalid("catalog revision event is orphaned");
+      if (event.eventKind === "revision_reserved") {
+        if (reservation.reservedCatalogGeneration !== event.catalogGeneration
+            || reservation.writeEpoch !== event.writeEpoch
+            || reservation.reservedAt !== event.at)
+          throw invalid("catalog reservation event is invalid");
+      } else {
+        const expectedState = event.eventKind === "revision_committed"
+          ? "committed" : "abandoned";
+        const reservedEpoch = BigInt(reservation.writeEpoch);
+        const finalizedEpoch = BigInt(reservation.finalizedWriteEpoch!);
+        const isTakeover = event.eventKind === "recovery_takeover";
+        if (reservation.state !== expectedState
+            || reservation.finalizedCatalogGeneration !== event.catalogGeneration
+            || reservation.finalizedWriteEpoch !== event.writeEpoch
+            || reservation.finalizedAt !== event.at
+            || (isTakeover && finalizedEpoch !== reservedEpoch + 1n)
+            || (!isTakeover && finalizedEpoch !== reservedEpoch))
+          throw invalid("catalog finalization event is invalid");
+      }
+    }
+  }
+  for (const reservation of reservations) {
+    const reservedEvent = eventByGeneration.get(reservation.reservedCatalogGeneration);
+    if (!reservedEvent || reservedEvent.eventKind !== "revision_reserved"
+        || reservedEvent.operationId !== reservation.operationId)
+      throw invalid("catalog reservation event is missing");
+    if (reservation.finalizedCatalogGeneration !== null) {
+      const finalizedEvent = eventByGeneration.get(reservation.finalizedCatalogGeneration);
+      if (!finalizedEvent || finalizedEvent.operationId !== reservation.operationId
+          || !["revision_committed", "revision_abandoned", "recovery_takeover"]
+            .includes(finalizedEvent.eventKind))
+        throw invalid("catalog finalization event is missing");
+    }
+  }
   if (events.length === 0
       || events.at(-1)!.catalogGeneration !== catalog.catalogGeneration
       || events.at(-1)!.writeEpoch !== catalog.writeEpoch)
     throw invalid("catalog event history does not reach the authoritative root");
   const leases = catalog.leases;
+  const issuanceByEpochAndTime = new Map<string, CatalogGenerationEvent[]>();
+  for (const event of events) {
+    if (event.eventKind !== "lease_issued" && event.eventKind !== "recovery_takeover") continue;
+    const key = `${event.writeEpoch}\u0000${event.at}`;
+    const matching = issuanceByEpochAndTime.get(key);
+    if (matching) matching.push(event);
+    else issuanceByEpochAndTime.set(key, [event]);
+  }
   for (let index = 0; index < leases.length; index++) {
     const lease = leases[index]!;
     if ((index > 0 && (compareUint64(leases[index - 1]!.writeEpoch, lease.writeEpoch) > 0
@@ -964,7 +1191,10 @@ function validateAuthorityHistory(evidence: ArchiveAuthorityEvidence): void {
         || lease.authorityIncarnationId !== catalog.authorityIncarnationId
         || BigInt(lease.writeEpoch) > BigInt(catalog.writeEpoch))
       throw invalid("catalog lease history is mismatched or reordered");
-    graph.leaseIssuance(lease);
+    const issuedAt = new Date(Number(lease.issuedAtMs)).toISOString();
+    const issuance = issuanceByEpochAndTime.get(`${lease.writeEpoch}\u0000${issuedAt}`) ?? [];
+    if (issuance.length !== 1)
+      throw invalid("catalog lease issuance evidence is missing or ambiguous");
   }
   const activeLeases = leases.filter(lease => !lease.revoked);
   if (activeLeases.length > 1
@@ -980,7 +1210,49 @@ function validateAuthorityHistory(evidence: ArchiveAuthorityEvidence): void {
     throw invalid("catalog lease history is incomplete");
   const catalogReservationEvents = new Set<string>();
   for (const reservation of reservations) {
-    graph.reservation(reservation, leaseById);
+    const reservingLease = leaseById.get(reservation.leaseId);
+    const app = entryByApp.get(reservation.appInstanceId);
+    const generation = generationById.get(reservation.activeGenerationId);
+    const reservedAtMs = BigInt(Date.parse(reservation.reservedAt));
+    if (reservation.authorityIncarnationId !== catalog.authorityIncarnationId
+        || !reservingLease
+        || reservingLease.authorityIncarnationId !== reservation.authorityIncarnationId
+        || reservingLease.writeEpoch !== reservation.writeEpoch
+        || reservingLease.releaseId !== reservation.releaseId
+        || !app || !generation
+        || generation.descriptor.target.appInstanceId !== reservation.appInstanceId
+        || generation.descriptor.target.lineageEpoch !== reservation.lineageEpoch
+        || reservedAtMs < BigInt(reservingLease.issuedAtMs)
+        || reservedAtMs >= BigInt(reservingLease.expiresAtMs)
+        || BigInt(reservation.reservedCatalogGeneration) > BigInt(catalog.catalogGeneration)
+        || (reservation.finalizedCatalogGeneration !== null
+          && BigInt(reservation.finalizedCatalogGeneration) > BigInt(catalog.catalogGeneration)))
+      throw invalid("catalog reservation authority relationship is invalid");
+    if (reservation.finalizedAt !== null) {
+      const finalizingLease = reservation.finalizedLeaseId === null
+        ? undefined : leaseById.get(reservation.finalizedLeaseId);
+      const finalizedAtMs = BigInt(Date.parse(reservation.finalizedAt));
+      const reservedEpoch = BigInt(reservation.writeEpoch);
+      const finalizedEpoch = BigInt(reservation.finalizedWriteEpoch!);
+      if (!finalizingLease
+          || finalizingLease.authorityIncarnationId !== reservation.authorityIncarnationId
+          || finalizingLease.writeEpoch !== reservation.finalizedWriteEpoch
+          || finalizingLease.releaseId !== reservation.finalizedReleaseId
+          || finalizedAtMs < reservedAtMs
+          || finalizedAtMs < BigInt(finalizingLease.issuedAtMs)
+          || finalizedAtMs >= BigInt(finalizingLease.expiresAtMs)
+          || finalizedEpoch < reservedEpoch
+          || (finalizedEpoch === reservedEpoch
+            && (reservation.finalizedLeaseId !== reservation.leaseId
+              || reservation.finalizedReleaseId !== reservation.releaseId))
+          || (finalizedEpoch > reservedEpoch
+            && (reservation.state !== "abandoned"
+              || finalizedEpoch !== reservedEpoch + 1n
+              || !reservingLease.revoked
+              || BigInt(finalizingLease.issuedAtMs) < BigInt(reservingLease.expiresAtMs)
+              || finalizedAtMs !== BigInt(finalizingLease.issuedAtMs))))
+        throw invalid("catalog finalization authority relationship is invalid");
+    }
     for (const catalogGeneration of [
       reservation.reservedCatalogGeneration,
       reservation.finalizedCatalogGeneration,
@@ -990,9 +1262,33 @@ function validateAuthorityHistory(evidence: ArchiveAuthorityEvidence): void {
         throw invalid("catalog reservation reuses a generation event");
       catalogReservationEvents.add(catalogGeneration);
     }
-    graph.activeReservation(reservation);
+    if (reservation.state === "reserved") {
+      const current: TargetEvidence = {
+        appInstanceId: app.appInstanceId,
+        activeGenerationId: app.activeGenerationId,
+        lineageEpoch: app.currentLineageEpoch,
+        protectionRevision: app.currentProtectionRevision,
+        digestSchema: app.digestSchema,
+        stateSha256: app.stateSha256,
+      };
+      if (catalog.selectedAppInstanceId !== app.appInstanceId
+          || !sameTarget(current, {
+            appInstanceId: reservation.appInstanceId,
+            activeGenerationId: reservation.activeGenerationId,
+            lineageEpoch: reservation.lineageEpoch,
+            protectionRevision: reservation.expectedProtectionRevision,
+            digestSchema: app.digestSchema,
+            stateSha256: reservation.expectedStateSha256,
+          })
+          || reservation.revision !== app.revisionHighWater
+          || reservation.reservedCatalogGeneration !== catalog.catalogGeneration)
+        throw invalid("active revision reservation is not current");
+    }
   }
-  graph.selectedApp(events);
+  const latestSelection = events.filter(event =>
+    event.eventKind === "app_seed" || event.eventKind === "app_selected").at(-1);
+  if (!latestSelection || latestSelection.appInstanceId !== catalog.selectedAppInstanceId)
+    throw invalid("catalog current selection does not match its event history");
   for (const candidate of entries) {
     const candidateGenesis = generationById.get(candidate.journalGenesisGenerationId)!;
     const candidateSeeds = events.filter(event =>
@@ -1003,7 +1299,11 @@ function validateAuthorityHistory(evidence: ArchiveAuthorityEvidence): void {
         || candidateSeeds[0]!.target === null
         || !sameTarget(candidateSeeds[0]!.target!, candidateGenesis.descriptor.target))
       throw invalid("catalog app genesis event is missing or mismatched");
-    graph.metadata(candidate, events);
+    const latestMetadata = [...events].reverse().find(event =>
+      event.appInstanceId === candidate.appInstanceId && event.displayName !== null);
+    if (!latestMetadata || latestMetadata.displayName !== candidate.displayName
+        || latestMetadata.shellId !== candidate.shellId)
+      throw invalid("catalog app metadata does not match its latest event");
   }
   const seedEvents = events.filter(event =>
     event.eventKind === "app_seed" && event.appInstanceId === evidence.target.appInstanceId);
@@ -1445,3 +1745,5 @@ export async function restoreAuthorityArchiveAsNew(
     throw error;
   }
 }
+
+export { validateAuthorityHistory as validateHistoryOracle };

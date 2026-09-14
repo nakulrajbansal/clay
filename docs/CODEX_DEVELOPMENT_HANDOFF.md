@@ -1,4 +1,168 @@
-# Worker FIX phase 1 — closed standalone validators — 2026-09-14
+# Worker FIX phase 2 — shared AuthorityGraph — 2026-09-14
+
+Base: `28db0b9ed11eb6e169325d4cfc9250bdf83e1414`, `D:\Clay`,
+`codex/clay-project`. Clean HEAD and origin tracking ref matched at entry.
+Sole writer, one uncommitted diff; no Git writes, dependency changes, deployment,
+production configuration, credential access, other-worktree edits, browser
+launches, server termination, collector/budget changes or release evidence.
+All prior A–F, renderer/CSS, SQLite, planner and standalone-validator work stays.
+
+## Phase 2 source boundary
+
+- `packages/kernel/src/authority-graph.ts` now contains the shared relationship
+  engine and retained-ID ledger. It receives only bounded, already captured and
+  codec-validated rows/maps. Its only runtime import is ClayError: no SQL,
+  database handle, schema factory, network, worker command, or mutation authority.
+- Closed modes are `live`, `recovery`, and `archive-v1` / `archive-v2` /
+  `archive-v3`. The archive labels refer to **catalog evidence versions inside
+  authenticated archive format 5**, not a change to the outer archive format.
+  Archive modes require the selected-target revision mirror; unknown modes fail.
+- Shared checks cover active/genesis binding, revision chains and target mirrors,
+  reservation/lease/finalizer epoch/time binding, known target evidence, backup
+  publication uniqueness, event ordering and forward/reverse publication links,
+  lease issuance, selected-app and metadata history, lifecycle terminal-event /
+  physical-generation relationships, and retained identity reference accounting.
+  Lease issuance uses one epoch/time index, preserving the archive's bounded
+  lookup cost instead of introducing a nested lease/event scan.
+- Live and archive adapters call stages in their original public error order.
+  Live errors retain the existing E_CATALOG_UNAVAILABLE catch boundary; archive
+  graph errors retain E_VALIDATION and the original reason text/prefix. Nullable
+  retained references are permitted only for archive optional fields, not live.
+- `device-catalog.ts` retains exact DDL/object allowlists, physical field codecs,
+  cardinality, closed pending-row decoding, tombstones, pending lifecycle/restore
+  fencing, manifest/storage identities, no-op identity migration and quarantine.
+  `archive-authority.ts` retains authentication-before-ZIP/target creation,
+  member/checksum/canonical JSON/Merkle/cardinality checks, target request-response
+  mirrors, version compatibility and nonterminal/quarantined-work rejection.
+  Distinct lifecycle provenance/canonical-result policies remain at the adapters.
+  Existing shared retention, lifecycle reattestation and private owner-history
+  validators stay authoritative; they were not replaced with permissive graph
+  defaults or duplicated behind a new generic command.
+- No StoreCommand/transition interpreter was started (phase 3 remains untouched).
+  The actual size gain is modest; graph sharing does not close aggregate budgets.
+
+## Independent oracle and RED/GREEN record
+
+- Before switching production, captured both complete readers from the base into
+  `packages/kernel/test/oracles/`. Only relative imports were relocated; test-only
+  exports expose the old readers. Source hashes (LF-normalized) prevent silently
+  editing these oracles to agree with a refactor. They never enter production.
+- `authority-graph-fixtures.ts` captures the pre-switch physical/archive builder.
+  `authority-graph.test.ts` compares independent owned SQLite copies and separately
+  authenticated synthetic archive copies, including exact accepted output and
+  public failure code/message. No real credential or owner store is consulted.
+- Differential states: empty, committed multi-app, retained tombstone, active and
+  abandoned reservations, expiry takeover, pending restore/create, rename receipt,
+  35 backup publications plus a durable removal acknowledgement, and all three
+  format-5 catalog evidence versions. Corruptions cover identities/discriminators,
+  missing/extra rows, ordering, generation/epoch/time, finalizer and publication
+  mirrors, selection/metadata, pending jobs, retention and authentication.
+- Initial RED: missing graph module. After adding the engine but before adapter
+  switching, **51 passed / 1 failed** (production wiring remained absent).
+  Switched core checks: **52 passed**, then **118 passed** across graph/catalog/
+  archive packets. Expanded graph differential: **61 passed**. A dedicated null-
+  reference RED caught archive-only optionality leaking into the live ledger;
+  fixed with closed-mode behavior: **62 passed**.
+- Final focused packet (graph, DeviceCatalog, archive authority, retention,
+  app lifecycle, production restore lifecycle): **156 passed / 6 files, 80.96s**,
+  `test-results/fix-batch/authority-graph-focused.json`.
+- `authority-graph-modules.test.mjs`: **3 passed** after missing-guard RED. It pins
+  oracles, enforces no graph I/O/schema factories, and tests rejection of missing,
+  duplicated or shell graph modules and any production test/oracle module.
+  `node scripts/authority-graph-module-check.mjs` checks the actual build report;
+  it is an additional architecture guard, not a collector or certificate.
+
+## Phase 2 final verification and measurement
+
+All six full suites passed on the final production source: **2,897 passed /
+1 skipped**. Commands used installed package-local binaries, serially:
+`node node_modules/vitest/vitest.mjs run --maxWorkers=1 --minWorkers=1 --reporter=dot --reporter=json --outputFile.json=../../test-results/fix-batch/<package>-authority-graph.json`.
+
+| Final-source gate | Actual result |
+| --- | --- |
+| Full kernel | PASS: 1,267 passed / 1 skipped, 116 files, 470.03s |
+| Full schema | PASS: 512 tests / 22 files, 17.97s |
+| Full mutation | PASS: 60 tests / 8 files, 4.97s |
+| Full panel-runtime | PASS: 66 tests / 4 files, 7.20s |
+| Full backend | PASS: 111 tests / 11 files, 9.98s |
+| Full shell, including A–F WorkerClient/db-worker and native recovery fixtures | PASS: 881 tests / 137 files, 399.05s; no unhandled-error report |
+| `node node_modules/typescript/bin/tsc --noEmit` in each package | All six exited 0 |
+| Panel package-local `node node_modules/vite/bin/vite.js build` | PASS: 5 modules, 666ms |
+| `node scripts/bundle-module-report.mjs` | PASS: actual production build, 162 modules, 14.84s |
+| `node scripts/renderer-module-check.mjs` | PASS: one Preact closure; raw shell planner / closed worker decoder |
+| `node scripts/standalone-module-check.mjs` | PASS: no Zod/authoring factories; one shared engine |
+| `node scripts/authority-graph-module-check.mjs` | PASS: one worker graph; no shell graph or test oracle |
+| `node scripts/bundle-diagnostic.mjs` | Exit 1: exactly completeWorker and completeBrowser remain over budget |
+| Unchanged `node scripts/bundle-budget.mjs` | Freshness PASS, then exit 1 at the complete worker closure; exact error below |
+| `node --test scripts/bundle-budget.test.mjs` | PASS: 19 tests, 134.01ms |
+| `node scripts/roadmap-development-census.mjs` | Exit 0: developmentComplete=true, 21 capabilities, no development blockers/hard-disable flags, 25 retired compatibility routes; inventory only |
+| `git diff --check` and bounded changed-source scan | Exit 0; 11 changed/new paths; no flagged dynamic execution, debugger, unsafe HTML assignment or private-key literal. Not security certification |
+| Read-only diff comparison of collectors, limits, lockfile, route census and `evidence/` | Unchanged |
+
+The unchanged frozen gate's actual failure:
+
+```text
+Error: database worker JavaScript closure: 1375121 B raw / 376966 B gzip exceeds 1010000 B / 280000 B
+```
+
+Final diagnostic artifacts are ignored development outputs at
+`test-results/fix-batch/bundle-modules.json` and `bundles.json`. No historical
+release report was regenerated. The first intermediate measurement (6,033 /
+608 worker bytes saved) is superseded by these final-source measurements:
+
+| Boundary | Entry raw / gzip | Final raw / gzip | Frozen raw / gzip | Result |
+| --- | ---: | ---: | ---: | --- |
+| totalShellJavaScript | 892,215 / 279,135 | **892,215 / 279,167** | 980,000 / 290,000 | PASS |
+| applicationStyles | 60,905 / 16,825 | **60,905 / 16,825** | 67,000 / 17,000 | PASS |
+| workerAuthority | 231,268 / 58,286 | **221,857 / 56,461** | 240,000 / 60,000 | PASS |
+| completeWorker | 1,381,089 / 377,530 | **1,375,121 / 376,966** | 1,010,000 / 280,000 | FAIL: 365,121 / 96,966 over |
+| completeBrowser | 3,306,124 / 1,110,773 | **3,300,156 / 1,110,244** | 3,250,000 / 1,100,000 | FAIL: 50,156 / 10,244 over |
+
+Net savings: complete worker **5,968 raw / 564 gzip**; complete browser **5,968 /
+529**. Shell raw bytes and all CSS are unchanged; rebuilt asset references vary
+the shell gzip total by +32 bytes. No worker code moved into shell. All other
+measured boundaries pass. Authority headroom is now 18,143 / 3,539; shell gzip
+headroom 10,833 and styles gzip headroom 175. Do not assume estimated future gains.
+
+Actual rendered membership: shared graph **17,689** and DeviceCatalog **166,513**
+in target-authority; archive-authority **53,450** and coordinator **106,003** in
+worker-authority; Store **265,257** in asyncstore. These rendered source lengths
+are not additive bundle/gzip savings. Aggregate closure reduction is much smaller
+than the source deletion because the shared graph replaces repeated predicates
+and retains their differing policies/errors. Phase 3 is still required; neither
+aggregate gate is represented as passing.
+
+## Exact continuation after phase 2
+
+1. Preserve the shared graph and frozen independent readers. Do not merge live
+   and archive stage order, drop physical/authentication adapters, or weaken
+   retention/legacy/owner-history policies to simplify a graph mode.
+2. The next architectural phase is a closed transition kernel, one route family
+   at a time with independent-store/failpoint differential tests BEFORE switching.
+   Retain stable persisted route strings and original capture/error ordering,
+   no-op/receipt policy, reservation/fencing, native transaction prerequisite,
+   poisoning/abandonment and exact readback. Lifecycle create/delete/restore stay
+   dedicated. No raw SQL, arbitrary setting/table/code, helper-worker authority
+   or shell final-write path may be introduced.
+3. Exact unchanged coordinator seams: `captureMutation` at line 666 (11,967 source
+   characters), `executeCapturedMutation` at 1129 (13,062), `#executeMeaningful`
+   at 2438 (11,794). Operational metrics have deliberately different canonical
+   and no-op policies: do not collapse these using default-open booleans.
+   `production-core-routes.ts` is already a closed capture/execution union; keep
+   its strict descriptor/prototype/payload checks when evaluating a family.
+4. Large remaining Store seams: `prepareSemanticAssignments` at 969 (15,720),
+   `runDueAutomations` at 4731 (9,905), `acceptIntakeSubmission` at 3132 (7,436),
+   `commitImport` at 5220 (6,742), `rawArchiveSchemaIssues` at 493 (6,228).
+   These are source character counts, not projected bundle savings. Use actual
+   closure membership and measurements; graph sharing alone is far from enough.
+5. Parent runs packaged browsers after source stabilizes. Release B rebinding,
+   frozen-runtime certification, clean-tree local export, manual NVDA and final
+   review remain external later gates. No FIX completion, certification or
+   shipment is claimed by this development/optimization checkpoint.
+
+---
+
+# Historical worker FIX phase 1 — closed standalone validators — 2026-09-14
 
 Base: `da925383ea11398291ca4bbc5163a1ad99c2d7f9`, `D:\Clay`,
 `codex/clay-project`; HEAD and the origin tracking ref matched at entry. This is
