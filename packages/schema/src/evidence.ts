@@ -1,4 +1,4 @@
-import { z } from "./validation-runtime";
+import { z } from "@clay/schema/validation-runtime";
 
 const Sha256 = z.string().regex(/^sha256:[0-9a-f]{64}$/);
 const GitObject = z.string().regex(/^[0-9a-f]{40}$/);
