@@ -1,3 +1,198 @@
+# Worker FIX phase 3A — core transition foundation — 2026-09-14
+
+Base: `f53ac67eb3541b56c5d6bedadc0acbfd78563c64`, `D:\Clay`,
+`codex/clay-project`. Clean HEAD and origin tracking ref matched at entry.
+One writer, one uncommitted source/test diff. No Git writes, dependency changes,
+deployment, production configuration, credential access, other-worktree edits,
+server termination, browser launches, collector/budget changes or release evidence.
+All A–F development and prior fixes are preserved. This is a verified development
+checkpoint, **not completion of the aggregate optimization or certification**.
+
+## Phase 3A source boundary
+
+- `production-core-routes.ts` now owns one immutable closed `ProductionRouteSpec`
+  registry and `ProductionTransition` interpreter for **18 existing routes**:
+  `timeline.setCheckpoint`, `timeline.makeLatest`, `panel.rename`, `panel.remove`,
+  `panel.revert`, `schema.addColumn`, `schema.addRelationColumn`,
+  `schema.renameColumn`, `schema.convertTextToRelation`,
+  `schema.undoRelationConversion`, `daily.source`, `daily.navigation`,
+  `daily.timeZone`, `daily.capture`, `daily.undoCapture`, `daily.inbox`,
+  `daily.undoInbox`, and `backup.manualDownload`.
+- Each descriptor fixes its existing route, exact capture, pure preparation,
+  closed command tuple, pinned Store executor and bounded JSON result validator.
+  The closed `canonical-shadow-journal-v1` policy requires the existing exact
+  target/catalog/fence, shadow, operation/fingerprint, reservation/invocation,
+  guarded mutation, canonical/Merkle, publication/receipt/readback and recovery
+  order. These obligations are unconditional coordinator behavior, not optional
+  metadata booleans. Only the trusted-clock requirement varies within this family.
+  The physical automation requirement on unmigrated routes is unchanged.
+- A `StoreCommand` is only `[known route, that route's captured payload, requestId]`.
+  Private WeakSets retain captured-request and compiled-transition identity;
+  requests/programs are frozen, and forged/copied/cross-route programs fail closed.
+  No raw SQL, arbitrary setting/column operation, executable input, caller-selected
+  function, public package export or WorkerClient program transport was added.
+  Existing descriptor/prototype/density/identifier checks and Store semantic
+  validation remain. Durable ownership remains in the DB worker.
+- `production-mutation-coordinator.ts` uses the registry for core capture/dispatch
+  and clock/transaction policy, removing duplicate core route lists. Shared
+  `#canonical()` performs each original read afresh, with no caching or omitted
+  validation. `capturedJsonExecution` replaces 30 identical result wrappers.
+  `production-json-capture.ts` shares the unchanged strict JSON capture and error
+  mapping; the full production payload cap remains exactly 2,000,000 UTF-8 bytes.
+  Existing separately bounded internal import/intake staging budgets are unchanged.
+- Six repeated queue implementations now use the original serialized read/write
+  queue. Synchronous capture, poison checks, rejection scheduling and post-response
+  intake validation retain their order. Operational metrics keep their dedicated
+  canonical-preservation/no-op behavior: no canonical receipt or reservation is
+  introduced for an operational no-op.
+- Uncalled, source-private test fault maps are allocated only by the test armer,
+  allowing normal static tree shaking to remove injected-failure branches from
+  production. Real failure/abandonment/recovery handlers remain unchanged. There
+  is no environment switch or production no-lock/no-transaction fallback.
+- Lifecycle create/delete/restore remain dedicated. The substantial transaction
+  body in `#executeMeaningful` is **not yet consolidated into a new stage engine**;
+  it still owns the original physical protocol. Samples, automation, intake,
+  import and other route families have not joined the core descriptor registry.
+  No DB-worker dispatch/census generation was introduced. The 25 callerless
+  compatibility routes remain retired and fail closed.
+
+## Independent oracle and RED/GREEN record
+
+- Before production switching, captured the complete old coordinator and core
+  routes in `packages/kernel/test/oracles/`. Only relative imports, provenance and
+  the test capture export differ from the base. Old coordinator uses old core.
+  LF-normalized SHA-256 pins in `production-transition-modules.test.mjs`:
+  core `81a0b0caaa38995b2ef03f6938099315ca54217fb077e171db48e28f3622d92b`;
+  coordinator `cbe246a43ee4ff91c6b87ee740c6bb855c167a5146a63e3688cf078561a1ce1d`.
+  The Phase 2 independent catalog/archive readers remain untouched.
+- `production-transition.test.ts` uses separate owned user/system/catalog copies
+  with exact SQLite DDL/rows and the real LiveWriteGuard. Fixed synthetic time and
+  randomness permit comparison of returned responses, error code/message/order,
+  all physical rows/DDL, user/system export bytes, canonical/Merkle and catalog
+  target/reservation/receipt state. Catalog bytes are compared as physical
+  schema/rows, not claimed as a serialized catalog-file byte comparison.
+- Coverage includes commit/replay/no-op, payload collision/stale replay, immutable
+  queue capture/read barriers, poison propagation, source/navigation CAS, Capture
+  and Undo/cancellation, all Inbox actions/Undo, relation Keep/Undo, manual download
+  metadata, bounded descriptor capture, and forged/cross-route program rejection.
+  Reservation, invocation, publication and readback faults run independently for
+  panel, Daily and relation families. Additional failures cover live mutation,
+  after-mutation rollback, stale fence, failed abandonment and worker loss/reopen
+  through unchanged ProductionStoreAuthority reservation recovery.
+- Initial small-family differential: 12 passed / one missing-spec RED, then
+  14 passed. Daily/relation and direct-column expansion each exposed missing
+  registry REDs before switching. Manual download and cross-route preparation
+  likewise failed before fixes. Queue behavior tests passed against the old
+  scheduling while the seven-queue structural test was RED, then GREEN.
+- An intermediate run reported 38 passing assertions but exited 1 with Vitest
+  `Timeout calling "onTaskUpdate"`; this was **not a passing gate**. Real event-loop
+  yields between independent WASM executions fixed worker RPC starvation, without
+  changing test/product timeouts. Subsequent focused and full runs had no reported
+  unhandled errors. Intermediate focused packet: 118 passed / 9 files, 219.34s,
+  `test-results/fix-batch/transition-focused.json` (superseded by final suites).
+- Final new tests: **40 differential/behavior tests + 6 module/source tests**.
+  The latter pin oracles, enforce a single queue and closed policy, reject forged
+  module reports and test/oracle inclusion, and require injected test branches to
+  be absent in emitted production code. The additional
+  `scripts/production-transition-module-check.mjs` checks the actual artifact;
+  it does not replace or alter frozen collectors.
+
+## Phase 3A final verification and actual size
+
+All six full suites passed on final production source: **2,943 passed / 1 skipped**.
+Installed package-local commands were run serially:
+`node node_modules/vitest/vitest.mjs run --maxWorkers=1 --minWorkers=1 --reporter=dot --reporter=json --outputFile.json=../../test-results/fix-batch/<package>-transition.json`.
+
+| Final-source gate | Actual result |
+| --- | --- |
+| Full kernel | PASS: 1,313 passed / 1 skipped; 117 passing / 1 skipped files; 584.91s |
+| Full schema | PASS: 512 tests / 22 files; 18.02s |
+| Full mutation | PASS: 60 tests / 8 files; 5.02s |
+| Full panel-runtime | PASS: 66 tests / 4 files; 7.29s |
+| Full backend | PASS: 111 tests / 11 files; 10.01s |
+| Full shell, including A–F WorkerClient/db-worker, native recovery and renderer fixtures | PASS: 881 tests / 137 files; 404.44s; no unhandled-error report |
+| Package-local `node node_modules/typescript/bin/tsc --noEmit` | All six exited 0 |
+| Panel package-local `node node_modules/vite/bin/vite.js build` | PASS: 5 modules; 653ms |
+| `node scripts/bundle-module-report.mjs` | PASS: actual production build; 162 modules; 14.85s |
+| Renderer, standalone, AuthorityGraph and production-transition module guards | All four exited 0; one Preact/validator/graph/transition closure; no production test/oracle or injected fault branch |
+| `node --test scripts/bundle-budget.test.mjs` | PASS: 19 tests; 134.63ms |
+| `node scripts/bundle-diagnostic.mjs` | Exit 1: only completeWorker and completeBrowser remain over budget |
+| Unchanged `node scripts/bundle-budget.mjs` | Freshness PASS, then exit 1 at complete worker (exact error below) |
+| `node scripts/roadmap-development-census.mjs` | Exit 0: developmentComplete=true; 21 capabilities; zero development blockers/hard-disable flags; 25 explicitly retired routes. Inventory only |
+| `git diff --check`; read-only collector/limit/lockfile/census/evidence comparison | Exit 0; those frozen inputs and release evidence are unchanged |
+| Bounded scan of three changed production modules and new module guard | Zero flagged dynamic execution, debugger, unsafe HTML assignment or private-key/bearer literal; not security certification |
+
+```text
+Error: database worker JavaScript closure: 1371604 B raw / 376955 B gzip exceeds 1010000 B / 280000 B
+```
+
+Final ignored development reports: `test-results/fix-batch/bundle-modules.json`,
+`bundles.json`, and the six `<package>-transition.json` suite reports. No checked-in
+release/browser evidence was regenerated. The source/test/handoff change is ten
+paths. A separate untracked **tool-generated** PowerShell cache remains at
+`Microsoft/Windows/PowerShell/ModuleAnalysisCache` (8,246 bytes). The exact-path
+`Remove-Item -LiteralPath 'D:\Clay\Microsoft\Windows\PowerShell\ModuleAnalysisCache'`
+cleanup command was rejected before execution with `blocked by policy`; it was
+not retried through another mechanism. This regenerable cache is not application
+source or evidence and should not enter the checkpoint. Final sizes supersede intermediate
+measurements, including the first five-route build's size regression:
+
+| Boundary | Entry raw / gzip | Final raw / gzip | Frozen raw / gzip | Result |
+| --- | ---: | ---: | ---: | --- |
+| totalShellJavaScript | 892,215 / 279,167 | **892,215 / 279,148** | 980,000 / 290,000 | PASS |
+| applicationStyles | 60,905 / 16,825 | **60,905 / 16,825** | 67,000 / 17,000 | PASS |
+| workerAuthority | 221,857 / 56,461 | **218,340 / 56,428** | 240,000 / 60,000 | PASS |
+| completeWorker | 1,375,121 / 376,966 | **1,371,604 / 376,955** | 1,010,000 / 280,000 | FAIL: 361,604 / 96,955 over |
+| completeBrowser | 3,300,156 / 1,110,244 | **3,296,639 / 1,110,214** | 3,250,000 / 1,100,000 | FAIL: 46,639 / 10,214 over |
+
+Actual savings: complete worker **3,517 raw / 11 gzip**; complete browser
+**3,517 raw / 30 gzip**. This is a small raw reduction, **not a meaningful gzip
+solution**. Shared strings/queue/canonical calls already compressed well, and the
+new closed registry offsets part of the deletion. Shell raw and all styles are
+unchanged; asset-reference changes account for shell's 19-byte gzip variation.
+All other measured boundaries pass. No worker code moved to shell.
+
+Rendered membership (not additive bundle savings): coordinator **99,433**, core
+routes **14,531**, Store **265,257**, DeviceCatalog **166,513**, AuthorityGraph
+**17,689**, archive-authority **53,450**, production-authority **67,350**.
+The unchanged asyncstore file is **498,392 / 143,296**, target-authority
+**191,808 / 41,104**, shared SQLite **210,779 / 62,560**. These dominate the remaining
+complete-worker gap; moving them between emitted files is not a reduction.
+
+## Exact continuation after phase 3A
+
+1. Preserve the frozen coordinator/core and graph oracles and the current green
+   A–F integration suite. Do not migrate the physical lifecycle/restore engines.
+   Preserve the operational-metrics policy, strict capture/error order and the
+   native automation guard. No command/census names or caller reachability changed.
+2. Next descriptor family: samples, using independent old/new copies before any
+   production switch. Its provenance, empty/removal/no-op, operation/batch identity
+   and result wrapper differ from the core JSON routes; declare those differences
+   as a closed policy, not default-open flags. Then automation/intake/import only
+   after their own fault/replay/source/transaction parity. Retired routes must not
+   become callable merely because an internal legacy implementation exists.
+3. Current coordinator seams: `captureMutation` line 618 (11,336 source chars),
+   `executeCapturedMutation` line 1065 (12,192), `#executeMeaningful` line 2341
+   (11,477). The latter's reservation/invoke/mutate/publish/readback algorithm is
+   intentionally intact. Extending the descriptor scaffold alone will not close
+   the gap; pursue actual repeated-policy/reducer deletion, with measurements.
+4. Store reducer work has **not** started and no frozen Store oracle was captured.
+   Before each move, capture independent original behavior and physical/fault
+   fixtures. Exact unchanged seams: `prepareSemanticAssignments` line 969 (15,720
+   source chars), `runDueAutomations` line 4731 (9,905), `acceptIntakeSubmission`
+   line 3132 (7,436), `commitImport` line 5220 (6,742), `rawArchiveSchemaIssues`
+   line 493 (6,228). Do not treat these source lengths as promised bundle savings.
+5. Remaining controlling gaps are **361,604 / 96,955 worker** and **46,639 / 10,214
+   browser**. Frozen collectors/limits, renderer/standalone/graph/module boundaries,
+   shell/style headroom and all user journeys must remain intact. Another worker
+   architecture phase is required; FIX completion is not claimed.
+6. Parent runs source-bound packaged browsers after stabilization. Release B
+   source rebinding/frozen-runtime certification, clean-tree local-export,
+   human NVDA and final review remain later gates. No certification/shipment
+   claim and no commit/push in this sandbox.
+
+---
+
 # Worker FIX phase 2 — shared AuthorityGraph — 2026-09-14
 
 Base: `28db0b9ed11eb6e169325d4cfc9250bdf83e1414`, `D:\Clay`,

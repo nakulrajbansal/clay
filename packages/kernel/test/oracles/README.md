@@ -1,5 +1,30 @@
 # AuthorityGraph pre-refactor oracles
 
+## Transition coordinator oracle (Phase 3A)
+
+`production-mutation-coordinator.ts` and `production-core-routes.ts` were captured
+from `f53ac67eb3541b56c5d6bedadc0acbfd78563c64` before production edits. Relative
+imports were relocated; the old coordinator imports the old core dispatcher,
+not the new descriptor/interpreter. Its private capture function is additionally
+exported for test-only comparison. Bodies, error adapters, no-op/replay rules,
+reservation/publication ordering and fault seams remain unchanged. Their hashes
+are pinned independently in `production-transition-modules.test.mjs`.
+
+`production-transition.test.ts` clones the complete synthetic user, system and
+catalog schemas/rows into separate owned in-memory connections, then wraps each
+in the real LiveWriteGuard. It compares returned values and error code/message,
+every physical row and DDL, user/system exports, canonical leaves, Merkle and
+catalog/receipt state. Fixed synthetic randomness and clock make byte comparisons
+meaningful; the test yields the real event loop so long WASM runs do not starve
+Vitest RPC. Faults are injected through the guarded connection, not through a
+permissive driver or replacement transaction implementation. Reopen goes through
+unchanged ProductionStoreAuthority recovery on independent physical copies.
+
+This is deterministic development parity, not OPFS/native/browser certification.
+The frozen oracles and SQL fixture copier are never production runtime inputs.
+
+## AuthorityGraph readers (Phase 2)
+
 The two TypeScript modules were captured from
 `28db0b9ed11eb6e169325d4cfc9250bdf83e1414` before production switched to the graph.
 Relative imports were relocated, a provenance comment was added, and the private

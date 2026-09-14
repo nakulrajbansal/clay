@@ -8,6 +8,8 @@ import type { TargetEvidenceV1 } from "@clay/schema/catalog";
 import { captureDaily, executeDaily, type CapturedDaily } from "./production-daily";
 import { ManualBackupDownloadV2 } from "@clay/schema/standalone/backup";
 import { recordManualBackupDownload } from "./production-manual-backup";
+import { captureJsonValue } from "./production-json-capture";
+import type { ProductionResponseJson } from "./production-response-envelope";
 
 const IDENT = /^[a-z][a-z0-9_]{0,40}$/;
 const PANEL_ID = /^[a-z][a-z0-9_]{2,40}$/;
@@ -165,10 +167,6 @@ function relationColumn(input: unknown): CapturedRelationColumn {
   });
 }
 
-function captured<T extends CapturedCoreMutation>(value: T): T {
-  return value;
-}
-
 function panelPayload(input: unknown): Readonly<{ panelId: string }> {
   const payload = dataRecord(input, ["panelId"]);
   if (typeof payload.panelId !== "string" || !PANEL_ID.test(payload.panelId))
@@ -176,108 +174,156 @@ function panelPayload(input: unknown): Readonly<{ panelId: string }> {
   return Object.freeze({ panelId: payload.panelId });
 }
 
-/** Fixes the shape of a payload already descriptor-captured and bounded by the coordinator. */
-export function captureCoreMutation(
-  requestId: string,
-  route: string,
-  input: unknown,
-): CapturedCoreMutation | null {
-    switch (route) {
-    case "backup.manualDownload": return { requestId, route, payload: ManualBackupDownloadV2.parse(input) };
-    case "daily.source":
-    case "daily.navigation":
-    case "daily.timeZone":
-    case "daily.capture":
-    case "daily.undoCapture":
-    case "daily.inbox":
-    case "daily.undoInbox":
-      return captureDaily(requestId, route, input);
-    case "schema.convertTextToRelation":
-      return { requestId, route, payload: RelationKeepRequest.parse(input) };
-    case "schema.undoRelationConversion":
-      return { requestId, route, payload: RelationUndoRequest.parse(input) };
-    case "timeline.setCheckpoint": {
-      const payload = dataRecord(input, ["version", "label"]);
-      if (!Number.isSafeInteger(payload.version) || (payload.version as number) < 0
-          || typeof payload.label !== "string") throw new Error("invalid checkpoint");
-      return captured(Object.freeze({ requestId, route, payload: Object.freeze({
-        version: payload.version as number, label: payload.label,
-      }) }));
-    }
-    case "timeline.makeLatest": {
-      const payload = dataRecord(input, ["version"]);
-      if (!Number.isSafeInteger(payload.version) || (payload.version as number) < 0)
-        throw new Error("invalid timeline version");
-      return captured(Object.freeze({ requestId, route, payload: Object.freeze({
-        version: payload.version as number,
-      }) }));
-    }
-    case "panel.revert":
-    case "panel.remove":
-      return captured(Object.freeze({ requestId, route, payload: panelPayload(input) }));
-    case "panel.rename": {
-      const payload = dataRecord(input, ["panelId", "title"]);
-      if (typeof payload.panelId !== "string" || !PANEL_ID.test(payload.panelId)
-          || typeof payload.title !== "string") throw new Error("invalid panel rename");
-      return captured(Object.freeze({ requestId, route, payload: Object.freeze({
-        panelId: payload.panelId, title: payload.title,
-      }) }));
-    }
-    case "schema.addColumn":
-    case "schema.addRelationColumn": {
-      const payload = dataRecord(input, ["table", "column"]);
-      if (typeof payload.table !== "string" || !IDENT.test(payload.table))
-        throw new Error("invalid table");
-      if (route === "schema.addColumn") return captured(Object.freeze({
-        requestId, route,
-        payload: Object.freeze({ table: payload.table, column: directColumn(payload.column) }),
-      }));
-      return captured(Object.freeze({
-        requestId, route,
-        payload: Object.freeze({ table: payload.table, column: relationColumn(payload.column) }),
-      }));
-    }
-    case "schema.renameColumn": {
-      const payload = dataRecord(input, ["table", "from", "to"]);
-      if (typeof payload.table !== "string" || !IDENT.test(payload.table)
-          || typeof payload.from !== "string" || !IDENT.test(payload.from)
-          || typeof payload.to !== "string" || payload.to.length > 256)
-        throw new Error("invalid column rename");
-      return captured(Object.freeze({ requestId, route, payload: Object.freeze({
-        table: payload.table, from: payload.from, to: payload.to,
-      }) }));
-    }
-    default:
-      return null;
+type TransitionRoute = CapturedCoreMutation["route"];
+type TransitionRequest<R extends TransitionRoute = TransitionRoute> = Extract<CapturedCoreMutation, { route: R }>;
+/** Private, closed data instructions, not a worker transport. Registry-selected
+ * identifiers still receive their original semantic/Store checks under authority. */
+export type StoreCommand = { [R in TransitionRoute]: readonly [R, TransitionRequest<R>["payload"], string] }[TransitionRoute];
+/** This closed kind declares the entire canonical mutation policy, not optional
+ * metadata flags: exact selected app/generation + catalog/fence, bounded capture,
+ * shadow preparation, V2 operation/fingerprint, reserve/invoke, guarded commands,
+ * canonical/Merkle publication and mirrored terminal receipt/readback, in that
+ * error order. No-op must write a canonical terminal receipt; replay must bind
+ * the exact current result/reservation. Abandonment/poisoning stay mandatory.
+ * Only clock acquisition varies here. Operational metrics cannot use this kind.
+ * These obligations execute unconditionally in the coordinator; callers cannot
+ * opt out by changing a descriptor's noOp/replay/canonical/target boolean. */
+const canonicalPolicy = Object.freeze({
+  kind: "canonical-shadow-journal-v1", native: "guarded-transaction", clock: "none",
+} as const);
+const timedPolicy = Object.freeze({ ...canonicalPolicy, clock: "trusted-instant" } as const);
+type TransitionContext = Readonly<{ requestId: string; target?: TargetEvidenceV1; driver?: DbDriver; now?: string }>;
+export type ProductionRouteSpec<R extends TransitionRoute = TransitionRoute> = Readonly<{
+  route: R;
+  policy: typeof canonicalPolicy | typeof timedPolicy;
+  capture: (requestId: string, input: unknown) => TransitionRequest<R>;
+  prepare: (request: TransitionRequest<R>) => StoreCommand;
+  execute: (store: ClayStore, payload: TransitionRequest<R>["payload"], context: TransitionContext) => unknown;
+  result: (value: unknown) => ProductionResponseJson;
+}>;
+const requests = new WeakSet<object>();
+// Only schema-returned bounded plain data reaches this freezer (never caller data).
+function freezeParsed<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const child of Object.values(value)) freezeParsed(child);
+    Object.freeze(value);
   }
+  return value;
+}
+function spec<R extends TransitionRoute>(route: R, policy: ProductionRouteSpec["policy"],
+  capture: (input: unknown, requestId: string) => TransitionRequest<R>["payload"],
+  execute: ProductionRouteSpec<R>["execute"],
+): ProductionRouteSpec<R> {
+  return Object.freeze({ route, policy,
+    capture: (requestId: string, input: unknown) => {
+      // R and its exact payload are correlated by this source-private factory.
+      const request = freezeParsed({ requestId, route, payload: capture(input, requestId) }) as unknown as TransitionRequest<R>;
+      requests.add(request); return request;
+    },
+    prepare: (input: TransitionRequest<R>) => {
+      if (!requests.has(input) || (input as TransitionRequest).route !== route)
+        throw new ClayError("E_TARGET_AUTHORITY_INVALID", "production request is not captured");
+      const request = input as TransitionRequest;
+      return Object.freeze([route, request.payload, request.requestId]) as StoreCommand;
+    },
+    execute, result: (value: unknown) => captureJsonValue(value, new WeakSet()),
+  });
+}
+const panels = (store: ClayStore) => PRODUCTION_STORE_PRIMITIVES.livePanels.call(store);
+function dailySpec<R extends CapturedDaily["route"]>(route: R): ProductionRouteSpec<R> {
+  return spec(route, timedPolicy,
+    (input, requestId) => captureDaily(requestId, route, input).payload as TransitionRequest<R>["payload"],
+    (store, payload, context) => executeDaily(store, { requestId: context.requestId, route, payload } as CapturedDaily,
+      context.target, context.driver, context.now));
+}
+function columnPayload<T>(input: unknown, capture: (input: unknown) => T): Readonly<{ table: string; column: T }> {
+  const payload = dataRecord(input, ["table", "column"]);
+  if (typeof payload.table !== "string" || !IDENT.test(payload.table)) throw new Error("invalid table");
+  return Object.freeze({ table: payload.table, column: capture(payload.column) });
+}
+const specifications = Object.freeze(Object.fromEntries([
+  spec("backup.manualDownload", canonicalPolicy, input => ManualBackupDownloadV2.parse(input), (store, payload, { target, requestId }) => {
+    if (!target) throw new ClayError("E_CONFLICT", "Download record requires an authority target");
+    return recordManualBackupDownload(store, requestId, payload, target);
+  }),
+  spec("timeline.setCheckpoint", canonicalPolicy, input => {
+    const payload = dataRecord(input, ["version", "label"]);
+    if (!Number.isSafeInteger(payload.version) || (payload.version as number) < 0 || typeof payload.label !== "string")
+      throw new Error("invalid checkpoint");
+    return Object.freeze({ version: payload.version as number, label: payload.label });
+  }, (store, payload) => {
+    PRODUCTION_STORE_PRIMITIVES.setCheckpoint.call(store, payload.version, payload.label);
+    return PRODUCTION_STORE_PRIMITIVES.history.call(store);
+  }),
+  spec("timeline.makeLatest", canonicalPolicy, input => {
+    const payload = dataRecord(input, ["version"]);
+    if (!Number.isSafeInteger(payload.version) || (payload.version as number) < 0) throw new Error("invalid timeline version");
+    return Object.freeze({ version: payload.version as number });
+  }, (store, payload) => { PRODUCTION_STORE_PRIMITIVES.rollbackTo.call(store, payload.version, { truncate: true }); return panels(store); }),
+  spec("panel.revert", canonicalPolicy, panelPayload, (store, payload) => {
+    PRODUCTION_STORE_PRIMITIVES.revertPanel.call(store, payload.panelId); return panels(store);
+  }),
+  spec("panel.remove", canonicalPolicy, panelPayload, (store, payload) => {
+    PRODUCTION_STORE_PRIMITIVES.removePanel.call(store, payload.panelId); return panels(store);
+  }),
+  spec("panel.rename", canonicalPolicy, input => {
+    const payload = dataRecord(input, ["panelId", "title"]);
+    if (typeof payload.panelId !== "string" || !PANEL_ID.test(payload.panelId) || typeof payload.title !== "string")
+      throw new Error("invalid panel rename");
+    return Object.freeze({ panelId: payload.panelId, title: payload.title });
+  }, (store, payload) => { PRODUCTION_STORE_PRIMITIVES.renamePanel.call(store, payload.panelId, payload.title); return panels(store); }),
+  dailySpec("daily.source"), dailySpec("daily.navigation"), dailySpec("daily.timeZone"), dailySpec("daily.capture"),
+  dailySpec("daily.undoCapture"), dailySpec("daily.inbox"), dailySpec("daily.undoInbox"),
+  spec("schema.convertTextToRelation", canonicalPolicy, input => RelationKeepRequest.parse(input), (store, payload, { target }) => {
+    if (!target) throw new ClayError("E_CONFLICT", "conversion requires an authority target");
+    return keepRelation(store, payload, target);
+  }),
+  spec("schema.undoRelationConversion", canonicalPolicy, input => RelationUndoRequest.parse(input), (store, payload, { target, driver }) => {
+    if (!target || !driver) throw new ClayError("E_CONFLICT", "conversion Undo requires authority");
+    return undoRelation(store, driver, payload, target);
+  }),
+  spec("schema.addColumn", canonicalPolicy, input => columnPayload(input, directColumn),
+    (store, payload) => commitColumn(store, payload.table, payload.column)),
+  spec("schema.addRelationColumn", canonicalPolicy, input => columnPayload(input, relationColumn),
+    (store, payload) => commitColumn(store, payload.table, payload.column)),
+  spec("schema.renameColumn", canonicalPolicy, input => {
+    const payload = dataRecord(input, ["table", "from", "to"]);
+    if (typeof payload.table !== "string" || !IDENT.test(payload.table)
+        || typeof payload.from !== "string" || !IDENT.test(payload.from)
+        || typeof payload.to !== "string" || payload.to.length > 256) throw new Error("invalid column rename");
+    return Object.freeze({ table: payload.table, from: payload.from, to: payload.to });
+  }, (store, payload) => renameColumn(store, payload.table, payload.from, payload.to)),
+].map(spec => [spec.route, spec])) as Readonly<Record<TransitionRoute, ProductionRouteSpec>>);
+/** Unknown/retired routes never acquire a descriptor; prototype lookup is forbidden. */
+export function productionRouteSpec(route: string): ProductionRouteSpec | null {
+  return Object.hasOwn(specifications, route) ? specifications[route as TransitionRoute] : null;
+}
+const transitions = new WeakSet<object>();
+export type ProductionTransition = Readonly<{ spec: ProductionRouteSpec; command: StoreCommand }>;
+/** Pure preparation; neither Store/driver nor caller-selected instructions. */
+export function prepareProductionTransition(request: CapturedCoreMutation): ProductionTransition | null {
+  const route = productionRouteSpec(request.route);
+  if (!route) return null;
+  const transition = Object.freeze({ spec: route, command: route.prepare(request as TransitionRequest) });
+  transitions.add(transition); return transition;
+}
+/** Called in disposable shadow or LiveWriteAuthority's synchronous transaction.
+ * The original coordinator owns all capture/fence/reserve/publish/readback stages. */
+export function executeProductionTransition(store: ClayStore, transition: ProductionTransition,
+  target?: TargetEvidenceV1, driver?: DbDriver, now?: string): ProductionResponseJson {
+  if (!transitions.has(transition)) throw new ClayError("E_TARGET_AUTHORITY_INVALID", "production transition is not captured");
+  return transition.spec.result(transition.spec.execute(store, transition.command[1], {
+    requestId: transition.command[2], target, driver, now,
+  }));
 }
 
-export function isCapturedCoreMutation(
-  request: Readonly<{ route: string }>,
-): request is CapturedCoreMutation {
-    switch (request.route) {
-    case "backup.manualDownload":
-    case "daily.source":
-    case "daily.navigation":
-    case "daily.timeZone":
-    case "daily.capture":
-    case "daily.undoCapture":
-    case "daily.inbox":
-    case "daily.undoInbox":
-    case "schema.convertTextToRelation":
-    case "timeline.setCheckpoint":
-    case "schema.undoRelationConversion":
-    case "timeline.makeLatest":
-    case "panel.revert":
-    case "panel.rename":
-    case "panel.remove":
-    case "schema.addColumn":
-    case "schema.renameColumn":
-    case "schema.addRelationColumn":
-      return true;
-    default:
-      return false;
-  }
+/** Input has already passed descriptor-safe bounded worker capture. */
+export function captureCoreMutation(requestId: string, route: string, input: unknown): CapturedCoreMutation | null {
+  const spec = productionRouteSpec(route);
+  return spec ? spec.capture(requestId, input) : null;
+}
+export function isCapturedCoreMutation(request: Readonly<{ route: string }>): request is CapturedCoreMutation {
+  return productionRouteSpec(request.route) !== null;
 }
 
 function columnIdent(label: string): string {
@@ -358,57 +404,10 @@ function renameColumn(store: ClayStore, table: string, from: string, to: string)
   return registryResult(store);
 }
 
-/** Trusted synchronous dispatch; called only inside the authority's outer transaction. */
-export function executeCapturedCoreMutation(
-  store: ClayStore,
-  request: CapturedCoreMutation,
-  target?: TargetEvidenceV1,
-  driver?: DbDriver,
-  now?: string,
-): unknown {
-    switch (request.route) {
-    case "backup.manualDownload":
-      if (!target) throw new ClayError("E_CONFLICT", "Download record requires an authority target");
-      return recordManualBackupDownload(store, request.requestId, request.payload, target);
-    case "daily.source":
-    case "daily.navigation":
-    case "daily.timeZone":
-    case "daily.capture":
-    case "daily.undoCapture":
-    case "daily.inbox":
-    case "daily.undoInbox":
-      return executeDaily(store, request, target, driver, now);
-    case "schema.convertTextToRelation":
-      if (!target) throw new ClayError("E_CONFLICT", "conversion requires an authority target");
-      return keepRelation(store, request.payload, target);
-    case "schema.undoRelationConversion":
-      if (!target || !driver) throw new ClayError("E_CONFLICT", "conversion Undo requires authority");
-      return undoRelation(store, driver, request.payload, target);
-    case "timeline.setCheckpoint":
-      PRODUCTION_STORE_PRIMITIVES.setCheckpoint.call(
-        store, request.payload.version, request.payload.label,
-      );
-      return PRODUCTION_STORE_PRIMITIVES.history.call(store);
-    case "timeline.makeLatest":
-      PRODUCTION_STORE_PRIMITIVES.rollbackTo.call(
-        store, request.payload.version, { truncate: true },
-      );
-      return PRODUCTION_STORE_PRIMITIVES.livePanels.call(store);
-    case "panel.revert":
-      PRODUCTION_STORE_PRIMITIVES.revertPanel.call(store, request.payload.panelId);
-      return PRODUCTION_STORE_PRIMITIVES.livePanels.call(store);
-    case "panel.rename":
-      PRODUCTION_STORE_PRIMITIVES.renamePanel.call(
-        store, request.payload.panelId, request.payload.title,
-      );
-      return PRODUCTION_STORE_PRIMITIVES.livePanels.call(store);
-    case "panel.remove":
-      PRODUCTION_STORE_PRIMITIVES.removePanel.call(store, request.payload.panelId);
-      return PRODUCTION_STORE_PRIMITIVES.livePanels.call(store);
-    case "schema.addColumn":
-    case "schema.addRelationColumn":
-      return commitColumn(store, request.payload.table, request.payload.column);
-    case "schema.renameColumn":
-      return renameColumn(store, request.payload.table, request.payload.from, request.payload.to);
-  }
+/** Internal compatibility entrypoint; no WorkerClient command accepts a program. */
+export function executeCapturedCoreMutation(store: ClayStore, request: CapturedCoreMutation,
+  target?: TargetEvidenceV1, driver?: DbDriver, now?: string): unknown {
+  const transition = prepareProductionTransition(request);
+  if (transition) return executeProductionTransition(store, transition, target, driver, now);
+  throw new ClayError("E_TARGET_AUTHORITY_INVALID", "production transition route is unavailable");
 }
