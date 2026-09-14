@@ -1,3 +1,4 @@
+import { errorMessage } from "../app/error-message";
 import { useMemo, useState } from "react";
 import {
   IntakeSubmissionPlaintextV1,
@@ -138,27 +139,27 @@ export function PublicIntakeForm({ payload, fetchImpl }: {
       await submitEncryptedIntake(payload, submission, fetchImpl);
       setSent(true);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(errorMessage(cause));
     } finally { setBusy(false); }
   };
 
   if (sent) return (
-    <main className="public-intake public-intake-success">
-      <span className="public-intake-lock" aria-hidden="true">✓</span>
+    <main className="ui ui-text-align-center ui-base-border-radius-c431a0 ui-label-display-b369c3 ui-label-gap-931d54 public-intake public-intake-success">
+      <span className="ui ui-place-items-center ui-border-radius-50 public-intake-lock" aria-hidden="true">✓</span>
       <h1>Sent securely</h1>
       <p>Your information was encrypted on this device and is waiting for the owner to review it.</p>
     </main>
   );
 
   return (
-    <main className="public-intake">
+    <main className="ui ui-base-border-radius-c431a0 ui-label-display-b369c3 ui-label-gap-931d54 public-intake">
       <header>
-        <span className="public-intake-brand">Clay secure intake</span>
+        <span className="ui ui-text-transform-uppercase public-intake-brand">Clay secure intake</span>
         <h1>{form.title}</h1>
         {form.description ? <p>{form.description}</p> : null}
-        <p className="public-intake-privacy">Encrypted here before upload. The relay cannot read your answers or files.</p>
+        <p className="ui ui-font-size-13px ui-border-radius-9px public-intake-privacy">Encrypted here before upload. The relay cannot read your answers or files.</p>
       </header>
-      {expired ? <div role="alert" className="intake-alert">This form has expired. Ask the owner for a new link.</div> : (
+      {expired ? <div role="alert" className="ui ui-border-radius-9px ui-padding-10px-12px intake-alert">This form has expired. Ask the owner for a new link.</div> : (
         <form onSubmit={event => void submit(event)}>
           {form.fields.map(field => (
             <label key={field.fieldId} className="intake-field">
@@ -199,7 +200,7 @@ export function PublicIntakeForm({ payload, fetchImpl }: {
                 }))} />
             </label>
           ))}
-          {error ? <div role="alert" className="intake-alert">{error}</div> : null}
+          {error ? <div role="alert" className="ui ui-border-radius-9px ui-padding-10px-12px intake-alert">{error}</div> : null}
           <button type="submit" className="primary" disabled={busy}>{busy ? "Encrypting…" : "Send securely"}</button>
           <small>Required fields are marked *. Files remain quarantined until the owner approves them.</small>
         </form>
@@ -212,8 +213,8 @@ export function PublicIntakePage(): React.JSX.Element {
   try {
     return <PublicIntakeForm payload={parsePublicIntakeLink(window.location.hash)} />;
   } catch (cause) {
-    return <main className="public-intake"><h1>Form unavailable</h1><div role="alert" className="intake-alert">
-      {cause instanceof Error ? cause.message : String(cause)}
+    return <main className="ui ui-base-border-radius-c431a0 ui-label-display-b369c3 ui-label-gap-931d54 public-intake"><h1>Form unavailable</h1><div role="alert" className="ui ui-border-radius-9px ui-padding-10px-12px intake-alert">
+      {errorMessage(cause)}
     </div></main>;
   }
 }

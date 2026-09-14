@@ -1,8 +1,10 @@
 /** @vitest-environment jsdom */
-import { act, useState, type ComponentProps } from "react";
+import { useState, type ComponentProps } from "react";
+import { act } from "preact/test-utils";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 import { AppSwitcher } from "../src/app/AppSwitcher";
+import { expectControlCensus } from "./helpers/control-census";
 import { THEMES } from "../src/app/themes";
 import type { WorkspaceMode } from "../src/app/workspace-mode";
 
@@ -63,6 +65,7 @@ describe("AppSwitcher workspace mode", () => {
 
     await act(async () => button("Customize")!.click());
     expect(button("Customize")?.getAttribute("aria-pressed")).toBe("true");
+    expectControlCensus("A.workspace");
     expect(button("Open automations")).toBeDefined();
     expect(button("Open all data")).toBeDefined();
     expect(button("Open data shape")).toBeDefined();

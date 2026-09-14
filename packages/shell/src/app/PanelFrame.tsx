@@ -1,3 +1,4 @@
+import { FocusInput } from "./FocusControl";
 // PanelHost (doc 02 §1): one sandboxed iframe per live panel. srcdoc +
 // sandbox="allow-scripts" gives an opaque origin — no cookies, storage, or
 // parent DOM; the CSP leaves no network path (doc 06 §2). The only channel
@@ -516,7 +517,7 @@ export function PanelFrame(props: {
       className={`panel-frame${preview ? " panel-preview" : ""}${props.draggingSrc ? " panel-drag-src" : ""}${resizing ? " panel-resizing" : ""}`}
       style={sectionStyle}
     >
-      <header className="panel-title" ref={headerRef}>
+      <header className="ui ui-display-flex ui-align-items-center ui-color-text ui-gap-8px ui-border-bottom-line ui-background-bg-soft panel-title" ref={headerRef}>
         {props.onDragStart ? (
           <span
             className="panel-grip"
@@ -533,8 +534,8 @@ export function PanelFrame(props: {
           >⠿</span>
         ) : null}
         {editTitle !== null ? (
-          <input
-            className="panel-title-edit"
+          <FocusInput
+            className="ui ui-background-panel ui-color-text ui-font-inherit ui-flex-1 ui-border-radius-7px ui-base-border-c04950 panel-title-edit"
             autoFocus
             value={editTitle}
             onChange={e => setEditTitle(e.target.value)}
@@ -553,16 +554,16 @@ export function PanelFrame(props: {
           />
         ) : (
           <span
-            className={props.onRename ? "panel-title-text panel-renamable" : "panel-title-text"}
+            className={props.onRename ? "ui ui-min-width-0 ui-overflow-hidden ui-white-space-nowrap ui-text-overflow-ellipsis panel-title-text panel-renamable" : "ui ui-min-width-0 ui-overflow-hidden ui-white-space-nowrap ui-text-overflow-ellipsis panel-title-text"}
             title={props.onRename ? "Double-click to rename" : undefined}
             onDoubleClick={props.onRename ? () => setEditTitle(panel.title) : undefined}
           >{panel.title}</span>
         )}
-        {preview ? <span className="panel-proposed">proposed</span> : null}
-        <span className="panel-tools">
+        {preview ? <span className="ui ui-color-accent-text ui-background-accent-soft ui-text-transform-uppercase ui-border-radius-999px panel-proposed">proposed</span> : null}
+        <span className="ui ui-display-flex ui-align-items-center ui-base-gap-2e0455 panel-tools">
           {props.provenance ? (
             <button
-              className={`panel-tool${provenanceOpen ? " active" : ""}`}
+              className={`ui ui-color-text-3 ui-font-size-13px ui-border-0 ui-background-none ui-border-radius-7px panel-tool${provenanceOpen ? " active" : ""}`}
               aria-label={`Why ${panel.title} exists`}
               aria-expanded={provenanceOpen}
               title="See this panel’s provenance"
@@ -571,7 +572,7 @@ export function PanelFrame(props: {
           ) : null}
           {props.onAskAbout ? (
             <button
-              className="panel-tool"
+              className="ui ui-color-text-3 ui-font-size-13px ui-border-0 ui-background-none ui-border-radius-7px panel-tool"
               aria-label={`Reshape ${panel.title}`}
               title="Reshape this panel — describe the change"
               onClick={props.onAskAbout}
@@ -579,31 +580,31 @@ export function PanelFrame(props: {
           ) : null}
           {props.onEditData && editTable ? (
             <button
-              className="panel-tool"
+              className="ui ui-color-text-3 ui-font-size-13px ui-border-0 ui-background-none ui-border-radius-7px panel-tool"
               aria-label={`Edit ${editTable} data`}
               title={`Edit the ${editTable} data`}
               onClick={() => props.onEditData!(editTable)}
             >✎</button>
           ) : null}
           {props.onViewAs ? (
-            <span className="panel-views">
+            <span className="ui ui-display-inline-flex ui-position-relative panel-views">
               <button
                 ref={viewsBtnRef}
-                className="panel-tool"
+                className="ui ui-color-text-3 ui-font-size-13px ui-border-0 ui-background-none ui-border-radius-7px panel-tool"
                 aria-label={`Change view for ${panel.title}`}
                 title="Show this data another way"
                 onClick={openViews}
               >⇄</button>
               {viewsOpen && viewsPos ? createPortal(
                 <>
-                  <div className="panel-views-backdrop" onClick={() => setViewsOpen(false)} />
-                  <div className="panel-views-menu"
+                  <div className="ui ui-position-fixed ui-inset-0 panel-views-backdrop" onClick={() => setViewsOpen(false)} />
+                  <div className="ui ui-display-flex ui-background-panel ui-flex-direction-column ui-base-border-8f9f0d ui-border-radius-11px ui-box-shadow-shadow-lg ui-position-absolute panel-views-menu"
                     style={{ position: "fixed", top: viewsPos.top, left: viewsPos.left }}>
-                    <span className="panel-views-head">View as</span>
+                    <span className="ui ui-color-text-3 ui-text-transform-uppercase panel-views-head">View as</span>
                     {VIEW_OPTIONS.map(v => (
                       <button
                         key={v.key}
-                        className="panel-views-item"
+                        className="ui ui-display-flex ui-align-items-center ui-color-text ui-font-size-13px ui-gap-9px ui-border-0 ui-text-align-left ui-font-inherit ui-background-none ui-border-radius-7px ui-hover-color-92c640 panel-views-item"
                         onClick={() => { setViewsOpen(false); props.onViewAs!(v.key); }}
                       >{v.icon} {v.label}</button>
                     ))}
@@ -615,7 +616,7 @@ export function PanelFrame(props: {
           ) : null}
           {props.onResize ? (
             <button
-              className="panel-resize panel-tool"
+              className="ui ui-color-text-3 ui-font-size-13px ui-border-0 ui-background-none ui-border-radius-7px panel-resize panel-tool"
               aria-label={`${props.wide ? "Make narrow" : "Make wide"}: ${panel.title}`}
               title={props.wide ? "Make narrow" : "Make wide"}
               onClick={props.onResize}
@@ -623,7 +624,7 @@ export function PanelFrame(props: {
           ) : null}
           {props.onRemove ? (
             <button
-              className="panel-tool panel-tool-remove"
+              className="ui ui-color-text-3 ui-font-size-13px ui-border-0 ui-background-none ui-border-radius-7px panel-tool panel-tool-remove"
               aria-label={`Remove ${panel.title}`}
               title="Remove this panel — rewind the timeline to bring it back"
               onClick={props.onRemove}
@@ -632,23 +633,23 @@ export function PanelFrame(props: {
         </span>
       </header>
       {provenanceOpen && props.provenance ? (
-        <aside ref={provenanceRef} className="panel-provenance"
+        <aside ref={provenanceRef} className="ui ui-display-grid ui-border-bottom-line ui-gap-9px panel-provenance"
           aria-label={`${panel.title} provenance`}>
-          <div className="panel-provenance-head">
+          <div className="ui ui-display-flex ui-align-items-center ui-justify-content-space-between ui-color-accent-text ui-text-transform-uppercase panel-provenance-head">
             <span>Why this view exists</span>
             <button className="link" onClick={() => setProvenanceOpen(false)}>close</button>
           </div>
-          <div className="panel-provenance-step">
+          <div className="ui ui-display-grid ui-gap-9px ui-font-size-12px ui-line-height-1-45 ui-align-items-baseline ui-b-color-a7ddc1 panel-provenance-step">
             <b>Created at v{props.provenance.createdVersion}</b>
             <span>{props.provenance.createdIntent}</span>
           </div>
           {props.provenance.lastChangedVersion !== props.provenance.createdVersion ? (
-            <div className="panel-provenance-step">
+            <div className="ui ui-display-grid ui-gap-9px ui-font-size-12px ui-line-height-1-45 ui-align-items-baseline ui-b-color-a7ddc1 panel-provenance-step">
               <b>Last shaped at v{props.provenance.lastChangedVersion}</b>
               <span>{props.provenance.lastChangedSummary}</span>
             </div>
           ) : null}
-          <div className="panel-provenance-data">
+          <div className="ui ui-display-flex ui-flex-wrap-wrap ui-gap-5px ui-small-color-0803d9 panel-provenance-data">
             {panel.declared_queries.map(query => query.from).filter((name, index, all) => all.indexOf(name) === index)
               .map(name => <span key={`read:${name}`}>{name}<small>read</small></span>)}
             {panel.declared_writes.filter((name, index, all) => all.indexOf(name) === index)
@@ -666,24 +667,24 @@ export function PanelFrame(props: {
         style={effHeight !== null ? { height: `${effHeight}px` } : undefined}
       />
       {props.onSetWidth ? (
-        <div className="panel-edge-resize e" title="Drag to resize width"
-          onPointerDown={e => startResize(e, { width: true })}><span className="panel-edge-grip" /></div>
+        <div className="ui ui-display-flex ui-align-items-center ui-justify-content-center ui-position-absolute panel-edge-resize e" title="Drag to resize width"
+          onPointerDown={e => startResize(e, { width: true })}><span className="ui ui-border-radius-999px panel-edge-grip" /></div>
       ) : null}
       {props.onSetHeight ? (
-        <div className="panel-edge-resize s" title="Drag to resize height"
-          onPointerDown={e => startResize(e, { height: true })}><span className="panel-edge-grip" /></div>
+        <div className="ui ui-display-flex ui-align-items-center ui-justify-content-center ui-position-absolute panel-edge-resize s" title="Drag to resize height"
+          onPointerDown={e => startResize(e, { height: true })}><span className="ui ui-border-radius-999px panel-edge-grip" /></div>
       ) : null}
       {props.onSetWidth && props.onSetHeight ? (
-        <div className="panel-corner-resize" title="Drag to resize"
+        <div className="ui ui-position-absolute panel-corner-resize" title="Drag to resize"
           onPointerDown={e => startResize(e, { width: true, height: true })} />
       ) : null}
       {props.fault ? (
-        <div className="panel-boundary">
-          <p className="panel-boundary-title">This panel hit a problem.</p>
-          <p className="panel-boundary-msg">
+        <div className="ui ui-display-flex ui-flex-direction-column ui-inset-0 ui-justify-content-center ui-position-absolute ui-gap-4px panel-boundary">
+          <p className="ui ui-margin-0 ui-color-warn panel-boundary-title">This panel hit a problem.</p>
+          <p className="ui ui-overflow-hidden ui-font-size-12px ui-color-warn panel-boundary-msg">
             {props.fault.code}: {props.fault.message}
           </p>
-          <div className="rail-actions">
+          <div className="ui ui-display-flex ui-align-items-center ui-flex-wrap-wrap ui-gap-12px rail-actions">
             {props.onRepair ? (
               <button className="primary" onClick={props.onRepair}>Repair</button>
             ) : null}

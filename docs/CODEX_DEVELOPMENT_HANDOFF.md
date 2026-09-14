@@ -1,4 +1,173 @@
-# Shell renderer preflight - 2026-09-14 (dependency provisioning BLOCKED)
+# FIX phase 1 — Preact and shared styles — 2026-09-14
+
+Base: `7b4a905351a97fe2f7d0c79e7ba028a9d22a037c`, `D:\Clay`,
+`codex/clay-project`. The base and origin tracking ref matched at entry. Sole
+writer; no commit, push, merge, deployment, dependency installation, credential
+access, other-worktree edit, browser launch, or server termination. Parent's
+exact Preact dependency checkpoint and prior A–F/native-recovery work are intact.
+The dependency blocker described in the historical section below is RESOLVED.
+
+## Current source changes
+
+- Vite and Vitest share exact renderer aliases and Preact deduplication.
+  `react-dom/client` uses `preact/compat/client`: the pinned compat root does NOT
+  export `createRoot`. React types remain compile-only. A build-time module
+  assertion and `scripts/renderer-module-check.mjs` reject React, ReactDOM,
+  Scheduler, mixed/duplicate Preact, and renderer code in workers. Actual module
+  reports have passed with one core/hooks/compat/client/JSX closure.
+- Tests use Preact's `act`. Compatibility covers controlled input/checkbox/select,
+  native blur/capture/bubble, refs/layout effects, external stores, iframe mounts,
+  lazy/Suspense, class error boundaries, portals/drag/drop, modal Tab/Escape,
+  background inert/aria-hidden, scroll locks and trigger restoration.
+  `FocusControl.tsx` explicitly preserves mount-time autofocus; Preact does not
+  emulate React's imperative autofocus on newly inserted controls.
+- Private metrics, Shape Map and Import Wizard reuse `ModalDialog`.
+  Shape Map navigation can preserve destination focus; inline cancellation retains
+  first-Escape ownership. A deterministic RED caught parent + delayed-child teardown
+  restoring `inert=true`; per-background reference counting fixes it without
+  weakening nested modal isolation. Ten repeated App lazy wrappers now share the
+  small `SurfaceBoundary`; literal dynamic imports and independent error boundaries
+  remain. Loading/failure/ready states are tested independently.
+- Automation draft edits read the latest retained fields before applying another
+  input event. Today setup is disabled until the original authority read completes;
+  a failed read now has an explicit error and read-only retry instead of a stuck
+  loading claim. Existing request identities, cancellation, CAS, Undo, and custody
+  boundaries are unchanged.
+- `primitives.css` consolidates exact shared declarations and native selector
+  aliases. JSX keeps semantic classes plus zero-specificity utility parameters.
+  Geometry, overflow, responsive/print overrides, motion and stacking remain in
+  their feature sheets. Cascade-sensitive exceptions stay at their original source
+  positions. Empty component rules are deliberate ownership anchors for the
+  declaration-equivalence fixture; the minifier emits no empty rules.
+  CSS class names retain deterministic component-family locality after compaction;
+  public panel theme tokens, runtime-only names and reserved symbols are preserved.
+- New style tests re-expand every factored declaration against the original source
+  fixture, check carrier literals, and compare actual JSX selector witnesses under
+  source/shell-first/reverse-lazy sheet orders, rest/engaged/disabled states,
+  overlapping 1280/320/160px breakpoints, dark/reduced-motion and print contexts.
+  Unsupported selectors/media fail the finder. This is NOT browser layout or human
+  accessibility certification. Eight rendered A–F control-state inventories are
+  integrated into existing UI tests; they read labels/states, never input values
+  or custody. They supplement rather than replace full browser accessible names.
+- `@clay/mutation/raw-client` owns the unchanged bounded HTTP/provider transport.
+  WorkerClient relays opaque bytes; the worker's closed `decodePlannerRaw` remains
+  the Preview/commit validator. The parsed MutationClient API is retained for
+  other callers. Differential tests cover malformed JSON, wire migration/query
+  hydration, clipping, Board/Timeline width, issue paths and the single repair
+  capability. No kernel validation, route or durable authority source was edited.
+  The module guard rejects a duplicate parsed shell planner or provider transport
+  in the worker. A generated wire schema precomputes ONLY the old `$comment`
+  removal; original prompt bytes and every transmitted schema field remain equal,
+  with an independent source-digest/equality test. No packed/executable model data.
+- Identical error-to-message expressions share a tested presentation-only helper;
+  there is no new logging, persistence, sanitization or retry. Already-loaded
+  catalog/presentation validators use narrow static imports, removing redundant
+  async namespace wrappers. Safe Terser compression remains free of unsafe flags.
+
+## Verification during implementation
+
+The first Preact full-shell finder run was RED: 838 passed, 18 failed and one
+unhandled error (`test-results/fix-batch/shell-preact-first.json`). Compatibility
+fixes and fixtures now wait for actual retained/readback completion, not an old
+render/React scheduling assumption. Assertions about durable payloads and errors
+were retained. The final full-shell rerun passed: **879 tests, 137 files, zero
+failures**, 411.67s. No unhandled-error report. The initial finder is retained as
+RED feedback, not the final checkpoint.
+
+Confirmed focused GREEN packets so far include 28 renderer/modal/Today tests;
+14 shared-boundary/modal/renderer tests; 37 mutation raw/client/assets/wire-schema
+tests; 33 operational/editor/readback/error-conversion tests; 53 tests across the
+eight A–F census files; and eight style-equivalence/finder tests.
+
+Final commands actually run, serially (repository-local installed tools; no
+dependency download or installation):
+
+| Command / working directory | Actual result |
+| --- | --- |
+| `node node_modules/vitest/vitest.mjs run --maxWorkers=1 --minWorkers=1 --reporter=dot --reporter=json --outputFile.json=../../test-results/fix-batch/shell-preact-final.json` / `packages/shell` | PASS: 879 tests / 137 files, 411.67s |
+| `node node_modules/vitest/vitest.mjs run --maxWorkers=1 --minWorkers=1 --reporter=dot` / `packages/mutation` | PASS: 60 tests / 8 files, 4.80s |
+| Same package-local Vitest command / `packages/backend` | PASS: 111 tests / 11 files, 9.62s |
+| `node node_modules/typescript/bin/tsc --noEmit` / each of schema, kernel, mutation, panel-runtime, shell, backend | All six exited 0 |
+| `node node_modules/vite/bin/vite.js build` / `packages/panel-runtime` | PASS: 5 modules; 1.36s |
+| `node scripts/bundle-module-report.mjs` / root | PASS: actual shell production build, 169 modules; 16.70s; regenerated module report |
+| `node scripts/renderer-module-check.mjs` / root | PASS: one pinned Preact closure; no React/ReactDOM/Scheduler or worker renderer; raw shell transport and closed worker decoder |
+| `node scripts/bundle-diagnostic.mjs` / root | Exit 1: only completeWorker and completeBrowser remain red; all other boundaries pass |
+| `node scripts/bundle-budget.mjs` / root | Exit 1: freshness and shell gates pass; fails at complete worker closure, exact error below |
+| `node --test scripts/bundle-budget.test.mjs` / root | PASS: 19 tests, no failures |
+| `node scripts/roadmap-development-census.mjs` / root | Exit 0: 21 capabilities, developmentComplete=true, no development blockers or hard-disable flags; 25 explicitly retired compatibility routes. Inventory, NOT certification |
+| `git diff --check` / root | Exit 0 |
+
+The final production source was unchanged throughout the successful full-shell,
+affected-suite, six-typecheck and final-build sequence. Only this handoff was
+updated during/after it. Kernel/schema/panel-runtime source, dependency lockfile,
+shell dependency manifest, frozen collectors/limits and checked-in `evidence/`
+are unchanged. A changed-content scan found no added eval/Function execution,
+unsafe HTML assignment, private-key/token literal pattern or debugger statement.
+This bounded scan is not a security review.
+
+## Final measured phase-1 checkpoint
+
+Raw / gzip bytes from the actual regenerated `test-results/fix-batch/bundles.json`:
+
+| Boundary | Before this turn | Final | Frozen limit | Status |
+| --- | ---: | ---: | ---: | --- |
+| totalShellJavaScript | 1,137,878 / 342,872 | **947,561 / 289,911** | 980,000 / 290,000 | PASS |
+| applicationStyles | 78,807 / 20,198 | **60,905 / 16,825** | 67,000 / 17,000 | PASS |
+| completeBrowser | 3,577,700 / 1,178,465 | **3,369,405 / 1,122,212** | 3,250,000 / 1,100,000 | FAIL: 119,405 / 22,212 over |
+| completeWorker | 1,434,879 / 387,588 | **1,434,812 / 387,687** | 1,010,000 / 280,000 | FAIL: 424,812 / 107,687 over |
+| workerAuthority | — | 212,957 / 53,228 | 240,000 / 60,000 | PASS |
+| ProductionBackupRuntime | — | 32,099 / 10,853 | 45,000 / 14,000 | PASS |
+
+Phase-1 shell/style size targets are closed. Shell saves 190,317 raw / 52,961 gzip;
+styles save 17,902 / 3,373; complete browser saves 208,295 / 56,253. Shell gzip
+headroom is only **89 bytes** and styles gzip headroom **175 bytes**: future
+changes must remeasure, not assume durable headroom. Safe compression changed
+worker output slightly; no worker architecture reduction is claimed.
+
+The unchanged frozen gate's exact terminal error was:
+`database worker JavaScript closure: 1434812 B raw / 387687 B gzip exceeds
+1010000 B / 280000 B`. It exits before later aggregate checks; the full diagnostic
+uses the same collector and reports styles green and complete browser red.
+
+Local feedback paths (not immutable release evidence):
+
+- `test-results/fix-batch/shell-preact-first.json` — retained RED finder.
+- `test-results/fix-batch/shell-preact-final.json` — final 879-test GREEN run.
+- `test-results/fix-batch/bundle-modules.json` — actual final build/module graph.
+- `test-results/fix-batch/bundles.json` — all final measured boundaries.
+
+The coherent uncommitted diff contains 77 modified tracked paths and 21 new paths;
+HEAD remains `7b4a905351a97fe2f7d0c79e7ba028a9d22a037c`. No remote network readback,
+commit or push was performed.
+
+## Exact continuation / remaining gates
+
+Phase 1 source/tests/size work is complete, not browser-certified. The next code
+boundary is the deferred complete-worker architectural phase: use the final module
+report to reduce actual Store/validation/target-catalog/DB closure duplication.
+Largest actual emitted worker files are asyncstore 480,997 / 138,303;
+worker-authority 212,957 / 53,228; sqlite-initializer 210,779 / 62,560;
+target-authority 193,667 / 41,161; db-worker 180,638 / 44,972; shared validation
+55,684 / 12,701. Splitting those into additional assets alone cannot close the
+424,812 / 107,687 worker gap. Do not remove authority, native recovery, syntax
+validation or user capability to meet it. Complete-browser remains 119,405 /
+22,212 over and should benefit from actual shared/worker source reductions.
+
+Keep shell/styles green (especially their narrow gzip headroom),
+all worker routes, pinned SQLite/SAHPool/native journal recovery, Acorn validation,
+archive authentication, trusted-shell custody and frozen collectors intact.
+Release B source binding/frozen-runtime certification and parent-owned packaged
+browser gates wait for stabilized source. Parent must check the Preact native
+focus/event/portal/modal behavior and responsive/print/dark/zoom/lazy CSS in real
+browsers; source/DOM compatibility tests are not a substitute. Human NVDA and
+optional credentialed model regression remain external; do not request credentials
+or call them passed. No browser matrix or formal review ran in this phase.
+
+No certification, release or shipment is claimed.
+
+---
+
+# Historical shell renderer preflight - 2026-09-14 (resolved dependency blocker)
 
 Started CLEAN at `a75c9bf8af68aa1efefb6b6679844160fa665226`, `D:\Clay`,
 `codex/clay-project`; local origin tracking ref matches (no network remote

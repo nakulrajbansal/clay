@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 /** @vitest-environment-options {"url":"https://clay.example"} */
 import { createHash } from "node:crypto";
-import { act } from "react";
+import { act } from "preact/test-utils";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -14,6 +14,7 @@ import { assertShareOwnerTransition, validateShareOwnerRecord, type ShareOwnerRe
 import { ShareDialog, type ShareAttachmentChoiceV1 } from "../src/share/ShareDialog";
 import type { ShareRelayClient } from "../src/share/relay-client";
 import { relayRequestSha256 } from "../src/app/relay-request-identity";
+import { expectControlCensus } from "./helpers/control-census";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -147,6 +148,7 @@ describe("F1 owner share preview and creation", () => {
       request, fieldChoices: choices, attachmentChoices: [], relay, viewerOrigin: "https://clay.example", now: () => new Date("2026-09-07T12:00:00.000Z"), onClose: () => {} };
     let host = document.createElement("div"); document.body.append(host); let root = createRoot(host);
     await act(async () => root.render(<ShareDialog {...props} />)); await flush();
+    expectControlCensus("F.share");
     await act(async () => button("Approve this exact scope").click()); await flush();
     await act(async () => button("Create encrypted link").click()); await flush();
     expect((await vault.list())[0]?.state).toBe("invoked"); expect(button("Create encrypted link").disabled).toBe(true);

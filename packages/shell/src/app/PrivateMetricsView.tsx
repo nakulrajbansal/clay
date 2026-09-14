@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { FocusButton } from "./FocusControl";
+import { useRef, useState } from "react";
+import { ModalDialog } from "./ModalDialog";
 import type { PrivateMetricsSummary, Rate } from "@clay/kernel";
 import "./PrivateMetricsView.css";
 
@@ -32,68 +33,22 @@ export function PrivateMetricsView(props: {
   const s = props.summary;
   const [confirmClear, setConfirmClear] = useState(false);
   const [actionStatus, setActionStatus] = useState("");
-  const dialogRef = useRef<HTMLElement>(null);
   const clearButtonRef = useRef<HTMLButtonElement>(null);
-  const onCloseRef = useRef(props.onClose);
-  onCloseRef.current = props.onClose;
-  useEffect(() => {
-    const previousFocus = document.activeElement instanceof HTMLElement
-      ? document.activeElement : null;
-    const app = document.querySelector<HTMLElement>(".app");
-    const priorInert = app?.inert ?? false;
-    const priorHidden = app?.getAttribute("aria-hidden") ?? null;
-    if (app) { app.inert = true; app.setAttribute("aria-hidden", "true"); }
-    const frame = requestAnimationFrame(() =>
-      dialogRef.current?.querySelector<HTMLElement>("button")?.focus());
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") {
-        event.preventDefault(); onCloseRef.current(); return;
-      }
-      if (event.key !== "Tab" || !dialogRef.current) return;
-      const nodes = [...dialogRef.current.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), '
-        + 'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      )].filter(node => node.getClientRects().length > 0);
-      if (nodes.length === 0) { event.preventDefault(); dialogRef.current.focus(); return; }
-      const first = nodes[0]!;
-      const last = nodes[nodes.length - 1]!;
-      if (event.shiftKey && (document.activeElement === first
-          || !dialogRef.current.contains(document.activeElement))) {
-        event.preventDefault(); last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault(); first.focus();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => {
-      cancelAnimationFrame(frame);
-      document.removeEventListener("keydown", onKey);
-      if (app) {
-        app.inert = priorInert;
-        if (priorHidden === null) app.removeAttribute("aria-hidden");
-        else app.setAttribute("aria-hidden", priorHidden);
-      }
-      previousFocus?.focus();
-    };
-  }, []);
-  return createPortal(
-    <div className="private-metrics-backdrop" onMouseDown={event => {
-      if (event.currentTarget === event.target) props.onClose();
-    }}>
-      <section ref={dialogRef} className="private-metrics" role="dialog" aria-modal="true"
-        aria-labelledby="private-metrics-title" tabIndex={-1}>
-        <header className="private-metrics-header">
+  return (
+    <ModalDialog backdropClassName="ui ui-display-grid ui-place-items-center ui-position-fixed ui-inset-0 private-metrics-backdrop" className="ui ui-background-panel ui-base-border-8f9f0d ui-base-border-radius-c431a0 ui-overflow-auto ui-box-shadow-shadow-lg private-metrics"
+      ariaLabelledBy="private-metrics-title" onClose={props.onClose}>
+        <header className="ui ui-display-flex ui-justify-content-space-between ui-align-items-flex-start private-metrics-header">
           <div><span className="contract-eyebrow">Current app · last 30 days</span>
             <h2 id="private-metrics-title">Private activity & trust</h2></div>
           <button className="link" onClick={props.onClose}>Close</button>
         </header>
-        <p className="private-metrics-privacy">
+        <p className="ui ui-color-text-2 ui-font-size-12px ui-padding-10px-12px ui-base-background-e37a96 private-metrics-privacy">
           Daily counts only. No records, names, prompts, or exact times. Never sent anywhere.
         </p>
 
         <section className="private-metrics-section" aria-labelledby="metrics-activation">
           <h3 id="metrics-activation">Activation</h3>
-          <div className="private-metrics-grid">
+          <div className="ui ui-display-grid ui-gap-9px ui-b-color-a7ddc1 ui-small-font-size-56900e private-metrics-grid">
             <Metric label="First useful reshape" value={s.activation.activated ? "Complete" : "Not yet"}
               detail={duration(s.activation.firstKeepElapsed)} />
             <Metric label="Full proof loop" value={s.activation.proofLoopComplete ? "Complete" : "Not yet"}
@@ -107,7 +62,7 @@ export function PrivateMetricsView(props: {
 
         <section className="private-metrics-section" aria-labelledby="metrics-reshape">
           <h3 id="metrics-reshape">Reshape decisions</h3>
-          <div className="private-metrics-grid">
+          <div className="ui ui-display-grid ui-gap-9px ui-b-color-a7ddc1 ui-small-font-size-56900e private-metrics-grid">
             <Metric label="Attempts" value={s.reshape.started} detail="reshapes started" />
             <Metric label="Preview reach" value={pct(s.reshape.previewRate)}
               detail={ratio(s.reshape.previewRate)} />
@@ -118,7 +73,7 @@ export function PrivateMetricsView(props: {
               detail={ratio(s.reshape.repairSaveRate)} />
           </div>
           {s.reshape.discardByDiff.length > 0 ? (
-            <div className="private-metrics-breakdown" aria-label="Discard decisions by change kind">
+            <div className="ui ui-display-flex ui-flex-wrap-wrap ui-gap-6px ui-span-border-radius-0b7e91 private-metrics-breakdown" aria-label="Discard decisions by change kind">
               {s.reshape.discardByDiff.map(item => <span key={item.diff}>
                 {item.diff.replaceAll("_", " ")}: {item.discarded}/{item.decisions} discarded
               </span>)}
@@ -128,7 +83,7 @@ export function PrivateMetricsView(props: {
 
         <section className="private-metrics-section" aria-labelledby="metrics-trust">
           <h3 id="metrics-trust">Trust actions</h3>
-          <div className="private-metrics-grid">
+          <div className="ui ui-display-grid ui-gap-9px ui-b-color-a7ddc1 ui-small-font-size-56900e private-metrics-grid">
             <Metric label="Verified previews" value={s.trust.previewsShown} detail="contracts shown" />
             <Metric label="Receipts" value={s.trust.receiptsOpened} detail="opened intentionally" />
             <Metric label="Shape map" value={s.trust.shapeMapOpened} detail="opens" />
@@ -141,14 +96,14 @@ export function PrivateMetricsView(props: {
 
         <section className="private-metrics-section" aria-labelledby="metrics-recovery">
           <h3 id="metrics-recovery">Recovery</h3>
-          <div className="private-metrics-grid">
+          <div className="ui ui-display-grid ui-gap-9px ui-b-color-a7ddc1 ui-small-font-size-56900e private-metrics-grid">
             <Metric label="Faults seen" value={s.recovery.faultsSeen} detail="fixed fault classes" />
             <Metric label="Recoveries" value={s.recovery.completed} detail="completed actions" />
             <Metric label="Recovery rate" value={pct(s.recovery.successRate)}
               detail={ratio(s.recovery.successRate)} />
           </div>
           {s.recovery.byMethod.length > 0 ? (
-            <div className="private-metrics-breakdown" aria-label="Recovery by method">
+            <div className="ui ui-display-flex ui-flex-wrap-wrap ui-gap-6px ui-span-border-radius-0b7e91 private-metrics-breakdown" aria-label="Recovery by method">
               {s.recovery.byMethod.map(item => <span key={item.method}>
                 {method(item.method)}: {item.succeeded}/{item.completed}
               </span>)}
@@ -156,7 +111,7 @@ export function PrivateMetricsView(props: {
           ) : null}
         </section>
 
-        <footer className="private-metrics-footer">
+        <footer className="ui ui-display-flex ui-align-items-center ui-color-text-2 ui-flex-wrap-wrap ui-border-top-line ui-label-gap-931d54 ui-font-size-11px ui-base-margin-top-7b237e private-metrics-footer">
           <span>{props.persistent ? "Stored only in this app’s local system database" : "Session-only storage"}</span>
           <label><input type="checkbox" checked={s.collectionEnabled}
             onChange={event => void props.onToggle(event.target.checked).then(ok =>
@@ -170,8 +125,9 @@ export function PrivateMetricsView(props: {
             Clear private metrics…
           </button>
           {confirmClear ? (
-            <div className="private-metrics-confirm" role="group"
+            <div className="ui ui-display-flex ui-align-items-center ui-gap-8px ui-border-radius-10px ui-justify-content-flex-end private-metrics-confirm" role="group"
               aria-label="Confirm clear private metrics"
+              data-modal-escape-owner="true"
               onKeyDown={event => {
                 if (event.key !== "Escape") return;
                 event.stopPropagation();
@@ -179,23 +135,21 @@ export function PrivateMetricsView(props: {
                 clearButtonRef.current?.focus();
               }}>
               <span>Clear only these local counts?</span>
-              <button autoFocus className="danger" onClick={() => void props.onClear().then(ok => {
+              <FocusButton autoFocus className="danger" onClick={() => void props.onClear().then(ok => {
                 setConfirmClear(false);
                 setActionStatus(ok ? "Private activity metrics cleared." : "Could not clear private metrics.");
                 clearButtonRef.current?.focus();
-              })}>Clear counts</button>
+              })}>Clear counts</FocusButton>
               <button className="link" onClick={() => {
                 setConfirmClear(false);
                 clearButtonRef.current?.focus();
               }}>Cancel</button>
             </div>
           ) : null}
-          <span className="private-metrics-status" role="status" aria-live="polite">
+          <span className="ui ui-color-text-2 private-metrics-status" role="status" aria-live="polite">
             {actionStatus}
           </span>
         </footer>
-      </section>
-    </div>,
-    document.body,
+    </ModalDialog>
   );
 }

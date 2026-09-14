@@ -1,3 +1,5 @@
+import { errorMessage } from "./error-message";
+import { FocusInput, FocusSelect } from "./FocusControl";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import type { AsyncStore, GlobalSearchResult, RegColumn, RegTable } from "@clay/kernel";
 import type { WorkerClient } from "./worker-client";
@@ -83,7 +85,7 @@ export function CommandPalette(props: {
         setActive(query.trim() !== "" && found.length > 0 ? quickCount : 0);
       }).catch(error => {
         if (live) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = errorMessage(error);
           setResults([]); setActive(0); setSearchError(message); props.onError(message);
         }
       }).finally(() => { if (live) setBusy(false); });
@@ -168,7 +170,7 @@ export function CommandPalette(props: {
       finishPresentationIntent(sessionStorage, intent.appInstanceId, "capture", intent.requestId);
       pendingCreate.current = null;
     } catch (error) {
-      props.onError(error instanceof Error ? error.message : String(error));
+      props.onError(errorMessage(error));
     } finally { submitting.current = false; setBusy(false); }
   };
 
@@ -184,7 +186,7 @@ export function CommandPalette(props: {
       props.onInfo(historical ? "Capture Undo was already recorded; later edits were kept." : `Undid quick capture in ${humanize(payload.capturePayload.table)}.`);
       finishPresentationIntent(sessionStorage, intent.appInstanceId, "captureUndo", intent.requestId);
       setUndoIntent(null);
-    } catch (error) { props.onError(`Could not undo quick capture: ${error instanceof Error ? error.message : String(error)}`); }
+    } catch (error) { props.onError(`Could not undo quick capture: ${errorMessage(error)}`); }
     finally { submitting.current = false; setBusy(false); }
   };
   const keepCapture = async (): Promise<void> => {
@@ -212,9 +214,9 @@ export function CommandPalette(props: {
   };
 
   return (
-    <ModalDialog className="command-palette" backdropClassName="modal-backdrop command-backdrop"
+    <ModalDialog className="ui ui-display-flex ui-background-panel ui-flex-direction-column ui-base-border-8f9f0d ui-overflow-hidden command-palette" backdropClassName="ui ui-display-flex ui-align-items-center ui-position-fixed ui-inset-0 ui-overflow-auto ui-justify-content-center modal-backdrop command-backdrop"
       ariaLabel="Search and act" onClose={props.onClose}>
-      <div className="command-search-row">
+      <div className="ui ui-display-grid ui-align-items-center ui-border-bottom-line ui-gap-10px ui-input-font-648ad9 ui-input-color-64eb43 command-search-row">
         {recovery.error ? <p role="alert">{recovery.error}</p> : null}
         {undoIntent && !pendingCreate.current ? <section aria-label="Previous capture recovery">
           <p>Undo is bounded to the original app with no intervening writes. Keep closes this Undo request without removing the record.</p>
@@ -224,7 +226,7 @@ export function CommandPalette(props: {
         {pendingCreate.current ? <button disabled={busy || !!recovery.error} onClick={() => void cancelPending()}>Cancel pending capture and edit</button> : null}
         {pendingCreate.current && !creating ? <p role="alert">The captured record type changed. Return to its original app and inspect Recovery Center; the request was kept.</p> : null}
         <span aria-hidden="true">⌕</span>
-        <input autoFocus type="search" value={query} disabled={!!pendingCreate.current || submitting.current} onChange={event => setQuery(event.target.value)}
+        <FocusInput autoFocus type="search" value={query} disabled={!!pendingCreate.current || submitting.current} onChange={event => setQuery(event.target.value)}
           onKeyDown={onKeyDown} placeholder="Find any record or choose an action…"
           role="combobox" aria-expanded="true"
           aria-activedescendant={itemCount > 0 ? `command-item-${active}` : undefined}
@@ -238,24 +240,24 @@ export function CommandPalette(props: {
             <button type="button" className="link" disabled={!!pendingCreate.current || submitting.current} onClick={() => { setCreating(null); setDraft({}); }}>← Back</button>
             <div><span>Quick create</span><h2>New {humanize(creating.name)}</h2></div>
           </header>
-          <div className="command-create-fields">
+          <div className="ui ui-display-grid ui-input-font-648ad9 ui-input-border-58fb43 ui-label-display-b369c3 ui-input-color-64eb43 ui-select-color-8a3cd5 ui-select-font-d3b791 ui-select-border-f5f110 ui-select-background-25bcef ui-input-background-904d66 command-create-fields">
             {fields.map((column, index) => (
               <label key={column.name}>{column.label ?? humanize(column.name)}
                 {column.type === "enum" ? (
-                  <select autoFocus={index === 0} required={column.required} disabled={!!pendingCreate.current || submitting.current}
+                  <FocusSelect autoFocus={index === 0} required={column.required} disabled={!!pendingCreate.current || submitting.current}
                     value={draft[column.name] ?? ""}
                     onChange={event => setDraft(value => ({ ...value, [column.name]: event.target.value }))}>
                     <option value="">Choose…</option>
                     {(column.values ?? []).map(value => <option key={value}>{value}</option>)}
-                  </select>
+                  </FocusSelect>
                 ) : column.type === "boolean" ? (
-                  <select autoFocus={index === 0} required={column.required} disabled={!!pendingCreate.current || submitting.current}
+                  <FocusSelect autoFocus={index === 0} required={column.required} disabled={!!pendingCreate.current || submitting.current}
                     value={draft[column.name] ?? ""}
                     onChange={event => setDraft(value => ({ ...value, [column.name]: event.target.value }))}>
                     <option value="">—</option><option value="true">Yes</option><option value="false">No</option>
-                  </select>
+                  </FocusSelect>
                 ) : (
-                  <input autoFocus={index === 0} required={column.required} disabled={!!pendingCreate.current || submitting.current}
+                  <FocusInput autoFocus={index === 0} required={column.required} disabled={!!pendingCreate.current || submitting.current}
                     aria-label={column.label ?? humanize(column.name)}
                     type={column.type === "number" || column.type === "integer" ? "number" : "text"}
                     placeholder={column.type === "date" ? "today, tomorrow, or YYYY-MM-DD" : undefined}
@@ -271,10 +273,10 @@ export function CommandPalette(props: {
             <button className="primary" disabled={busy || !!recovery.error || !props.appInstanceId || (!!undoIntent && !pendingCreate.current)} type="submit">{busy ? "Creating…" : pendingCreate.current ? "Retry capture" : "Create record"}</button></footer>
         </form>
       ) : (
-        <div id="command-results" className="command-results">
+        <div id="command-results" className="ui ui-overflow-auto command-results">
           <section className="command-actions" aria-label="Quick actions">
-            <div className="command-section-label">Quick actions</div>
-            <div className="command-action-grid">
+            <div className="ui ui-color-text-3 ui-text-transform-uppercase command-section-label">Quick actions</div>
+            <div className="ui ui-display-grid ui-gap-6px ui-button-font-590948 ui-button-color-353ba8 command-action-grid">
               {quickTables.map((table, index) => (
                 <button key={table.name} className={active === index ? "active" : ""}
                   id={`command-item-${index}`} data-command-index={index}
@@ -297,10 +299,10 @@ export function CommandPalette(props: {
               </button>
             </div>
           </section>
-          <div className="command-section-label">{query ? "Records" : "Recently changed"}</div>
-          {searchError ? <div className="command-empty command-error" role="alert">{searchError}</div>
-            : busy && results.length === 0 ? <div className="command-empty">Searching…</div>
-            : results.length === 0 ? <div className="command-empty">No records found. Try another word.</div>
+          <div className="ui ui-color-text-3 ui-text-transform-uppercase command-section-label">{query ? "Records" : "Recently changed"}</div>
+          {searchError ? <div className="ui ui-color-text-3 ui-font-size-13px ui-text-align-center command-empty command-error" role="alert">{searchError}</div>
+            : busy && results.length === 0 ? <div className="ui ui-color-text-3 ui-font-size-13px ui-text-align-center command-empty">Searching…</div>
+            : results.length === 0 ? <div className="ui ui-color-text-3 ui-font-size-13px ui-text-align-center command-empty">No records found. Try another word.</div>
               : results.map((result, index) => {
                 const itemIndex = quickCount + index;
                 return <button key={`${result.table}:${result.id}`}
@@ -311,10 +313,10 @@ export function CommandPalette(props: {
                   onFocus={() => setActive(itemIndex)}
                   onKeyDown={event => onItemKeyDown(event, itemIndex)}
                   onMouseEnter={() => setActive(itemIndex)} onClick={() => activate(itemIndex)}>
-                  <span className="command-record-icon" aria-hidden="true">{result.label.slice(0, 1).toUpperCase()}</span>
-                  <span className="command-record-copy"><strong>{result.label}</strong>
+                  <span className="ui ui-display-grid ui-color-accent-text ui-place-items-center ui-border-radius-8px ui-background-bg command-record-icon" aria-hidden="true">{result.label.slice(0, 1).toUpperCase()}</span>
+                  <span className="ui ui-display-grid ui-min-width-0 ui-small-color-0803d9 command-record-copy"><strong>{result.label}</strong>
                     <small>{result.secondary || `Updated ${result.updatedAt.slice(0, 10)}`}</small></span>
-                  <span className="command-record-table">{humanize(result.table)}</span>
+                  <span className="ui ui-color-text-3 ui-font-size-10-5px command-record-table">{humanize(result.table)}</span>
                 </button>;
               })}
         </div>

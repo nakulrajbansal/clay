@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { act } from "react";
+import { act } from "preact/test-utils";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -148,7 +148,7 @@ describe("local export owner preview", () => {
     expect(push).not.toHaveBeenCalled();
     expect(replace).not.toHaveBeenCalled();
 
-    await act(async () => dialog.dispatchEvent(new KeyboardEvent("keydown", {
+    await act(async () => void dialog.dispatchEvent(new KeyboardEvent("keydown", {
       key: "Escape", bubbles: true,
     })));
     expect(closes).toBe(1);
@@ -218,7 +218,7 @@ describe("local export owner preview", () => {
     expect(printRoot.querySelectorAll("td")).toHaveLength(205 * 30);
     expect(Math.max(...[...printRoot.querySelectorAll(".projection-print-sheet")]
       .map(sheet => sheet.querySelectorAll("td").length))).toBeLessThanOrEqual(600);
-    await act(async () => window.dispatchEvent(new Event("afterprint")));
+    await act(async () => void window.dispatchEvent(new Event("afterprint")));
     expect(document.body.querySelector(".projection-print-root")).toBeNull();
     expect(dialog.querySelectorAll("tbody tr")).toHaveLength(5);
     await act(async () => root.unmount());
@@ -298,7 +298,7 @@ describe("local export owner preview", () => {
       onClose={() => { closed = true; root.unmount(); }} />));
     const dialog = document.body.querySelector<HTMLElement>(".export-dialog")!;
     const started = performance.now();
-    await act(async () => dialog.dispatchEvent(new KeyboardEvent("keydown", {
+    await act(async () => void dialog.dispatchEvent(new KeyboardEvent("keydown", {
       key: "Escape", bubbles: true,
     })));
     expect(performance.now() - started).toBeLessThan(250);

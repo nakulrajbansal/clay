@@ -60,6 +60,31 @@ function assignCompactNames(counts, eligible, reserved, prefix = "") {
   return assigned;
 }
 
+function assignClassNames(counts, eligible, reserved) {
+  const ranked = [...assignCompactNames(counts, eligible, reserved).keys()];
+  const assigned = assignCompactNames(counts, new Set(ranked.slice(0, NAME_ALPHABET.length)), reserved);
+  const used = new Set(assigned.values()), families = new Map();
+  for (const original of ranked.slice(NAME_ALPHABET.length)) {
+    const family = original.includes("-") ? original.split("-")[0] : "other";
+    if (!families.has(family)) families.set(family, []);
+    families.get(family).push(original);
+  }
+  // Names in the same component tend to occur together in both selectors and
+  // JSX. Preserve that locality after shortening, rather than scattering the
+  // family over an unrelated frequency-ranked alphabet. No selector is removed.
+  let group = 0;
+  for (const [, originals] of [...families].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))) {
+    const prefix = compactName(group++); let index = 0;
+    for (const original of originals) {
+      let compact;
+      do compact = prefix + compactName(index++);
+      while (reserved.has(compact) || used.has(compact));
+      assigned.set(original, compact); used.add(compact);
+    }
+  }
+  return assigned;
+}
+
 function visitSelectorComponents(value, visitor) {
   if (Array.isArray(value)) {
     for (const item of value) visitSelectorComponents(item, visitor);
@@ -144,26 +169,33 @@ function analyzeCodeSource(code, id) {
   );
   const literals = [];
   const styleTokens = new Set();
+  const styleTokenCounts = new Map();
   function visit(node) {
     if (isLiteralToken(node) && typeof node.text === "string") {
       const style = isClassBearingLiteral(node, sourceFile);
       if (style) {
-        for (const token of node.text.match(CLASS_TOKEN) ?? []) styleTokens.add(token);
+        for (const token of node.text.match(CLASS_TOKEN) ?? []) {
+          styleTokens.add(token);
+          styleTokenCounts.set(token, (styleTokenCounts.get(token) ?? 0) + 1);
+        }
       }
       literals.push({ start: node.getStart(sourceFile), end: node.end, style });
     }
     ts.forEachChild(node, visit);
   }
   visit(sourceFile);
-  return { literals, styleTokens };
+  return { literals, styleTokens, styleTokenCounts };
 }
 
 export function buildCssSymbolPlan({ cssSources, codeSources }) {
   const css = collectCssSymbols(cssSources);
   const styleTokens = new Set();
+  const usage = new Map(css.classes);
   for (const source of [...codeSources].sort((a, b) => a.id.localeCompare(b.id))) {
     const analysis = analyzeCodeSource(source.code, source.id);
     for (const token of analysis.styleTokens) styleTokens.add(token);
+    for (const [token, count] of analysis.styleTokenCounts)
+      usage.set(token, (usage.get(token) ?? 0) + count);
   }
 
   // Only identifiers found inside class-bearing syntax are eligible. Ordinary
@@ -171,8 +203,8 @@ export function buildCssSymbolPlan({ cssSources, codeSources }) {
   // semantic because they have no static class token to synchronize with CSS.
   const eligibleClasses = new Set([...css.classes.keys()].filter(name =>
     styleTokens.has(name)));
-  const classes = assignCompactNames(
-    css.classes, eligibleClasses, new Set([...css.classes.keys(), ...styleTokens]),
+  const classes = assignClassNames(
+    usage, eligibleClasses, new Set([...css.classes.keys(), ...styleTokens]),
   );
   const customProperties = assignCompactNames(
     css.customProperties,

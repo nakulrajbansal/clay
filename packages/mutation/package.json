@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./client": "./src/client.ts",
+    "./raw-client": "./src/raw-client.ts",
     "./bounded-response": "./src/bounded-response.ts"
   },
   "scripts": {

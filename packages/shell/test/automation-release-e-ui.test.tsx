@@ -1,8 +1,9 @@
 /** @vitest-environment jsdom */
-import { act } from "react";
+import { act } from "preact/test-utils";
 import { createRoot } from "react-dom/client";
 import { beforeEach, expect, it } from "vitest";
 import { automationUiFixture } from "./helpers/automation-ui-fixture";
+import { expectControlCensus } from "./helpers/control-census";
 beforeEach(() => sessionStorage.clear());
 import type {
   AutomationDefinitionAny, AutomationDefinitionV2, AutomationDraftInputV2,
@@ -166,6 +167,7 @@ it("puts eligible recipes first, exposes local limits, and saves a recipe draft 
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
 
   const text = document.body.textContent ?? "";
+  expectControlCensus("E.automations");
   expect(text.indexOf("Start with a recipe")).toBeLessThan(text.indexOf("Build a custom rule"));
   expect(text).toContain("Automations run on this device while Clay is open.");
   expect(text).toContain("No cloud runner · no model access · no network access");

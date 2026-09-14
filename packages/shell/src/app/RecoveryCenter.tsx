@@ -266,21 +266,21 @@ export function RecoveryCenter(props: RecoveryCenterProps): React.JSX.Element {
           : "Recovery Kit checked. Archive authenticity can be verified; newest status is not yet known.";
 
   return (
-    <ModalDialog className="shape-map recovery-center" backdropClassName="shape-map-backdrop"
+    <ModalDialog className="ui ui-display-grid ui-background-panel ui-color-text ui-base-border-8f9f0d ui-overflow-hidden ui-min-height-0 shape-map recovery-center" backdropClassName="ui ui-display-grid ui-place-items-center ui-position-fixed ui-inset-0 ui-base-padding-6fe44b shape-map-backdrop"
       ariaLabelledBy="recovery-center-title" onClose={props.onClose}>
-      <header className="shape-map-header">
+      <header className="ui ui-display-flex ui-background-panel ui-justify-content-space-between ui-border-bottom-line ui-align-items-flex-start shape-map-header">
         <h2 id="recovery-center-title">Recovery Center</h2>
-        <button className="shape-map-close" aria-label="Close Recovery Center" onClick={props.onClose}>×</button>
+        <button className="ui ui-display-grid ui-color-text-2 ui-base-border-f41cca ui-flex-none ui-place-items-center ui-background-bg-soft ui-hover-color-caf367 ui-base-border-radius-25b77c shape-map-close" aria-label="Close Recovery Center" onClick={props.onClose}>×</button>
       </header>
 
-      <div className="shape-column" style={{ overflowY: "auto", minHeight: 0 }}
+      <div className="ui ui-min-width-0 ui-overflow-y-auto ui-min-height-0 shape-column" style={{ overflowY: "auto", minHeight: 0 }}
         role="region" aria-label="Recovery Center details" tabIndex={0}>
         {props.ownerRecovery}
         <section aria-labelledby="recovery-kit-title">
           <h3 id="recovery-kit-title">Recovery Kit</h3>
           <p>{trustMessage}</p>
           <p>A Recovery Kit authenticates backups but does not encrypt your records. Anyone with file access can read them.</p>
-          <div className="rail-actions">
+          <div className="ui ui-display-flex ui-align-items-center ui-flex-wrap-wrap ui-gap-12px rail-actions">
             <button
               className={props.backupTrustStatus?.status === "not_enrolled"
                 && props.onExportRecoveryKit ? "primary" : undefined}
@@ -291,7 +291,7 @@ export function RecoveryCenter(props: RecoveryCenterProps): React.JSX.Element {
                 "Recovery Kit downloaded. Check that exact file next.",
               )}
             >Download Recovery Kit</button>
-            <label className="shape-history-open file-label">
+            <label className="ui ui-color-text ui-base-border-8f9f0d ui-border-radius-10px ui-background-bg-soft ui-width-100 ui-hover-border-color-2b372d ui-hover-color-92c640 shape-history-open file-label">
               Check downloaded Recovery Kit
               <input type="file" accept=".txt,text/plain"
                 disabled={kitBusy || props.backupTrustStatus?.status !== "needs_test_import"
@@ -305,7 +305,7 @@ export function RecoveryCenter(props: RecoveryCenterProps): React.JSX.Element {
                   event.target.value = "";
                 }} />
             </label>
-            <label className="shape-history-open file-label">
+            <label className="ui ui-color-text ui-base-border-8f9f0d ui-border-radius-10px ui-background-bg-soft ui-width-100 ui-hover-border-color-2b372d ui-hover-color-92c640 shape-history-open file-label">
               Import an existing Recovery Kit
               <input type="file" accept=".txt,text/plain"
                 disabled={kitBusy || !props.onImportRecoveryKit}
@@ -351,7 +351,7 @@ export function RecoveryCenter(props: RecoveryCenterProps): React.JSX.Element {
               ? formatDate(props.lastVerifiedBackup.verifiedAt)
               : "No verified backup yet"}</dd></div>
           </dl>
-          <div className="rail-actions">
+          <div className="ui ui-display-flex ui-align-items-center ui-flex-wrap-wrap ui-gap-12px rail-actions">
             <button className={props.onRetry && props.failures.length > 0 ? "primary" : undefined}
               disabled={!props.onRetry || props.failures.length === 0}
               onClick={() => { void props.onRetry?.(); }}>
@@ -394,7 +394,7 @@ export function RecoveryCenter(props: RecoveryCenterProps): React.JSX.Element {
               </div>
             ) : null}
           <h3 id="recovery-failures-title">Recent backup problems</h3>
-          {props.failures.length === 0 ? <p className="shape-evolution-empty">No backup failures recorded.</p> : (
+          {props.failures.length === 0 ? <p className="ui ui-color-text-3 ui-font-size-12px ui-text-align-center shape-evolution-empty">No backup failures recorded.</p> : (
             <ul>
               {props.failures.slice(0, 20).map(failure => (
                 <li key={failure.id}>{recoveryFailureMessage(failure.reasonCode)}</li>
@@ -406,7 +406,7 @@ export function RecoveryCenter(props: RecoveryCenterProps): React.JSX.Element {
         <section aria-labelledby="recovery-history-title">
           <h3 id="recovery-history-title">Backup history</h3>
           <p>Validated at publication. Current file availability is not continuously monitored.</p>
-          {props.history.length === 0 ? <p className="shape-evolution-empty">No verified backups yet.</p> : (
+          {props.history.length === 0 ? <p className="ui ui-color-text-3 ui-font-size-12px ui-text-align-center shape-evolution-empty">No verified backups yet.</p> : (
             <ol>
               {props.history.slice(0, 64).map(item => (
                 <li className="recovery-history-item" key={item.backupId}>
@@ -444,7 +444,7 @@ export function RecoveryCenter(props: RecoveryCenterProps): React.JSX.Element {
 
           <h4>Records and attachments</h4>
           {props.recordCandidates.length === 0
-            ? <p className="shape-evolution-empty">No recent record snapshots are recoverable.</p>
+            ? <p className="ui ui-color-text-3 ui-font-size-12px ui-text-align-center shape-evolution-empty">No recent record snapshots are recoverable.</p>
             : <ul>
               {props.recordCandidates.slice(0, 20).map(candidate => (
                 <li key={`${candidate.table}\u0000${candidate.id}`}>
@@ -466,7 +466,7 @@ export function RecoveryCenter(props: RecoveryCenterProps): React.JSX.Element {
 
           <h4>Operation batches</h4>
           {props.recentBatches.filter(batch => !batch.undone).length === 0
-            ? <p className="shape-evolution-empty">No recent batch is available to undo.</p>
+            ? <p className="ui ui-color-text-3 ui-font-size-12px ui-text-align-center shape-evolution-empty">No recent batch is available to undo.</p>
             : <ul>
               {props.recentBatches.filter(batch => !batch.undone).slice(0, 20).map(batch => (
                 <li key={batch.id}>
@@ -482,7 +482,7 @@ export function RecoveryCenter(props: RecoveryCenterProps): React.JSX.Element {
 
           <h4>Structural history</h4>
           {props.structuralHistory.length < 2
-            ? <p className="shape-evolution-empty">No earlier structure is available.</p>
+            ? <p className="ui ui-color-text-3 ui-font-size-12px ui-text-align-center shape-evolution-empty">No earlier structure is available.</p>
             : <ol>
               {[...props.structuralHistory].reverse().slice(1, 20).map(entry => (
                 <li key={entry.version}>
@@ -512,10 +512,10 @@ export function RecoveryCenter(props: RecoveryCenterProps): React.JSX.Element {
           <p>Download records do not prove a file was saved outside this browser.</p>
           {pendingDownload ? <div>
             <p>Unfinished download request: {pendingDownload.record.fileName}. Retry its local record or check the exact file.</p>
-            <div className="rail-actions">
+            <div className="ui ui-display-flex ui-align-items-center ui-flex-wrap-wrap ui-gap-12px rail-actions">
               <button disabled={manualWorking || !props.onResumeManualDownload}
                 onClick={() => void runManual(() => props.onResumeManualDownload!())}>Retry download record</button>
-              <label className="shape-history-open file-label">Check the downloaded file
+              <label className="ui ui-color-text ui-base-border-8f9f0d ui-border-radius-10px ui-background-bg-soft ui-width-100 ui-hover-border-color-2b372d ui-hover-color-92c640 shape-history-open file-label">Check the downloaded file
                 <input type="file" accept=".clay" disabled={manualWorking || !props.onResumeManualDownload} onChange={event => {
                   const file = event.target.files?.[0]; event.target.value = "";
                   if (file) void runManual(() => props.onResumeManualDownload!(file));
@@ -533,8 +533,8 @@ export function RecoveryCenter(props: RecoveryCenterProps): React.JSX.Element {
           </ul>}
           <h3 id="recovery-restore-title">Restore as a new app</h3>
           <p>Format 5 creates a separate app. Your original app is never replaced.</p>
-          <div className="rail-actions">
-            <label className="shape-history-open file-label">
+          <div className="ui ui-display-flex ui-align-items-center ui-flex-wrap-wrap ui-gap-12px rail-actions">
+            <label className="ui ui-color-text ui-base-border-8f9f0d ui-border-radius-10px ui-background-bg-soft ui-width-100 ui-hover-border-color-2b372d ui-hover-color-92c640 shape-history-open file-label">
               Choose a .clay backup
               <input type="file" accept=".clay" disabled={!props.onValidateRestore || restoreIntent !== null || restoreStatus === "checking"}
                 onChange={event => {

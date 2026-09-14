@@ -1,3 +1,5 @@
+import { errorMessage } from "./error-message";
+import { FocusSelect, FocusInput } from "./FocusControl";
 // The Data view (doc 01/W3): trusted, shell-rendered table editing —
 // see every row, edit cells, add rows, soft-delete, and restore (G6:
 // per-row snapshots from row_history; soft-deleted rows come back too).
@@ -604,7 +606,7 @@ export function DataView(props: {
         return true;
       } catch (e) {
         if (recovery) props.onRecovery?.("failed");
-        props.onError(e instanceof Error ? e.message : String(e));
+        props.onError(errorMessage(e));
         return false;
       }
     });
@@ -655,19 +657,19 @@ export function DataView(props: {
     commit?: () => void): React.JSX.Element => {
     if (c.type === "boolean") {
       return (
-        <select value={value} autoFocus={commit !== undefined} aria-label={c.name} data-modal-escape-owner="true"
+        <FocusSelect value={value} autoFocus={commit !== undefined} aria-label={c.name} data-modal-escape-owner="true"
           onChange={e => onChange(e.target.value)} onBlur={commit}
           onKeyDown={e => {
             if (e.key === "Enter" && commit) commit();
             if (e.key === "Escape") { e.stopPropagation(); cancelEdit(); }
           }}>
           <option value="">—</option><option value="true">Yes</option><option value="false">No</option>
-        </select>
+        </FocusSelect>
       );
     }
     if (c.type === "enum") {
       return (
-        <select value={value} autoFocus={commit !== undefined} aria-label={c.name} data-modal-escape-owner="true"
+        <FocusSelect value={value} autoFocus={commit !== undefined} aria-label={c.name} data-modal-escape-owner="true"
           onChange={e => { onChange(e.target.value); }} onBlur={commit}
           onKeyDown={e => {
             if (e.key === "Enter" && commit) commit();
@@ -675,11 +677,11 @@ export function DataView(props: {
           }}>
           <option value="">—</option>
           {(c.values ?? []).map(v => <option key={v} value={v}>{v}</option>)}
-        </select>
+        </FocusSelect>
       );
     }
     return (
-      <input
+      <FocusInput
         type={c.type === "date" ? "date"
           : c.type === "number" || c.type === "integer" ? "number" : "text"}
         value={value}
@@ -709,7 +711,7 @@ export function DataView(props: {
         props.onInfo(`Added ${res.added} sample row${res.added === 1 ? "" : "s"} across ${res.tables} table${res.tables === 1 ? "" : "s"}.`);
       });
     } catch (e) {
-      props.onError(e instanceof Error ? e.message : String(e));
+      props.onError(errorMessage(e));
     }
   };
   const clearSamples = async (): Promise<void> => {
@@ -727,7 +729,7 @@ export function DataView(props: {
           : `Cleared ${result.affected} generated sample row${result.affected === 1 ? "" : "s"}. Your own data is untouched, and ${result.recovery.recoverable} generated row${result.recovery.recoverable === 1 ? " is" : "s are"} recoverable under “deleted rows”.`);
       });
     } catch (e) {
-      props.onError(e instanceof Error ? e.message : String(e));
+      props.onError(errorMessage(e));
     }
   };
 
@@ -773,7 +775,7 @@ export function DataView(props: {
         props.onInfo(`Saved “${view.name}” for daily use.`);
       });
 
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
   };
 
   const removeView = async (id: string): Promise<void> => {
@@ -782,7 +784,7 @@ export function DataView(props: {
         setViewLibrary(await deleteOperationalView(worker, id));
         props.onDailyHomeInvalidated?.();
       });
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
   };
 
   const runBulkUpdate = async (): Promise<void> => {
@@ -806,7 +808,7 @@ export function DataView(props: {
         await reload(selected); props.onWrite(selected);
         props.onInfo(`Updated ${receipt.changed} records. Undo is available here.`);
       });
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
   };
 
   const runBulkArchive = async (): Promise<void> => {
@@ -828,7 +830,7 @@ export function DataView(props: {
         await reload(selected); props.onWrite(selected);
         props.onInfo(`Archived ${receipt.changed} records. Undo is available here.`);
       });
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
   };
 
   const undoLastBatch = async (): Promise<void> => {
@@ -843,7 +845,7 @@ export function DataView(props: {
         if (selected) { await reload(selected); props.onWrite(selected); }
         props.onInfo(`Undid “${undone.summary}”.`);
       });
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
   };
 
   const openCurrentViewExport = async (): Promise<void> => {
@@ -878,7 +880,7 @@ export function DataView(props: {
       }));
     } catch (error) {
       endExportSession(session);
-      props.onError(error instanceof Error ? error.message : String(error));
+      props.onError(errorMessage(error));
     }
   };
 
@@ -907,7 +909,7 @@ export function DataView(props: {
       }));
     } catch (error) {
       endExportSession(session);
-      props.onError(error instanceof Error ? error.message : String(error));
+      props.onError(errorMessage(error));
     }
   };
 
@@ -948,7 +950,7 @@ export function DataView(props: {
       });
     } catch (error) {
       endExportSession(session);
-      props.onError(error instanceof Error ? error.message : String(error));
+      props.onError(errorMessage(error));
     }
   };
 
@@ -992,7 +994,7 @@ export function DataView(props: {
       setShareScope({ ...scope, attachmentChoices });
     } catch (error) {
       endExportSession(session);
-      props.onError(error instanceof Error ? error.message : String(error));
+      props.onError(errorMessage(error));
     }
   };
 
@@ -1038,72 +1040,72 @@ export function DataView(props: {
   };
 
   return (
-    <ModalDialog className="dataview" backdropClassName="modal-backdrop dataview-backdrop"
+    <ModalDialog className="ui ui-display-flex ui-background-panel ui-flex-direction-column ui-overflow-hidden ui-position-fixed ui-box-shadow-shadow-lg dataview" backdropClassName="ui ui-display-flex ui-align-items-center ui-position-fixed ui-inset-0 ui-overflow-auto ui-justify-content-center modal-backdrop dataview-backdrop"
       ariaLabel="Your data" onClose={props.onClose} returnFocusRef={props.returnFocusRef}>
-      <header className="dataview-header">
-        <div className="dataview-title">
+      <header className="ui ui-display-flex ui-align-items-center ui-justify-content-space-between ui-border-bottom-line ui-gap-14px dataview-header">
+        <div className="ui ui-display-flex ui-min-width-0 ui-gap-12px ui-align-items-baseline dataview-title">
           <strong>Your data</strong>
-          <span className="dataview-hint">click any cell to edit — every change is saved and reversible</span>
+          <span className="ui ui-color-text-3 ui-overflow-hidden ui-font-size-12px ui-white-space-nowrap ui-text-overflow-ellipsis dataview-hint">click any cell to edit — every change is saved and reversible</span>
         </div>
-        <div className="dataview-header-actions">
+        <div className="ui ui-display-flex ui-align-items-center ui-flex-none ui-gap-10px dataview-header-actions">
           {table && tables.length > 1 && table.columns.some(column =>
             !column.hidden && !column.inactive
               && ["text", "enum", "rich_text"].includes(column.type)) ? (
-            <button className="dataview-connect" onClick={() => setShowRelationDialog(true)}
+            <button className="ui ui-align-items-center ui-color-accent-text ui-gap-6px ui-background-accent-soft ui-display-inline-flex ui-border-radius-9px ui-hover-border-color-2b372d dataview-connect" onClick={() => setShowRelationDialog(true)}
               title="Turn an existing text field into safe linked records">
               ⛓ Connect records
             </button>
           ) : null}
           {tables.length > 0 ? (
-            <button className="dataview-sample" onClick={() => void fillSamples()}
+            <button className="ui ui-align-items-center ui-background-panel ui-color-text ui-gap-6px ui-base-border-8f9f0d ui-display-inline-flex ui-border-radius-9px ui-hover-border-color-2b372d ui-hover-color-92c640 dataview-sample" onClick={() => void fillSamples()}
               title="Fill every table with realistic sample rows so you can see the app working. Clearing later removes only these generated rows.">
               ✨ Sample data
             </button>
           ) : null}
           {samples > 0 ? (
-            <button className="dataview-sample dataview-sample-clear" onClick={() => void clearSamples()}
+            <button className="ui ui-align-items-center ui-background-panel ui-color-text ui-gap-6px ui-base-border-8f9f0d ui-display-inline-flex ui-border-radius-9px ui-hover-border-color-2b372d ui-hover-color-92c640 dataview-sample dataview-sample-clear" onClick={() => void clearSamples()}
               title="Removes only the generated sample rows — never your own data. Cleared rows stay under “deleted rows”, restorable.">
               Clear samples ({samples})
             </button>
           ) : null}
           {table && props.appInstanceId ? (
-            <button className="dataview-import" title={`Import CSV or pasted cells into “${table.name}”`}
+            <button className="ui ui-align-items-center ui-color-accent-text ui-gap-6px ui-background-accent-soft ui-display-inline-flex ui-border-radius-9px ui-base-border-c04950 dataview-import" title={`Import CSV or pasted cells into “${table.name}”`}
               onClick={() => setShowImportWizard(true)}>⇧ Import data</button>
           ) : null}
-          {table ? <button ref={exportButtonRef} className="dataview-import"
+          {table ? <button ref={exportButtonRef} className="ui ui-align-items-center ui-color-accent-text ui-gap-6px ui-background-accent-soft ui-display-inline-flex ui-border-radius-9px ui-base-border-c04950 dataview-import"
             type="button" aria-label="Preview Print / CSV for current Data view"
             disabled={coordination.pendingWrites > 0 || coordination.exportSessionActive}
             aria-busy={coordination.pendingWrites > 0 || coordination.exportSessionActive}
             onClick={() => void openCurrentViewExport()}>Print / CSV</button> : null}
-          {table ? <button ref={shareButtonRef} className="dataview-import"
+          {table ? <button ref={shareButtonRef} className="ui ui-align-items-center ui-color-accent-text ui-gap-6px ui-background-accent-soft ui-display-inline-flex ui-border-radius-9px ui-base-border-c04950 dataview-import"
             type="button" aria-label="Create read-only share for current Data view"
             disabled={coordination.pendingWrites > 0 || coordination.exportSessionActive}
             aria-busy={coordination.pendingWrites > 0 || coordination.exportSessionActive}
             onClick={() => void openCurrentViewShare()}>Share link</button> : null}
-          <button className="dataview-close" aria-label="Close data view"
+          <button className="ui ui-color-text-3 ui-border-0 ui-border-radius-8px ui-background-none ui-hover-color-caf367 dataview-close" aria-label="Close data view"
             title="Close (Esc)" onClick={props.onClose}>✕</button>
         </div>
       </header>
 
       {tables.length > 0 ? (
-        <div className="dataview-toolbar">
-          <div className="dataview-tables">
+        <div className="ui ui-display-flex ui-align-items-center ui-justify-content-space-between ui-border-bottom-line ui-background-bg ui-gap-14px dataview-toolbar">
+          <div className="ui ui-display-flex ui-min-width-0 ui-flex-wrap-wrap ui-gap-6px dataview-tables">
             {tables.map(t => (
               <button key={t.name}
-                className={`dataview-tab${t.name === selected ? " selected" : ""}`}
+                className={`ui ui-color-text-2 ui-border-radius-8px ui-background-none ui-hover-color-caf367 dataview-tab${t.name === selected ? " selected" : ""}`}
                 onClick={() => void pick(t.name)}>{t.name}</button>
             ))}
           </div>
-          <div className="dataview-toolbar-right">
+          <div className="ui ui-display-flex ui-align-items-center ui-flex-none ui-gap-10px dataview-toolbar-right">
             <input
-              className="dataview-search"
+              className="ui ui-background-panel ui-color-text ui-base-border-8f9f0d ui-font-inherit ui-border-radius-9px ui-font-size-12-5px dataview-search"
               type="search"
               maxLength={512}
               placeholder={`Search ${selected ?? ""}…`}
               value={search}
               onChange={e => { setSearch(e.target.value); setActiveViewId(null); }}
             />
-            <span className="dataview-count">
+            <span className="ui ui-color-text-2 ui-white-space-nowrap dataview-count">
               {q !== "" || filter ? `${visible.length} of ${rows.length}` : `${rows.length} row${rows.length === 1 ? "" : "s"}`}
             </span>
           </div>
@@ -1111,7 +1113,7 @@ export function DataView(props: {
       ) : null}
 
       {table ? (
-        <div className="workbench-bar" aria-label="Operational views and filters">
+        <div className="ui ui-display-flex ui-align-items-center ui-justify-content-space-between ui-gap-12px ui-border-bottom-line workbench-bar" aria-label="Operational views and filters">
           <div className="workbench-views">
             <button className={!filter && !search && !sort && !activeViewId ? "selected" : ""}
               onClick={() => { setSearch(""); setFilter(null); setSort(null); setActiveViewId(null); }}>All</button>
@@ -1132,7 +1134,7 @@ export function DataView(props: {
               </>
             ) : null}
             {viewLibrary.views.filter(view => view.table === table.name).map(view => (
-              <span className="saved-work-view" key={view.id}>
+              <span className="ui ui-display-inline-flex saved-work-view" key={view.id}>
                 <button className={activeViewId === view.id ? "selected" : ""}
                   aria-pressed={activeViewId === view.id}
                   onClick={() => applyOperationalView(view)}>{view.name}</button>
@@ -1160,7 +1162,7 @@ export function DataView(props: {
                   )))}
               </select>
             ) : null}
-            <details className="field-picker">
+            <details className="ui ui-position-relative ui-div-display-8ce2fc field-picker">
               <summary>Fields {columns.length}/{allColumns.length}</summary>
               <div>
                 {allColumns.map(column => (
@@ -1178,8 +1180,8 @@ export function DataView(props: {
               </div>
             </details>
             {savingView ? (
-              <span className="save-work-view">
-                <input autoFocus value={viewName} placeholder="View name" data-modal-escape-owner="true"
+              <span className="ui ui-display-flex ui-input-font-648ad9 ui-input-color-64eb43 save-work-view">
+                <FocusInput autoFocus value={viewName} placeholder="View name" data-modal-escape-owner="true"
                   onChange={event => setViewName(event.target.value)}
                   onKeyDown={event => {
                     if (event.key === "Enter") void saveCurrentView();
@@ -1201,7 +1203,7 @@ export function DataView(props: {
       ) : null}
 
       {selectedRows.size > 0 && table ? (
-        <div className="bulk-bar" role="region" aria-label="Bulk actions">
+        <div className="ui ui-display-flex ui-align-items-center ui-gap-8px ui-background-accent-soft ui-input-font-648ad9 ui-button-font-590948 ui-button-background-9f7e57 ui-input-border-58fb43 ui-button-color-353ba8 ui-input-color-64eb43 ui-select-color-8a3cd5 ui-primary-background-1be894 ui-primary-border-color-f73659 ui-select-font-d3b791 ui-select-border-f5f110 bulk-bar" role="region" aria-label="Bulk actions">
           <strong>{selectedRows.size} selected</strong>
           <select aria-label="Field to update" value={bulkField}
             onChange={event => { setBulkField(event.target.value); setBulkValue(""); }}>
@@ -1224,7 +1226,7 @@ export function DataView(props: {
 
       {table ? (
         <div className="dataview-body">
-          <table className="dataview-grid" role="grid" aria-rowcount={visible.length + 1}>
+          <table className="ui ui-font-size-13px ui-input-font-648ad9 ui-width-100 ui-input-color-64eb43 ui-select-color-8a3cd5 ui-select-font-d3b791 ui-select-width-96bdbe dataview-grid" role="grid" aria-rowcount={visible.length + 1}>
             <thead>
               <tr>
                 <th className="dataview-select-cell">
@@ -1242,8 +1244,8 @@ export function DataView(props: {
                 {columns.map(c => (
                   <th key={c.name} title={`${c.type} column`}>
                     {renamingCol?.from === c.name ? (
-                      <input
-                        className="dataview-col-edit"
+                      <FocusInput
+                        className="ui ui-background-panel ui-color-text ui-font-inherit ui-base-border-c04950 dataview-col-edit"
                         data-modal-escape-owner="true"
                         autoFocus
                         value={renamingCol.value}
@@ -1261,15 +1263,15 @@ export function DataView(props: {
                         onBlur={() => void commitRenameColumn()}
                       />
                     ) : (
-                      <span className="dataview-column-controls">
-                        <button className="dataview-sort-button"
+                      <span className="ui ui-display-flex ui-align-items-center ui-gap-3px dataview-column-controls">
+                        <button className="ui ui-align-items-center ui-display-inline-flex ui-gap-3px dataview-sort-button"
                           aria-label={`Sort by ${c.label ?? c.name}`}
                           onClick={() => { setActiveViewId(null); setSort(current => current?.field === c.name
                             ? { field: c.name, dir: current.dir === "asc" ? "desc" : "asc" }
                             : { field: c.name, dir: "asc" }); }}>
                           {c.label ?? c.name.replace(/_/g, " ")}
-                          {TYPE_HINT[c.type] ? <span className="dataview-type">{TYPE_HINT[c.type]}</span> : null}
-                          {sort?.field === c.name ? <span className="dataview-sort" aria-hidden="true">
+                          {TYPE_HINT[c.type] ? <span className="ui ui-color-text-2 ui-base-border-f41cca dataview-type">{TYPE_HINT[c.type]}</span> : null}
+                          {sort?.field === c.name ? <span className="ui ui-color-accent-text dataview-sort" aria-hidden="true">
                             {sort.dir === "asc" ? " ↑" : " ↓"}
                           </span> : null}
                         </button>
@@ -1283,9 +1285,9 @@ export function DataView(props: {
                 ))}
                 <th className="dataview-addcol-th">
                   {addingCol ? (
-                    <span className="dataview-addcol">
-                      <input
-                        className="dataview-col-edit"
+                    <span className="ui ui-align-items-center ui-display-inline-flex ui-gap-5px ui-select-color-8a3cd5 ui-select-font-d3b791 dataview-addcol">
+                      <FocusInput
+                        className="ui ui-background-panel ui-color-text ui-font-inherit ui-base-border-c04950 dataview-col-edit"
                         autoFocus
                         aria-label="new column name" data-modal-escape-owner="true"
                         placeholder="column name"
@@ -1334,7 +1336,7 @@ export function DataView(props: {
                     </span>
                   ) : (
                     <button
-                      className="link dataview-addcol-btn"
+                      className="ui ui-white-space-nowrap link dataview-addcol-btn"
                       title="Add a column — instant, reversible on the timeline"
                       onClick={() => setAddingCol({ name: "", type: "text",
                         targetTable: tables.find(candidate => candidate.name !== selected)?.name })}>
@@ -1369,7 +1371,7 @@ export function DataView(props: {
                     };
                     return (
                       <td key={c.name}
-                        className={isDerived(c.type) ? "cell-computed"
+                        className={isDerived(c.type) ? "ui ui-color-text-3 cell-computed"
                           : c.type === "relation" ? "cell-relation"
                             : c.type === "rich_text" || c.type === "attachment"
                               ? "cell-detail" : "cell-editable"}
@@ -1406,14 +1408,14 @@ export function DataView(props: {
                               {attachmentCount(r[c.name])} file{attachmentCount(r[c.name]) === 1 ? "" : "s"}
                             </span>
                           ) : c.type === "relation" && displayValue(r[c.name]) ? (
-                            <span className="dataview-link-value">
+                            <span className="ui ui-align-items-center ui-color-accent-text ui-display-inline-flex dataview-link-value">
                               {displayValue(r[c.name])}<span aria-hidden="true"> ↗</span>
                             </span>
                           ) : displayValue(r[c.name])}
                       </td>
                     );
                   })}
-                  <td className="cell-actions">
+                  <td className="ui ui-display-flex ui-gap-8px ui-white-space-nowrap cell-actions">
                     <button className="link" data-id={String(r.id)}
                       aria-label={`Open ${accessibleRowLabel(table, r)} record details`}
                       onClick={() => openRecordDetail(selected!, String(r.id))}>
@@ -1445,7 +1447,7 @@ export function DataView(props: {
                 return [tr, (
                   <tr key={`${String(r.id)}-hist`} className="dataview-hist">
                     <td colSpan={columns.length + 2}>
-                      <div className="dataview-hist-head">
+                      <div className="ui ui-display-flex ui-align-items-center ui-color-text-2 ui-justify-content-space-between dataview-hist-head">
                         This record’s history — newest first
                         <button className="link"
                           onClick={() => void act(async () => {
@@ -1457,10 +1459,10 @@ export function DataView(props: {
                         </button>
                       </div>
                       {histFor.entries.length === 0
-                        ? <div className="dataview-hist-row">No snapshots in the last 30 days.</div>
+                        ? <div className="ui ui-display-flex ui-color-text-2 ui-gap-12px ui-font-size-12px dataview-hist-row">No snapshots in the last 30 days.</div>
                         : histFor.entries.map((e, j) => (
-                          <div key={j} className="dataview-hist-row">
-                            <span className="dataview-hist-at">{e.at.slice(0, 16).replace("T", " ")}</span>
+                          <div key={j} className="ui ui-display-flex ui-color-text-2 ui-gap-12px ui-font-size-12px dataview-hist-row">
+                            <span className="ui ui-color-text-3 ui-flex-none dataview-hist-at">{e.at.slice(0, 16).replace("T", " ")}</span>
                             <span>{columns.filter(c => e.values[c.name] !== undefined)
                               .slice(0, 4)
                               .map(c => `${c.name}: ${String(e.values[c.name] ?? "—")}`)
@@ -1472,11 +1474,11 @@ export function DataView(props: {
                 )];
               })}
               {visible.length === 0 && (q !== "" || filter) ? (
-                <tr><td className="dataview-nomatch" colSpan={columns.length + 2}>
+                <tr><td className="ui ui-color-text-3 ui-text-align-center dataview-nomatch" colSpan={columns.length + 2}>
                   No records match this view.
                 </td></tr>
               ) : null}
-              <tr className="dataview-new">
+              <tr className="ui ui-inputfocus-outline-89c3b3 ui-inputfocus-border-color-a722a4 dataview-new">
                 <td className="dataview-select-cell" />
                 {columns.map(c => (
                   <td key={c.name}>
@@ -1485,7 +1487,7 @@ export function DataView(props: {
                       v => setDraftRow(d => ({ ...d, [c.name]: v })))}
                   </td>
                 ))}
-                <td className="cell-actions">
+                <td className="ui ui-display-flex ui-gap-8px ui-white-space-nowrap cell-actions">
                   <button className="primary" disabled={addingRow}
                     onClick={() => void addRow()}>{addingRow ? "Adding…" : "+ Add"}</button>
                 </td>
@@ -1494,12 +1496,12 @@ export function DataView(props: {
           </table>
 
           {deleted.length > 0 ? (
-            <details className="dataview-deleted">
+            <details className="ui ui-color-text-2 ui-font-size-13px ui-base-margin-top-7b237e dataview-deleted">
               <summary>
                 {deleted.length} deleted row{deleted.length === 1 ? "" : "s"} — kept, restore any time
               </summary>
               {deleted.map(r => (
-                <div key={String(r.id)} className="dataview-deleted-row">
+                <div key={String(r.id)} className="ui ui-display-flex ui-justify-content-space-between ui-border-bottom-line dataview-deleted-row">
                   <span>{columns.slice(0, 3).map(c => displayValue(r[c.name])).join(" · ")}</span>
                   <button className="link"
                     onClick={() => void act(async () => worker.restoreRow(
@@ -1512,9 +1514,9 @@ export function DataView(props: {
           ) : null}
         </div>
       ) : (
-        <div className="dataview-empty">
+        <div className="ui ui-color-text-2 ui-text-align-center dataview-empty">
           <p>No data yet.</p>
-          <p className="dataview-empty-sub">
+          <p className="ui ui-color-text-3 ui-font-size-12-5px dataview-empty-sub">
             Describe the records you need and Clay will propose the tables for review.
           </p>
         </div>

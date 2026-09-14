@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 /** @vitest-environment-options {"url":"https://app.example.test"} */
-import { act } from "react";
+import { act } from "preact/test-utils";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import type { WorkerClient } from "../src/app/worker-client";
@@ -19,6 +19,7 @@ it("makes unprovable V1/private history and old sharing a safe usable compatibil
     await act(async () => root.render(<LegacyOwnerRecovery worker={worker} origin={location.origin} archive={archive} legacyStorage={legacyStorage}
       onNewIntake={next} onNewShare={share} onNewApp={app} />));
     await act(async () => [...element.querySelectorAll("button")].find(b => b.textContent === "Inspect legacy compatibility")!.click());
+    await vi.waitFor(() => expect(element.textContent).toMatch(/old sharing receipts/i));
     expect(element.textContent).toMatch(/cannot be recovered automatically/i);
     expect(element.textContent).toMatch(/app remains usable/i);
     expect(element.textContent).toMatch(/old sharing receipts/i);

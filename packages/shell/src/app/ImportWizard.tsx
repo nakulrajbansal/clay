@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { errorMessage as message } from "./error-message";
 import type {
   CommitImportResult,
   ExistingTableImportMapping,
@@ -17,6 +18,7 @@ import {
   ReleaseCParserWorkerClient,
 } from "../worker/release-c/import-worker-client";
 import type { WorkerClient } from "./worker-client";
+import { ModalDialog } from "./ModalDialog";
 
 export interface ImportParserClientLike {
   openImportSource(input: {
@@ -60,9 +62,6 @@ function defaultParser(): ImportParserClientLike {
   ));
 }
 
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 export function ImportWizard(props: Props): React.JSX.Element {
   const [step, setStep] = useState<ImportStep>("source");
@@ -307,22 +306,11 @@ export function ImportWizard(props: Props): React.JSX.Element {
     props.onClose();
   };
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      close();
-    };
-    window.addEventListener("keydown", onKey, true);
-    return (): void => window.removeEventListener("keydown", onKey, true);
-  });
-
-  return <div className="modal-backdrop relation-backdrop" role="presentation">
-    <section className="relation-dialog" role="dialog" aria-modal="true" aria-labelledby="import-title">
-      <header className="relation-dialog-header">
+  return <ModalDialog backdropClassName="ui ui-display-flex ui-align-items-center ui-position-fixed ui-inset-0 ui-overflow-auto ui-justify-content-center modal-backdrop relation-backdrop"
+    className="ui ui-background-panel ui-base-border-8f9f0d ui-base-border-radius-c431a0 relation-dialog" ariaLabelledBy="import-title" onClose={close}>
+      <header className="ui ui-display-flex ui-justify-content-space-between ui-border-bottom-line ui-p-margin-9d8b39 ui-p-color-a3a3fb ui-base-padding-6fe44b relation-dialog-header">
         <div>
-          <p className="record-detail-kicker">Guided import</p>
+          <p className="ui ui-color-accent-text ui-text-transform-uppercase record-detail-kicker">Guided import</p>
           <h2 id="import-title">Import data into {props.targetTable}</h2>
         </div>
         <button type="button" aria-label="Close import" onClick={close}>✕</button>
@@ -331,20 +319,20 @@ export function ImportWizard(props: Props): React.JSX.Element {
       {step === "source" ? <div className="automation-builder">
         <h3>Choose a source</h3>
         <p>Your source is read locally in a dedicated worker. Nothing is sent to a model.</p>
-        <div className="automation-inline">
-          <label className="record-field">
+        <div className="ui ui-display-grid ui-gap-9px automation-inline">
+          <label className="ui ui-display-grid ui-gap-6px ui-inputfocus-outline-89c3b3 ui-inputfocus-box-shadow-0cf866 ui-inputfocus-border-color-a722a4 record-field">
             <strong>CSV file or Excel workbook</strong>
             <span>CSV, tab-separated text, or .xlsx; parsed locally with hard size limits.</span>
             <input type="file" accept=".csv,.tsv,.xlsx,text/csv,text/tab-separated-values,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               disabled={busy} onChange={event => void chooseFile(event.target.files?.[0])} />
           </label>
-          <div className="record-field">
+          <div className="ui ui-display-grid ui-gap-6px ui-inputfocus-outline-89c3b3 ui-inputfocus-box-shadow-0cf866 ui-inputfocus-border-color-a722a4 record-field">
             <strong>Paste cells</strong>
             <span>Copy a range from a spreadsheet and paste it below.</span>
             <textarea aria-label="Pasted spreadsheet cells" value={paste}
               onChange={event => setPaste(event.target.value)} rows={6}
               placeholder={'Email\tName\nhello@example.com\tHello'} />
-            <button type="button" className="dataview-import" disabled={busy || paste.length === 0}
+            <button type="button" className="ui ui-align-items-center ui-color-accent-text ui-gap-6px ui-background-accent-soft ui-display-inline-flex ui-border-radius-9px ui-base-border-c04950 dataview-import" disabled={busy || paste.length === 0}
               onClick={() => void acquire("paste", new TextEncoder().encode(paste).buffer)}>
               Use pasted cells
             </button>
@@ -355,7 +343,7 @@ export function ImportWizard(props: Props): React.JSX.Element {
       {step === "sheet" && workbook ? <div className="automation-builder">
         <h3>Choose a worksheet</h3>
         <p>Hidden worksheets are marked and are never selected automatically. Saved formula results are shown; formulas are never run.</p>
-        <label className="record-field">Worksheet
+        <label className="ui ui-display-grid ui-gap-6px ui-inputfocus-outline-89c3b3 ui-inputfocus-box-shadow-0cf866 ui-inputfocus-border-color-a722a4 record-field">Worksheet
           <select aria-label="Worksheet" value={selectedSheetId} disabled={busy}
             onChange={event => setSelectedSheetId(event.target.value)}>
             <option value="">Choose a worksheet</option>
@@ -364,7 +352,7 @@ export function ImportWizard(props: Props): React.JSX.Element {
             </option>)}
           </select>
         </label>
-        <div className="relation-dialog-actions">
+        <div className="ui ui-display-flex ui-gap-8px ui-button-font-590948 ui-border-top-line ui-justify-content-flex-end ui-button-background-9f7e57 ui-button-color-353ba8 ui-primary-background-1be894 ui-primary-border-color-f73659 relation-dialog-actions">
           <button type="button" disabled={busy} onClick={() => {
             parserRef.current?.dispose();
             parserRef.current = null;
@@ -379,7 +367,7 @@ export function ImportWizard(props: Props): React.JSX.Element {
 
       {step === "map" && structure ? <div className="automation-builder">
         <h3>Map columns</h3>
-        <label className="record-field">Header row
+        <label className="ui ui-display-grid ui-gap-6px ui-inputfocus-outline-89c3b3 ui-inputfocus-box-shadow-0cf866 ui-inputfocus-border-color-a722a4 record-field">Header row
           <select aria-label="Header row" disabled={busy}
             value={header.mode === "no_header" ? "none" : String(header.sourceRow)}
             onChange={event => void selectHeader(event.target.value === "none" ? { mode: "no_header" }
@@ -390,8 +378,8 @@ export function ImportWizard(props: Props): React.JSX.Element {
             </option>)}
           </select>
         </label>
-        <div className="record-fields">
-          {structure.inferredColumns.map(column => <label key={column.sourceColumn} className="record-field">
+        <div className="ui ui-display-grid ui-gap-14px record-fields">
+          {structure.inferredColumns.map(column => <label key={column.sourceColumn} className="ui ui-display-grid ui-gap-6px ui-inputfocus-outline-89c3b3 ui-inputfocus-box-shadow-0cf866 ui-inputfocus-border-color-a722a4 record-field">
             <span><strong>{column.label}</strong> · {column.inferredType}</span>
             <span aria-hidden="true">→</span>
             <select aria-label={`Map ${column.label}`} value={destinations[column.sourceColumn] ?? ""}
@@ -417,14 +405,14 @@ export function ImportWizard(props: Props): React.JSX.Element {
             </select> : null}
           </label>)}
         </div>
-        <label className="record-field">Import behavior
+        <label className="ui ui-display-grid ui-gap-6px ui-inputfocus-outline-89c3b3 ui-inputfocus-box-shadow-0cf866 ui-inputfocus-border-color-a722a4 record-field">Import behavior
           <select aria-label="Import behavior" value={behavior}
             onChange={event => setBehavior(event.target.value as "append" | "upsert")}>
             <option value="append">Create new records</option>
             <option value="upsert">Create or update matching records</option>
           </select>
         </label>
-        {behavior === "upsert" ? <label className="record-field">Records match by
+        {behavior === "upsert" ? <label className="ui ui-display-grid ui-gap-6px ui-inputfocus-outline-89c3b3 ui-inputfocus-box-shadow-0cf866 ui-inputfocus-border-color-a722a4 record-field">Records match by
           <select aria-label="Update match field" value={matchField}
             onChange={event => setMatchField(event.target.value)}>
             <option value="">Choose a mapped field</option>
@@ -434,7 +422,7 @@ export function ImportWizard(props: Props): React.JSX.Element {
               </option>)}
           </select>
         </label> : null}
-        <div className="relation-dialog-actions">
+        <div className="ui ui-display-flex ui-gap-8px ui-button-font-590948 ui-border-top-line ui-justify-content-flex-end ui-button-background-9f7e57 ui-button-color-353ba8 ui-primary-background-1be894 ui-primary-border-color-f73659 relation-dialog-actions">
           <button type="button" onClick={() => setStep("source")} disabled={busy}>Back</button>
           <button type="button" className="primary" onClick={() => void review()} disabled={busy}>Review import</button>
         </div>
@@ -442,7 +430,7 @@ export function ImportWizard(props: Props): React.JSX.Element {
 
       {step === "preview" && preview ? <div className="automation-builder">
         <h3>Exact preview</h3>
-        <div className="automation-inline" aria-label="Exact import totals">
+        <div className="ui ui-display-grid ui-gap-9px automation-inline" aria-label="Exact import totals">
           <strong>{preview.sourceTotals.createRows} create</strong>
           <strong>{preview.sourceTotals.updateRows} update</strong>
           <strong>{preview.sourceTotals.skipRows} skip</strong>
@@ -455,10 +443,10 @@ export function ImportWizard(props: Props): React.JSX.Element {
             <p key={reason}>{count} · {reason.replaceAll("_", " ")}</p>)}
           {preview.warningTotals.warnings === 0 ? <p>No warnings.</p> : null}
         </details>
-        {preview.issues.length > 0 ? <div role="alert" className="automation-simulation">
+        {preview.issues.length > 0 ? <div role="alert" className="ui ui-small-color-0803d9 ui-border-radius-11px ui-p-color-a3a3fb ui-p-font-size-9ca3bf automation-simulation">
           {preview.issues.map(issue => <p key={issue.issueId}>{issue.message}</p>)}
         </div> : null}
-        <div className="relation-dialog-actions">
+        <div className="ui ui-display-flex ui-gap-8px ui-button-font-590948 ui-border-top-line ui-justify-content-flex-end ui-button-background-9f7e57 ui-button-color-353ba8 ui-primary-background-1be894 ui-primary-border-color-f73659 relation-dialog-actions">
           <button type="button" onClick={() => setStep("map")} disabled={busy}>Back to mapping</button>
           <button type="button" className="primary" disabled={busy || !preview.commitAllowed}
             onClick={() => void commit()}>Confirm import</button>
@@ -472,19 +460,18 @@ export function ImportWizard(props: Props): React.JSX.Element {
         </> : <>
           <h3>{undone ? "Import undone" : "Import complete"}</h3>
           <p>{result.changed} changes saved in one receipt.</p>
-          <div className="automation-inline">
+          <div className="ui ui-display-grid ui-gap-9px automation-inline">
             <strong>{result.sourceTotals.createRows} created</strong>
             <strong>{result.sourceTotals.updateRows} updated</strong>
             <strong>{result.sourceTotals.skipRows} skipped</strong>
           </div>
         </>}
-        <div className="relation-dialog-actions">
+        <div className="ui ui-display-flex ui-gap-8px ui-button-font-590948 ui-border-top-line ui-justify-content-flex-end ui-button-background-9f7e57 ui-button-color-353ba8 ui-primary-background-1be894 ui-primary-border-color-f73659 relation-dialog-actions">
           {result.kind === "receipt" && !undone
             ? <button type="button" onClick={() => void undo()} disabled={busy}>Undo import</button>
             : null}
           <button type="button" className="primary" onClick={close}>Done</button>
         </div>
       </div> : null}
-    </section>
-  </div>;
+  </ModalDialog>;
 }

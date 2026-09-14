@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { act } from "react";
+import { act } from "preact/test-utils";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -77,7 +77,7 @@ describe("Data export pending-write barrier", () => {
       setter.call(input, "After reopen");
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    act(() => input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+    act(() => void input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
     await writeStarted;
 
     await act(async () => root.render(null));
@@ -276,6 +276,7 @@ describe("Data export pending-write barrier", () => {
       'button[aria-label*="record details"]',
     )!.click());
     await waitFor(() => document.body.querySelector(".record-detail") !== null);
+    await waitFor(() => document.body.querySelector('button[aria-label="Preview Print / CSV for this record"]') !== null);
     await act(async () => {
       [...document.body.querySelectorAll<HTMLButtonElement>(".record-detail-actions button")]
         .find(button => button.textContent === "Archive")!.click();
@@ -432,7 +433,7 @@ describe("Data export pending-write barrier", () => {
     await act(async () => document.body.querySelector<HTMLButtonElement>(
       'button[aria-label*="record details"]',
     )!.click());
-    await waitFor(() => document.body.querySelector(".record-detail") !== null);
+    await waitFor(() => document.body.querySelector('button[aria-label="Preview Print / CSV for this record"]') !== null);
     holdReload = true;
     act(() => document.body.querySelector<HTMLButtonElement>(
       'button[aria-label="Preview Print / CSV for this record"]',

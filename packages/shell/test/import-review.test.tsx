@@ -1,8 +1,9 @@
 /** @vitest-environment jsdom */
-import { act } from "react";
+import { act } from "preact/test-utils";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 import { ImportReview, type ReviewedImportFile } from "../src/app/ImportReview";
+import { expectControlCensus } from "./helpers/control-census";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -62,6 +63,8 @@ function reviewRows(): Record<string, string> {
 describe("ImportReview", () => {
   it("shows the exact reviewed table, row disposition, and schema truncation before commit", async () => {
     const { unmount } = await mount();
+
+    expectControlCensus("C.import");
 
     expect(document.querySelector('[role="dialog"]')).not.toBeNull();
     expect(document.body.textContent).toContain("orders.csv");

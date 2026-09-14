@@ -206,8 +206,8 @@ export function ExportDialog(props: {
   ] : [];
 
   return <ModalDialog
-    className="relation-dialog export-dialog"
-    backdropClassName="modal-backdrop relation-backdrop export-dialog-backdrop"
+    className="ui ui-background-panel ui-min-width-0 ui-base-border-8f9f0d ui-base-border-radius-c431a0 relation-dialog export-dialog"
+    backdropClassName="ui ui-display-flex ui-align-items-center ui-position-fixed ui-inset-0 ui-overflow-auto ui-justify-content-center modal-backdrop relation-backdrop export-dialog-backdrop"
     ariaLabelledBy="export-dialog-title"
     ariaDescribedBy={[
       "export-dialog-description",
@@ -217,9 +217,9 @@ export function ExportDialog(props: {
     onClose={props.onClose}
     returnFocusRef={props.returnFocusRef}
   >
-    <header className="relation-dialog-header export-dialog-header">
+    <header className="ui ui-display-flex ui-justify-content-space-between ui-border-bottom-line ui-p-margin-9d8b39 ui-p-color-a3a3fb ui-base-padding-6fe44b relation-dialog-header export-dialog-header">
       <div>
-        <span className="record-detail-kicker export-local-badge">Local only</span>
+        <span className="ui ui-color-accent-text ui-text-transform-uppercase record-detail-kicker export-local-badge">Local only</span>
         <h2 id="export-dialog-title">Preview Print / CSV</h2>
         <p id="export-dialog-description">
           Review the exact frozen projection. Nothing leaves this device until you choose an action.
@@ -229,14 +229,14 @@ export function ExportDialog(props: {
         onClick={props.onClose}>×</button>
     </header>
 
-    <fieldset className="record-fields export-options">
+    <fieldset className="ui ui-display-grid ui-gap-14px record-fields export-options">
       <legend>Advanced export policy</legend>
       <label>
         <input type="checkbox" checked={includeRecordIds} disabled={printing}
           onChange={event => setIncludeRecordIds(event.currentTarget.checked)} />
         Include Clay record IDs and relation ID columns
       </label>
-      {props.fieldChoices.length > 0 ? <div className="workbench-tools export-redaction-options"
+      {props.fieldChoices.length > 0 ? <div className="ui ui-flex-wrap-wrap workbench-tools export-redaction-options"
         role="group" aria-labelledby="export-redaction-values-label">
         <span id="export-redaction-values-label">Redact values</span>
         {props.fieldChoices.map((field, index) => <label key={field.fieldId}>
@@ -248,25 +248,25 @@ export function ExportDialog(props: {
       </div> : null}
     </fieldset>
 
-    {!manifest && !error ? <div className="relation-preview-note export-loading" role="status" aria-live="polite">
+    {!manifest && !error ? <div className="ui ui-border-radius-8px ui-background-bg relation-preview-note export-loading" role="status" aria-live="polite">
       Building a complete local preview…
     </div> : null}
-    {error ? <div id="export-dialog-error" className="relation-preview-note export-error" role="alert">
+    {error ? <div id="export-dialog-error" className="ui ui-border-radius-8px ui-background-bg relation-preview-note export-error" role="alert">
       <strong>Export preview unavailable.</strong>
       <span>{error}</span>
       <button type="button" onClick={() => setRetry(value => value + 1)}>Try again</button>
     </div> : null}
-    {printing ? <div className="relation-preview-note export-loading" role="status" aria-live="polite">
+    {printing ? <div className="ui ui-border-radius-8px ui-background-bg relation-preview-note export-loading" role="status" aria-live="polite">
       Preparing the complete print document in responsive batches…
     </div> : null}
     {printError ? <div id="export-dialog-print-error"
-      className="relation-preview-note export-error" role="alert">
+      className="ui ui-border-radius-8px ui-background-bg relation-preview-note export-error" role="alert">
       <strong>Print unavailable.</strong><span>{printError}</span>
     </div> : null}
 
     {manifest && plaintext ? <>
       <section className="export-manifest" aria-label="Export manifest">
-        <dl className="relation-preview">
+        <dl className="ui ui-display-grid ui-gap-8px ui-p-color-a3a3fb ui-p-font-size-9ca3bf relation-preview">
           {manifestRows.map(([label, value]) => <div key={label}>
             <dt>{label}</dt><dd>{value}</dd>
           </div>)}
@@ -280,7 +280,7 @@ export function ExportDialog(props: {
       </section>
 
       {manifest.rowCount > PREVIEW_PAGE_SIZE ? <nav
-        className="projection-pagination" aria-label="Preview rows">
+        className="ui ui-display-flex ui-align-items-center ui-justify-content-space-between ui-flex-wrap-wrap ui-gap-8px projection-pagination" aria-label="Preview rows">
         <output aria-live="polite">
           Rows {pageStart + 1}–{pageEnd} of {manifest.rowCount}. Download and Print include all rows.
         </output>
@@ -292,7 +292,7 @@ export function ExportDialog(props: {
         </span>
       </nav> : null}
 
-      <article className="record-fields projection-print-document" data-renderer={
+      <article className="ui ui-display-grid ui-gap-14px record-fields projection-print-document" data-renderer={
         `${manifest.renderer.id}@${manifest.renderer.version}`
       }>
         <header className="projection-print-header">
@@ -305,7 +305,7 @@ export function ExportDialog(props: {
           aria-label={`${readableScope(plaintext)} preview table`}
           tabIndex={0}
         >
-          <table className="dataview-grid">
+          <table className="ui ui-font-size-13px ui-input-font-648ad9 ui-width-100 ui-input-color-64eb43 ui-select-color-8a3cd5 ui-select-font-d3b791 ui-select-width-96bdbe dataview-grid">
             <caption>{readableScope(plaintext)}{manifest.rowCount > PREVIEW_PAGE_SIZE
               ? ` · Rows ${pageStart + 1}–${pageEnd} of ${manifest.rowCount}` : ""}</caption>
             <thead><tr>{manifest.fields.map((field, index) => {
@@ -331,7 +331,7 @@ export function ExportDialog(props: {
       </article>
     </> : null}
 
-    <footer className="relation-dialog-actions export-dialog-actions" style={{ flexWrap: "wrap" }}>
+    <footer className="ui ui-display-flex ui-gap-8px ui-button-font-590948 ui-border-top-line ui-justify-content-flex-end ui-button-background-9f7e57 ui-button-color-353ba8 ui-primary-background-1be894 ui-primary-border-color-f73659 relation-dialog-actions export-dialog-actions" style={{ flexWrap: "wrap" }}>
       <button type="button" onClick={props.onClose}>Cancel</button>
       <button type="button" data-export-csv disabled={!artifact || !plaintext || printing}
         onClick={downloadCsv}>Download CSV</button>

@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
-import { act } from "react";
+import { act } from "preact/test-utils";
 import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AsyncStore, BatchReceipt, RegTable } from "@clay/kernel";
 import {
   CommandPalette,
@@ -59,18 +59,22 @@ describe("quick capture", () => {
     try {
       await act(async () => render()); await settle();
       await act(async () => typeInto(document.querySelector<HTMLInputElement>('input[aria-label="Title"]')!, "Original"));
-      await act(async () => document.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+      await act(async () => void document.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+      await vi.waitFor(() => expect(readPresentationIntent(sessionStorage, appInstanceId, "captureUndo")).not.toBeNull());
       const kept = readPresentationIntent(sessionStorage, appInstanceId, "captureUndo");
       expect(kept).not.toBeNull();
       expect(kept!.payload).toMatchObject({ authorityTarget: target, batchId: receipt.id,
         capturePayload: { appInstanceId, table: "tasks", tableId, row: { title: "Original" } } });
       await remount(); presentationFails = false;
-      await click("Retry capture"); await remount();
+      await click("Retry capture");
+      await vi.waitFor(() => expect(readPresentationIntent(sessionStorage, appInstanceId, "capture")).toBeNull());
+      await remount();
       await click("Undo previous capture");
       expect(readPresentationIntent(sessionStorage, appInstanceId, "captureUndo")).toEqual(kept);
       await click("Keep previous capture"); // Must not clear an ambiguous Undo to permit another capture.
       expect(readPresentationIntent(sessionStorage, appInstanceId, "captureUndo")).toEqual(kept);
       await remount(); await click("Undo previous capture");
+      await vi.waitFor(() => expect(readPresentationIntent(sessionStorage, appInstanceId, "captureUndo")).toBeNull());
       expect(undoCalls).toEqual([[kept!.payload, { requestId: kept!.requestId }]]);
       expect(readPresentationIntent(sessionStorage, appInstanceId, "captureUndo")).toBeNull();
     } finally { await act(async () => root.unmount()); }

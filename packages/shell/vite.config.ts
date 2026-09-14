@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { sharedRuntimeChunk } from "./config/shared-runtime-chunks.mjs";
 import { createSharedSqliteRuntime } from "./config/shared-sqlite-runtime.mjs";
 import { createPanelParserSpecialization } from "./config/panel-parser-specialization.mjs";
+import { rendererAliases, productionRendererGuard } from "./config/renderer-runtime.mjs";
 
 import {
   createProductionCssOptimizer,
@@ -26,7 +27,9 @@ if (sourceTree !== "unbound") {
 }
 
 export default defineConfig({
+  resolve: { alias: rendererAliases, dedupe: ["preact"] },
   plugins: [
+    productionRendererGuard(),
     createSharedSqliteRuntime(),
     createPanelParserSpecialization(),
     createProductionCssOptimizer({
@@ -47,7 +50,9 @@ export default defineConfig({
     target: CSS_BROWSER_TARGETS.vite,
     manifest: true,
     minify: "terser",
-    terserOptions: { compress: { passes: 2 } },
+    // The supported browsers all implement ES2020. Keep unsafe transforms off;
+    // permit equivalent modern forms instead of forcing ES5 object syntax.
+    terserOptions: { ecma: 2020, compress: { passes: 3 } },
     cssMinify: "lightningcss",
     cssTarget: CSS_BROWSER_TARGETS.vite,
     rollupOptions: {

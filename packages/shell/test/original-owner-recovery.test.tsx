@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 /** @vitest-environment-options {"url":"https://owner.example"} */
-import { act } from "react";
+import { act } from "preact/test-utils";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { OriginalOwnerRecovery } from "../src/app/OriginalOwnerRecovery";
@@ -42,12 +42,16 @@ it.each(["deleted", "history_only", "configuration_off"])("requires explicit ori
   const read = vi.fn(async () => mode === "history_only" ? { ...witness, status: "history_only", retirement: undefined } : structuredClone(witness));
   const close = vi.spyOn(IntakePublication.prototype, "closeDeletedOriginal").mockResolvedValue();
   const element = document.createElement("div"); document.body.append(element); const root = createRoot(element);
-  const click = async (label: string) => { await act(async () => { const button = [...element.querySelectorAll("button")].find(row => row.textContent === label); expect(button).toBeDefined(); button!.click(); }); };
+  const click = async (label: string) => {
+    await vi.waitFor(() => expect([...element.querySelectorAll("button")].find(row => row.textContent === label)?.disabled).toBe(false));
+    await act(async () => { [...element.querySelectorAll("button")].find(row => row.textContent === label)!.click(); });
+  };
   try {
     await act(async () => root.render(<OriginalOwnerRecovery worker={{ intakeOwnerWitness: read } as unknown as WorkerClient}
       relayBaseUrl={mode === "configuration_off" ? null : form.relayBaseUrl} publicBaseUrl={location.origin} workflows={workflows} />));
     await click("Inspect retained owner work"); expect(close).not.toHaveBeenCalled(); expect(read).not.toHaveBeenCalled();
     await click("Review original owner proof"); expect(read).toHaveBeenCalledWith(witness.claim); expect(close).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(element.textContent).toContain(mode === "history_only" ? "not proven deleted" : "catalog proves deletion"));
     const confirm = [...element.querySelectorAll("button")].find(row => row.textContent === "Close this deleted original publication");
     if (mode !== "deleted") expect(confirm?.disabled ?? true).toBe(true);
     else { await click("Close this deleted original publication"); expect(close).toHaveBeenCalledWith(witness); }

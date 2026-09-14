@@ -12,6 +12,7 @@ const FOCUSABLE = [
 
 let modalScrollLocks = 0;
 let priorBodyOverflow = "";
+const modalBackgrounds = new WeakMap<HTMLElement, { count: number; inert: boolean; hidden: string | null }>();
 
 type ModalLayer = { backdrop: HTMLDivElement; dialog: HTMLElement };
 const modalLayers: ModalLayer[] = [];
@@ -74,6 +75,8 @@ export function ModalDialog(props: {
   onClose: () => void;
   dismissible?: boolean;
   returnFocusRef?: RefObject<HTMLElement | null>;
+  /** Navigation can explicitly hand focus to a new surface before closing. */
+  shouldRestoreFocus?: () => boolean;
   children: ReactNode;
 }): React.JSX.Element {
   const backdropRef = useRef<HTMLDivElement>(null);
@@ -85,6 +88,8 @@ export function ModalDialog(props: {
   closeRef.current = props.onClose;
   const dismissibleRef = useRef(props.dismissible !== false);
   dismissibleRef.current = props.dismissible !== false;
+  const restoreRef = useRef(props.shouldRestoreFocus);
+  restoreRef.current = props.shouldRestoreFocus;
 
   // Native capture is intentional: feedback may be portalled here from a
   // different React branch, whose synthetic events follow that owner branch
@@ -133,9 +138,11 @@ export function ModalDialog(props: {
     }
     const app = document.querySelector<HTMLElement>(".app")
       ?? document.querySelector<HTMLElement>("#root > *");
-    const priorInert = app?.inert ?? false;
-    const priorHidden = app?.getAttribute("aria-hidden") ?? null;
-    if (app) { app.inert = true; app.setAttribute("aria-hidden", "true"); }
+    if (app) {
+      const state = modalBackgrounds.get(app) ?? { count: 0, inert: app.inert ?? false, hidden: app.getAttribute("aria-hidden") };
+      state.count++; modalBackgrounds.set(app, state);
+      app.inert = true; app.setAttribute("aria-hidden", "true");
+    }
     const frame = requestAnimationFrame(() => {
       const dialog = dialogRef.current;
       if (dialog && modalLayers.at(-1)?.dialog === dialog) focusDialog(dialog);
@@ -151,16 +158,20 @@ export function ModalDialog(props: {
       modalScrollLocks = Math.max(0, modalScrollLocks - 1);
       if (modalScrollLocks === 0) document.body.style.overflow = priorBodyOverflow;
       if (app) {
-        app.inert = priorInert;
-        if (priorHidden === null) app.removeAttribute("aria-hidden");
-        else app.setAttribute("aria-hidden", priorHidden);
+        const state = modalBackgrounds.get(app);
+        if (state && --state.count === 0) {
+          app.inert = state.inert;
+          if (state.hidden === null) app.removeAttribute("aria-hidden");
+          else app.setAttribute("aria-hidden", state.hidden);
+          modalBackgrounds.delete(app);
+        }
       }
       const target = props.returnFocusRef?.current ?? previousFocus.current;
       const top = modalLayers.at(-1);
       if (top) {
         if (target && top.dialog.contains(target)) target.focus();
         if (document.activeElement !== target) focusDialog(top.dialog);
-      } else target?.focus();
+      } else if (restoreRef.current?.() !== false) target?.focus();
     };
   }, []);
 

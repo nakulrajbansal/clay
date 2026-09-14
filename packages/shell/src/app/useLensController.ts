@@ -1,3 +1,4 @@
+import { errorMessage } from "./error-message";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { LivePanel, PanelProvenance } from "@clay/kernel";
 import type { WorkerClient } from "./worker-client";
@@ -138,7 +139,7 @@ export function useLensController(input: {
       if (typeof localStorage !== "undefined") saveLensId(localStorage, input.appId, saved.id);
       input.notify(`Saved lens “${saved.name}”`, "success");
     } catch (error) {
-      input.notify(error instanceof Error ? error.message : String(error), "danger");
+      input.notify(errorMessage(error), "danger");
     }
   };
 
@@ -152,7 +153,7 @@ export function useLensController(input: {
       if (lensId === id) selectLens("all");
       input.notify(`Deleted lens “${result.deleted.name}”`, "default");
     } catch (error) {
-      input.notify(error instanceof Error ? error.message : String(error), "danger");
+      input.notify(errorMessage(error), "danger");
     }
   };
 

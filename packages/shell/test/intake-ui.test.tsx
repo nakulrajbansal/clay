@@ -1,6 +1,7 @@
 /** @vitest-environment jsdom */
 /** @vitest-environment-options {"url":"https://app.example.test"} */
-import { act, useState } from "react";
+import { useState } from "react";
+import { act } from "preact/test-utils";
 import { createRoot } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -22,6 +23,7 @@ import { OwnedFactory } from "./helpers/owned-idb";
 import { relayRequestSha256 } from "../src/app/relay-request-identity";
 import { IntakePublication } from "../src/intake/publication";
 import { IntakeSession } from "../src/intake/session";
+import { expectControlCensus } from "./helpers/control-census";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -329,12 +331,12 @@ describe("public intake UI", () => {
       const first = focusable[0]!;
       const last = focusable.at(-1)!;
       last.focus();
-      await act(async () => last.dispatchEvent(new KeyboardEvent("keydown", {
+      await act(async () => void last.dispatchEvent(new KeyboardEvent("keydown", {
         key: "Tab", bubbles: true, cancelable: true,
       })));
       expect(document.activeElement).toBe(first);
 
-      await act(async () => dialog.dispatchEvent(new KeyboardEvent("keydown", {
+      await act(async () => void dialog.dispatchEvent(new KeyboardEvent("keydown", {
         key: "Escape", bubbles: true, cancelable: true,
       })));
       expect(document.body.querySelector(".intake-center")).toBeNull();
@@ -579,6 +581,7 @@ describe("public intake UI", () => {
     await act(async () => { field.click(); fileRequest.click(); });
     const review = [...document.body.querySelectorAll<HTMLButtonElement>("button")]
       .find(button => button.textContent === "Review form")!;
+    expectControlCensus("F.intake");
     await act(async () => { review.click(); });
     expect(events).toEqual([]);
     expect(document.body.textContent).toContain("Nothing has been published yet");

@@ -285,16 +285,16 @@ export function ShareDialog(props: Readonly<{
 
   const preview = artifact?.projection ?? null;
   return <ModalDialog
-    className="share-dialog"
-    backdropClassName="modal-backdrop share-dialog-backdrop"
+    className="ui ui-background-panel ui-color-text ui-base-border-f41cca ui-base-border-radius-c431a0 ui-overflow-auto ui-box-shadow-shadow-lg ui-padding-0 share-dialog"
+    backdropClassName="ui ui-display-flex ui-align-items-center ui-position-fixed ui-inset-0 ui-overflow-auto ui-justify-content-center modal-backdrop share-dialog-backdrop"
     ariaLabelledBy="share-dialog-title"
     ariaDescribedBy="share-dialog-description"
     onClose={props.onClose}
     returnFocusRef={props.returnFocusRef}
   >
-    <header className="share-dialog-header">
+    <header className="ui ui-display-flex ui-justify-content-space-between ui-border-bottom-line ui-p-margin-9d8b39 share-dialog-header">
       <div>
-        <span className="record-detail-kicker">Encrypted snapshot</span>
+        <span className="ui ui-color-accent-text ui-text-transform-uppercase record-detail-kicker">Encrypted snapshot</span>
         <h2 id="share-dialog-title">Create read-only share link</h2>
         <p id="share-dialog-description">
           Confirm the exact fields and files. Encryption happens here before the relay receives anything.
@@ -311,7 +311,7 @@ export function ShareDialog(props: Readonly<{
       {row.state !== "revoke_pending" ? <button disabled={busy || row.receipt.relayBaseUrl !== props.relay?.baseUrl} onClick={() => void revoke(row.receipt)}>Revoke retained snapshot</button> : null}
     </section>)}
 
-    <section className="share-scope" aria-label="Share scope">
+    <section className="ui ui-display-grid ui-gap-14px share-scope" aria-label="Share scope">
       <fieldset disabled={busy || pending.length > 0}>
         <legend>Fields included (stable-ID allowlist)</legend>
         {props.fieldChoices.map(field => <label key={field.fieldId}>
@@ -334,7 +334,7 @@ export function ShareDialog(props: Readonly<{
             </label>)}
         <small>Files are excluded unless checked separately.</small>
       </fieldset>
-      <label className="share-expiry">Link expires
+      <label className="ui ui-justify-content-space-between share-expiry">Link expires
         <select disabled={busy || pending.length > 0} value={duration} onChange={event => {
           invalidateApproval();
           setDuration(event.currentTarget.value);
@@ -350,10 +350,10 @@ export function ShareDialog(props: Readonly<{
       Scope changed. Preview and approve again before creating a link.
     </p> : null}
 
-    {preview ? <section className="share-preview" aria-label="Exact share preview">
+    {preview ? <section className="ui ui-base-border-f41cca ui-base-border-radius-25b77c share-preview" aria-label="Exact share preview">
       <h3>{preview.manifest.title}</h3>
       <p>{preview.manifest.rowCount} rows × {preview.manifest.fieldCount} fields · frozen snapshot</p>
-      <div className="share-preview-scroll" tabIndex={0}>
+      <div className="ui ui-overflow-auto share-preview-scroll" tabIndex={0}>
         <table>
           <thead><tr>{preview.manifest.fields.map((field, index) =>
             <th scope="col" key={`${field.name}-${index}`}>{field.label}</th>)}</tr></thead>
@@ -364,7 +364,7 @@ export function ShareDialog(props: Readonly<{
       </div>
     </section> : null}
 
-    {created ? <section className="share-created" aria-live="polite">
+    {created ? <section className="ui ui-display-flex ui-align-items-center ui-flex-wrap-wrap ui-gap-9px ui-base-border-radius-25b77c ui-base-border-c04950 ui-input-min-width-39910f share-created" aria-live="polite">
       <h3>{createdState === "revoke_pending" ? "Revocation acknowledgement pending" : created.revokedAt ? "Link revoked" : Date.parse(created.expiresAt) <= clock().getTime() ? "Link expired" : "Encrypted link ready"}</h3>
       <input data-share-link readOnly value={created.url} aria-label="Encrypted share link" />
       {createdState === "published" && !created.revokedAt && Date.parse(created.expiresAt) > clock().getTime() ? <>
@@ -374,7 +374,7 @@ export function ShareDialog(props: Readonly<{
     </section> : null}
 
     {historicalReceipts.some(receipt => receipt.shareId !== created?.shareId) ?
-      <details className="share-history"><summary>Earlier links</summary>
+      <details className="ui ui-article-align-items-c91e3c share-history"><summary>Earlier links</summary>
         {historicalReceipts.filter(receipt => receipt.shareId !== created?.shareId).map(receipt =>
           <article key={receipt.shareId}>
             <span>{receipt.title} · expires {new Date(receipt.expiresAt).toLocaleDateString()}</span>
@@ -384,7 +384,7 @@ export function ShareDialog(props: Readonly<{
           </article>)}
       </details> : null}
 
-    <footer className="share-dialog-actions">
+    <footer className="ui ui-display-flex ui-background-panel ui-gap-10px ui-border-top-line ui-justify-content-flex-end ui-base-position-df0639 share-dialog-actions">
       <button type="button" onClick={props.onClose}>Cancel</button>
       <button type="button" disabled={busy || pending.length > 0} onClick={() => {
         invalidateApproval(); setPreviewRevision(value => value + 1);

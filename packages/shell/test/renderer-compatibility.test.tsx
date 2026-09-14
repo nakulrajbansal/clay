@@ -1,10 +1,12 @@
 /** @vitest-environment jsdom */
-import { act, createRef, lazy, Suspense, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { createRef, lazy, Suspense, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { act } from "preact/test-utils";
 import { createRoot, type Root } from "react-dom/client";
 import { createPortal } from "react-dom";
 import { afterEach, expect, it, vi } from "vitest";
 import { ModalDialog, ModalScopedPortal } from "../src/app/ModalDialog";
 import { LazySurfaceBoundary } from "../src/app/LazySurfaceBoundary";
+import { FocusInput } from "../src/app/FocusControl";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let root: Root;
@@ -17,6 +19,22 @@ function type(input: HTMLInputElement, value: string) {
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
   input.dispatchEvent(new Event("input", { bubbles: true }));
 }
+
+it("focuses newly mounted editors before blur/commit and preserves forwarded refs across edits", async () => {
+  let blurs = 0; const ref = createRef<HTMLInputElement>();
+  function Probe() {
+    const [value, setValue] = useState("before");
+    return <FocusInput ref={ref} autoFocus aria-label="Inline editor" value={value}
+      onChange={event => setValue(event.currentTarget.value)} onBlur={() => { blurs++; }} />;
+  }
+  const host = await mount(<Probe />);
+  expect(document.activeElement).toBe(ref.current);
+  await act(async () => type(ref.current!, "after"));
+  expect(ref.current?.value).toBe("after");
+  expect(document.activeElement).toBe(host.querySelector("input"));
+  await act(async () => ref.current!.blur());
+  expect(blurs).toBe(1);
+});
 
 it("preserves controlled input, checkbox, select, blur/focusout and native propagation", async () => {
   const events: string[] = [];
@@ -37,7 +55,7 @@ it("preserves controlled input, checkbox, select, blur/focusout and native propa
   await act(async () => host.querySelector<HTMLInputElement>('[type="checkbox"]')!.click());
   const select = host.querySelector("select")!;
   await act(async () => { select.value = "b"; select.dispatchEvent(new Event("change", { bubbles: true })); });
-  await act(async () => host.querySelector("input")!.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  await act(async () => void host.querySelector("input")!.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
   expect(host.querySelector("output")!.textContent).toBe("after:true:b");
   expect(events).toEqual(["native-capture", "native-bubble", "native-capture", "native-bubble", "blur"]);
 });
@@ -84,7 +102,7 @@ it("retains drag/drop payload, preventDefault, and explicit native capture acros
   const over = new Event("dragover", { bubbles: true, cancelable: true }); target.dispatchEvent(over);
   expect(over.defaultPrevented).toBe(true);
   const drop = new Event("drop", { bubbles: true }); Object.defineProperty(drop, "dataTransfer", { value: dataTransfer });
-  await act(async () => target.dispatchEvent(drop)); expect(events).toEqual(["capture", "owned-panel"]);
+  await act(async () => void target.dispatchEvent(drop)); expect(events).toEqual(["capture", "owned-panel"]);
 });
 
 it("keeps explicit inline cancellation ahead of dialog dismissal, without escaping the Tab trap", async () => {
@@ -94,9 +112,9 @@ it("keeps explicit inline cancellation ahead of dialog dismissal, without escapi
       if (event.key === "Escape") { cancellations++; event.preventDefault(); event.stopPropagation(); }
     }} /></ModalDialog>);
   const input = document.querySelector("input")!; input.focus();
-  await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await act(async () => void input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   expect(cancellations).toBe(1); expect(closes).toBe(0);
-  await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })));
+  await act(async () => void input.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })));
   expect(document.activeElement).toBe(document.querySelector(".owned-editor"));
 });
 
@@ -115,7 +133,7 @@ it("keeps a failed modal non-dismissible with the same focus, inert and scroll-l
   expect(dialog?.getAttribute("aria-label")).toBe("tools failed to load");
   expect(document.body.style.overflow).toBe("hidden");
   expect(host.querySelector<HTMLElement>(".app")?.inert).toBe(true);
-  await act(async () => dialog!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await act(async () => void dialog!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   await act(async () => dialog!.parentElement!.click());
   expect(document.querySelector('[role="alertdialog"]')).toBe(dialog);
   expect(dialog?.querySelector("button")?.textContent).toBe("Reload Clay");
@@ -146,15 +164,15 @@ it("traps nested portals, Escape and native-stopped events, locks the background
   const parent = document.querySelector<HTMLElement>(".owned-parent")!;
   const feedback = parent.querySelector<HTMLButtonElement>("[data-modal-scoped-feedback]")!;
   feedback.focus();
-  await act(async () => feedback.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })));
+  await act(async () => void feedback.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })));
   expect(document.activeElement?.textContent).toBe("Open child");
   await act(async () => parent.querySelector<HTMLButtonElement>("button")!.click());
   expect(parent.parentElement!.inert).toBe(true); expect(parent.parentElement!.getAttribute("aria-hidden")).toBe("true");
   const child = document.querySelector<HTMLElement>(".owned-child")!;
-  await act(async () => child.querySelector("button")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await act(async () => void child.querySelector("button")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   expect(document.activeElement?.textContent).toBe("Open child"); expect(parent.parentElement!.inert).toBe(false);
   // Moving a portal between destinations may remount its DOM; use the live control.
-  await act(async () => parent.querySelector("[data-modal-scoped-feedback]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await act(async () => void parent.querySelector("[data-modal-scoped-feedback]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   expect(document.querySelector(".owned-parent")).toBeNull(); expect(app.inert).toBe(false);
   expect(app.hasAttribute("aria-hidden")).toBe(false); expect(document.body.style.overflow).toBe(""); expect(document.activeElement).toBe(trigger);
 });

@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { act } from "react";
+import { act } from "preact/test-utils";
 import { createRoot, type Root } from "react-dom/client";
 import { beforeEach, describe, expect, it } from "vitest";
 import { useWorkspaceMode } from "../src/app/workspace-mode";

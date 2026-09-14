@@ -39,11 +39,12 @@ import type {
   IntakeAutoAcceptDraftV1, IntakeAutoAcceptRuleV1,
   IntakeSubmissionPlaintextV1, LocalIntakeFormV2,
 } from "@clay/schema/intake";
-import { TargetEvidenceV1 } from "@clay/schema/catalog";
+import { DailyPresentationV1, PresentationMutationOutcomeV1, TargetEvidenceV1 } from "@clay/schema/catalog";
 import { BackupRetentionPlanV1, BackupRetentionHistoryV1, BackupRemovalAuthorizationV1, BackupRetentionReceiptV1,
   type BackupRemovalIntentV1, type BackupRetentionScopeV1 } from "@clay/schema/backup";
 import type { IntentOutcome } from "../worker/db-worker";
 import type { FirstSuccessState } from "./first-success-state";
+import { readPresentationIntent } from "./presentation-intent";
 import { fetchModelHealth } from "./model-health";
 import type {
   ImportHeaderChoice, ImportParserChunk, ImportSourceDescriptor,
@@ -1267,7 +1268,7 @@ export class WorkerClient {
   #servePlanner(active: ActivePlanner, access: Readonly<ModelAccess>, lifecycle: number): void {
     let initial: { epoch: string; generation: number; contextId: string; contextJson: string } | null = null;
     let client: Pick<
-      import("@clay/mutation/client").MutationClient, "rawPlan" | "rawRepair"
+      import("@clay/mutation/raw-client").RawMutationClient, "rawPlan" | "rawRepair"
     > | null = null;
     let expectedSequence = 0;
     let busy = false;
@@ -1371,7 +1372,7 @@ export class WorkerClient {
           );
           let requestClient = client;
           if (!requestClient) {
-            const { MutationClient } = await import("@clay/mutation/client");
+            const { RawMutationClient } = await import("@clay/mutation/raw-client");
             if (active.closed || this.#terminated || lifecycle !== this.#lifecycle) return;
             const transport = access.apiKey
               ? { mode: "byo" as const, apiKey: access.apiKey }
@@ -1383,7 +1384,7 @@ export class WorkerClient {
                   ? { session: (access.provider === "clay" ? access.session : access.providerToken)! }
                   : {}),
               };
-            requestClient = new MutationClient(transport, {
+            requestClient = new RawMutationClient(transport, {
               modelRepair: true, signal: active.controller.signal,
             });
             client = requestClient;
@@ -1740,18 +1741,17 @@ export class WorkerClient {
   async dailyPresentation(): Promise<import("@clay/schema/catalog").DailyPresentationV1> {
     await this.ensureDailyHomeTimeZone();
     const request = this.ephemeralCall("dailyPresentation");
-    return (await import("@clay/schema/catalog")).DailyPresentationV1.parse(await request);
+    return DailyPresentationV1.parse(await request);
   }
   initializeDailyHomeTimeZone(timeZone: string, context: WorkerMutationContext = createWorkerMutationContext()): Promise<string> {
     return this.mutationCall("dailyHomeInitializeTimeZone", { timeZone }, context);
   }
   async presentationSource(): Promise<import("@clay/schema/catalog").TargetEvidenceV1> {
     const result = await this.ephemeralCall("presentationSource");
-    return (await import("@clay/schema/catalog")).TargetEvidenceV1.parse(result);
+    return TargetEvidenceV1.parse(result);
   }
   async mayRecordPresentationSideEffects(): Promise<boolean> {
     const source = await this.presentationSource();
-    const { readPresentationIntent } = await import("./presentation-intent");
     // A cache can suppress incidental UI writes, never authorize a durable one.
     // Missing/unreadable browser storage is not permission to close an Undo window.
     if (typeof sessionStorage === "undefined") return false;
@@ -1763,7 +1763,7 @@ export class WorkerClient {
   }
   async cancelPresentation(route: string, payload: unknown, context: WorkerMutationContext): Promise<import("@clay/schema/catalog").PresentationMutationOutcomeV1> {
     const request = this.mutationCall("cancelPresentation", { route, payload: structuredClone(payload) }, captureWorkerMutationContext(context));
-    return (await import("@clay/schema/catalog")).PresentationMutationOutcomeV1.parse(await request);
+    return PresentationMutationOutcomeV1.parse(await request);
   }
   quickCapture(table: string, row: Record<string, unknown>, tableId: string, context: WorkerMutationContext, appInstanceId: string): Promise<BatchReceipt> {
     const captured = captureWorkerMutationContext(context); const capturedRow = structuredClone(row);
@@ -1860,7 +1860,7 @@ export class WorkerClient {
     context: WorkerMutationContext): Promise<import("@clay/schema/catalog").PresentationMutationOutcomeV1> {
     const captured = captureWorkerMutationContext(context); const input = structuredClone({ route, payload });
     const result = await this.call(captured.requestId, "mutationOutcome", input);
-    return (await import("@clay/schema/catalog")).PresentationMutationOutcomeV1.parse(result);
+    return PresentationMutationOutcomeV1.parse(result);
   }
   addColumn(
     table: string,

@@ -1,3 +1,5 @@
+import { errorMessage } from "./error-message";
+import { FocusSelect } from "./FocusControl";
 import { useMemo, useRef, useState } from "react";
 import type { RelationConversionPreview, RegTable } from "@clay/kernel";
 import type { WorkerClient } from "./worker-client";
@@ -53,7 +55,7 @@ export function RelationConversionDialog(props: {
         sourceField, targetTable, displayField: effectiveDisplay,
       }));
     } catch (error) {
-      props.onError(error instanceof Error ? error.message : String(error));
+      props.onError(errorMessage(error));
     } finally { working.current = false; setBusy(false); }
   };
 
@@ -85,7 +87,7 @@ export function RelationConversionDialog(props: {
         pendingKeep.current = null; setCompleted(true); setNeedsReconciliation(false);
       });
     } catch (error) {
-      props.onError(error instanceof Error ? error.message : String(error));
+      props.onError(errorMessage(error));
       setNeedsReconciliation(true);
     } finally { working.current = false; setBusy(false); }
   };
@@ -126,28 +128,28 @@ export function RelationConversionDialog(props: {
   };
 
   return (
-    <ModalDialog className="relation-dialog" backdropClassName="modal-backdrop relation-backdrop"
+    <ModalDialog className="ui ui-background-panel ui-base-border-8f9f0d ui-base-border-radius-c431a0 relation-dialog" backdropClassName="ui ui-display-flex ui-align-items-center ui-position-fixed ui-inset-0 ui-overflow-auto ui-justify-content-center modal-backdrop relation-backdrop"
       ariaLabelledBy="relation-dialog-title" onClose={props.onClose}>
-      <header className="relation-dialog-header">
+      <header className="ui ui-display-flex ui-justify-content-space-between ui-border-bottom-line ui-p-margin-9d8b39 ui-p-color-a3a3fb ui-base-padding-6fe44b relation-dialog-header">
         <div>
-          <span className="record-detail-kicker">Connected work</span>
+          <span className="ui ui-color-accent-text ui-text-transform-uppercase record-detail-kicker">Connected work</span>
           <h2 id="relation-dialog-title">Turn text into linked records</h2>
           <p>Clay keeps the original text hidden. Undo is available only while the exact converted state is unchanged.</p>
         </div>
         <button aria-label="Close linked-record setup" onClick={props.onClose}>✕</button>
       </header>
 
-      <div className="relation-dialog-grid">
+      <div className="ui ui-display-grid ui-gap-14px ui-label-display-b369c3 ui-select-color-8a3cd5 ui-select-font-d3b791 ui-label-gap-931d54 ui-select-border-f5f110 ui-select-width-96bdbe ui-select-background-25bcef relation-dialog-grid">
         {recovery.error ? <p role="alert">{recovery.error}</p> : null}
         <label>Text field
-          <select autoFocus value={sourceField} disabled={busy || needsReconciliation || completed}
+          <FocusSelect autoFocus value={sourceField} disabled={busy || needsReconciliation || completed}
             onChange={event => { setSourceField(event.target.value); setPreview(null); }}>
             {sourceFields.map(field => <option key={field.name} value={field.name}>
               {field.label ?? label(field.name)}
             </option>)}
-          </select>
+          </FocusSelect>
         </label>
-        <span className="relation-arrow" aria-hidden="true">→</span>
+        <span className="ui ui-color-accent-text ui-text-align-center relation-arrow" aria-hidden="true">→</span>
         <label>Link to table
           <select value={targetTable} disabled={busy || needsReconciliation || completed}
             onChange={event => {
@@ -169,30 +171,30 @@ export function RelationConversionDialog(props: {
       </div>
 
       {!preview ? (
-        <div className="relation-dialog-empty">
-          <div className="relation-preview-icon" aria-hidden="true">⌁</div>
+        <div className="ui ui-display-grid ui-color-text-2 ui-text-align-center ui-gap-5px ui-base-border-radius-25b77c ui-base-border-9a0e96 relation-dialog-empty">
+          <div className="ui ui-color-accent-text relation-preview-icon" aria-hidden="true">⌁</div>
           <strong>Preview every match first</strong>
           <span>Clay matches text case-insensitively and never guesses when target names are duplicated.</span>
         </div>
       ) : (
-        <section className="relation-preview" aria-live="polite">
-          <div className="relation-stat good"><strong>{preview.matchedRows}</strong><span>matched</span></div>
-          <div className="relation-stat"><strong>{preview.unmatchedRows}</strong><span>unmatched</span></div>
-          <div className="relation-stat warn"><strong>{preview.ambiguousRows}</strong><span>ambiguous</span></div>
-          <div className="relation-stat"><strong>{preview.duplicateSourceRows}</strong><span>repeated text</span></div>
+        <section className="ui ui-display-grid ui-gap-8px ui-p-color-a3a3fb ui-p-font-size-9ca3bf relation-preview" aria-live="polite">
+          <div className="ui ui-display-grid ui-border-radius-10px ui-background-bg ui-span-color-e1f86b relation-stat good"><strong>{preview.matchedRows}</strong><span>matched</span></div>
+          <div className="ui ui-display-grid ui-border-radius-10px ui-background-bg ui-span-color-e1f86b relation-stat"><strong>{preview.unmatchedRows}</strong><span>unmatched</span></div>
+          <div className="ui ui-display-grid ui-border-radius-10px ui-background-bg ui-span-color-e1f86b relation-stat warn"><strong>{preview.ambiguousRows}</strong><span>ambiguous</span></div>
+          <div className="ui ui-display-grid ui-border-radius-10px ui-background-bg ui-span-color-e1f86b relation-stat"><strong>{preview.duplicateSourceRows}</strong><span>repeated text</span></div>
           {preview.unmatchedSamples.length > 0 ? (
             <p><strong>Unmatched:</strong> {preview.unmatchedSamples.join(", ")}</p>
           ) : null}
           {preview.ambiguousSamples.length > 0 ? (
             <p><strong>Needs a unique target:</strong> {preview.ambiguousSamples.join(", ")}</p>
           ) : null}
-          <p className="relation-preview-note">
+          <p className="ui ui-border-radius-8px ui-background-bg relation-preview-note">
             Unmatched and ambiguous rows stay unlinked. Their original text remains recoverable.
           </p>
         </section>
       )}
 
-      <footer className="relation-dialog-actions">
+      <footer className="ui ui-display-flex ui-gap-8px ui-button-font-590948 ui-border-top-line ui-justify-content-flex-end ui-button-background-9f7e57 ui-button-color-353ba8 ui-primary-background-1be894 ui-primary-border-color-f73659 relation-dialog-actions">
         {needsReconciliation ? <p role="status">The Keep outcome needs checking. Retry the same request, or close and inspect History. No changes are discarded by closing.</p> : null}
         {needsReconciliation ? <button disabled={busy || !!recovery.error} onClick={() => void cancelPending()}>Cancel pending Keep and re-preview</button> : null}
         <button disabled={busy} onClick={props.onClose}>{needsReconciliation ? "Close" : preview ? "Discard preview" : "Cancel"}</button>

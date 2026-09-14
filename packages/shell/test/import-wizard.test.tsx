@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import React, { act } from "react";
+import React from "react";
+import { act } from "preact/test-utils";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 import type { ImportReceipt } from "@clay/kernel";
@@ -227,7 +228,7 @@ describe("Release C ImportWizard", () => {
     });
     const fileInput = document.body.querySelector<HTMLInputElement>('input[type="file"]')!;
     Object.defineProperty(fileInput, "files", { configurable: true, value: [file] });
-    await act(async () => fileInput.dispatchEvent(new Event("change", { bubbles: true })));
+    await act(async () => void fileInput.dispatchEvent(new Event("change", { bubbles: true })));
     await waitFor(() => document.body.textContent?.includes("Choose a worksheet") ?? false);
 
     expect(document.body.textContent).toContain("Archive · hidden");

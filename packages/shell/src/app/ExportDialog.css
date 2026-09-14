@@ -1,27 +1,21 @@
 .export-manifest dd {
-  margin: 0;
 }
 
 .projection-print-document {
-  margin: 0 24px 16px;
-  color: #172033;
-  background: #fff;
 }
 
 .projection-pagination {
-  margin: 0 24px 12px; display: flex; align-items: center;
-  justify-content: space-between; gap: 8px; flex-wrap: wrap;
 }
-.projection-pagination span { display: flex; gap: 8px; }
+.projection-pagination span { }
 .projection-pagination button { min-height: 44px; }
-.export-dialog { min-width: 0; overflow-x: hidden; }
+.export-dialog { overflow-x: hidden; }
 .export-dialog > *, .export-options, .projection-print-document,
 .projection-table-scroll { min-width: 0; max-width: 100%; }
 .projection-table-scroll { overflow: auto; }
-.export-redaction-options { flex-wrap: wrap; overflow-x: visible; }
-.export-redaction-options > span { flex-basis: 100%; }
-.export-redaction-options label { white-space: normal; overflow-wrap: anywhere; }
-.projection-print-root { display: none; }
+.export-redaction-options { overflow-x: visible; }
+.export-redaction-options > span { }
+.export-redaction-options label { }
+.projection-print-root { }
 
 
 @media (max-width: 480px) {

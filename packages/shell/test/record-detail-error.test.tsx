@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { act } from "react";
+import { act } from "preact/test-utils";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 import type { WorkerClient } from "../src/app/worker-client";
@@ -111,7 +111,7 @@ it("preserves a newer draft in another field when an earlier save reloads", asyn
     setter.call(title, "Title saved");
     title.dispatchEvent(new Event("input", { bubbles: true }));
   });
-  act(() => title.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  act(() => void title.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
   await titleStarted;
   await act(async () => {
     setter.call(details, "Newer unsaved details");
@@ -185,7 +185,7 @@ it("ignores a stale save reload after record navigation", async () => {
     setter.call(input, "First saved");
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
-  act(() => input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  act(() => void input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
   await firstReloadStarted;
   await act(async () => root.render(<RecordDetail {...props} recordId={String(second.id)} />));
   for (let attempt = 0; attempt < 50
@@ -217,7 +217,7 @@ it("ignores unchanged blur and Escape cancels only the dirty field", async () =>
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
   const input = document.body.querySelector<HTMLInputElement>('#record-title')!;
   const before = store.rowHistoryCount();
-  await act(async () => input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  await act(async () => void input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
   expect(store.rowHistoryCount()).toBe(before);
 
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;

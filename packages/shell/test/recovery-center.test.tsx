@@ -1,7 +1,9 @@
 /** @vitest-environment jsdom */
-import { act, type ComponentProps } from "react";
+import { type ComponentProps } from "react";
+import { act } from "preact/test-utils";
 import { createRoot, type Root } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
+import { expectControlCensus } from "./helpers/control-census";
 import type { AuthenticatedFormat5RestoreGrant } from "@clay/kernel/recovery";
 import {
   RecoveryCenter,
@@ -96,6 +98,7 @@ const button = (name: string): HTMLButtonElement => {
 it("shows preserved storage quarantine without claiming that current-app backups include it", async () => {
   const { root } = await mount({ ...baseProps(), quarantinedStorageSlots: 2 });
   try {
+    expectControlCensus("B.recovery");
     const warning = document.querySelector('[aria-label="Recovery Center details"] [role="alert"]');
     expect(warning?.textContent).toContain("uncertain identity and is quarantined");
     expect(warning?.textContent).toContain("Current-app backups do not include this quarantined storage");
@@ -116,7 +119,7 @@ it("distinguishes publication validation from availability and exposes exact qua
     expect(document.body.textContent).toContain("Current file availability is not continuously monitored");
     await act(async () => button("Resume retention: Earlier folder").click());
     expect(retry).toHaveBeenCalledWith(scope);
-    expect(document.body.textContent).toContain("Retention checked");
+    await vi.waitFor(() => expect(document.body.textContent).toContain("Retention checked"));
   } finally { await act(async () => root.unmount()); }
 });
 
@@ -205,7 +208,7 @@ describe("Release B Recovery Center", () => {
     expect(document.querySelector<HTMLInputElement>('input[type="file"]')?.disabled).toBe(true);
     const body = document.querySelector<HTMLElement>(".recovery-center > .shape-column");
     expect(body?.style.overflowY).toBe("auto");
-    expect(body?.style.minHeight).toBe("0");
+    expect(Number.parseFloat(body!.style.minHeight)).toBe(0);
     expect(body?.tabIndex).toBe(0);
     expect(body?.getAttribute("role")).toBe("region");
     expect(body?.getAttribute("aria-label")).toBe("Recovery Center details");

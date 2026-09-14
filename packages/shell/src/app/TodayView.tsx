@@ -1,3 +1,4 @@
+import { errorMessage } from "./error-message";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { LatestRequestGate } from "./async-lifecycle";
 import {
@@ -128,6 +129,7 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<DailyHomeSnapshot | null>(null);
   const [reviewed, setReviewed] = useState<DailyPresentationV1 | null>(null);
   const [setupReviewed, setSetupReviewed] = useState<DailyPresentationV1 | null>(null);
+  const [setupError, setSetupError] = useState("");
   const [pending, setPending] = useState<PresentationIntent[]>([]);
   const [recoveryError, setRecoveryError] = useState("");
   const [inbox, setInbox] = useState(false);
@@ -220,7 +222,7 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
       }
     } catch (cause) {
       if (!projectionGate.current.isCurrent(request)) return;
-      const message = cause instanceof Error ? cause.message : String(cause);
+      const message = errorMessage(cause);
       setError(message);
       props.onError(message);
     } finally {
@@ -230,6 +232,7 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
 
   const loadSetup = useCallback(async (): Promise<void> => {
     const request = setupGate.current.begin();
+    setSetupError(""); setSetupReviewed(null);
     try {
       const read = await props.worker.dailyPresentation();
       const raw = read.sourceLibrary;
@@ -246,11 +249,13 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
       }
     } catch (cause) {
       if (!setupGate.current.isCurrent(request)) return;
-      props.onError(cause instanceof Error ? cause.message : String(cause));
+      const message = errorMessage(cause);
+      setSetupError(message); props.onError(message);
     }
   }, [props.worker, props.onError, snapshot?.basis.appInstanceId]);
 
   const openSetup = (): void => {
+    setSetupReviewed(null);
     if (!setupTableId && setupOptions[0]) {
       selectSetupTable(String(setupOptions[0].table.semantic!.tableId));
     }
@@ -307,7 +312,7 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
       await refresh();
       finishChange();
     } catch (cause) {
-      props.onError(cause instanceof Error ? cause.message : String(cause));
+      props.onError(errorMessage(cause));
     } finally {
       working.current = false; setSavingSetup(false);
     }
@@ -324,7 +329,7 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
       await refresh();
       await loadSetup(); finishChange();
     } catch (cause) {
-      props.onError(cause instanceof Error ? cause.message : String(cause));
+      props.onError(errorMessage(cause));
     } finally { working.current = false; setSavingSetup(false); }
   };
 
@@ -340,7 +345,7 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
       await refresh();
       await loadSetup(); finishChange();
     } catch (cause) {
-      props.onError(cause instanceof Error ? cause.message : String(cause));
+      props.onError(errorMessage(cause));
     } finally { working.current = false; setSavingSetup(false); }
   };
 
@@ -369,7 +374,7 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
       await refresh(); if (showSetup) await loadSetup();
       if (!cancel) finishChange();
       loadPending(intent.appInstanceId);
-    } catch (cause) { props.onError(cause instanceof Error ? cause.message : String(cause)); }
+    } catch (cause) { props.onError(errorMessage(cause)); }
     finally { working.current = false; setSavingSetup(false); }
   };
 
@@ -393,7 +398,7 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
       await executeInboxIntent(sessionStorage, props.worker, intent);
       loadPending(intent.appInstanceId); reportInboxWrite(intent);
       await refresh(); finishChange();
-    } catch (cause) { props.onError(cause instanceof Error ? cause.message : String(cause)); }
+    } catch (cause) { props.onError(errorMessage(cause)); }
     finally { working.current = false; setSavingSetup(false); }
   };
 
@@ -443,12 +448,12 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
   };
 
   if (loading && !snapshot) {
-    return <main className="today-home" aria-label="Today"><div className="today-loading" role="status">
+    return <main className="ui ui-min-width-0 ui-flex-1 ui-overflow-y-auto today-home" aria-label="Today"><div className="today-loading" role="status">
       Preparing Today from your local records…
     </div></main>;
   }
   if (!snapshot) {
-    return <main className="today-home" aria-label="Today"><div className="today-error" role="alert">
+    return <main className="ui ui-min-width-0 ui-flex-1 ui-overflow-y-auto today-home" aria-label="Today"><div className="today-error" role="alert">
       <strong>Today could not be prepared.</strong><span>{error}</span>
       <button onClick={() => void refresh()}>Try again</button>
     </div></main>;
@@ -481,30 +486,30 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
       await refresh();
       finishChange();
     } catch (cause) {
-      props.onError(cause instanceof Error ? cause.message : String(cause));
+      props.onError(errorMessage(cause));
     } finally { working.current = false; setSavingSetup(false); }
   };
   const cards = (items: DailyHomeItem[]): React.JSX.Element[] => items.map(item => {
     const target = recordTarget(item);
     const favorite = target !== null && favoriteTargets.has(target);
     const recent = target !== null && recentTargets.has(target);
-    return <article className={`today-item today-item-${item.kind}`}
+    return <article className={`ui ui-display-flex ui-min-width-0 ui-background-transparent ui-width-100 today-item today-item-${item.kind}`}
       key={`${item.sourceKey}:${item.sourceGeneration}`}>
-      <button className="today-item-main" onClick={() => open(item)}>
-        <span className="today-item-mark" aria-hidden="true" />
-        <span className="today-item-copy"><strong>{item.title}</strong><small>{itemMeta(item)}</small>
-          <span className="today-item-badges">
+      <button className="ui ui-display-grid ui-align-items-center ui-min-width-0 ui-border-0 ui-text-align-left ui-font-inherit ui-background-transparent ui-flex-1 today-item-main" onClick={() => open(item)}>
+        <span className="ui ui-border-radius-50 today-item-mark" aria-hidden="true" />
+        <span className="ui ui-display-grid ui-min-width-0 ui-gap-4px today-item-copy"><strong>{item.title}</strong><small>{itemMeta(item)}</small>
+          <span className="ui ui-display-flex ui-flex-wrap-wrap ui-gap-5px today-item-badges">
             {favorite ? <span>Favorite</span> : null}
             {recent ? <span>Opened recently</span> : null}
           </span>
         </span>
         <span className="today-item-open" aria-hidden="true">›</span>
       </button>
-      {item.route.kind === "record" && mutationsAvailable ? <button className="today-pin" disabled={savingSetup || !!pending.length || !!recoveryError}
+      {item.route.kind === "record" && mutationsAvailable ? <button className="ui ui-flex-none ui-border-0 ui-background-transparent today-pin" disabled={savingSetup || !!pending.length || !!recoveryError}
         aria-label={`${favorite ? "Unpin" : "Pin"} ${item.title}`}
         title={favorite ? "Remove from favorites" : "Add to favorites"}
         onClick={() => void toggleFavorite(item)}>{favorite ? "★" : "☆"}</button> : null}
-      {(item.kind === "due_record" || item.kind === "automation_notification") && mutationsAvailable ? <div className="today-inbox-actions">
+      {(item.kind === "due_record" || item.kind === "automation_notification") && mutationsAvailable ? <div className="ui ui-display-flex ui-align-items-center ui-flex-wrap-wrap today-inbox-actions">
         {item.actions.includes("complete") ? <button disabled={savingSetup || !!pending.length || !!recoveryError} onClick={() => void actOnInbox(item, "complete")}>Complete</button> : null}
         {item.actions.includes("snooze") ? <>
           <input type="date" aria-label={`Snooze ${item.title} until local date`} disabled={savingSetup || !!pending.length || !!recoveryError}
@@ -517,7 +522,7 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
     </article>;
   });
 
-  return <main className="today-home" aria-labelledby="today-title">
+  return <main className="ui ui-min-width-0 ui-flex-1 ui-overflow-y-auto today-home" aria-labelledby="today-title">
     {recoveryError ? <p role="alert">{recoveryError}</p> : null}
     {pending.map(intent => intent.slot === "dailyInboxUndo" ? <section key={intent.requestId} aria-label="Inbox Undo recovery">
       <p>Undo this Inbox change while its original app is unchanged. Keep closes the pending Undo without reverting the change.</p>
@@ -528,17 +533,17 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
       <button disabled={savingSetup} onClick={() => void recoverChange(intent, false)}>Retry original Daily change</button>
       <button disabled={savingSetup} onClick={() => void recoverChange(intent, true)}>Cancel original Daily change</button>
     </section>)}
-    <header className="today-hero">
-      <div><span className="today-kicker">Your local daily view</span><h1 id="today-title">{inbox ? "Inbox" : "Today"}</h1>
+    <header className="ui ui-display-flex ui-justify-content-space-between ui-base-max-width-a4f80e today-hero">
+      <div><span className="ui ui-text-transform-uppercase ui-base-display-4b026d today-kicker">Your local daily view</span><h1 id="today-title">{inbox ? "Inbox" : "Today"}</h1>
         <p>{snapshot.basis.localDate} · projected live from canonical records</p></div>
-      <div className="today-actions">
+      <div className="ui ui-display-flex ui-flex-wrap-wrap ui-gap-10px ui-justify-content-flex-end today-actions">
         <button aria-pressed={!inbox} onClick={() => setInbox(false)}>Today</button>
         <button aria-pressed={inbox} onClick={() => setInbox(true)}>Inbox</button>
         <button className="today-secondary" onClick={props.onCreateRecurring}
           disabled={props.automationMutationsAvailable === false}
           title={props.automationMutationsAvailable === false
             ? "Unavailable until automation authority is certified" : undefined}>↻ Recurring record</button>
-        <button className="today-primary" onClick={props.onQuickCapture}
+        <button className="ui ui-box-shadow-shadow today-primary" onClick={props.onQuickCapture}
           disabled={!mutationsAvailable}
           title={!mutationsAvailable ? "Unavailable until Daily Home changes are certified" : undefined}>
           ＋ Quick capture
@@ -555,20 +560,23 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
       <button className="link" onClick={openSetup}>Review setup</button>
     </div> : null}
 
-    {showSetup ? <section className="today-source-setup" aria-labelledby="today-source-title">
-      <header><div><span className="today-kicker">Reviewed local source</span>
+    {showSetup ? <section className="ui ui-base-border-radius-c431a0 ui-box-shadow-shadow ui-base-max-width-a4f80e today-source-setup" aria-labelledby="today-source-title">
+      <header><div><span className="ui ui-text-transform-uppercase ui-base-display-4b026d today-kicker">Reviewed local source</span>
         <h2 id="today-source-title">Choose records for Today</h2></div>
         <button type="button" className="link" onClick={() => setShowSetup(false)}
           disabled={savingSetup}>Close</button>
       </header>
+      {setupError ? <div role="alert"><p>{setupError}</p>
+        <button type="button" disabled={savingSetup} onClick={() => void loadSetup()}>Retry source review</button>
+      </div> : !setupReviewed ? <p role="status">Reading the original source for review…</p> : null}
       {sourceMalformed ? <div className="today-source-warning" role="alert">
         <strong>Today source settings are malformed.</strong>
         <p>Reset only the Today source list; canonical records are not changed.</p>
         <button type="button" aria-label="Reset Today sources"
-          disabled={savingSetup || !mutationsAvailable || !!pending.length || !!recoveryError}
+          disabled={savingSetup || !setupReviewed || !mutationsAvailable || !!pending.length || !!recoveryError}
           onClick={() => void resetSources()}>Reset Today sources</button>
       </div> : null}
-      {sourceLibrary && sourceLibrary.profiles.length > 0 ? <section className="today-configured-sources"
+      {sourceLibrary && sourceLibrary.profiles.length > 0 ? <section className="ui ui-display-grid ui-gap-8px ui-article-align-items-c91e3c ui-base-margin-top-7b237e today-configured-sources"
         aria-label="Configured Today sources">
         <h3>Configured sources</h3>
         {sourceLibrary.profiles.map(profile => {
@@ -585,7 +593,7 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
               </span>
               : <span>{profile.completion.kind === "none"
                 ? "No completion rule" : "Completion reviewed"}</span>}</div>
-            <div className="today-source-recovery">
+            <div className="ui ui-display-flex ui-align-items-center ui-flex-wrap-wrap ui-gap-8px ui-justify-content-flex-end today-source-recovery">
               {issue && configuredTable && !configuredTable.inactive && !ambiguous
                 ? <button type="button" className="link"
                   aria-label={`Review binding for ${label}`}
@@ -594,7 +602,7 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
                 aria-label={`Repair schema for ${label}`}
                 onClick={props.onSetup}>Open Data to repair schema</button> : null}
               <button type="button" className="link danger"
-                aria-label={`Remove source ${label}`} disabled={savingSetup || !mutationsAvailable || !!pending.length || !!recoveryError}
+                aria-label={`Remove source ${label}`} disabled={savingSetup || !setupReviewed || !mutationsAvailable || !!pending.length || !!recoveryError}
                 title={!mutationsAvailable
                   ? "Unavailable until Daily Home changes are certified" : undefined}
                 onClick={() => void removeSource(profile.profileId)}>Remove</button>
@@ -602,10 +610,10 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
           </article>;
         })}
       </section> : null}
-      {setupOptions.length ? <form className="today-source-form" onSubmit={event => void saveSetup(event)}>
+      {setupOptions.length ? <form className="ui ui-display-grid ui-gap-12px ui-label-display-b369c3 ui-label-gap-931d54 ui-select-width-96bdbe ui-base-margin-top-7b237e today-source-form" onSubmit={event => void saveSetup(event)}>
         <label>Record type
           <select aria-label="Record type" value={setupTableId}
-            onChange={event => selectSetupTable(event.currentTarget.value)} disabled={savingSetup}>
+            onChange={event => selectSetupTable(event.currentTarget.value)} disabled={savingSetup || !setupReviewed}>
             {setupOptions.map(option => {
               const id = String(option.table.semantic!.tableId);
               return <option key={id} value={id}>
@@ -616,7 +624,7 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
         </label>
         <label>Title field
           <select aria-label="Title field" value={setupLabelId}
-            onChange={event => setSetupLabelId(event.currentTarget.value)} disabled={savingSetup}>
+            onChange={event => setSetupLabelId(event.currentTarget.value)} disabled={savingSetup || !setupReviewed}>
             {(setupOptions.find(option => String(option.table.semantic?.tableId) === setupTableId)?.labels ?? [])
               .map(column => {
                 const id = String(column.semantic!.fieldId);
@@ -626,7 +634,7 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
         </label>
         <label>Due date field
           <select aria-label="Due date field" value={setupDueId}
-            onChange={event => setSetupDueId(event.currentTarget.value)} disabled={savingSetup}>
+            onChange={event => setSetupDueId(event.currentTarget.value)} disabled={savingSetup || !setupReviewed}>
             {(setupOptions.find(option => String(option.table.semantic?.tableId) === setupTableId)?.dates ?? [])
               .map(column => {
                 const id = String(column.semantic!.fieldId);
@@ -635,7 +643,7 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
           </select>
         </label>
         <label>Completion rule
-          <select aria-label="Completion rule" value={setupCompletion} disabled={savingSetup}
+          <select aria-label="Completion rule" value={setupCompletion} disabled={savingSetup || !setupReviewed}
             onChange={event => {
               const value = event.currentTarget.value;
               setSetupCompletion(value);
@@ -657,60 +665,60 @@ export function TodayView(props: TodayViewProps): React.JSX.Element {
           </select>
         </label>
         {selectedEnumCompletion ? <label>Completed value
-          <select aria-label="Completed value" value={setupEnumValue} disabled={savingSetup}
+          <select aria-label="Completed value" value={setupEnumValue} disabled={savingSetup || !setupReviewed}
             onChange={event => setSetupEnumValue(event.currentTarget.value)}>
             {(selectedEnumCompletion.values ?? []).map(value =>
               <option key={value} value={value}>{value}</option>)}
           </select>
         </label> : null}
         <p>Clay includes records due today or earlier and excludes only the completion rule reviewed here.</p>
-        <div className="today-source-actions">
-          <button className="today-primary" type="submit"
+        <div className="ui ui-display-flex ui-gap-9px today-source-actions">
+          <button className="ui ui-box-shadow-shadow today-primary" type="submit"
             disabled={savingSetup || !mutationsAvailable || !setupReviewed || !!pending.length || !!recoveryError}>
             {savingSetup ? "Saving…" : mutationsAvailable ? "Use this source" : "Changes unavailable"}
           </button>
           <button className="today-secondary" type="button" disabled={savingSetup}
             onClick={() => setShowSetup(false)}>Cancel</button>
         </div>
-      </form> : <div className="today-source-empty">
+      </form> : <div className="ui ui-display-flex ui-align-items-center ui-justify-content-space-between ui-p-margin-9d8b39 ui-gap-16px ui-p-font-size-9ca3bf today-source-empty">
         <p>Add a record type with a text title and date field, then return to Today.</p>
         <button className="today-secondary" type="button" onClick={props.onSetup}>Open Data</button>
       </div>}
     </section> : null}
 
-    <div className="today-grid">
-      {inbox ? <section className="today-section" aria-label="Local Inbox">
+    <div className="ui ui-display-grid ui-gap-14px ui-base-max-width-a4f80e today-grid">
+      {inbox ? <section className="ui ui-min-width-0 ui-overflow-hidden ui-base-border-radius-c431a0 ui-box-shadow-shadow today-section" aria-label="Local Inbox">
         <header><h2>Local Inbox</h2></header>
         <p>Due work and local automation notices. Snooze uses this app’s calendar; no off-device reminder delivery is implied.</p>
         {snapshot.sources.filter(source => source.sourceId === "due_record" || source.sourceId === "automation_notification").map(source => <section key={source.sourceId}>
           <h3>{source.sourceId === "due_record" ? "Due records" : "Automation notices"} · {countLabel(source.page.counts.renderedUnique)}</h3>
-          <div className="today-list">{cards(source.page.items)}</div>
+          <div className="ui ui-display-grid today-list">{cards(source.page.items)}</div>
           {!source.page.items.length ? <p>{source.page.counts.renderedUnique.kind === "exact" ? "No current items in this source." : "This source is partial or unavailable; more work may exist."}</p> : null}
         </section>)}
       </section> : <>
-      <section className="today-section today-section-due_today" aria-labelledby="today-due">
+      <section className="ui ui-min-width-0 ui-overflow-hidden ui-base-border-radius-c431a0 ui-box-shadow-shadow today-section today-section-due_today" aria-labelledby="today-due">
         <header><h2 id="today-due">Due today &amp; overdue</h2>
           <span>{countLabel(due.page.counts.renderedUnique)}</span></header>
-        <div className="today-list">{due.page.items.length ? cards(due.page.items)
-          : <p className="today-empty">{due.page.counts.renderedUnique.kind === "exact"
+        <div className="ui ui-display-grid today-list">{due.page.items.length ? cards(due.page.items)
+          : <p className="ui ui-font-size-12px ui-margin-0 today-empty">{due.page.counts.renderedUnique.kind === "exact"
             ? "Nothing is due today or overdue."
             : "Due results are partial; more work may exist."}</p>}</div>
       </section>
       {sections.map(section => {
         const copy = SECTION_COPY[section.sectionId];
-        return <section className={`today-section today-section-${section.sectionId}`}
+        return <section className={`ui ui-min-width-0 ui-overflow-hidden ui-base-border-radius-c431a0 ui-box-shadow-shadow today-section today-section-${section.sectionId}`}
           key={section.sectionId} aria-labelledby={`today-${section.sectionId}`}>
           <header><h2 id={`today-${section.sectionId}`}>{copy.title}</h2>
             <span>{countLabel(section.page.counts.renderedUnique)}</span></header>
-          <div className="today-list">{section.page.items.length
+          <div className="ui ui-display-grid today-list">{section.page.items.length
             ? cards(section.page.items)
-            : <p className="today-empty">{section.page.counts.renderedUnique.kind === "exact"
+            : <p className="ui ui-font-size-12px ui-margin-0 today-empty">{section.page.counts.renderedUnique.kind === "exact"
               ? copy.empty : `${copy.title} results are partial; more work may exist.`}</p>}</div>
         </section>;
       })}
       </>}
     </div>
-    {snapshot.aggregateCounts.renderedUnique.kind === "partial" ? <p className="today-completeness">
+    {snapshot.aggregateCounts.renderedUnique.kind === "partial" ? <p className="ui ui-font-size-11px ui-base-max-width-a4f80e today-completeness">
       Counts ending in + are partial. Clay never calls a loaded page “all”.
     </p> : null}
   </main>;

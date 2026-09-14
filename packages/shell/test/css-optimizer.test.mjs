@@ -38,6 +38,30 @@ const codeSources = [
 ];
 
 describe("production CSS symbol compaction", () => {
+  it("clusters less-frequent component families without collisions or renaming reserved/runtime classes", () => {
+    const names = Array.from({ length: 70 }, (_, i) => `common-${i}`);
+    const rare = ["dialog-close", "dialog-title", "dialog-content", "grid-header", "grid-body"];
+    const plan = buildCssSymbolPlan({
+      cssSources: [{ id: "ui.css", code: [...names, ...rare, "a", "ba", "runtime-only"].map(n => `.${n}{color:red}`).join("") }],
+      codeSources: [{ id: "ui.tsx", code: names.map(n => `<div className="${n}" />`.repeat(5)).join("")
+        + rare.map(n => `<div className="${n}" />`).join("") }],
+    });
+    expect(new Set([...plan.classes.values()]).size).toBe(plan.classes.size);
+    expect([...plan.classes.values()]).not.toContain("a");
+    expect([...plan.classes.values()]).not.toContain("ba");
+    expect(plan.classes.has("runtime-only")).toBe(false);
+    expect(new Set(rare.filter(n => n.startsWith("dialog-")).map(n => plan.classes.get(n).slice(0, 1))).size).toBe(1);
+    expect(plan.classes.get("dialog-close").slice(0, 1)).not.toBe(plan.classes.get("grid-body").slice(0, 1));
+  });
+  it("reserves the shortest names for actual combined stylesheet and JSX usage", () => {
+    const plan = buildCssSymbolPlan({
+      cssSources: [{ id: "controls.css", code: ".common-control{display:flex}.rare-control{color:red}.rare-control:hover{color:blue}" }],
+      codeSources: [{ id: "Controls.tsx", code: 'const view = <><i className="rare-control" />'
+        + '<i className="common-control" />'.repeat(8) + '</>;' }],
+    });
+    expect(plan.classes.get("common-control")).toBe("a");
+    expect(plan.classes.get("rare-control")).toBe("b");
+  });
   it("builds a deterministic plan from static style-bearing class uses", () => {
     const first = buildCssSymbolPlan({ cssSources, codeSources });
     const second = buildCssSymbolPlan({

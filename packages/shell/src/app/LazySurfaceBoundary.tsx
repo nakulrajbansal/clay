@@ -1,3 +1,4 @@
+import { FocusButton } from "./FocusControl";
 import { Component, useEffect, useRef, type ErrorInfo, type ReactNode } from "react";
 import { ModalDialog } from "./ModalDialog";
 
@@ -13,16 +14,16 @@ function SurfaceFailure(props: { label: string; modal?: boolean }): React.JSX.El
     <span className="contract-eyebrow">Recoverable loading error</span>
     <h2>Couldn’t open {props.label}</h2>
     <p>Your records and app history are untouched. Reload Clay to fetch this surface again.</p>
-    <button ref={reloadRef} autoFocus className="primary"
-      onClick={() => window.location.reload()}>Reload Clay</button>
+    <FocusButton ref={reloadRef} autoFocus className="primary"
+      onClick={() => window.location.reload()}>Reload Clay</FocusButton>
   </>;
   const label = `${props.label} failed to load`;
   return props.modal
-    ? <ModalDialog className="surface-error" backdropClassName="surface-error-backdrop"
+    ? <ModalDialog className="ui ui-display-grid ui-background-panel ui-min-width-0 ui-gap-10px ui-flex-1 ui-base-padding-6fe44b surface-error" backdropClassName="ui ui-display-grid ui-place-items-center ui-position-fixed surface-error-backdrop"
         role="alertdialog" ariaLabel={label} dismissible={false} onClose={() => undefined}>
         {content}
       </ModalDialog>
-    : <section className="surface-error" role="alert" aria-label={label}>{content}</section>;
+    : <section className="ui ui-display-grid ui-background-panel ui-min-width-0 ui-gap-10px ui-flex-1 ui-base-padding-6fe44b surface-error" role="alert" aria-label={label}>{content}</section>;
 }
 
 export class LazySurfaceBoundary extends Component<{

@@ -1,3 +1,5 @@
+import { errorMessage } from "./error-message";
+import { FocusButton } from "./FocusControl";
 // The shell chrome (doc 02 §1): onboarding -> main screen with panel
 // regions + conversation rail. Live panels bind to the live store's Bridge;
 // during S5 the proposed panels render in place with a dashed frame,
@@ -66,6 +68,7 @@ import { reorder, type Region } from "./layout";
 import { buildTrustReceipt } from "./change-contract";
 import { useLensController } from "./useLensController";
 import { LazySurfaceBoundary } from "./LazySurfaceBoundary";
+import { SurfaceBoundary } from "./SurfaceBoundary";
 import { ModalDialog, ModalScopedPortal } from "./ModalDialog";
 import type {
   RecoveryActionFailure,
@@ -114,13 +117,6 @@ const loadProductionBackupRuntime = createRetryingLoader<ProductionBackupRuntime
 const loadAutomaticBackupTriggerRuntime = createRetryingLoader<AutomaticBackupRuntime>(
   () => import("./automatic-backup-trigger.browser"),
 );
-
-function SurfaceFallback({ label, modal = false }: {
-  label: string; modal?: boolean;
-}): React.JSX.Element {
-  const status = <div className="surface-loading" role="status">Opening {label}…</div>;
-  return modal ? <div className="surface-loading-backdrop">{status}</div> : status;
-}
 
 function durationBucket(ms: number): "under_3m" | "3_to_10m" | "10_to_30m" | "over_30m" {
   if (ms < 180_000) return "under_3m";
@@ -617,7 +613,7 @@ export function App(): React.JSX.Element {
         const failed = runs.filter(run => run.status === "failed").length;
         if (failed > 0) pushToast(`${failed} automation run${failed === 1 ? "" : "s"} failed safely`, "danger");
       } catch (error) {
-        if (live) pushToast(`Automation check failed: ${error instanceof Error ? error.message : String(error)}`, "danger");
+        if (live) pushToast(`Automation check failed: ${errorMessage(error)}`, "danger");
       } finally { running = false; }
     };
     void tick();
@@ -807,7 +803,7 @@ export function App(): React.JSX.Element {
         console.error("[clay boot]", e);
         setApps(listApps());
         setCurrentId(currentApp()?.id ?? null);
-        setBootError(e instanceof Error ? e.message : String(e));
+        setBootError(errorMessage(e));
         setPhase("error");
       }
     })();
@@ -891,7 +887,7 @@ export function App(): React.JSX.Element {
       setPhase("main");
       recordPrivateMetric({ type: "app_ready", entry: "new_starter" });
     } catch (error) {
-      setOnboardingError(error instanceof Error ? error.message : String(error));
+      setOnboardingError(errorMessage(error));
     } finally {
       setBusy(false);
     }
@@ -946,7 +942,7 @@ export function App(): React.JSX.Element {
         parsed: await parseNewAppImportFile(file, parserAppId),
       });
     } catch (error) {
-      setOnboardingError(error instanceof Error ? error.message : String(error));
+      setOnboardingError(errorMessage(error));
     } finally {
       setBusy(false);
     }
@@ -1051,7 +1047,7 @@ export function App(): React.JSX.Element {
     } catch (error) {
       // Timeout and post-commit readback/presentation errors are outcome-ambiguous.
       // The exact request remains retained for reconciliation. Never delete its target.
-      setOnboardingError((error instanceof Error ? error.message : String(error))
+      setOnboardingError((errorMessage(error))
         + " No app was deleted. Retry (or reload and retry) to reconcile the same import receipt.");
     } finally {
       setBusy(false);
@@ -1760,7 +1756,7 @@ export function App(): React.JSX.Element {
       await openEverydayActionTarget(client(), openData);
       pushToast("Opened your real record. Reviewing it completes this step.", "info");
     } catch (error) {
-      pushToast(error instanceof Error ? error.message : String(error), "danger");
+      pushToast(errorMessage(error), "danger");
     }
   };
   openRecordRef.current = (table, id): void => openData(table, id);
@@ -1879,7 +1875,7 @@ export function App(): React.JSX.Element {
       publishCurrentModelAccess();
       pushToast(normalized ? "Model backend set for all apps" : "Model backend cleared", "success");
     } catch (error) {
-      pushToast(error instanceof Error ? error.message : String(error), "danger");
+      pushToast(errorMessage(error), "danger");
     }
   };
 
@@ -2123,7 +2119,7 @@ export function App(): React.JSX.Element {
       recordPrivateMetric({ type: "rewind_finished", source, result: "failed", depth });
       recordPrivateMetric({ type: "recovery_finished",
         method: "history_rewind", result: "failed" });
-      pushToast(error instanceof Error ? error.message : String(error), "danger");
+      pushToast(errorMessage(error), "danger");
     }
   };
   restoreToRef.current = restoreTo;
@@ -2177,13 +2173,13 @@ export function App(): React.JSX.Element {
     });
   }, [display, lensPanels, preview, scrub]);
   const confirmDialog = confirmBox ? (
-    <ModalDialog role="alertdialog" className="confirm-card"
-      backdropClassName="confirm-backdrop" ariaLabelledBy="confirm-title"
+    <ModalDialog role="alertdialog" className="ui ui-background-panel ui-base-border-8f9f0d ui-box-shadow-shadow-lg confirm-card"
+      backdropClassName="ui ui-display-grid ui-place-items-center ui-position-fixed ui-inset-0 confirm-backdrop" ariaLabelledBy="confirm-title"
       ariaDescribedBy="confirm-message" onClose={() => settleConfirm(false)}>
       <h2 id="confirm-title" className="confirm-title">Confirm action</h2>
-      <p id="confirm-message" className="confirm-msg">{confirmBox.msg}</p>
-      <div className="rail-actions confirm-actions">
-        <button autoFocus className="primary" onClick={() => settleConfirm(true)}>Confirm</button>
+      <p id="confirm-message" className="ui ui-color-text confirm-msg">{confirmBox.msg}</p>
+      <div className="ui ui-display-flex ui-align-items-center ui-flex-wrap-wrap ui-gap-12px ui-justify-content-flex-end rail-actions confirm-actions">
+        <FocusButton autoFocus className="primary" onClick={() => settleConfirm(true)}>Confirm</FocusButton>
         <button onClick={() => settleConfirm(false)}>Cancel</button>
       </div>
     </ModalDialog>
@@ -2193,16 +2189,16 @@ export function App(): React.JSX.Element {
     [panelProvenance],
   );
 
-  if (phase === "loading") return <div className="boot">Opening your app…</div>;
+  if (phase === "loading") return <div className="ui ui-display-grid ui-color-text-2 ui-place-items-center boot">Opening your app…</div>;
   if (phase === "error")
     return (<>
-      <div className="boot boot-error">
+      <div className="ui ui-display-grid ui-color-text-2 ui-place-items-center ui-text-align-center ui-gap-10px ui-base-padding-6fe44b boot boot-error">
         <h2>This app didn’t open</h2>
         <p className="boot-error-msg">{bootError}</p>
-        <div className="rail-actions">
+        <div className="ui ui-display-flex ui-align-items-center ui-flex-wrap-wrap ui-gap-12px rail-actions">
           <button className="primary" onClick={() => window.location.reload()}>Try again</button>
         </div>
-        <p className="boot-error-hint">
+        <p className="ui ui-color-text-3 ui-font-size-12px boot-error-hint">
           Your stored apps were kept. Switching and deleting are unavailable until
           the authoritative catalog opens successfully. Close any other Clay tab,
           then try again; do not clear this site's storage.
@@ -2246,7 +2242,7 @@ export function App(): React.JSX.Element {
                     reviewed.fileName, reviewed.parsed.headerReview!.sourceRows, choice,
                   ) });
                   setOnboardingError(null);
-                } catch (error) { setOnboardingError(error instanceof Error ? error.message : String(error)); }
+                } catch (error) { setOnboardingError(errorMessage(error)); }
               });
             }}
               onCancel={() => {
@@ -2353,7 +2349,7 @@ export function App(): React.JSX.Element {
         enabled, mutationContext()));
       return true;
     } catch (error) {
-      pushToast(error instanceof Error ? error.message : String(error), "danger");
+      pushToast(errorMessage(error), "danger");
       return false;
     }
   };
@@ -2363,7 +2359,7 @@ export function App(): React.JSX.Element {
       setPrivateMetricsSummary(await client().clearPrivateMetrics(mutationContext()));
       return true;
     } catch (error) {
-      pushToast(error instanceof Error ? error.message : String(error), "danger");
+      pushToast(errorMessage(error), "danger");
       return false;
     }
   };
@@ -2476,8 +2472,8 @@ export function App(): React.JSX.Element {
         if (!bridge || d.ghost) {
           return (
             <section key={d.panel.panel_id} className="panel-frame panel-ghost">
-              <header className="panel-title">{d.panel.title}
-                <span className="panel-proposed">will be removed</span>
+              <header className="ui ui-display-flex ui-align-items-center ui-color-text ui-gap-8px ui-border-bottom-line ui-background-bg-soft panel-title">{d.panel.title}
+                <span className="ui ui-color-accent-text ui-background-accent-soft ui-text-transform-uppercase ui-border-radius-999px panel-proposed">will be removed</span>
               </header>
             </section>
           );
@@ -2495,7 +2491,7 @@ export function App(): React.JSX.Element {
           <Suspense
             key={`${d.panel.panel_id}@${d.panel.version}${d.isPreview ? ":preview" : ""}:t${themeId}`}
             fallback={<section className="panel-frame panel-loading" style={loadingStyle}>
-              <header className="panel-title">Opening {d.panel.title}…</header>
+              <header className="ui ui-display-flex ui-align-items-center ui-color-text ui-gap-8px ui-border-bottom-line ui-background-bg-soft panel-title">Opening {d.panel.title}…</header>
             </section>}
           >
           <PanelFrame
@@ -2541,7 +2537,7 @@ export function App(): React.JSX.Element {
       const dw = panels.find(p => p.panel_id === dragId)?.placement.w ?? 2;
       const slotStyle = name === "main" && dropTarget.col !== null
         ? { gridColumn: `${dropTarget.col + 1} / span ${dw}` } : undefined;
-      els.splice(i, 0, <div key="drop-slot" className="drop-slot" style={slotStyle} aria-hidden="true" />);
+      els.splice(i, 0, <div key="drop-slot" className="ui ui-background-accent-soft drop-slot" style={slotStyle} aria-hidden="true" />);
     }
     return els;
   };
@@ -2581,8 +2577,7 @@ export function App(): React.JSX.Element {
       />
       {(firstSuccessLoading || firstSuccessError
           || firstSuccess?.start.state === "complete") ? (
-        <LazySurfaceBoundary label="first steps">
-          <Suspense fallback={<SurfaceFallback label="first steps" />}>
+        <SurfaceBoundary label="first steps">
             <FirstSuccessChecklist
               state={firstSuccess}
               loading={firstSuccessLoading}
@@ -2614,12 +2609,10 @@ export function App(): React.JSX.Element {
                 if (workerRef.current) void loadFirstSuccess(workerRef.current);
               }}
             />
-          </Suspense>
-        </LazySurfaceBoundary>
+          </SurfaceBoundary>
       ) : null}
       {showRecoveryCenter ? (
-        <LazySurfaceBoundary label="Recovery Center" modal>
-          <Suspense fallback={<SurfaceFallback label="Recovery Center" modal />}>
+        <SurfaceBoundary label="Recovery Center" modal>
             <RecoveryCenter
               appName={apps.find(app => app.id === currentId)?.name ?? "This app"}
               authoritativeAppInstanceId={currentId}
@@ -2671,25 +2664,23 @@ export function App(): React.JSX.Element {
               }}
               onRestoreAsNew={productionWorkerRouteAvailable("restoreAsNew") ? restoreAsNew : undefined}
             />
-          </Suspense>
-        </LazySurfaceBoundary>
+          </SurfaceBoundary>
       ) : null}
       {!persistent ? (
-        <div className="banner">
+        <div className="ui ui-display-flex ui-align-items-center ui-justify-content-space-between ui-flex-none ui-gap-16px ui-color-warn banner">
           <span>
             Your data isn’t saving on this device right now. If Clay is open in
             another tab, close it and retry. Otherwise export a backup to be safe.
           </span>
-          <span className="banner-actions">
+          <span className="ui ui-display-flex ui-flex-none ui-gap-14px banner-actions">
             <button className="link" onClick={reloadApp}>Retry</button>
             <button className="link" onClick={() => void exportArchive()}>Export backup</button>
           </span>
         </div>
       ) : null}
-      <div className="app-body">
+      <div className="ui ui-display-flex ui-flex-1 ui-position-relative ui-min-height-0 app-body">
       {workspaceMode === "work" && workerRef.current ? (
-        <LazySurfaceBoundary label="Today">
-          <Suspense fallback={<SurfaceFallback label="Today" />}>
+        <SurfaceBoundary label="Today">
             <TodayView
               worker={workerRef.current}
               tables={registryTables}
@@ -2705,11 +2696,10 @@ export function App(): React.JSX.Element {
               onWrite={table => { liveBridge?.notifyWrite(table); invalidateDailyHome(); }}
               onError={message => pushToast(message, "danger")}
             />
-          </Suspense>
-        </LazySurfaceBoundary>
+          </SurfaceBoundary>
       ) : <>
       <LazySurfaceBoundary label="views">
-      <main className="regions">
+      <main className="ui ui-display-grid ui-flex-1 ui-gap-16px ui-overflow-y-auto regions">
         <TimeSlider
           history={history}
           current={scrub?.version ?? head}
@@ -2720,21 +2710,21 @@ export function App(): React.JSX.Element {
           onOpenHistory={openHistory}
         />
         {display.length === 0 && !preview && !scrub ? (
-          <div className="empty-canvas">
+          <div className="ui ui-display-flex ui-align-items-center ui-flex-direction-column ui-text-align-center ui-p-color-a3a3fb empty-canvas">
             {workspaceMode === "work" ? <>
-              <div className="empty-canvas-spark" aria-hidden="true">✓</div>
+              <div className="ui ui-display-grid ui-place-items-center ui-background-accent-soft ui-box-shadow-shadow ui-color-accent empty-canvas-spark" aria-hidden="true">✓</div>
               <h2>Your workspace is ready</h2>
               <p>Use Search to find or update work. Switch to Customize when you want to
                 add views, import data, or reshape the workspace.</p>
-              <button className="empty-chip" onClick={() => chooseWorkspaceMode("customize")}>
+              <button className="ui ui-background-panel ui-color-text ui-base-border-f41cca ui-text-align-left ui-font-inherit ui-box-shadow-shadow empty-chip" onClick={() => chooseWorkspaceMode("customize")}>
                 Customize workspace
               </button>
             </> : <>
-            <div className="empty-canvas-spark">✦</div>
+            <div className="ui ui-display-grid ui-place-items-center ui-background-accent-soft ui-box-shadow-shadow ui-color-accent empty-canvas-spark">✦</div>
             <h2>What do you want to build?</h2>
             <p>Describe it in plain words. Every proposed change is reviewed before it is applied,
               and every kept change remains reversible.</p>
-            <div className="empty-canvas-chips">
+            <div className="ui ui-display-flex ui-flex-direction-column ui-gap-10px ui-width-100 empty-canvas-chips">
               {[
                 "Build a habit tracker with a daily check-off and a streak count",
                 "A simple client CRM with contacts and a deal pipeline board",
@@ -2742,26 +2732,25 @@ export function App(): React.JSX.Element {
                 "A weekly meal planner with a board by day of the week",
                 "An expense tracker with a category chart and a running total",
               ].map(ex => (
-                <button key={ex} className="empty-chip" disabled={busy}
+                <button key={ex} className="ui ui-background-panel ui-color-text ui-base-border-f41cca ui-text-align-left ui-font-inherit ui-box-shadow-shadow empty-chip" disabled={busy}
                   onClick={() => seedIntent(ex)}>{ex}</button>
               ))}
             </div>
-            {busy ? <p className="empty-canvas-busy">Building…</p> : null}
+            {busy ? <p className="ui ui-color-accent-text empty-canvas-busy">Building…</p> : null}
             </>}
           </div>
         ) : (
           <>
-            <div className="region-top" onDragOver={e => onRegionDragOver("top", e)} onDrop={e => onRegionDrop("top", e)}>{region("top")}</div>
-            <div className="region-main" onDragOver={e => onRegionDragOver("main", e)} onDrop={e => onRegionDrop("main", e)}>{region("main")}</div>
-            <div className="region-side" onDragOver={e => onRegionDragOver("side", e)} onDrop={e => onRegionDrop("side", e)}>{region("side")}</div>
+            <div className="ui ui-display-grid region-top" onDragOver={e => onRegionDragOver("top", e)} onDrop={e => onRegionDrop("top", e)}>{region("top")}</div>
+            <div className="ui ui-display-grid region-main" onDragOver={e => onRegionDragOver("main", e)} onDrop={e => onRegionDrop("main", e)}>{region("main")}</div>
+            <div className="ui ui-display-flex ui-flex-direction-column ui-gap-16px region-side" onDragOver={e => onRegionDragOver("side", e)} onDrop={e => onRegionDrop("side", e)}>{region("side")}</div>
           </>
         )}
       </main>
       </LazySurfaceBoundary>
       </>}
       {showHistory ? (
-        <LazySurfaceBoundary label="history" modal>
-        <Suspense fallback={<SurfaceFallback label="history" modal />}>
+        <SurfaceBoundary label="history" modal>
         <HistoryView
           history={history}
           head={head}
@@ -2772,12 +2761,10 @@ export function App(): React.JSX.Element {
             .setCheckpoint(v, label, mutationContext()).then(setHistory)}
           onClose={closeHistory}
         />
-        </Suspense>
-        </LazySurfaceBoundary>
+        </SurfaceBoundary>
       ) : null}
       {showAutomations && workerRef.current ? (
-        <LazySurfaceBoundary label="automations" modal>
-          <Suspense fallback={<SurfaceFallback label="automations" modal />}>
+        <SurfaceBoundary label="automations" modal>
             <AutomationCenter
               worker={workerRef.current}
               tables={registryTables}
@@ -2798,12 +2785,10 @@ export function App(): React.JSX.Element {
               onInfo={message => pushToast(message, "info")}
               onConfirm={askConfirm}
             />
-          </Suspense>
-        </LazySurfaceBoundary>
+          </SurfaceBoundary>
       ) : null}
       {showIntake && workerRef.current && semanticTrace && currentId ? (
-        <LazySurfaceBoundary label="public intake" modal>
-          <Suspense fallback={<SurfaceFallback label="public intake" modal />}>
+        <SurfaceBoundary label="public intake" modal>
             <IntakeCenter
               worker={workerRef.current}
               appInstanceId={currentId}
@@ -2818,12 +2803,10 @@ export function App(): React.JSX.Element {
               onError={message => pushToast(message, "danger")}
               onInfo={message => pushToast(message, "info")}
             />
-          </Suspense>
-        </LazySurfaceBoundary>
+          </SurfaceBoundary>
       ) : null}
       {showCommandPalette && workerRef.current && dataStoreRef.current ? (
-        <LazySurfaceBoundary label="search and act" modal>
-          <Suspense fallback={<SurfaceFallback label="search and act" modal />}>
+        <SurfaceBoundary label="search and act" modal>
             <CommandPalette
               appInstanceId={currentId}
               worker={workerRef.current}
@@ -2841,12 +2824,10 @@ export function App(): React.JSX.Element {
               onError={message => pushToast(message, "danger")}
               onInfo={(message, action) => pushToast(message, "info", action)}
             />
-          </Suspense>
-        </LazySurfaceBoundary>
+          </SurfaceBoundary>
       ) : null}
       {showData && dataStoreRef.current && workerRef.current ? (
-        <LazySurfaceBoundary label="data" modal>
-        <Suspense fallback={<SurfaceFallback label="data" modal />}>
+        <SurfaceBoundary label="data" modal>
         <DataView
           worker={workerRef.current}
           store={dataStoreRef.current}
@@ -2871,8 +2852,7 @@ export function App(): React.JSX.Element {
             type: "recovery_finished", method: "row_restore", result,
           })}
         />
-        </Suspense>
-        </LazySurfaceBoundary>
+        </SurfaceBoundary>
       ) : null}
       {workspaceMode === "customize" && railOpen ? <ConversationRail
         feed={feed}
@@ -2913,8 +2893,7 @@ export function App(): React.JSX.Element {
       /> : null}
       </div>
       {showShapeMap ? (
-        <LazySurfaceBoundary label="shape map" modal>
-        <Suspense fallback={<SurfaceFallback label="shape map" modal />}>
+        <SurfaceBoundary label="shape map" modal>
         <ShapeMapView
           tables={registryTables}
           panels={panels}
@@ -2927,12 +2906,10 @@ export function App(): React.JSX.Element {
           onOpenHistory={openHistory}
           onAskAbout={askAboutPanel}
         />
-        </Suspense>
-        </LazySurfaceBoundary>
+        </SurfaceBoundary>
       ) : null}
       {showPrivateMetrics && privateMetricsSummary ? (
-        <LazySurfaceBoundary label="private activity" modal>
-        <Suspense fallback={<SurfaceFallback label="private activity" modal />}>
+        <SurfaceBoundary label="private activity" modal>
           <PrivateMetricsView
             summary={privateMetricsSummary}
             persistent={persistent}
@@ -2941,12 +2918,11 @@ export function App(): React.JSX.Element {
             onClear={clearPrivateMetrics}
             onCopy={copyPrivateMetrics}
           />
-        </Suspense>
-        </LazySurfaceBoundary>
+        </SurfaceBoundary>
       ) : null}
       {confirmDialog}
       <ModalScopedPortal>
-        <div className="toasts" data-modal-scoped-feedback
+        <div className="ui ui-display-flex ui-flex-direction-column ui-gap-8px ui-position-fixed toasts" data-modal-scoped-feedback
           aria-live="polite" aria-atomic="true">
           {toasts.map(t => (
             <div key={t.id} className={`toast toast-${t.kind}`}
@@ -2954,7 +2930,7 @@ export function App(): React.JSX.Element {
               {t.msg}
               {t.action ? (
                 <button
-                  className="toast-action"
+                  className="ui ui-color-text ui-border-0 ui-font-inherit ui-background-bg ui-border-radius-7px toast-action"
                   onClick={() => { t.action!.run(); setToasts(x => x.filter(y => y.id !== t.id)); }}
                 >{t.action.label}</button>
               ) : null}

@@ -1,3 +1,4 @@
+import { errorMessage } from "./error-message";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   IntakeAcceptanceReceipt, IntakeAutoAcceptSimulation, IntakeDeliveryFailure, IntakeInboxItem,
@@ -78,7 +79,7 @@ function AutoAcceptControls({ form, worker, authorityTarget, enabled, disabled, 
   const [simulation, setSimulation] = useState<{ result: IntakeAutoAcceptSimulation; target: IntakeRead["authorityTarget"]; draft: IntakeAutoAcceptDraftV1 } | null>(null);
   const [busy, setBusy] = useState(false);
   if (form.publicForm.fileRequests.length > 0) return (
-    <p className="intake-rule-note">Automatic acceptance is unavailable: requested files always need owner review.</p>
+    <p className="ui ui-font-size-13px intake-rule-note">Automatic acceptance is unavailable: requested files always need owner review.</p>
   );
   const draft = (): IntakeAutoAcceptDraftV1 => ({
     schema: 1,
@@ -95,7 +96,7 @@ function AutoAcceptControls({ form, worker, authorityTarget, enabled, disabled, 
       // A newer presentation read must not rebase the reviewed simulation.
       setSimulation({ ...outcome, draft: reviewedDraft }); await onChange();
     }
-    catch (cause) { onError(cause instanceof Error ? cause.message : String(cause)); }
+    catch (cause) { onError(errorMessage(cause)); }
     finally { setBusy(false); }
   };
   const enable = async (): Promise<void> => {
@@ -106,13 +107,13 @@ function AutoAcceptControls({ form, worker, authorityTarget, enabled, disabled, 
       await onChange();
       onInfo("Automatic acceptance enabled for this exact previewed rule.");
       setSimulation(null);
-    } catch (cause) { onError(cause instanceof Error ? cause.message : String(cause)); }
+    } catch (cause) { onError(errorMessage(cause)); }
     finally { setBusy(false); }
   };
-  return <details className="intake-rule">
+  return <details className="ui ui-base-margin-top-48251f intake-rule">
     <summary>Optional automatic acceptance</summary>
     <p>{enabled ? "Enabled while this app is open on this device." : "Off. Preview an exact rule before enabling."} Files always require owner review.</p>
-    <fieldset disabled={disabled || busy}><div className="intake-rule-grid">
+    <fieldset disabled={disabled || busy}><div className="ui ui-display-grid ui-gap-8px intake-rule-grid">
       <select aria-label="Auto-accept field" value={fieldId}
         onChange={event => { setFieldId(event.target.value); setSimulation(null); }}>
         {form.publicForm.fields.map(field => <option key={field.fieldId} value={field.fieldId}>{field.label}</option>)}
@@ -133,7 +134,7 @@ function AutoAcceptControls({ form, worker, authorityTarget, enabled, disabled, 
     </div> : null}
     <button className="link-button" onClick={() => void worker.command("intake.disableAutoAccept", { formId: form.publicForm.formId }, authorityTarget)
       .then(async () => { await onChange(); onInfo("Automatic acceptance disabled."); })
-      .catch(cause => onError(cause instanceof Error ? cause.message : String(cause)))}>
+      .catch(cause => onError(errorMessage(cause)))}>
       Disable automatic acceptance
     </button></fieldset>
   </details>;
@@ -256,7 +257,7 @@ export function IntakeCenter(props: {
     } else updateRecovery();
   };
   useEffect(() => { void refresh().catch(cause =>
-    props.onError(cause instanceof Error ? cause.message : String(cause))); }, []);
+    props.onError(errorMessage(cause))); }, []);
 
   const selectedTable = eligibleTables.find(table => table.name === tableName) ?? eligibleTables[0];
   const scalarColumns = (selectedTable?.columns ?? []).filter(column =>
@@ -310,7 +311,7 @@ export function IntakeCenter(props: {
       await refresh();
       await configured.publication.finish();
       props.onInfo("Secure form published. Only the submit capability is in the public link.");
-    } catch (cause) { props.onError(cause instanceof Error ? cause.message : String(cause)); }
+    } catch (cause) { props.onError(errorMessage(cause)); }
     finally { setBusy(false); updateRecovery(); }
   };
 
@@ -335,7 +336,7 @@ export function IntakeCenter(props: {
       if (result.errors.length > 0) props.onError(
         `${result.errors.length} form(s) could not be refreshed. Other active forms were still checked.`,
       );
-    } catch (cause) { props.onError(cause instanceof Error ? cause.message : String(cause)); }
+    } catch (cause) { props.onError(errorMessage(cause)); }
     finally { setBusy(false); updateRecovery(); }
   };
 
@@ -345,7 +346,7 @@ export function IntakeCenter(props: {
       const fileIds = item.files.filter(file => approved[file.uploadId]).map(file => file.uploadId);
       await session.command("intake.acceptSubmission", { submissionId: item.submissionId, approvedFileIds: fileIds, mode: "manual" }, read?.authorityTarget);
       await refresh(); props.onWrite?.(); props.onInfo("Submission accepted with an undoable local receipt.");
-    } catch (cause) { props.onError(cause instanceof Error ? cause.message : String(cause)); }
+    } catch (cause) { props.onError(errorMessage(cause)); }
     finally { setBusy(false); updateRecovery(); }
   };
 
@@ -355,7 +356,7 @@ export function IntakeCenter(props: {
       if (!configured.owner) throw new Error("Original relay configuration is required for revocation");
       await configured.owner.revoke(form); setPendingRevoke(null);
       await refresh(); props.onInfo("Form revoked. Its public link no longer accepts submissions.");
-    } catch (cause) { props.onError(cause instanceof Error ? cause.message : String(cause)); }
+    } catch (cause) { props.onError(errorMessage(cause)); }
     finally { setBusy(false); updateRecovery(); }
   };
   const closePublication = async (): Promise<void> => {
@@ -427,7 +428,7 @@ export function IntakeCenter(props: {
       if (staged.length > 0) props.onWrite?.();
       if (unresolved) props.onError("The delivery still could not be decrypted. You can retry or discard it.");
       else props.onInfo("Encrypted delivery recovered and staged for review.");
-    } catch (cause) { props.onError(cause instanceof Error ? cause.message : String(cause)); }
+    } catch (cause) { props.onError(errorMessage(cause)); }
     finally { setBusy(false); updateRecovery(); }
   };
 
@@ -444,7 +445,7 @@ export function IntakeCenter(props: {
       setPendingDiscard(null);
       await refresh();
       props.onInfo("Encrypted delivery permanently discarded after durable owner authorization.");
-    } catch (cause) { props.onError(cause instanceof Error ? cause.message : String(cause)); }
+    } catch (cause) { props.onError(errorMessage(cause)); }
     finally { setBusy(false); updateRecovery(); }
   };
   const localAction = async (action: () => Promise<unknown>, message: string): Promise<void> => {
@@ -454,7 +455,7 @@ export function IntakeCenter(props: {
     finally { setBusy(false); updateRecovery(); }
   };
 
-  return <ModalDialog className="intake-center" backdropClassName="intake-backdrop"
+  return <ModalDialog className="ui ui-display-flex ui-flex-direction-column ui-overflow-hidden intake-center" backdropClassName="ui ui-display-grid ui-place-items-center ui-position-fixed ui-inset-0 intake-backdrop"
     ariaLabelledBy="intake-title" onClose={props.onClose}>
       <header className="intake-center-header"><div><span className="eyebrow">Secure intake</span>
         <h2 id="intake-title">Forms & review inbox</h2></div>
@@ -494,8 +495,8 @@ export function IntakeCenter(props: {
           if (!await session.cancel()) throw new Error("The original request committed. Retry it to read the result before another action.");
         }, "Request terminalized without another effect.")}>Cancel uncommitted request</button></p> : null}
 
-      {tab === "forms" ? <div className="intake-content">
-        <section className="intake-author"><h3>Create a public form</h3><fieldset disabled={blocked || !configured.publication}>
+      {tab === "forms" ? <div className="ui ui-overflow-auto intake-content">
+        <section className="ui ui-display-grid ui-label-display-b369c3 ui-label-gap-931d54 intake-author"><h3>Create a public form</h3><fieldset disabled={blocked || !configured.publication}>
           <label>Recipe<select value={recipe} onChange={event => {
             const id = event.target.value as typeof recipe;
             setRecipe(id); setTitle(RECIPES.find(item => item[0] === id)![1]); setPreview(null);
@@ -533,7 +534,7 @@ export function IntakeCenter(props: {
           <button className="primary" disabled={blocked || !configured.publication} onClick={() => void publish()}>{busy ? "Publishing…" : "Publish secure form"}</button>
           <button disabled={busy} onClick={() => setPreview(null)}>Discard preview</button>
         </section> : null}
-        {shareLink ? <section className="intake-share"><h3>Public link</h3>
+        {shareLink ? <section className="ui ui-display-grid ui-gap-10px intake-share"><h3>Public link</h3>
           <input readOnly value={shareLink} aria-label="Public intake link" />
           <button onClick={() => void navigator.clipboard?.writeText(shareLink)
             .then(() => props.onInfo("Link copied."))}>Copy link</button></section> : null}
@@ -555,7 +556,7 @@ export function IntakeCenter(props: {
                 onInfo={props.onInfo} onError={message => { updateRecovery(); props.onError(message); }} /> : null}
             </> : null}
           </article>)}</section>
-      </div> : <div className="intake-content intake-inbox">
+      </div> : <div className="ui ui-overflow-auto intake-content intake-inbox">
         <div className="intake-inbox-actions"><p>Submissions stay untrusted here until you accept one.</p>
           <button disabled={blocked || !configured.owner} onClick={() => void refreshRelay()}>{busy ? "Refreshing…" : "Refresh encrypted inbox"}</button></div>
         {deliveryFailures.length > 0 ? <section className="intake-failures"
@@ -579,7 +580,7 @@ export function IntakeCenter(props: {
                   onClick={() => void retryDelivery(failure)}>Retry delivery</button> : null}
                 {failure.status === "discard_authorized" ? <button disabled={blocked || !configured.owner || !ownsForm(form)}
                   onClick={() => void discardDelivery(failure)}>Finish authorized discard</button>
-                  : pendingDiscard === key ? <div className="intake-discard-confirm" role="group"
+                  : pendingDiscard === key ? <div className="ui ui-display-flex ui-align-items-center ui-flex-wrap-wrap ui-gap-8px ui-justify-content-flex-end intake-discard-confirm" role="group"
                     aria-label={`Confirm discard ${failure.submissionId}`}>
                     <span>This permanently deletes the encrypted relay item.</span>
                     <button className="danger" disabled={blocked || !configured.owner || !ownsForm(form)}
@@ -598,9 +599,9 @@ export function IntakeCenter(props: {
             <header><b>{item.formTitle}</b><span>{item.status}</span></header>
             <dl>{item.values.map(value => <div key={value.fieldId}><dt>{labels.get(value.fieldId) ?? "Answer"}</dt>
               <dd>{String(value.value)}</dd></div>)}</dl>
-            {item.validationErrors.length ? <div role="alert" className="intake-alert">
+            {item.validationErrors.length ? <div role="alert" className="ui ui-border-radius-9px ui-padding-10px-12px intake-alert">
               {item.validationErrors.join(" · ")}</div> : null}
-            {item.files.map(file => <label className={`intake-file-review ${file.status}`} key={file.uploadId}>
+            {item.files.map(file => <label className={`ui ui-display-flex ui-border-radius-10px ui-align-items-flex-start intake-file-review ${file.status}`} key={file.uploadId}>
               <input type="checkbox" disabled={blocked || !ownsForm(form) || file.status !== "quarantined" || item.status !== "pending"}
                 checked={approved[file.uploadId] === true} onChange={event =>
                   setApproved(current => ({ ...current, [file.uploadId]: event.target.checked }))} />

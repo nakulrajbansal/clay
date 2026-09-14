@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { act } from "react";
+import { act } from "preact/test-utils";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type DailyHomeSnapshot, type RegTable } from "@clay/kernel";
@@ -7,8 +7,37 @@ import { TodayView } from "../src/app/TodayView";
 import { createWorkerMutationContext, type WorkerClient } from "../src/app/worker-client";
 import { DAILY_HOME_SOURCE_IDS_V1 } from "@clay/schema/daily-home";
 import { readPresentationIntent } from "../src/app/presentation-intent";
+import { expectControlCensus } from "./helpers/control-census";
 
 afterEach(() => sessionStorage.clear());
+
+it("ends a failed setup read truthfully and retries only that read before enabling review", async () => {
+  let reads = 0;
+  const worker = fixtureWorker({ dailyHome: async () => {
+    if (++reads === 2) throw new Error("source read unavailable");
+    return snapshot();
+  } });
+  const host = document.createElement("div"); document.body.replaceChildren(host);
+  const root = createRoot(host); const onError = vi.fn();
+  try {
+    await act(async () => root.render(<TodayView worker={worker} tables={[]}
+      onOpenRecord={() => undefined} onOpenAutomation={() => undefined} onOpenSavedView={() => undefined}
+      onQuickCapture={() => undefined} onSetup={() => undefined} onCreateRecurring={() => undefined}
+      dailyHomeMutationsAvailable onError={onError} />));
+    const button = (name: string) => [...host.querySelectorAll("button")].find(b => b.textContent === name);
+    await waitFor(() => !!button("Review setup"));
+    await act(async () => button("Review setup")!.click());
+    await waitFor(() => onError.mock.calls.length === 1);
+    expect(onError).toHaveBeenCalledWith("source read unavailable");
+    expect(host.textContent).not.toContain("Reading the original source");
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("source read unavailable");
+    expect(button("Retry source review")).toBeDefined();
+    await act(async () => button("Retry source review")!.click());
+    await waitFor(() => !button("Retry source review"));
+    expect(reads).toBe(3); expect(button("Retry source review")).toBeUndefined();
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  } finally { await act(async () => root.unmount()); }
+});
 function fixtureWorker(input: Record<string, any>): WorkerClient {
   const worker = { createMutationContext: createWorkerMutationContext,
     mutationOutcome: async () => ({ status: "not_invoked" }),
@@ -153,13 +182,18 @@ describe("Today home", () => {
         expect(readPresentationIntent(sessionStorage, view.basis.appInstanceId, "dailyInboxUndo")).not.toBeNull();
         if (presentationFails) throw new Error("Panel refresh failed");
       }} />);
-    const click = async (label: string) => act(async () => {
+    const click = async (label: string) => {
+      await waitFor(() => [...document.querySelectorAll("button")].some(button => button.textContent === label && !button.disabled));
+      await act(async () => {
       const button = [...document.querySelectorAll("button")].find(button => button.textContent === label);
       expect(button, label).toBeDefined(); button!.click();
-    });
+      });
+    };
     const remount = async () => { await act(async () => root.unmount()); root = createRoot(host); await act(async () => render()); };
     try {
-      await act(async () => render()); await click("Inbox"); await click("Complete");
+      await act(async () => render()); await click("Inbox");
+      expectControlCensus("D.inbox"); await click("Complete");
+      await waitFor(() => readPresentationIntent(sessionStorage, view.basis.appInstanceId, "dailyInboxUndo") !== null);
       const retained = readPresentationIntent(sessionStorage, view.basis.appInstanceId, "dailyInboxUndo");
       expect(retained).not.toBeNull();
       await remount(); presentationFails = false; await click("Retry original Daily change");
@@ -167,6 +201,7 @@ describe("Today home", () => {
       await click("Undo Inbox change"); expect(readPresentationIntent(sessionStorage, view.basis.appInstanceId, "dailyInboxUndo")).toEqual(retained);
       await click("Keep Inbox change"); expect(readPresentationIntent(sessionStorage, view.basis.appInstanceId, "dailyInboxUndo")).toEqual(retained);
       await remount(); await click("Undo Inbox change");
+      await waitFor(() => readPresentationIntent(sessionStorage, view.basis.appInstanceId, "dailyInboxUndo") === null);
       expect(undoCalls).toEqual([[retained!.payload, { requestId: retained!.requestId }]]);
       expect(readPresentationIntent(sessionStorage, view.basis.appInstanceId, "dailyInboxUndo")).toBeNull();
     } finally { await act(async () => root.unmount()); }
@@ -182,6 +217,7 @@ describe("Today home", () => {
     try {
       await act(async () => root.render(<TodayView {...props} refreshToken={1} />));
       await act(async () => root.render(<TodayView {...props} refreshToken={2} />));
+      await waitFor(() => document.body.textContent?.includes("Current work") ?? false);
       expect(document.body.textContent).toContain("Current work");
       await act(async () => release(snapshot()));
       expect(document.body.textContent).toContain("Current work");
@@ -309,12 +345,13 @@ describe("Today home", () => {
     await waitFor(() => document.body.textContent?.includes("Set up Today") ?? false);
     await act(async () => [...document.querySelectorAll<HTMLButtonElement>("button")]
       .find(button => button.textContent === "Set up Today")!.click());
+    await waitFor(() => document.querySelector<HTMLSelectElement>('select[aria-label="Record type"]')?.disabled === false);
 
     expect(document.querySelector<HTMLSelectElement>('select[aria-label="Record type"]')?.value).toBe(tableId);
     expect(document.querySelector<HTMLSelectElement>('select[aria-label="Title field"]')?.value).toBe(labelFieldId);
     expect(document.querySelector<HTMLSelectElement>('select[aria-label="Due date field"]')?.value).toBe(dueFieldId);
     const form = document.querySelector<HTMLFormElement>("form.today-source-form")!;
-    await act(async () => form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    await act(async () => void form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
     await waitFor(() => projected >= 3);
 
     expect(writes).toHaveLength(1);
@@ -389,41 +426,44 @@ describe("Today home", () => {
     await waitFor(() => document.body.textContent?.includes("Review setup") ?? false);
     await act(async () => [...document.querySelectorAll<HTMLButtonElement>("button")]
       .find(button => button.textContent === "Review setup")!.click());
-    await waitFor(() => document.querySelector('select[aria-label="Completion rule"]') !== null);
+    await waitFor(() => document.querySelector<HTMLSelectElement>('select[aria-label="Completion rule"]')?.disabled === false);
 
     const completion = document.querySelector<HTMLSelectElement>('select[aria-label="Completion rule"]')!;
     await act(async () => {
       completion.value = `boolean:${doneFieldId}`;
       completion.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    await act(async () => document.querySelector<HTMLFormElement>("form.today-source-form")!
+    await act(async () => void document.querySelector<HTMLFormElement>("form.today-source-form")!
       .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
     await waitFor(() => writes.length === 1);
     expect(writes[0]).toMatchObject({ profiles: [
       { tableId, completion: { kind: "boolean", fieldId: doneFieldId, completeValue: true } },
       { tableId: staleTableId },
     ] });
+    await waitFor(() => document.querySelector("form.today-source-form") === null);
 
     await act(async () => [...document.querySelectorAll<HTMLButtonElement>("button")]
       .find(button => button.textContent === "Review setup")!.click());
-    await waitFor(() => document.querySelector('[aria-label="Remove source Missing tasks"]') !== null);
+    await waitFor(() => document.querySelector<HTMLButtonElement>('[aria-label="Remove source Missing tasks"]')?.disabled === false);
     await act(async () => document.querySelector<HTMLButtonElement>(
       '[aria-label="Remove source Missing tasks"]',
     )!.click());
     await waitFor(() => writes.length === 2);
     expect((writes[1] as { profiles: unknown[] }).profiles).toHaveLength(1);
+    await waitFor(() => readPresentationIntent(sessionStorage, snapshot().basis.appInstanceId, "dailySource") === null);
 
     current = { schema: 99, revision: 8, profiles: "broken" };
     await act(async () => [...document.querySelectorAll<HTMLButtonElement>("button")]
       .find(button => button.textContent === "Close")?.click());
     await act(async () => [...document.querySelectorAll<HTMLButtonElement>("button")]
       .find(button => button.textContent === "Review setup")!.click());
-    await waitFor(() => document.querySelector('[aria-label="Reset Today sources"]') !== null);
+    await waitFor(() => document.querySelector<HTMLButtonElement>('[aria-label="Reset Today sources"]')?.disabled === false);
     await act(async () => document.querySelector<HTMLButtonElement>(
       '[aria-label="Reset Today sources"]',
     )!.click());
     await waitFor(() => writes.length === 3);
     expect(writes[2]).toEqual({ schema: 1, revision: 9, profiles: [] });
+    await waitFor(() => readPresentationIntent(sessionStorage, snapshot().basis.appInstanceId, "dailySource") === null);
 
     await act(async () => root.unmount());
   });
@@ -521,6 +561,7 @@ describe("Today home", () => {
         onCreateRecurring={() => undefined} onError={message => { throw new Error(message); }}
       />); await Promise.resolve(); });
       expect(projected).toBe(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
 
       await act(async () => { await vi.advanceTimersByTimeAsync(1_001); });
       expect(projected).toBe(2);

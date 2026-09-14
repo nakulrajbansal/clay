@@ -1,5 +1,6 @@
 /** @vitest-environment jsdom */
-import { act, useRef, useState, type ComponentType, type ReactNode } from "react";
+import { useRef, useState, type ComponentType, type ReactNode } from "react";
+import { act } from "preact/test-utils";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { createRoot } from "react-dom/client";
@@ -13,6 +14,30 @@ const { ModalDialog } = modalDialogModule;
 const ModalScopedPortal = (modalDialogModule as typeof modalDialogModule & {
   ModalScopedPortal?: ComponentType<{ children: ReactNode }>;
 }).ModalScopedPortal;
+
+it.each([false, true])("restores the background after whole-tree removal (delayed child: %s)", async delayed => {
+  const host = document.createElement("div"); host.id = "root";
+  document.body.replaceChildren(host); document.body.style.overflow = "clip";
+  const root = createRoot(host);
+  function Probe({ show, child = true }: { show: boolean; child?: boolean }): React.JSX.Element {
+    return <main className="app"><button>Underlying app</button>{show &&
+      <ModalDialog className="parent-dialog" backdropClassName="modal-backdrop" ariaLabel="Parent" onClose={() => undefined}>
+        {child && <ModalDialog className="child-dialog" backdropClassName="modal-backdrop" ariaLabel="Child" onClose={() => undefined}>
+          <button>Inside</button>
+        </ModalDialog>}
+      </ModalDialog>}</main>;
+  }
+  try {
+    await act(async () => root.render(<Probe show child={!delayed} />));
+    if (delayed) await act(async () => root.render(<Probe show />));
+    const app = host.querySelector<HTMLElement>(".app")!;
+    expect(app.inert).toBe(true);
+    await act(async () => root.render(<Probe show={false} />));
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(app.inert).toBe(false); expect(app.hasAttribute("aria-hidden")).toBe(false);
+    expect(document.body.style.overflow).toBe("clip");
+  } finally { await act(async () => root.unmount()); document.body.style.overflow = ""; }
+});
 
 it("keeps modal feedback accessible inside the active focus trap", async () => {
   const appSource = readFileSync(resolve(process.cwd(), "src/app/App.tsx"), "utf8");
@@ -57,14 +82,14 @@ it("keeps modal feedback accessible inside the active focus trap", async () => {
   expect(dialog.contains(action)).toBe(true);
 
   action.focus();
-  await act(async () => action.dispatchEvent(new KeyboardEvent("keydown", {
+  await act(async () => void action.dispatchEvent(new KeyboardEvent("keydown", {
     key: "Tab", bubbles: true,
   })));
   expect(document.activeElement).toBe(dialog);
   expect(document.activeElement).not.toBe(app.querySelector(".outside-action"));
 
   action.focus();
-  await act(async () => action.dispatchEvent(new KeyboardEvent("keydown", {
+  await act(async () => void action.dispatchEvent(new KeyboardEvent("keydown", {
     key: "Escape", bubbles: true,
   })));
   expect(closes).toBe(1);
@@ -125,7 +150,7 @@ it("restores an explicit trigger inside the newly exposed parent", async () => {
     .find(button => button.textContent === "Export trigger")!;
   await act(async () => trigger.click());
   const child = document.body.querySelector<HTMLElement>(".child-dialog")!;
-  await act(async () => child.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await act(async () => void child.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   expect(document.activeElement).toBe(trigger);
   await act(async () => root.unmount());
 });
@@ -152,7 +177,7 @@ it("returns focus to the newly exposed parent instead of an outside trigger", as
   await act(async () => root.render(<Probe />));
   await act(async () => document.body.querySelector<HTMLButtonElement>(".parent-dialog button")!.click());
   const child = document.body.querySelector<HTMLElement>(".child-dialog")!;
-  await act(async () => child.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await act(async () => void child.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   const parent = document.body.querySelector<HTMLElement>(".parent-dialog")!;
   expect(parent.contains(document.activeElement)).toBe(true);
   expect(document.activeElement?.textContent).not.toBe("Outside trigger");

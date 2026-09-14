@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { act } from "react";
+import { act } from "preact/test-utils";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/app/App";
@@ -146,7 +146,7 @@ describe("first-run import loss-boundary confirmation", () => {
     const file = new File([text], "expenses.csv", { type: "text/csv" });
     Object.defineProperty(file, "arrayBuffer", { value: async () => new TextEncoder().encode(text).buffer });
     Object.defineProperty(input, "files", { configurable: true, value: [file] });
-    await act(async () => input.dispatchEvent(new Event("change", { bubbles: true })));
+    await act(async () => void input.dispatchEvent(new Event("change", { bubbles: true })));
     const button = await waitForButton("Import accepted rows");
     await act(async () => button.click());
     await waitFor(() => container.textContent?.includes("No app was deleted") ?? false);
@@ -202,7 +202,7 @@ describe("first-run import loss-boundary confirmation", () => {
       value: async () => new TextEncoder().encode("name\nMine").buffer,
     });
     Object.defineProperty(input, "files", { configurable: true, value: [file] });
-    await act(async () => input.dispatchEvent(new Event("change", { bubbles: true })));
+    await act(async () => void input.dispatchEvent(new Event("change", { bubbles: true })));
 
     const importButton = await waitForButton("Import accepted rows");
     await act(async () => importButton.click());

@@ -1,8 +1,9 @@
 /** @vitest-environment jsdom */
-import { act } from "react";
+import { act } from "preact/test-utils";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 import { Onboarding } from "../src/app/Onboarding";
+import { expectControlCensus } from "./helpers/control-census";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -34,6 +35,8 @@ describe("first-run onboarding", () => {
     const onPick = vi.fn();
     const { unmount } = await mount({ onPick });
 
+    expectControlCensus("A.onboarding");
+
     const primary = document.querySelector<HTMLElement>('[aria-labelledby="start-heading"]')!;
     const primaryActions = [...primary.querySelectorAll<HTMLButtonElement>(
       'button[data-start-priority="primary"]',
@@ -43,9 +46,8 @@ describe("first-run onboarding", () => {
       expect.stringContaining("Import a spreadsheet"),
       expect.stringContaining("Use a recommended starter"),
     ]);
-    expect(primaryActions.map(item => item.className)).toEqual([
-      "onboarding-hero", "onboarding-hero",
-    ]);
+    expect(primaryActions.every(item => item.classList.contains("onboarding-hero"))).toBe(true);
+    expect(primaryActions[0]!.className).toBe(primaryActions[1]!.className);
     expect(document.querySelectorAll('button[data-start-priority="primary"]')).toHaveLength(2);
     expect(button("Change recommendation").getAttribute("aria-expanded")).toBe("false");
     const text = document.body.textContent ?? "";
@@ -93,7 +95,7 @@ describe("first-run onboarding", () => {
     expect(nativeClick).toHaveBeenCalledTimes(1);
     const file = new File(["name\nMine"], "mine.csv", { type: "text/csv" });
     Object.defineProperty(input, "files", { configurable: true, value: [file] });
-    await act(async () => input.dispatchEvent(new Event("change", { bubbles: true })));
+    await act(async () => void input.dispatchEvent(new Event("change", { bubbles: true })));
     expect(onImport).toHaveBeenCalledWith(file);
     await act(async () => button("Advanced options").click());
     await act(async () => button("Start from scratch").click());
@@ -107,7 +109,7 @@ describe("first-run onboarding", () => {
     expect(document.querySelector('[role="status"]')?.textContent).toContain("Setting up");
     expect(document.querySelector('[role="alert"]')?.textContent).toContain("not changed");
     expect(button("Use a recommended starter").disabled).toBe(true);
-    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    await act(async () => void window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
     expect(onCancel).toHaveBeenCalledTimes(1);
     await unmount();
   });

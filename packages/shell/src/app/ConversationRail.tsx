@@ -105,10 +105,10 @@ export function ConversationRail(props: {
   };
 
   return (
-    <aside className="rail">
-      <header className="rail-header">
+    <aside className="ui ui-display-flex ui-background-panel ui-flex-direction-column ui-overflow-hidden ui-min-height-0 rail">
+      <header className="ui ui-display-flex ui-justify-content-space-between ui-align-items-baseline rail-header">
         <span>Ask Clay</span>
-        <span className="rail-header-links">
+        <span className="ui ui-display-flex ui-gap-14px rail-header-links">
           <button className="link" onClick={() => setShowSettings(s => !s)}>
             ⚙ Advanced
           </button>
@@ -116,13 +116,13 @@ export function ConversationRail(props: {
       </header>
 
       {showSettings ? (
-        <div className="rail-settings">
-          <fieldset className="model-provider-picker">
+        <div className="ui ui-flex-none ui-border-bottom-line ui-overflow-y-auto rail-settings">
+          <fieldset className="ui ui-border-0 ui-margin-0 model-provider-picker">
             <legend>Model connection</legend>
-            <div className="model-provider-options">
+            <div className="ui ui-display-grid ui-gap-6px model-provider-options">
               {MODEL_PROVIDERS.map(provider => (
                 <button key={provider.id} type="button"
-                  className={`model-provider-option${props.modelProvider === provider.id ? " selected" : ""}`}
+                  className={`ui ui-display-flex ui-background-panel ui-color-text ui-min-width-0 ui-flex-direction-column ui-base-border-8f9f0d ui-border-radius-10px ui-text-align-left ui-base-gap-2e0455 model-provider-option${props.modelProvider === provider.id ? " selected" : ""}`}
                   aria-pressed={props.modelProvider === provider.id}
                   onClick={() => props.onSelectModelProvider(provider.id)}>
                   <b>{provider.name}</b><span>{provider.detail}</span>
@@ -131,39 +131,39 @@ export function ConversationRail(props: {
             </div>
           </fieldset>
           {status ? (
-            <div className={`model-connection-status${status.modelConnection.reachable ? " connected" : ""}`}>
-              <span className="model-status-dot" aria-hidden="true" />
+            <div className={`ui ui-display-flex ui-align-items-center ui-gap-8px ui-border-radius-10px ui-base-border-f41cca ui-background-bg-soft model-connection-status${status.modelConnection.reachable ? " connected" : ""}`}>
+              <span className="ui ui-flex-none ui-border-radius-50 model-status-dot" aria-hidden="true" />
               <span><b>{status.modelConnection.provider}</b>
                 {status.modelConnection.model ? ` · ${status.modelConnection.model}` : ""}
                 <small>{status.modelConnection.detail}</small></span>
             </div>
           ) : null}
           {props.modelProvider === "codex" ? (
-            <div className="model-provider-note">
+            <div className="ui ui-display-grid ui-color-text-2 ui-border-radius-10px ui-background-accent-soft ui-font-size-11px ui-gap-4px model-provider-note">
               <b>Local connector</b>
               <span>Run <code>pnpm codex</code>, then Clay connects to {CODEX_BACKEND_URL}.</span>
               <span>Your Codex login stays on this computer.</span>
             </div>
           ) : null}
           <div className="theme-picker">
-            <span className="rail-label" style={{ marginBottom: 6 }}>Color scheme</span>
-            <div className="theme-swatches">
+            <span className="ui ui-display-flex ui-color-text-2 ui-flex-direction-column ui-font-size-12px ui-inputfocus-outline-89c3b3 ui-gap-5px ui-inputfocus-box-shadow-0cf866 ui-inputfocus-border-color-a722a4 ui-input-font-648ad9 ui-input-border-58fb43 ui-input-border-radius-9af632 rail-label" style={{ marginBottom: 6 }}>Color scheme</span>
+            <div className="ui ui-display-grid ui-gap-7px theme-swatches">
               {props.themes.map(t => (
                 <button
                   key={t.id}
-                  className={`theme-swatch${t.id === props.themeId ? " selected" : ""}`}
+                  className={`ui ui-display-flex ui-align-items-center ui-color-text ui-base-border-8f9f0d ui-border-radius-10px ui-font-inherit ui-gap-7px theme-swatch${t.id === props.themeId ? " selected" : ""}`}
                   title={t.name}
                   onClick={() => props.onSelectTheme(t.id)}
                   style={{ background: t.vars.bg, color: t.vars.text, borderColor: t.vars.borderStrong }}
                 >
-                  <span className="theme-dot" style={{ background: t.vars.accent }} />
-                  <span className="theme-name">{t.name}</span>
+                  <span className="ui ui-flex-none ui-border-radius-50 theme-dot" style={{ background: t.vars.accent }} />
+                  <span className="ui ui-overflow-hidden ui-white-space-nowrap ui-text-overflow-ellipsis theme-name">{t.name}</span>
                 </button>
               ))}
             </div>
           </div>
           {status ? (
-            <div className="rail-status">
+            <div className="ui ui-display-flex ui-color-text-2 ui-flex-direction-column ui-border-radius-10px ui-base-border-f41cca ui-font-size-12px ui-background-bg ui-gap-3px ui-padding-10px-12px ui-base-margin-bottom-38a7cc rail-status">
               <div>
                 Storage:{" "}
                 {status.persistent
@@ -195,22 +195,22 @@ export function ConversationRail(props: {
             </div>
           ) : null}
           {props.meter && props.meter.quota !== null ? (
-            <div className={`rail-meter${props.meter.used / props.meter.quota >= 0.5 ? " rail-meter-warm" : ""}`}>
+            <div className={`ui ui-display-flex ui-color-text-2 ui-flex-direction-column ui-border-radius-10px ui-base-border-f41cca ui-background-bg-soft ui-gap-5px ui-padding-10px-12px ui-base-margin-bottom-38a7cc rail-meter${props.meter.used / props.meter.quota >= 0.5 ? " rail-meter-warm" : ""}`}>
               <span>Reshapes this period: {props.meter.used} of {props.meter.quota}</span>
-              <span className="rail-meter-track">
-                <span className="rail-meter-fill" style={{
+              <span className="ui ui-overflow-hidden ui-border-radius-999px rail-meter-track">
+                <span className="ui ui-border-radius-999px ui-base-display-4b026d ui-background-accent rail-meter-fill" style={{
                   width: `${Math.min(100, Math.round((props.meter.used / props.meter.quota) * 100))}%` }} />
               </span>
             </div>
           ) : null}
           {props.modelProvider === "clay" && props.account ? (
-            <div className="rail-account">
-              <span className="rail-account-who">Signed in as <b>{props.account.email}</b></span>
+            <div className="ui ui-display-flex ui-align-items-center ui-color-text-2 ui-justify-content-space-between ui-border-radius-10px ui-base-border-f41cca ui-background-bg-soft ui-gap-10px ui-font-size-12-5px ui-base-margin-bottom-38a7cc rail-account">
+              <span className="ui ui-b-color-a7ddc1 rail-account-who">Signed in as <b>{props.account.email}</b></span>
               <button className="link" onClick={props.onSignOut}>sign out</button>
             </div>
           ) : props.modelProvider === "clay" && props.onSignIn ? (
-            <div className="rail-account rail-account-signin">
-              <label className="rail-label">
+            <div className="ui ui-display-flex ui-align-items-center ui-color-text-2 ui-justify-content-space-between ui-border-radius-10px ui-base-border-f41cca ui-background-bg-soft ui-gap-10px ui-base-display-4b026d ui-font-size-12-5px ui-base-margin-bottom-38a7cc rail-account rail-account-signin">
+              <label className="ui ui-display-flex ui-color-text-2 ui-flex-direction-column ui-font-size-12px ui-inputfocus-outline-89c3b3 ui-gap-5px ui-inputfocus-box-shadow-0cf866 ui-inputfocus-border-color-a722a4 ui-input-font-648ad9 ui-input-border-58fb43 ui-input-border-radius-9af632 rail-label">
                 Sign in (hosted mode) — we email you a link, no password
                 <input
                   type="email"
@@ -224,7 +224,7 @@ export function ConversationRail(props: {
                   }}
                 />
               </label>
-              <div className="rail-actions">
+              <div className="ui ui-display-flex ui-align-items-center ui-flex-wrap-wrap ui-gap-12px rail-actions">
                 <button
                   className="primary"
                   disabled={emailDraft.trim() === ""}
@@ -235,7 +235,7 @@ export function ConversationRail(props: {
           ) : null}
           {props.modelProvider === "clay" || props.modelProvider === "openai" ? (
             <>
-              <label className="rail-label">
+              <label className="ui ui-display-flex ui-color-text-2 ui-flex-direction-column ui-font-size-12px ui-inputfocus-outline-89c3b3 ui-gap-5px ui-inputfocus-box-shadow-0cf866 ui-inputfocus-border-color-a722a4 ui-input-font-648ad9 ui-input-border-58fb43 ui-input-border-radius-9af632 rail-label">
                 {props.modelProvider === "openai"
                   ? "OpenAI backend URL (the API key stays on that server)"
                   : "Clay backend URL (hosted — no key needed in the browser)"}
@@ -246,7 +246,7 @@ export function ConversationRail(props: {
                   onChange={e => setBackendDraft(e.target.value)}
                 />
               </label>
-              <div className="rail-actions">
+              <div className="ui ui-display-flex ui-align-items-center ui-flex-wrap-wrap ui-gap-12px rail-actions">
                 <button className="primary"
                   onClick={() => { props.onSaveBackend(backendDraft.trim()); setBackendDraft(""); }}>
                   Save backend
@@ -256,13 +256,13 @@ export function ConversationRail(props: {
           ) : null}
           {props.modelProvider === "anthropic" ? (
             <>
-              <label className="rail-label">
+              <label className="ui ui-display-flex ui-color-text-2 ui-flex-direction-column ui-font-size-12px ui-inputfocus-outline-89c3b3 ui-gap-5px ui-inputfocus-box-shadow-0cf866 ui-inputfocus-border-color-a722a4 ui-input-font-648ad9 ui-input-border-58fb43 ui-input-border-radius-9af632 rail-label">
                 Anthropic API key (stored in this browser and sent only to Anthropic)
                 <input type="password" value={keyDraft}
                   placeholder={props.hasKey ? "saved" : "sk-ant-…"}
                   onChange={e => setKeyDraft(e.target.value)} />
               </label>
-              <div className="rail-actions">
+              <div className="ui ui-display-flex ui-align-items-center ui-flex-wrap-wrap ui-gap-12px rail-actions">
                 <button className="primary" disabled={keyDraft.trim().length === 0}
                   onClick={() => { props.onSaveKey(keyDraft.trim()); setKeyDraft(""); }}>
                   Save Anthropic key
@@ -270,7 +270,7 @@ export function ConversationRail(props: {
               </div>
             </>
           ) : null}
-          <div className="rail-actions">
+          <div className="ui ui-display-flex ui-align-items-center ui-flex-wrap-wrap ui-gap-12px rail-actions">
             <button className="link" onClick={props.onRemoveSamples}>
               Clear example data
             </button>
@@ -278,12 +278,12 @@ export function ConversationRail(props: {
               Start over…
             </button>
           </div>
-          <div className="rail-actions">
+          <div className="ui ui-display-flex ui-align-items-center ui-flex-wrap-wrap ui-gap-12px rail-actions">
             <button className="link" onClick={props.onExport}>
               Export portable .clay copy
             </button>
           </div>
-          <div className="rail-actions">
+          <div className="ui ui-display-flex ui-align-items-center ui-flex-wrap-wrap ui-gap-12px rail-actions">
             <button className="link" onClick={props.onCopyDiagnostics}>
               Copy diagnostics (last {25} reshapes)
             </button>
@@ -291,40 +291,40 @@ export function ConversationRail(props: {
         </div>
       ) : null}
 
-      <div className="rail-feed" tabIndex={0} role="log" aria-label="Recent changes">
+      <div className="ui ui-display-flex ui-gap-9px ui-overflow-y-auto ui-min-height-0 rail-feed" tabIndex={0} role="log" aria-label="Recent changes">
         {props.feed.map((item, i) => {
           switch (item.kind) {
             case "intent":
-              return <div key={i} className="feed-item feed-intent">{item.text}</div>;
+              return <div key={i} className="ui ui-font-size-13px ui-line-height-1-45 ui-border-radius-11px ui-background-accent feed-item feed-intent">{item.text}</div>;
             case "clarify":
-              return <div key={i} className="feed-item feed-clarify">{item.question}</div>;
+              return <div key={i} className="ui ui-font-size-13px ui-color-accent-text ui-background-accent-soft ui-line-height-1-45 ui-border-radius-11px feed-item feed-clarify">{item.question}</div>;
             case "failure":
               return (
-                <div key={i} className="feed-item feed-failure">
+                <div key={i} className="ui ui-font-size-13px ui-line-height-1-45 ui-border-radius-11px ui-color-warn feed-item feed-failure">
                   <strong>That didn’t work.</strong>
                   <ul>{item.reasons.map((r, j) => <li key={j}>{r}</li>)}</ul>
                 </div>
               );
             case "committed":
               return (
-                <details key={i} className="feed-item feed-committed trust-receipt"
+                <details key={i} className="ui ui-font-size-13px ui-overflow-hidden ui-line-height-1-45 ui-border-radius-11px ui-base-background-e37a96 feed-item feed-committed trust-receipt"
                   onToggle={event => { if (event.currentTarget.open) props.onReceiptOpened(); }}>
                   <summary>
                     <span><b>Kept</b> {item.summary}</span>
                     <span className="feed-version">v{item.version}</span>
                   </summary>
                   {item.receipt ? (
-                    <div className="trust-receipt-body">
-                      <div className="trust-receipt-proof">
+                    <div className="ui ui-display-grid ui-gap-8px trust-receipt-body">
+                      <div className="ui ui-display-flex ui-flex-wrap-wrap ui-gap-5px ui-span-border-radius-0b7e91 trust-receipt-proof">
                         <span>✓ Rows retained</span><span>✓ Reversible</span>
                         <span>✓ {item.receipt.affectedViews.length} view{item.receipt.affectedViews.length === 1 ? "" : "s"}</span>
                       </div>
-                      <ul className="trust-receipt-changes">
+                      <ul className="ui ui-color-text-2 ui-line-height-1-45 ui-margin-0 ui-font-size-11-5px trust-receipt-changes">
                         {item.receipt.changes.map((change, index) =>
                           <li key={index}>{change.detail}</li>)}
                       </ul>
                       {item.receipt.dataAccess.length > 0 ? (
-                        <p className="trust-receipt-access">
+                        <p className="ui ui-color-text-3 ui-margin-0 ui-font-size-10-5px trust-receipt-access">
                           Data: {item.receipt.dataAccess.map(access => access.table).join(", ")}
                         </p>
                       ) : null}
@@ -337,25 +337,25 @@ export function ConversationRail(props: {
                 </details>
               );
             case "discarded":
-              return <div key={i} className="feed-item feed-discarded">Not kept: {item.summary}</div>;
+              return <div key={i} className="ui ui-color-text-2 ui-font-size-13px ui-line-height-1-45 ui-border-radius-11px feed-item feed-discarded">Not kept: {item.summary}</div>;
             case "info":
-              return <div key={i} className="feed-item feed-info">{item.text}</div>;
+              return <div key={i} className="ui ui-color-text-2 ui-font-size-13px ui-line-height-1-45 ui-border-radius-11px feed-item feed-info">{item.text}</div>;
           }
         })}
         {props.busy ? (
-          <div className="feed-item feed-info reshaping">
-            <span className="reshaping-dots"><i /><i /><i /></span>
+          <div className="ui ui-display-flex ui-align-items-center ui-color-text-2 ui-font-size-13px ui-line-height-1-45 ui-border-radius-11px feed-item feed-info reshaping">
+            <span className="ui ui-display-inline-flex ui-gap-3px reshaping-dots"><i /><i /><i /></span>
             {RESHAPE_STAGES[stageIx]}
           </div>
         ) : null}
       </div>
 
       {props.suggestions.length > 0 && !props.preview ? (
-        <div className="rail-suggestions">
+        <div className="ui ui-display-flex ui-gap-8px ui-border-top-line ui-overflow-y-auto rail-suggestions">
           {props.suggestions.map(s => (
-            <div key={s.id} className="suggestion-chip">
-              <span className="suggestion-reason">{s.reason}</span>
-              <span className="rail-actions">
+            <div key={s.id} className="ui ui-display-flex ui-font-size-13px ui-flex-direction-column ui-background-accent-soft ui-gap-7px ui-border-radius-11px ui-padding-10px-12px suggestion-chip">
+              <span className="ui ui-color-accent-text suggestion-reason">{s.reason}</span>
+              <span className="ui ui-display-flex ui-align-items-center ui-flex-wrap-wrap ui-gap-12px rail-actions">
                 <button className="primary" disabled={props.busy}
                   onClick={() => props.onAcceptSuggestion(s)}>
                   Do it
@@ -370,28 +370,28 @@ export function ConversationRail(props: {
       ) : null}
 
       {contract ? (
-        <div className="change-contract" role="region" aria-label="Proposed change">
-          <header className="contract-header">
+        <div className="ui ui-background-panel ui-overflow-auto change-contract" role="region" aria-label="Proposed change">
+          <header className="ui ui-display-flex ui-align-items-center ui-justify-content-space-between ui-gap-12px contract-header">
             <div>
               <span className="contract-eyebrow">Proposed change</span>
               <strong>Ready as v{contract.version}</strong>
             </div>
-            <span className="contract-verified"><i aria-hidden="true">✓</i> verified</span>
+            <span className="ui ui-align-items-center ui-display-inline-flex ui-text-transform-uppercase ui-gap-5px contract-verified"><i aria-hidden="true">✓</i> verified</span>
           </header>
 
-          <p className="contract-summary">{contract.summary}</p>
+          <p className="ui ui-color-text ui-line-height-1-45 contract-summary">{contract.summary}</p>
 
-          <div className="contract-guarantees" aria-label="Safety guarantees">
+          <div className="ui ui-display-grid ui-gap-6px contract-guarantees" aria-label="Safety guarantees">
             {contract.guarantees.map(guarantee => (
-              <span key={guarantee.id} className="contract-guarantee" title={guarantee.detail}>
+              <span key={guarantee.id} className="ui ui-min-width-0 ui-border-radius-10px ui-text-align-center ui-base-background-e37a96 contract-guarantee" title={guarantee.detail}>
                 <i aria-hidden="true">✓</i>{guarantee.label}
               </span>
             ))}
           </div>
 
-          <section className="contract-section">
+          <section className="ui ui-border-bottom-line contract-section">
             <span className="contract-label">What changes</span>
-            <ul className="diff-lines">
+            <ul className="ui ui-font-size-13px ui-margin-0 diff-lines">
               {contract.changes.map((change, index) => (
                 <li key={index} className={`diff-${change.kind}`}>{change.detail}</li>
               ))}
@@ -399,11 +399,11 @@ export function ConversationRail(props: {
           </section>
 
           {contract.dataAccess.length > 0 ? (
-            <section className="contract-section">
+            <section className="ui ui-border-bottom-line contract-section">
               <span className="contract-label">Panel data access</span>
-              <div className="contract-chips">
+              <div className="ui ui-display-flex ui-flex-wrap-wrap ui-gap-6px contract-chips">
                 {contract.dataAccess.map(access => (
-                  <span key={access.table} className={`contract-chip contract-chip-${access.mode}`}>
+                  <span key={access.table} className={`ui ui-color-text ui-base-border-f41cca ui-display-inline-flex ui-overflow-hidden ui-background-bg-soft ui-border-radius-8px ui-gap-5px ui-white-space-nowrap ui-small-color-0803d9 ui-text-overflow-ellipsis ui-align-items-baseline contract-chip contract-chip-${access.mode}`}>
                     {access.table}<small>{access.mode === "read_write" ? "read + write" : access.mode}</small>
                   </span>
                 ))}
@@ -412,16 +412,16 @@ export function ConversationRail(props: {
           ) : null}
 
           {contract.changedViews.length > 0 || contract.removedPanelIds.length > 0 ? (
-            <section className="contract-section">
+            <section className="ui ui-border-bottom-line contract-section">
               <span className="contract-label">Affected views</span>
-              <div className="contract-chips">
+              <div className="ui ui-display-flex ui-flex-wrap-wrap ui-gap-6px contract-chips">
                 {contract.changedViews.map(view => (
-                  <span key={view.id} className="contract-chip contract-view">
+                  <span key={view.id} className="ui ui-color-text ui-base-border-f41cca ui-display-inline-flex ui-overflow-hidden ui-background-bg-soft ui-border-radius-8px ui-gap-5px ui-white-space-nowrap ui-small-color-0803d9 ui-text-overflow-ellipsis ui-align-items-baseline contract-chip contract-view">
                     {view.title}<small>{view.access === "none" ? "presentation" : view.access.replace("_", " + ")}</small>
                   </span>
                 ))}
                 {contract.removedPanelIds.length > 0 ? (
-                  <span className="contract-chip contract-remove">
+                  <span className="ui ui-color-text ui-base-border-f41cca ui-display-inline-flex ui-overflow-hidden ui-background-bg-soft ui-border-radius-8px ui-gap-5px ui-white-space-nowrap ui-small-color-0803d9 ui-text-overflow-ellipsis ui-align-items-baseline contract-chip contract-remove">
                     {contract.removedPanelIds.length} removed<small>rewindable</small>
                   </span>
                 ) : null}
@@ -430,16 +430,16 @@ export function ConversationRail(props: {
           ) : null}
 
           {contract.repaired ? (
-            <p className="contract-repair">One repair round was needed before this preview passed.</p>
+            <p className="ui ui-border-radius-8px ui-font-size-10-5px contract-repair">One repair round was needed before this preview passed.</p>
           ) : null}
-          <p className="contract-promise">Nothing is live until you keep it.</p>
-          <div className="contract-actions">
+          <p className="ui ui-color-text-2 ui-text-align-center ui-font-size-11px contract-promise">Nothing is live until you keep it.</p>
+          <div className="ui ui-display-grid ui-background-panel ui-gap-8px ui-base-position-df0639 contract-actions">
             <button className="primary" onClick={props.onKeep}>Keep this change</button>
             <button onClick={props.onDiscard}>Go back</button>
           </div>
         </div>
       ) : (
-        <div className="rail-input">
+        <div className="ui ui-display-flex ui-gap-10px ui-border-top-line rail-input">
           <textarea
             ref={inputRef}
             value={text}

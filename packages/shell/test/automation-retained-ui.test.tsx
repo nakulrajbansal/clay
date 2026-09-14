@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { act } from "react";
+import { act } from "preact/test-utils";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { AutomationCenter } from "../src/app/AutomationCenter";
@@ -27,6 +27,7 @@ it("does not claim a recipe is saving when physical authority is unavailable", a
   try {
     await act(async () => root.render(<AutomationCenter worker={worker} appInstanceId={app} tables={[]} notifications={[]}
       onNotifications={() => {}} onClose={() => {}} onOpenRecord={() => {}} onWrite={() => {}} onError={() => {}} onInfo={() => {}} />));
+    await vi.waitFor(() => expect(document.body.textContent).toContain("Owned weekly recipe"));
     const setup = Array.from(document.querySelectorAll("button")).find(node => node.textContent?.trim() === "Set up recipe")!;
     expect(setup).toBeDefined(); await act(async () => setup.click());
     expect(document.body.textContent).not.toContain("Saving…");
@@ -62,18 +63,19 @@ it("keeps a lossless V2 edit and its original invocation after failed presentati
     onNotifications={() => {}} onClose={() => {}} onOpenRecord={() => {}} onWrite={() => {}} onError={value => errors.push(value)} onInfo={() => {}} />);
   const button = (text: string) => Array.from(document.querySelectorAll("button")).find(node => node.textContent?.trim() === text)!;
   await act(async () => render());
-  expect(button("Edit rule")).toBeDefined();
+  await vi.waitFor(() => expect(button("Edit rule")).toBeDefined());
   await act(async () => button("Edit rule").click());
   expect(readAutomationWorkspace(sessionStorage, app)?.definition?.actions).toEqual(rule.actions);
   await act(async () => button("Save and simulate").click());
-  expect(errors).toContain("Injected presentation loss");
+  await vi.waitFor(() => expect(errors).toContain("Injected presentation loss"));
   const original = readPresentationIntent(sessionStorage, app, "automation")!;
   expect(original).not.toBeNull();
   expect((original.payload.command as any).payload.input.actions).toEqual(rule.actions);
   await act(async () => root.unmount()); root = createRoot(host); await act(async () => render());
+  await vi.waitFor(() => expect(button("Retry original automation change")?.disabled).toBe(false));
   await act(async () => button("Retry original automation change").click());
   expect(command).toHaveBeenCalledTimes(1);
-  expect(readPresentationIntent(sessionStorage, app, "automation")).toBeNull();
+  await vi.waitFor(() => expect(readPresentationIntent(sessionStorage, app, "automation")).toBeNull());
   expect(stored.actions).toEqual(rule.actions); expect(stored.runtime.timeZone).toBe("Pacific/Auckland");
   await act(async () => root.unmount());
 });

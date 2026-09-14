@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { act } from "react";
+import { act } from "preact/test-utils";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -83,7 +83,7 @@ describe("Daily Workbench UI", () => {
       onOpenData={() => { openedData++; }} onWrite={() => undefined}
       onError={message => { throw new Error(message); }} onInfo={() => undefined} />);
     await waitFor(() => document.body.textContent?.includes("Call Acme") ?? false);
-    await act(async () => document.body.querySelector<HTMLInputElement>(".command-search-row input")!
+    await act(async () => void document.body.querySelector<HTMLInputElement>(".command-search-row input")!
       .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
     expect(openedData).toBe(1);
     await unmount();
@@ -173,7 +173,7 @@ describe("Daily Workbench UI", () => {
       .find(button => button.textContent?.includes("Alice task"))!;
     expect(result.tabIndex).toBe(0);
     expect(result.getAttribute("aria-current")).toBe("true");
-    await act(async () => search.dispatchEvent(new KeyboardEvent("keydown", {
+    await act(async () => void search.dispatchEvent(new KeyboardEvent("keydown", {
       key: "Enter", bubbles: true,
     })));
     expect(opened).toEqual([{ table: "tasks", id: "018f0000-0000-7000-8000-000000000001" }]);
@@ -220,6 +220,8 @@ describe("Daily Workbench UI", () => {
       .find(button => button.textContent?.includes("New Tasks"))!.click());
     const title = document.body.querySelector<HTMLInputElement>(".command-create-fields input")!;
     await act(async () => typeInto(title, "Only once"));
+    await waitFor(() => [...document.querySelectorAll<HTMLButtonElement>("button")]
+      .some(button => button.textContent === "Create record" && !button.disabled));
     const submit = (): void => [...document.body.querySelectorAll<HTMLButtonElement>("button")]
       .find(button => button.textContent === "Create record" || button.textContent === "Retry capture")!.click();
     await act(async () => submit());
@@ -308,7 +310,7 @@ describe("Daily Workbench UI", () => {
     const editable = document.body.querySelector<HTMLTableCellElement>("td.cell-editable")!;
     expect(document.body.querySelectorAll('td[data-grid-cell][tabindex="0"]')).toHaveLength(1);
     await act(async () => editable.focus());
-    await act(async () => editable.dispatchEvent(new KeyboardEvent("keydown", {
+    await act(async () => void editable.dispatchEvent(new KeyboardEvent("keydown", {
       key: "Enter", bubbles: true,
     })));
     expect(editable.querySelector("input")).not.toBeNull();
@@ -428,7 +430,7 @@ describe("Daily Workbench UI", () => {
     const escape = async (selector: string): Promise<void> => {
       await waitFor(() => document.body.querySelector(selector) !== null);
       const target = document.body.querySelector<HTMLElement>(selector)!;
-      await act(async () => target
+      await act(async () => void target
         .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
       expect(closes).toBe(0); expect(document.body.querySelector(".dataview")).not.toBeNull();
     };
@@ -555,7 +557,8 @@ describe("Automation Center UI", () => {
       onOpenRecord={() => undefined} onWrite={() => undefined}
       onError={message => errors.push(message)} onInfo={() => undefined}
     />);
-    await waitFor(() => document.body.textContent?.includes("Build a custom rule") ?? false);
+    await waitFor(() => [...document.querySelectorAll<HTMLButtonElement>("button")]
+      .some(button => button.textContent?.includes("Build a custom rule") && !button.disabled));
     await act(async () => {
       [...document.body.querySelectorAll<HTMLButtonElement>("button")]
         .find(button => button.textContent?.includes("Build a custom rule"))!.click();
@@ -568,6 +571,8 @@ describe("Automation Center UI", () => {
       typeInto(name, "Follow up");
       typeInto(condition, "Call");
     });
+    expect(labelled("Rule name").value).toBe("Follow up");
+    expect(labelled("Equals").value).toBe("Call");
     await act(async () => {
       [...document.body.querySelectorAll<HTMLButtonElement>("button")]
         .find(button => button.textContent === "Save and simulate")!.click();

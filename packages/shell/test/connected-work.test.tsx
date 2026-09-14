@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { act } from "react";
+import { act } from "preact/test-utils";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it } from "vitest";
 import {
@@ -104,7 +104,7 @@ describe("connected work record detail", () => {
       />);
     });
     await waitFor(() => document.body.textContent?.includes("Install") ?? false);
-    expect(document.body.textContent).toContain("Priority account");
+    expect(document.querySelector("textarea")?.value).toBe("Priority account");
     expect(document.body.textContent).toContain("Related records");
     expect(document.body.textContent).toContain("Install");
     const related = [...document.body.querySelectorAll<HTMLButtonElement>(".related-row")]

@@ -41,8 +41,8 @@ export function ImportReview(props: {
   const { review } = props.parsed;
   return (
     <ModalDialog
-      className="surface-error import-review"
-      backdropClassName="surface-error-backdrop"
+      className="ui ui-display-grid ui-background-panel ui-min-width-0 ui-gap-10px ui-flex-1 ui-base-padding-6fe44b surface-error import-review"
+      backdropClassName="ui ui-display-grid ui-place-items-center ui-position-fixed surface-error-backdrop"
       ariaLabelledBy="import-review-title"
       onClose={props.onCancel}
     >
@@ -97,7 +97,7 @@ export function ImportReview(props: {
           Only this reviewed subset will be imported: at most 5,000 accepted rows and 20 fields.
         </p>
       ) : null}
-      <div className="rail-actions" style={{ display: "flex", gap: 10, justifyContent: "flex-end", width: "100%" }}>
+      <div className="ui ui-display-flex ui-align-items-center ui-flex-wrap-wrap ui-gap-12px rail-actions" style={{ display: "flex", gap: 10, justifyContent: "flex-end", width: "100%" }}>
         <button disabled={props.busy} onClick={props.onCancel}>Go back</button>
         <button className="primary" disabled={props.busy || review.acceptedRows === 0}
           onClick={props.onConfirm}>

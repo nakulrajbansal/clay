@@ -1,3 +1,4 @@
+import { errorMessage } from "./error-message";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import type {
   AsyncStore, AttachmentMetadata, QueryRow, QueryValue, RecordLink, RegColumn, RegTable,
@@ -140,8 +141,8 @@ function RichNoteEditor(props: {
       input.focus(); input.setSelectionRange(start + before.length, start + before.length + selected.length);
     });
   };
-  return <div className="rich-note-editor">
-    <div className="rich-note-toolbar" role="toolbar" aria-label="Note formatting">
+  return <div className="ui ui-base-border-8f9f0d ui-border-radius-10px ui-overflow-hidden ui-background-bg rich-note-editor">
+    <div className="ui ui-display-flex ui-background-panel ui-border-bottom-line ui-button-font-590948 ui-gap-3px rich-note-toolbar" role="toolbar" aria-label="Note formatting">
       <button type="button" title="Bold" disabled={formattingDisabled}
         onMouseDown={event => event.preventDefault()}
         onClick={() => wrap("**")}>B</button>
@@ -157,7 +158,7 @@ function RichNoteEditor(props: {
       <button type="button" className={preview ? "active" : ""}
         onClick={() => setPreview(value => !value)}>{preview ? "Edit" : "Preview"}</button>
     </div>
-    {preview ? <div className="rich-note-preview">
+    {preview ? <div className="ui ui-padding-10px-12px rich-note-preview">
       {props.value.split("\n").map((line, index) => line.startsWith("- ")
         ? <div className="rich-note-bullet" key={index}>• {inlineMarkdown(line.slice(2))}</div>
         : <p key={index}>{line ? inlineMarkdown(line) : " "}</p>)}
@@ -342,7 +343,7 @@ export function RecordDetail(props: {
         props.onDailyHomeInvalidated?.();
         finishPresentationIntent(sessionStorage, intent.appInstanceId, intent.slot, intent.requestId);
       } catch (error) {
-        props.onError(`Recently opened could not be saved: ${error instanceof Error ? error.message : String(error)}`);
+        props.onError(`Recently opened could not be saved: ${errorMessage(error)}`);
       }
     }
     const everydayKey = `${props.table.name}\u0000${props.recordId}`;
@@ -356,7 +357,7 @@ export function RecordDetail(props: {
         if (progress.steps.everyday.state === "complete")
           reportedEverydayRecord.current = everydayKey;
       } catch (error) {
-        props.onError(error instanceof Error ? error.message : String(error));
+        props.onError(errorMessage(error));
       }
     }
   };
@@ -367,7 +368,7 @@ export function RecordDetail(props: {
     void reload().catch(error => {
       if (live) {
         setLoaded(true);
-        props.onError(error instanceof Error ? error.message : String(error));
+        props.onError(errorMessage(error));
       }
     });
     const frame = requestAnimationFrame(() => titleRef.current?.focus());
@@ -386,7 +387,7 @@ export function RecordDetail(props: {
         || richTextRevisionRef.current === props.richTextRevision) return;
     richTextRevisionRef.current = props.richTextRevision;
     void reload().catch(error => {
-      props.onError(error instanceof Error ? error.message : String(error));
+      props.onError(errorMessage(error));
     });
     // A coordinator settlement is the reload trigger; reload deliberately remains render-local.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -410,7 +411,7 @@ export function RecordDetail(props: {
       setFieldSaving(column.name, true);
       try { await pending; }
       catch (error) {
-        props.onError(error instanceof Error ? error.message : String(error));
+        props.onError(errorMessage(error));
         await reload().catch(() => undefined);
       } finally {
         setFieldSaving(column.name, false);
@@ -433,7 +434,7 @@ export function RecordDetail(props: {
       };
       await props.runWrite(write);
     } catch (error) {
-      props.onError(error instanceof Error ? error.message : String(error));
+      props.onError(errorMessage(error));
       await reload(settled).catch(() => undefined);
     } finally {
       savingFieldsRef.current.delete(column.name);
@@ -461,7 +462,7 @@ export function RecordDetail(props: {
         props.onInfo("Record duplicated. You can edit the copy now.");
         props.onNavigate(props.table.name, String(copy.id));
       });
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
   };
 
   const archive = async (): Promise<void> => {
@@ -475,7 +476,7 @@ export function RecordDetail(props: {
         props.onInfo("Record archived. Its history and links are preserved.");
         props.onClose();
       });
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
   };
 
 
@@ -502,7 +503,7 @@ export function RecordDetail(props: {
         await reload();
         props.onNavigate(creating.table.name, String(created.id));
       });
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
   };
 
   const upload = async (column: RegColumn, file: File): Promise<void> => {
@@ -520,7 +521,7 @@ export function RecordDetail(props: {
         await reload(); props.onWrite(props.table.name);
         props.onInfo(`Added ${file.name}. It is included in Clay backups.`);
       });
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
     finally { setFieldSaving(column.name, false); }
   };
 
@@ -533,7 +534,7 @@ export function RecordDetail(props: {
       const anchor = document.createElement("a");
       anchor.href = url; anchor.download = stored.name; anchor.click();
       window.setTimeout(() => URL.revokeObjectURL(url), 0);
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
   };
 
   const removeFile = async (column: RegColumn, file: AttachmentMetadata): Promise<void> => {
@@ -548,7 +549,7 @@ export function RecordDetail(props: {
         await reload(); props.onWrite(props.table.name);
         props.onInfo(`${file.name} removed. Bytes remain recoverable for 30 days.`);
       });
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
   };
 
   const formatBytes = (bytes: number): string => bytes < 1024
@@ -556,21 +557,21 @@ export function RecordDetail(props: {
       : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 
   return (
-    <ModalDialog className="record-detail" backdropClassName="modal-backdrop record-detail-backdrop"
+    <ModalDialog className="ui ui-display-flex ui-background-panel ui-flex-direction-column ui-overflow-auto ui-position-absolute record-detail" backdropClassName="ui ui-display-flex ui-align-items-center ui-position-fixed ui-inset-0 ui-overflow-auto ui-justify-content-flex-end ui-justify-content-center ui-padding-0 modal-backdrop record-detail-backdrop"
       ariaLabel={`${props.table.name} record details`} onClose={props.onClose}>
-      <header className="record-detail-header">
+      <header className="ui ui-display-flex ui-justify-content-space-between ui-border-bottom-line ui-gap-16px ui-align-items-flex-start ui-base-position-df0639 record-detail-header">
         <div>
-          <span className="record-detail-kicker">{props.table.name.replace(/_/g, " ")}</span>
+          <span className="ui ui-color-accent-text ui-text-transform-uppercase record-detail-kicker">{props.table.name.replace(/_/g, " ")}</span>
           <h2 ref={titleRef} tabIndex={-1}>{row ? rowLabel(props.table, row) : "Record"}</h2>
         </div>
-        <button className="record-detail-close" aria-label="Close record details"
+        <button className="ui ui-color-text-2 ui-border-0 ui-background-bg ui-border-radius-9px ui-hover-color-caf367 record-detail-close" aria-label="Close record details"
           title="Close record details" onClick={props.onClose}>✕</button>
       </header>
 
-      {!loaded ? <div className="record-detail-empty" role="status">Loading record…</div>
-        : !row ? <div className="record-detail-empty">This record is no longer available.</div> : (
+      {!loaded ? <div className="ui ui-color-text-3 ui-base-display-4b026d ui-font-size-12-5px record-detail-empty" role="status">Loading record…</div>
+        : !row ? <div className="ui ui-color-text-3 ui-base-display-4b026d ui-font-size-12-5px record-detail-empty">This record is no longer available.</div> : (
         <>
-          <div className="record-detail-actions" aria-label="Record actions">
+          <div className="ui ui-display-flex ui-gap-8px ui-border-bottom-line ui-button-font-590948 ui-button-background-9f7e57 ui-button-color-353ba8 record-detail-actions" aria-label="Record actions">
             {props.onExport ? <button type="button"
               aria-label="Preview Print / CSV for this record"
               disabled={props.exportPending || saving.size > 0}
@@ -581,7 +582,7 @@ export function RecordDetail(props: {
             <button onClick={() => void duplicate()}>Duplicate</button>
             <button className="danger" onClick={() => void archive()}>Archive</button>
           </div>
-          <section className="record-fields" aria-label="Fields">
+          <section className="ui ui-display-grid ui-gap-14px record-fields" aria-label="Fields">
             {columns.map(column => {
               const value = row[column.name];
               const label = fieldLabel(column);
@@ -590,7 +591,7 @@ export function RecordDetail(props: {
                 const target = props.tables.find(table => table.name === column.relation!.target_table);
                 const selected = relationIds(value);
                 return (
-                  <div className="record-field" key={column.name}>
+                  <div className="ui ui-display-grid ui-gap-6px ui-inputfocus-outline-89c3b3 ui-inputfocus-box-shadow-0cf866 ui-inputfocus-border-color-a722a4 record-field" key={column.name}>
                     <label htmlFor={`record-${column.name}`}>{label}</label>
                     <select id={`record-${column.name}`}
                       multiple={column.relation.cardinality === "many"}
@@ -609,10 +610,10 @@ export function RecordDetail(props: {
                         </option>
                       ))}
                     </select>
-                    <div className="record-link-chips">
+                    <div className="ui ui-display-flex ui-flex-wrap-wrap ui-gap-6px record-link-chips">
                       {(Array.isArray(value) ? value.filter(isRecordLink)
                         : isRecordLink(value) ? [value] : []).map(link => (
-                        <button key={link.id} className="record-link-chip"
+                        <button key={link.id} className="ui ui-color-accent-text ui-background-accent-soft ui-font-inherit ui-border-radius-999px ui-hover-border-color-2b372d record-link-chip"
                           onClick={() => props.onNavigate(link.table, link.id)}>
                           {link.label}<span aria-hidden="true"> ↗</span>
                         </button>
@@ -622,12 +623,12 @@ export function RecordDetail(props: {
                 );
               }
               if (isDerived(column)) return (
-                <div className="record-field record-field-derived" key={column.name}>
+                <div className="ui ui-display-grid ui-gap-6px ui-inputfocus-outline-89c3b3 ui-inputfocus-box-shadow-0cf866 ui-inputfocus-border-color-a722a4 ui-background-bg ui-border-radius-9px ui-padding-10px-12px record-field record-field-derived" key={column.name}>
                   <span>{label}</span><output>{displayValue(value) || "—"}</output>
                 </div>
               );
               if (column.type === "enum") return (
-                <div className="record-field" key={column.name}>
+                <div className="ui ui-display-grid ui-gap-6px ui-inputfocus-outline-89c3b3 ui-inputfocus-box-shadow-0cf866 ui-inputfocus-border-color-a722a4 record-field" key={column.name}>
                   <label htmlFor={`record-${column.name}`}>{label}</label>
                   <select id={`record-${column.name}`} value={displayValue(value)}
                     disabled={saving.has(column.name)}
@@ -638,7 +639,7 @@ export function RecordDetail(props: {
                 </div>
               );
               if (column.type === "boolean") return (
-                <label className="record-field record-field-check" key={column.name}>
+                <label className="ui ui-display-grid ui-align-items-center ui-justify-content-space-between ui-gap-6px ui-inputfocus-outline-89c3b3 ui-inputfocus-box-shadow-0cf866 ui-inputfocus-border-color-a722a4 record-field record-field-check" key={column.name}>
                   <span>{label}</span>
                   <input type="checkbox" checked={value === true} disabled={saving.has(column.name)}
                     onChange={event => void save(column, event.target.checked)} />
@@ -648,7 +649,7 @@ export function RecordDetail(props: {
                 const identity = richTextIdentity(column.name);
                 const coordinatedDraft = props.richTextCoordinator?.richTextDraft(identity);
                 return (
-                  <div className="record-field" key={column.name}>
+                  <div className="ui ui-display-grid ui-gap-6px ui-inputfocus-outline-89c3b3 ui-inputfocus-box-shadow-0cf866 ui-inputfocus-border-color-a722a4 record-field" key={column.name}>
                     <span>{label}</span>
                     <RichNoteEditor label={label}
                       value={coordinatedDraft?.value
@@ -663,25 +664,25 @@ export function RecordDetail(props: {
                 );
               }
               if (column.type === "attachment") return (
-                <div className="record-field record-file-field" key={column.name}>
+                <div className="ui ui-display-grid ui-gap-6px ui-inputfocus-outline-89c3b3 ui-inputfocus-box-shadow-0cf866 ui-inputfocus-border-color-a722a4 record-field record-file-field" key={column.name}>
                   <span>{label}</span>
-                  <div className="record-files">
+                  <div className="ui ui-display-grid ui-gap-6px ui-article-align-items-c91e3c record-files">
                     {(attachments[column.name] ?? []).map(file => (
                       <article key={file.id}>
-                        <span className="record-file-icon" aria-hidden="true">
+                        <span className="ui ui-display-grid ui-color-accent-text ui-place-items-center ui-background-accent-soft ui-border-radius-7px record-file-icon" aria-hidden="true">
                           {file.mime.startsWith("image/") ? "▧" : "▤"}
                         </span>
-                        <button className="record-file-name" onClick={() => void download(file)}>
+                        <button className="ui ui-display-grid ui-color-text ui-min-width-0 ui-border-0 ui-text-align-left ui-font-inherit ui-background-transparent ui-small-color-0803d9 record-file-name" onClick={() => void download(file)}>
                           <strong>{file.name}</strong><small>{formatBytes(file.size)}</small>
                         </button>
-                        <button className="record-file-remove" aria-label={`Remove ${file.name}`}
+                        <button className="ui ui-color-text-3 ui-border-0 ui-background-transparent record-file-remove" aria-label={`Remove ${file.name}`}
                           onClick={() => void removeFile(column, file)}>×</button>
                       </article>
                     ))}
                     {(attachments[column.name] ?? []).length === 0
-                      ? <span className="record-files-empty">No files attached</span> : null}
+                      ? <span className="ui ui-color-text-3 ui-border-radius-8px ui-text-align-center ui-font-size-11-5px record-files-empty">No files attached</span> : null}
                   </div>
-                  <label className="record-file-upload">
+                  <label className="ui ui-align-items-center ui-background-panel ui-base-border-8f9f0d ui-border-radius-8px ui-justify-content-center ui-position-relative ui-hover-border-color-2b372d record-file-upload">
                     <span>{saving.has(column.name) ? "Adding…" : "＋ Add file"}</span>
                     <input type="file" aria-label={`Add file to ${label}`}
                       disabled={!props.worker || saving.has(column.name)}
@@ -692,11 +693,11 @@ export function RecordDetail(props: {
                         event.currentTarget.value = "";
                       }} />
                   </label>
-                  <small className="record-file-limit">Up to 10 MB each · included in .clay backups</small>
+                  <small className="ui ui-color-text-3 ui-text-align-center record-file-limit">Up to 10 MB each · included in .clay backups</small>
                 </div>
               );
               return (
-                <div className="record-field" key={column.name}>
+                <div className="ui ui-display-grid ui-gap-6px ui-inputfocus-outline-89c3b3 ui-inputfocus-box-shadow-0cf866 ui-inputfocus-border-color-a722a4 record-field" key={column.name}>
                   <label htmlFor={`record-${column.name}`}>{label}</label>
                   <input id={`record-${column.name}`} data-modal-escape-owner="true"
                     type={column.type === "date" ? "date"
@@ -715,23 +716,23 @@ export function RecordDetail(props: {
           </section>
 
           <section className="related-records" aria-labelledby="related-title">
-            <div className="related-records-heading">
+            <div className="ui ui-border-top-line related-records-heading">
               <h3 id="related-title">Related records</h3>
               <span>{related.reduce((sum, group) => sum + group.rows.length, 0)}</span>
             </div>
             {related.length === 0 ? (
-              <p className="record-detail-empty">No tables link to this record yet.</p>
+              <p className="ui ui-color-text-3 ui-base-display-4b026d ui-font-size-12-5px record-detail-empty">No tables link to this record yet.</p>
             ) : related.map(group => (
               <div className="related-group" key={`${group.table.name}.${group.relation.name}`}>
-                <div className="related-group-heading">
+                <div className="ui ui-font-size-12px related-group-heading">
                   <strong>{group.table.name.replace(/_/g, " ")}</strong>
                   <button className="link" onClick={() => setCreating({
                     table: group.table, relation: group.relation, draft: {},
                   })}>＋ Add related</button>
                 </div>
-                {group.rows.length === 0 ? <span className="related-empty">None yet</span>
+                {group.rows.length === 0 ? <span className="ui ui-color-text-3 ui-base-display-4b026d ui-font-size-12-5px related-empty">None yet</span>
                   : group.rows.map(relatedRow => (
-                    <button key={String(relatedRow.id)} className="related-row"
+                    <button key={String(relatedRow.id)} className="ui ui-display-flex ui-justify-content-space-between ui-color-text ui-text-align-left ui-font-inherit ui-background-transparent ui-width-100 ui-hover-color-92c640 related-row"
                       onClick={() => props.onNavigate(group.table.name, String(relatedRow.id))}>
                       <span>{rowLabel(group.table, relatedRow)}</span><span aria-hidden="true">→</span>
                     </button>
@@ -743,8 +744,8 @@ export function RecordDetail(props: {
       )}
 
       {creating ? (
-        <form className="related-create" onSubmit={event => void createRelated(event)}>
-          <div className="related-create-head">
+        <form className="ui ui-display-grid ui-background-panel ui-gap-9px ui-input-border-58fb43 ui-label-display-b369c3 ui-input-color-64eb43 ui-select-color-8a3cd5 ui-primary-background-1be894 ui-primary-border-color-f73659 ui-select-border-f5f110 ui-select-background-25bcef ui-input-background-904d66 ui-base-position-df0639 related-create" onSubmit={event => void createRelated(event)}>
+          <div className="ui ui-display-flex ui-justify-content-space-between related-create-head">
             <strong>New {creating.table.name.replace(/_/g, " ")}</strong>
             <button type="button" className="link" onClick={() => setCreating(null)}>Cancel</button>
           </div>

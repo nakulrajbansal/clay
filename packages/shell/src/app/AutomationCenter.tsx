@@ -1,3 +1,5 @@
+import { errorMessage } from "./error-message";
+import { FocusInput } from "./FocusControl";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AutomationCommandPayloadV1, AutomationWorkspaceV1, TargetEvidenceV1 } from "@clay/schema/catalog";
 import { beginPresentationIntent, readPresentationIntent, finishPresentationIntent, cancelPresentationIntent, type PresentationIntent } from "./presentation-intent";
@@ -262,9 +264,9 @@ function RecipeSetup(props: {
   const canSave = option?.kind === "overdue_invoice_reminder"
     ? Boolean(dateFieldId && conditionFieldId && conditionValue.trim())
     : Boolean(titleFieldId && title.trim());
-  return <section className="automation-recipe-setup" aria-labelledby="recipe-setup-title">
+  return <section className="ui ui-display-grid ui-gap-14px ui-input-font-648ad9 ui-input-border-58fb43 ui-input-color-64eb43 ui-select-color-8a3cd5 ui-select-font-d3b791 ui-select-border-f5f110 ui-select-width-96bdbe ui-select-background-25bcef ui-input-background-904d66 automation-recipe-setup" aria-labelledby="recipe-setup-title">
     <label>Rule timezone<input value={timeZone} disabled={props.busy} onChange={event => setTimeZone(event.target.value)} /></label>
-    <div className="automation-builder-title">
+    <div className="ui ui-display-flex ui-gap-16px ui-div-display-8ce2fc ui-span-color-e1f86b ui-align-items-flex-start automation-builder-title">
       <button className="link" onClick={props.onCancel}>← Recipes</button>
       <div><strong id="recipe-setup-title">{props.recipe.title}</strong>
         <span>This first saves a disabled draft. Nothing runs yet.</span></div>
@@ -278,7 +280,7 @@ function RecipeSetup(props: {
             : `${candidate.source.lastKnownName} → ${candidate.target.lastKnownName}`}
       </option>)}
     </select></label>
-    {option?.kind === "overdue_invoice_reminder" ? <div className="automation-inline">
+    {option?.kind === "overdue_invoice_reminder" ? <div className="ui ui-display-grid ui-gap-9px automation-inline">
       <label>Date field<select value={dateFieldId} onChange={event => setDateFieldId(event.target.value)}>
         {option.dateFields.map(field => <option key={field.fieldId} value={field.fieldId}>{field.lastKnownName}</option>)}
       </select></label>
@@ -289,7 +291,7 @@ function RecipeSetup(props: {
         onChange={event => setConditionValue(event.target.value)} /></label>
       <label>Days before<input type="number" min="-365" max="365" value={daysBefore}
         onChange={event => setDaysBefore(event.target.value)} /></label>
-    </div> : option ? <div className="automation-inline">
+    </div> : option ? <div className="ui ui-display-grid ui-gap-9px automation-inline">
       <label>Title field<select value={titleFieldId} onChange={event => setTitleFieldId(event.target.value)}>
         {option.writableFields.map(field => <option key={field.fieldId} value={field.fieldId}>{field.lastKnownName}</option>)}
       </select></label>
@@ -302,10 +304,10 @@ function RecipeSetup(props: {
       </select></label><label>At<input type="time" value={localTime}
         onChange={event => setLocalTime(event.target.value)} /></label></> : null}
     </div> : null}
-    <div className="automation-recipe-facts">
+    <div className="ui ui-display-grid ui-color-text-2 ui-background-bg ui-border-radius-9px ui-padding-10px-12px ui-font-size-11px ui-gap-4px automation-recipe-facts">
       <span>{props.recipe.runtimeFact}</span><span>{props.recipe.undoFact}</span>
     </div>
-    <footer className="automation-builder-actions"><button onClick={props.onCancel}>Cancel</button>
+    <footer className="ui ui-display-flex ui-gap-8px ui-justify-content-flex-end automation-builder-actions"><button onClick={props.onCancel}>Cancel</button>
       <button className="primary" disabled={props.busy || !props.mutationsAvailable || !canSave} onClick={() => void save()}>
         {props.busy ? "Saving…" : "Save disabled draft"}</button></footer>
   </section>;
@@ -366,10 +368,16 @@ export function AutomationCenter(props: {
   };
   const setDraft = (update: Draft | ((value: Draft) => Draft)): void => {
     try {
-      const next = typeof update === "function" ? update(draft) : update;
+      // Multiple native input events may precede a render. The retained workspace
+      // is updated synchronously; never overwrite an earlier edit with a stale
+      // render's draft (nor put persistence side effects in a state updater).
+      const retained = workspaceRef.current;
+      const latest = retained?.kind === "custom" || retained?.kind === "legacy"
+        ? { ...draft, ...retained.fields } as Draft : draft;
+      const next = typeof update === "function" ? update(latest) : update;
       if (workspaceRef.current) persistWorkspace({ ...workspaceRef.current, fields: { ...next } });
       setDraftState(next); setSimulation(null); setSimulatedRule(null); setSimulatedDraft(null);
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
   };
   const beginWorkspace = (kind: AutomationWorkspaceV1["kind"], fields: Record<string, string>,
     definition: AutomationDraftInputV2 | null = null, expectedRevision: number | null = null,
@@ -442,7 +450,7 @@ export function AutomationCenter(props: {
     }
   })().catch(error => {
     setLoaded(true);
-    const message = error instanceof Error ? error.message : String(error); setRecoveryError(message); props.onError(message);
+    const message = errorMessage(error); setRecoveryError(message); props.onError(message);
   });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -530,7 +538,7 @@ export function AutomationCenter(props: {
       if (current) persistWorkspace({ ...current, authorityTarget: read.authorityTarget,
         definition: JSON.parse(JSON.stringify(editableAutomation(saved))), expectedRevision: saved.definitionRevision });
       setRepairing({ id: saved.id, revision: saved.definitionRevision });
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
     finally { setBusy(false); }
   };
 
@@ -544,7 +552,7 @@ export function AutomationCenter(props: {
       finishCommand();
       if (workspaceRef.current) clearAutomationWorkspace(sessionStorage, workspaceRef.current);
       workspaceRef.current = null; setWorkspace(null);
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
     finally { setBusy(false); }
   };
 
@@ -564,7 +572,7 @@ export function AutomationCenter(props: {
       finishCommand();
       if (workspaceRef.current) clearAutomationWorkspace(sessionStorage, workspaceRef.current);
       workspaceRef.current = null; setWorkspace(null); setDraftState(defaultDraft(props.tables));
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
     finally { setBusy(false); }
   };
 
@@ -584,7 +592,7 @@ export function AutomationCenter(props: {
       props.onInfo(`Paused “${rule.name}”.`);
       await refresh();
       finishCommand();
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
     finally { setBusy(false); }
   };
 
@@ -598,7 +606,7 @@ export function AutomationCenter(props: {
       setPendingEnable(null);
       await refresh();
       finishCommand();
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
     finally { setBusy(false); }
   };
 
@@ -611,7 +619,7 @@ export function AutomationCenter(props: {
     try {
       const preview = await props.worker.simulateAutomation(rule.id, rule.definitionRevision, "run_now");
       setPendingRun({ rule, simulation: preview });
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
     finally { setBusy(false); }
   };
 
@@ -633,7 +641,7 @@ export function AutomationCenter(props: {
       } else props.onInfo(`“${pendingRun.rule.name}” was already up to date. Nothing was written.`);
       setPendingRun(null);
       await refresh(); setTab("history"); finishCommand();
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
     finally { setBusy(false); }
   };
 
@@ -645,7 +653,7 @@ export function AutomationCenter(props: {
       await refresh();
       for (const table of props.tables) props.onWrite(table.name);
       finishCommand();
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
     finally { setBusy(false); }
   };
 
@@ -676,14 +684,14 @@ export function AutomationCenter(props: {
         if (workspaceRef.current) clearAutomationWorkspace(sessionStorage, workspaceRef.current);
         workspaceRef.current = null; setWorkspace(null); setBuilding(false); setRecipeSetup(null); setRepairing(null);
       }
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
     finally { setBusy(false); }
   };
   const closeDraft = (): void => {
     try {
       if (workspaceRef.current) clearAutomationWorkspace(sessionStorage, workspaceRef.current);
       workspaceRef.current = null; setWorkspace(null); setBuilding(false); setRecipeSetup(null); setRepairing(null); setSimulation(null);
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
   };
   const reviewDraftSource = async (): Promise<void> => {
     if (!workspaceRef.current || pendingRef.current) return;
@@ -697,25 +705,25 @@ export function AutomationCenter(props: {
       persistWorkspace({ ...original, authorityTarget: read.authorityTarget });
       setSimulation(null); setSimulatedRule(null); setPendingEnable(null); setPendingRun(null);
       props.onInfo("Review every field against this source before saving. The old request was not reused.");
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
     finally { setBusy(false); }
   };
   const startCustom = (): void => {
     try { const next = defaultDraft(props.tables); beginWorkspace("custom", next);
       setRepairing(null); setDraftState(next); setBuilding(true);
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
   };
   const editRule = (rule: AutomationDefinitionV2): void => {
     try {
       const input = editableAutomation(rule);
       beginWorkspace("edit", { document: JSON.stringify(input, null, 2) }, input, rule.definitionRevision);
       setRepairing(null); setBuilding(true); setSimulation(null);
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
   };
   const updateDocument = (raw: string): void => {
     try { if (!workspaceRef.current) return;
       persistWorkspace({ ...workspaceRef.current, fields: { document: raw } }); setSimulation(null); setSimulatedRule(null);
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
   };
   const documentField = (key: "name" | "timeZone"): string => {
     try { const value = JSON.parse(workspace?.fields.document ?? "{}"); return key === "name" ? String(value.name ?? "") : String(value.runtime?.timeZone ?? ""); }
@@ -732,13 +740,13 @@ export function AutomationCenter(props: {
       const results = await runCommand<AutomationRun[]>("runDueAutomations", {});
       await refresh(); for (const table of props.tables) props.onWrite(table.name);
       props.onInfo(`Checked due schedules on this device. ${results.length} run receipts returned.`); setTab("history"); finishCommand();
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
     finally { setBusy(false); }
   };
   const markRead = async (id: string): Promise<void> => {
     setBusy(true);
     try { await runCommand("markNotificationRead", { id }); await refresh(); finishCommand(); }
-    catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    catch (error) { props.onError(errorMessage(error)); }
     finally { setBusy(false); }
   };
   const deleteRule = async (rule: AutomationDefinitionAny): Promise<void> => {
@@ -746,7 +754,7 @@ export function AutomationCenter(props: {
     try {
       if (!props.onConfirm || !await props.onConfirm(`Delete “${rule.name}”? Existing run history remains visible.`)) return;
       await runCommand("deleteAutomation", { id: rule.id }, source); await refresh(); finishCommand();
-    } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { props.onError(errorMessage(error)); }
     finally { setBusy(false); }
   };
   const v2Editor = <section className="automation-builder">
@@ -766,22 +774,22 @@ export function AutomationCenter(props: {
   const customBuilder = <section className="automation-builder">
     <label>Rule timezone<input value={draft.timeZone} disabled={busy || !!pending}
       onChange={event => setDraft(current => ({ ...current, timeZone: event.target.value }))} placeholder="America/New_York" /></label>
-    <div className="automation-builder-title"><button className="link"
+    <div className="ui ui-display-flex ui-gap-16px ui-div-display-8ce2fc ui-span-color-e1f86b ui-align-items-flex-start automation-builder-title"><button className="link"
       onClick={() => { setBuilding(false); setRepairing(null); setSimulation(null); }}>← Automations</button>
       <div><strong>{repairing ? "Repair this older rule in place" : props.initialRecipe === "recurring_record" ? "Create a recurring record" : "Build a custom local rule"}</strong>
         <span>{repairing
           ? "Review every sentence field. Saving replaces the older rule with a disabled stable-ID draft."
           : "Choose exact fields, save disabled, inspect a target-bound simulation, then enable."}</span></div></div>
-    <div className="automation-sentence" aria-live="polite">
+    <div className="ui ui-display-grid ui-base-border-f41cca ui-background-bg ui-border-radius-9px ui-gap-3px ui-padding-10px-12px ui-span-color-e1f86b ui-base-margin-bottom-38a7cc automation-sentence" aria-live="polite">
       <span>Rule sentence</span><strong>{draftSentence(draft)}</strong>
     </div>
-    <div className="automation-step"><span className="automation-step-number">1</span><div>
-      <label>Rule name<input autoFocus value={draft.name}
+    <div className="ui ui-display-grid ui-gap-12px ui-inputfocus-outline-89c3b3 ui-inputfocus-box-shadow-0cf866 ui-inputfocus-border-color-a722a4 ui-input-font-648ad9 ui-border-top-line ui-div-display-8ce2fc ui-input-border-58fb43 ui-label-display-b369c3 ui-input-color-64eb43 ui-select-color-8a3cd5 ui-select-font-d3b791 ui-select-border-f5f110 ui-select-width-96bdbe ui-select-background-25bcef ui-input-background-904d66 automation-step"><span className="ui ui-display-grid ui-color-accent-text ui-place-items-center ui-background-accent-soft ui-border-radius-8px automation-step-number">1</span><div>
+      <label>Rule name<FocusInput autoFocus value={draft.name}
         onChange={event => setDraft(current => ({ ...current, name: event.target.value }))}
         placeholder="Create kickoff task for new deals" /></label>
     </div></div>
-    <div className="automation-step"><span className="automation-step-number">2</span><div>
-      <div className="automation-inline">
+    <div className="ui ui-display-grid ui-gap-12px ui-inputfocus-outline-89c3b3 ui-inputfocus-box-shadow-0cf866 ui-inputfocus-border-color-a722a4 ui-input-font-648ad9 ui-border-top-line ui-div-display-8ce2fc ui-input-border-58fb43 ui-label-display-b369c3 ui-input-color-64eb43 ui-select-color-8a3cd5 ui-select-font-d3b791 ui-select-border-f5f110 ui-select-width-96bdbe ui-select-background-25bcef ui-input-background-904d66 automation-step"><span className="ui ui-display-grid ui-color-accent-text ui-place-items-center ui-background-accent-soft ui-border-radius-8px automation-step-number">2</span><div>
+      <div className="ui ui-display-grid ui-gap-9px automation-inline">
         <label>When<select value={draft.trigger}
           onChange={event => setDraft(current => ({ ...current, trigger: event.target.value as TriggerKind }))}>
           <option value="record_created">a record is created</option>
@@ -796,7 +804,7 @@ export function AutomationCenter(props: {
           {props.tables.map(table => <option key={table.name}>{table.name}</option>)}
         </select></label> : null}
       </div>
-      {draft.trigger === "schedule" ? <div className="automation-inline">
+      {draft.trigger === "schedule" ? <div className="ui ui-display-grid ui-gap-9px automation-inline">
         <label>Cadence<select value={draft.cadence}
           onChange={event => setDraft(current => ({ ...current,
             cadence: event.target.value as "daily" | "weekly" }))}>
@@ -809,7 +817,7 @@ export function AutomationCenter(props: {
         </select></label> : null}
         <label>At<input type="time" value={draft.localTime}
           onChange={event => setDraft(current => ({ ...current, localTime: event.target.value }))} /></label>
-      </div> : draft.trigger === "date_due" ? <div className="automation-inline">
+      </div> : draft.trigger === "date_due" ? <div className="ui ui-display-grid ui-gap-9px automation-inline">
         <label>Date field<select value={draft.dateField}
           onChange={event => setDraft(current => ({ ...current, dateField: event.target.value }))}>
           {dateFields.map(field => <option key={field.name}>{field.name}</option>)}
@@ -818,7 +826,7 @@ export function AutomationCenter(props: {
             daysBefore: event.target.value }))} /></label>
       </div> : null}
       {draft.trigger !== "schedule" && draft.trigger !== "record_created" ? (
-        <div className="automation-inline"><label>Field<select value={draft.conditionField}
+        <div className="ui ui-display-grid ui-gap-9px automation-inline"><label>Field<select value={draft.conditionField}
           onChange={event => setDraft(current => ({ ...current, conditionField: event.target.value }))}>
           {sourceFields.map(field => <option key={field.name}>{field.name}</option>)}
         </select></label><label>Equals{valueEditor(
@@ -828,7 +836,7 @@ export function AutomationCenter(props: {
         )}</label></div>
       ) : null}
     </div></div>
-    <div className="automation-step"><span className="automation-step-number">3</span><div>
+    <div className="ui ui-display-grid ui-gap-12px ui-inputfocus-outline-89c3b3 ui-inputfocus-box-shadow-0cf866 ui-inputfocus-border-color-a722a4 ui-input-font-648ad9 ui-border-top-line ui-div-display-8ce2fc ui-input-border-58fb43 ui-label-display-b369c3 ui-input-color-64eb43 ui-select-color-8a3cd5 ui-select-font-d3b791 ui-select-border-f5f110 ui-select-width-96bdbe ui-select-background-25bcef ui-input-background-904d66 automation-step"><span className="ui ui-display-grid ui-color-accent-text ui-place-items-center ui-background-accent-soft ui-border-radius-8px automation-step-number">3</span><div>
       <label>Then<select value={draft.action}
         onChange={event => setDraft(current => ({ ...current, action: event.target.value as ActionKind }))}>
         <option value="notify">show a reminder</option>
@@ -837,12 +845,12 @@ export function AutomationCenter(props: {
           ? <option value="create_related">create a related record</option> : null}
         <option value="create_record">create a record</option>
       </select></label>
-      {draft.action === "notify" ? <div className="automation-inline">
+      {draft.action === "notify" ? <div className="ui ui-display-grid ui-gap-9px automation-inline">
         <label>Title<input value={draft.noticeTitle}
           onChange={event => setDraft(current => ({ ...current, noticeTitle: event.target.value }))} /></label>
         <label>Message<input value={draft.noticeBody}
           onChange={event => setDraft(current => ({ ...current, noticeBody: event.target.value }))} /></label>
-      </div> : draft.action === "set_fields" ? <div className="automation-inline">
+      </div> : draft.action === "set_fields" ? <div className="ui ui-display-grid ui-gap-9px automation-inline">
         <label>Field<select value={draft.actionField}
           onChange={event => setDraft(current => ({ ...current, actionField: event.target.value }))}>
           {sourceFields.map(field => <option key={field.name}>{field.name}</option>)}
@@ -851,7 +859,7 @@ export function AutomationCenter(props: {
           draft.actionValue,
           value => setDraft(current => ({ ...current, actionValue: value })),
         )}</label>
-      </div> : draft.action === "create_related" ? <div className="automation-inline">
+      </div> : draft.action === "create_related" ? <div className="ui ui-display-grid ui-gap-9px automation-inline">
         <label>Related table<select value={draft.relationField}
           onChange={event => {
             const option = relatedOptions.find(candidate =>
@@ -866,7 +874,7 @@ export function AutomationCenter(props: {
             draft.actionValue,
             value => setDraft(current => ({ ...current, actionValue: value })),
           )}</label>
-      </div> : <div className="automation-inline">
+      </div> : <div className="ui ui-display-grid ui-gap-9px automation-inline">
         <label>Table<select value={draft.targetTable}
           onChange={event => {
             const next = props.tables.find(table => table.name === event.target.value);
@@ -883,13 +891,13 @@ export function AutomationCenter(props: {
         )}</label>
       </div>}
     </div></div>
-    {simulation ? <div className="automation-simulation" aria-live="polite">
+    {simulation ? <div className="ui ui-small-color-0803d9 ui-border-radius-11px ui-p-color-a3a3fb ui-p-font-size-9ca3bf automation-simulation" aria-live="polite">
       <span>Target-bound simulation</span><strong>{simulation.matchedRecords} records match</strong>
       <p>{simulation.plannedMutations} data changes · {simulation.plannedNotifications} reminders</p>
       <small>Revision {simulation.target.stateRevision} · proof expires {simulation.expiresAt.slice(11, 16)}</small>
       {simulation.sampleLabels.length ? <small>{simulation.sampleLabels.join(" · ")}</small> : null}
     </div> : null}
-    <footer className="automation-builder-actions"><button onClick={() => {
+    <footer className="ui ui-display-flex ui-gap-8px ui-justify-content-flex-end automation-builder-actions"><button onClick={() => {
       setBuilding(false); setRepairing(null);
     }}>Cancel</button>
       {!simulation ? <button className="primary" disabled={busy || !mutationsAvailable || !draft.name.trim() || !trace}
@@ -900,22 +908,22 @@ export function AutomationCenter(props: {
   </section>;
 
   return (
-    <ModalDialog className="automation-center" backdropClassName="modal-backdrop automation-backdrop"
+    <ModalDialog className="ui ui-display-flex ui-background-panel ui-flex-direction-column ui-base-border-8f9f0d ui-overflow-hidden ui-base-border-radius-c431a0 automation-center" backdropClassName="ui ui-display-flex ui-align-items-center ui-position-fixed ui-inset-0 ui-overflow-auto ui-justify-content-center modal-backdrop automation-backdrop"
       ariaLabelledBy="automation-title" onClose={props.onClose}>
-      <header className="automation-header">
-        <div><span className="record-detail-kicker">Local workflows</span>
+      <header className="ui ui-display-flex ui-justify-content-space-between ui-p-margin-9d8b39 ui-p-color-a3a3fb ui-align-items-flex-start automation-header">
+        <div><span className="ui ui-color-accent-text ui-text-transform-uppercase record-detail-kicker">Local workflows</span>
           <h2 id="automation-title">Automations</h2>
           <p>Start from a trusted recipe, inspect exact effects, then decide whether to enable it.</p></div>
         <button aria-label="Close automations" onClick={props.onClose}>✕</button>
       </header>
-      <div className="automation-runtime-fact" role="status">
+      <div className="ui ui-display-grid ui-border-radius-10px ui-gap-3px automation-runtime-fact" role="status">
         <strong>{runtimeStatus.headline}</strong><span>{runtimeStatus.detail}</span>
         <small>No cloud runner · no model access · no network access</small>
         {lastRequestId ? <small data-automation-request-id={lastRequestId}>
           Last durable request: <code>{lastRequestId}</code>
         </small> : null}
       </div>
-      <nav className="automation-tabs" aria-label="Automation sections">
+      <nav className="ui ui-display-flex ui-border-bottom-line ui-gap-5px ui-button-font-590948 ui-span-border-radius-0b7e91 automation-tabs" aria-label="Automation sections">
         <button className={tab === "rules" ? "active" : ""} aria-pressed={tab === "rules"}
           onClick={() => setTab("rules")}>Rules <span>{rules.length}</span></button>
         <button className={tab === "inbox" ? "active" : ""} aria-pressed={tab === "inbox"}
@@ -944,57 +952,57 @@ export function AutomationCenter(props: {
           <button disabled={busy || !!pending} onClick={() => void reviewDraftSource()}>Review current source for this draft</button> : null}
       </section> : null}
 
-      <div className="automation-body">
+      <div className="ui ui-overflow-auto ui-flex-1 automation-body">
         {tab === "rules" ? building ? workspace?.kind === "edit" ? v2Editor : customBuilder : recipeSetup ? (
           <RecipeSetup recipe={recipeSetup} busy={busy} mutationsAvailable={mutationsAvailable} fields={workspace?.fields ?? {}}
             onField={(name, value) => {
               try { if (workspaceRef.current) persistWorkspace({ ...workspaceRef.current, fields: { ...workspaceRef.current.fields, [name]: value } }); }
-              catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+              catch (error) { props.onError(errorMessage(error)); }
             }} onCancel={() => setRecipeSetup(null)}
             onSave={saveRecipe} />
         ) : <section className="automation-rule-list">
-          <section className="automation-recipes" aria-labelledby="automation-recipes-title">
-            <div className="automation-list-head"><div><strong id="automation-recipes-title">Start with a recipe</strong>
+          <section className="ui ui-border-bottom-line automation-recipes" aria-labelledby="automation-recipes-title">
+            <div className="ui ui-display-flex ui-align-items-center ui-justify-content-space-between ui-div-display-8ce2fc ui-span-color-e1f86b automation-list-head"><div><strong id="automation-recipes-title">Start with a recipe</strong>
               <span>Only recipes your current tables can support are shown.</span></div></div>
-            <div className="automation-recipe-grid">
-              {recipes.map(recipe => <article className="automation-recipe" key={recipe.id}>
-                <span className="automation-recipe-badge">Verified recipe · v{recipe.version}</span>
+            <div className="ui ui-display-grid ui-gap-10px automation-recipe-grid">
+              {recipes.map(recipe => <article className="ui ui-display-flex ui-min-width-0 ui-flex-direction-column ui-base-border-8f9f0d ui-gap-7px ui-background-bg ui-small-color-0803d9 ui-p-margin-9d8b39 ui-p-color-a3a3fb ui-base-border-radius-25b77c ui-small-font-size-56900e automation-recipe" key={recipe.id}>
+                <span className="ui ui-color-accent-text ui-text-transform-uppercase automation-recipe-badge">Verified recipe · v{recipe.version}</span>
                 <h3>{recipe.title}</h3><p>{recipe.result}</p>
                 <ul>{recipe.requiredMappings.map(mapping => <li key={mapping}>{mapping}</li>)}</ul>
                 <small>{recipe.runtimeFact}</small>
                 <button className="primary" disabled={!reviewed || !!workspace || !!pending || !!recoveryError} onClick={() => {
                   try { beginWorkspace("recipe", { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC" }, null, null, recipe.id); setRecipeSetup(recipe); }
-                  catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+                  catch (error) { props.onError(errorMessage(error)); }
                 }}>Set up recipe</button>
               </article>)}
             </div>
           </section>
-          <div className="automation-custom-entry">
+          <div className="ui ui-display-flex ui-align-items-center ui-justify-content-space-between ui-gap-12px ui-border-radius-11px ui-div-display-8ce2fc ui-span-color-e1f86b ui-base-border-9a0e96 automation-custom-entry">
             <div><strong>Need something different?</strong>
               <span>The custom builder uses exact table and field identities.</span></div>
             <button disabled={!reviewed || !!workspace || !!pending || !!recoveryError} onClick={startCustom}>
               Build a custom rule</button>
           </div>
-          <div className="automation-list-head"><div><strong>Your rules</strong>
+          <div className="ui ui-display-flex ui-align-items-center ui-justify-content-space-between ui-div-display-8ce2fc ui-span-color-e1f86b automation-list-head"><div><strong>Your rules</strong>
             <span>{runtimeStatus.enabledDefinitions} enabled · {runtimeStatus.needsRepairDefinitions} need review</span></div></div>
           <button disabled={busy || !mutationsAvailable} onClick={() => void runDue()}>Run due schedules now</button>
-          {pendingEnable ? <div className="automation-enable-preview" aria-live="polite">
+          {pendingEnable ? <div className="ui ui-display-grid ui-align-items-center ui-background-accent-soft ui-gap-10px ui-small-color-0803d9 ui-button-font-590948 ui-border-radius-11px ui-p-margin-9d8b39 ui-p-color-a3a3fb ui-button-background-9f7e57 ui-div-display-8ce2fc ui-button-color-353ba8 ui-primary-background-1be894 ui-primary-border-color-f73659 automation-enable-preview" aria-live="polite">
             <div><span>Target-bound simulation</span><strong>{pendingEnable.rule.name}</strong>
               <p>{pendingEnable.simulation.matchedRecords} match · {pendingEnable.simulation.plannedMutations} data changes · {pendingEnable.simulation.plannedNotifications} reminders</p>
               <small>Bound to target revision {pendingEnable.simulation.target.stateRevision}</small></div>
             <button onClick={() => setPendingEnable(null)}>Cancel</button>
             <button className="primary" disabled={busy || !mutationsAvailable} onClick={() => void confirmPendingEnable()}>Enable rule</button>
           </div> : null}
-          {pendingRun ? <div className="automation-enable-preview" aria-live="polite">
+          {pendingRun ? <div className="ui ui-display-grid ui-align-items-center ui-background-accent-soft ui-gap-10px ui-small-color-0803d9 ui-button-font-590948 ui-border-radius-11px ui-p-margin-9d8b39 ui-p-color-a3a3fb ui-button-background-9f7e57 ui-div-display-8ce2fc ui-button-color-353ba8 ui-primary-background-1be894 ui-primary-border-color-f73659 automation-enable-preview" aria-live="polite">
             <div><span>Run preview</span><strong>{pendingRun.rule.name}</strong>
               <p>{pendingRun.simulation.matchedRecords} match · {pendingRun.simulation.plannedMutations} data changes · {pendingRun.simulation.plannedNotifications} reminders</p>
               <small>{pendingRun.simulation.undo === "available_after_commit" ? "This run can be undone after commit." : "No data changes are planned."}</small></div>
             <button onClick={() => setPendingRun(null)}>Cancel</button>
             <button className="primary" disabled={busy || !mutationsAvailable} onClick={() => void confirmPendingRun()}>Confirm run</button>
           </div> : null}
-          {!loaded ? <div className="automation-empty" role="status"><span aria-hidden="true">◷</span>
+          {!loaded ? <div className="ui ui-display-grid ui-color-text-2 ui-text-align-center ui-gap-5px ui-p-margin-9d8b39 ui-p-font-size-9ca3bf automation-empty" role="status"><span aria-hidden="true">◷</span>
             <strong>Loading rules…</strong></div>
-            : rules.length === 0 ? <div className="automation-empty"><span aria-hidden="true">↻</span>
+            : rules.length === 0 ? <div className="ui ui-display-grid ui-color-text-2 ui-text-align-center ui-gap-5px ui-p-margin-9d8b39 ui-p-font-size-9ca3bf automation-empty"><span aria-hidden="true">↻</span>
             <strong>No saved rules yet</strong><p>Choose a recipe above. It will save disabled first.</p></div>
             : rules.map(rule => {
               const ruleRuntime = runtimeOverview.rules.find(state => state.automationId === rule.id);
@@ -1003,10 +1011,10 @@ export function AutomationCenter(props: {
                   ? runs.find(run => run.id === ruleRuntime.lastRunId) ?? null : null);
               const lastRuntime = lastRun
                 ? runtimeOverview.runs.find(state => state.runId === lastRun.id) : undefined;
-              return <article className={`automation-rule${rule.needsRepair ? " needs-repair" : ""}`}
+              return <article className={`ui ui-display-grid ui-align-items-center ui-gap-12px ui-border-bottom-line ui-div-display-8ce2fc automation-rule${rule.needsRepair ? " needs-repair" : ""}`}
                 key={rule.id} data-automation-id={rule.id}
                 aria-current={rule.id === props.initialAutomationId ? "true" : undefined}>
-                <button className={`automation-toggle${rule.enabled ? " on" : ""}`}
+                <button className={`ui ui-border-0 ui-position-relative automation-toggle${rule.enabled ? " on" : ""}`}
                   role="switch" aria-checked={rule.enabled}
                   aria-label={rule.needsRepair ? `${rule.name} needs review`
                     : `${rule.enabled ? "Pause" : "Enable"} ${rule.name}`}
@@ -1015,7 +1023,7 @@ export function AutomationCenter(props: {
                 <div><strong>{rule.name}</strong><span>{humanize(rule.trigger.kind)} · {rule.actions.map(action => humanize(action.kind)).join(", ")}</span>
                   {rule.needsRepair ? <small className="automation-repair-copy">Needs review after upgrade · disabled</small>
                     : <small>{humanize(rule.state)} · definition r{rule.definitionRevision}</small>}
-                  <div className="automation-rule-runtime">
+                  <div className="ui ui-display-grid ui-small-color-0803d9 ui-small-font-size-56900e ui-base-gap-2e0455 automation-rule-runtime">
                     <small>Last run: {lastRun
                       ? `${humanize(lastRun.status)} · ${lastRun.at.slice(0, 16).replace("T", " ")}`
                       : "Never"}</small>
@@ -1035,7 +1043,7 @@ export function AutomationCenter(props: {
                   try {
                     beginWorkspace("legacy", repairDraft, { ...editableAutomation(rule as unknown as AutomationDefinitionV2), id: rule.id }, 0);
                     setDraftState(repairDraft); setRepairing({ id: rule.id, revision: 0 }); setBuilding(true);
-                  } catch (error) { props.onError(error instanceof Error ? error.message : String(error)); }
+                  } catch (error) { props.onError(errorMessage(error)); }
                 }}>Review &amp; rebuild</button>
                   : <><button disabled={busy || !!workspace || !!pending || !!recoveryError} onClick={() => editRule(rule)}>Edit rule</button>
                     <button onClick={() => void previewRun(rule)} disabled={busy || !mutationsAvailable}>Preview run</button></>}
@@ -1044,8 +1052,8 @@ export function AutomationCenter(props: {
                   onClick={() => void deleteRule(rule)}>Delete</button>
               </article>;
             })}
-        </section> : tab === "inbox" ? <section className="automation-inbox">
-          {props.notifications.length === 0 ? <div className="automation-empty"><span aria-hidden="true">✓</span>
+        </section> : tab === "inbox" ? <section className="ui ui-button-font-590948 ui-p-margin-9d8b39 ui-button-background-9f7e57 ui-p-font-size-9ca3bf automation-inbox">
+          {props.notifications.length === 0 ? <div className="ui ui-display-grid ui-color-text-2 ui-text-align-center ui-gap-5px ui-p-margin-9d8b39 ui-p-font-size-9ca3bf automation-empty"><span aria-hidden="true">✓</span>
             <strong>You’re caught up</strong><p>Local reminders from rules appear here.</p></div>
             : props.notifications.map(notification => <article key={notification.id}
               className={notification.read ? "read" : ""}>
@@ -1059,21 +1067,21 @@ export function AutomationCenter(props: {
                 onClick={() => void markRead(notification.id)}>
                 Mark read</button> : null}
             </article>)}
-        </section> : <section className="automation-history">
-          {runs.length === 0 ? <div className="automation-empty"><span aria-hidden="true">◷</span>
+        </section> : <section className="ui ui-button-font-590948 ui-button-background-9f7e57 automation-history">
+          {runs.length === 0 ? <div className="ui ui-display-grid ui-color-text-2 ui-text-align-center ui-gap-5px ui-p-margin-9d8b39 ui-p-font-size-9ca3bf automation-empty"><span aria-hidden="true">◷</span>
             <strong>No runs yet</strong><p>Committed results and safe failures appear here.</p></div>
             : runs.map(run => {
               const rule = rules.find(candidate => candidate.id === run.automationId);
               const runRuntime = runtimeOverview.runs.find(state => state.runId === run.id);
-              return <article key={run.id}><span className={`run-status ${run.status}`} />
+              return <article key={run.id}><span className={`ui ui-border-radius-50 run-status ${run.status}`} />
                 <div><strong>{rule?.name ?? "Deleted rule"}</strong><span>{run.matchedRecords} matched · {run.changed} changed · {run.at.slice(0,16).replace("T"," ")}</span></div>
-                {run.status === "failed" ? <div className="automation-run-detail"><code>{run.errorCode}</code>
+                {run.status === "failed" ? <div className="ui ui-display-grid ui-small-color-0803d9 ui-small-font-size-56900e ui-base-gap-2e0455 automation-run-detail"><code>{run.errorCode}</code>
                   {runRuntime?.failure ? <small>{runRuntime.failure.detail}</small> : null}</div>
-                  : run.undone ? <span className="run-undone">Undone</span>
+                  : run.undone ? <span className="ui ui-color-text-3 ui-font-size-11px run-undone">Undone</span>
 : runRuntime?.undo.available ? <button disabled={busy || !mutationsAvailable}
                       title={!mutationsAvailable ? "Unavailable until automation authority is certified" : undefined}
                       onClick={() => void undoRun(run)}>Undo run</button>
-                      : <small className="automation-undo-unavailable">
+                      : <small className="ui ui-color-text-3 ui-font-size-10-5px automation-undo-unavailable">
                         {runRuntime?.undo.detail ?? "Undo availability could not be verified."}</small>}</article>;
             })}
         </section>}

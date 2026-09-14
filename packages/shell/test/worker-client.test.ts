@@ -24,8 +24,8 @@ const modelBridge = vi.hoisted(() => ({
   rawRepair: vi.fn<(...args: unknown[]) => Promise<string>>(),
   transports: [] as unknown[],
 }));
-vi.mock("@clay/mutation/client", () => ({
-  MutationClient: class {
+vi.mock("@clay/mutation/raw-client", () => ({
+  RawMutationClient: class {
     constructor(transport: unknown) { modelBridge.transports.push(transport); }
     rawPlan(context: unknown): Promise<string> { return modelBridge.rawPlan(context); }
     rawRepair(...args: unknown[]): Promise<string> { return modelBridge.rawRepair(...args); }

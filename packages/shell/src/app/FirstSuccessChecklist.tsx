@@ -29,13 +29,13 @@ export function FirstSuccessChecklist(props: {
   onRetry: () => void;
 }): React.JSX.Element {
   if (props.loading) {
-    return <section className="banner" role="status">Loading setup checklist…</section>;
+    return <section className="ui ui-display-flex ui-align-items-center ui-justify-content-space-between ui-flex-none ui-gap-16px ui-color-warn banner" role="status">Loading setup checklist…</section>;
   }
   if (props.error || !props.state) {
     return (
-      <section className="banner" role="alert" style={{ flexWrap: "wrap" }}>
+      <section className="ui ui-display-flex ui-align-items-center ui-justify-content-space-between ui-flex-none ui-gap-16px ui-color-warn banner" role="alert" style={{ flexWrap: "wrap" }}>
         <span>{props.error ?? "Setup progress could not be loaded. Your records were not changed."}</span>
-        <span className="banner-actions">
+        <span className="ui ui-display-flex ui-flex-none ui-gap-14px banner-actions">
           <button className="link" onClick={props.onRetry}>Try again</button>
         </span>
       </section>
@@ -56,9 +56,9 @@ export function FirstSuccessChecklist(props: {
       : "Waiting for protection";
   if (state.dismissed) {
     return (
-      <section className="banner" aria-label="Setup checklist" style={{ flexWrap: "wrap" }}>
+      <section className="ui ui-display-flex ui-align-items-center ui-justify-content-space-between ui-flex-none ui-gap-16px ui-color-warn banner" aria-label="Setup checklist" style={{ flexWrap: "wrap" }}>
         <span>{count} of 4 activity steps complete{exactProtected ? " — protected on this device" : ""}</span>
-        <span className="banner-actions">
+        <span className="ui ui-display-flex ui-flex-none ui-gap-14px banner-actions">
           <button className="link" onClick={props.onResume}>Continue setup</button>
         </span>
       </section>
@@ -79,7 +79,7 @@ export function FirstSuccessChecklist(props: {
           ? { label: "Review Preview", run: props.onReviewPreview } : null;
 
   return (
-    <section className="banner" aria-labelledby="first-success-title"
+    <section className="ui ui-display-flex ui-align-items-center ui-justify-content-space-between ui-flex-none ui-gap-16px ui-color-warn banner" aria-labelledby="first-success-title"
       style={{ alignItems: "flex-start", flexWrap: "wrap" }}>
       <div style={{ flex: "1 1 520px", minWidth: 0 }}>
         <h2 id="first-success-title" style={{ fontSize: 14, margin: "0 0 6px" }}>
@@ -109,7 +109,7 @@ export function FirstSuccessChecklist(props: {
           </p>
         ) : null}
       </div>
-      <div className="banner-actions" style={{ alignItems: "center", minHeight: 44 }}>
+      <div className="ui ui-display-flex ui-flex-none ui-gap-14px banner-actions" style={{ alignItems: "center", minHeight: 44 }}>
         {nextAction ? (
           <button className="link" style={{ minHeight: 44 }} onClick={nextAction.run}>
             {nextAction.label}

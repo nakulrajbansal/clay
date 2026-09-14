@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { createHash } from "node:crypto";
-import { act } from "react";
+import { act } from "preact/test-utils";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {

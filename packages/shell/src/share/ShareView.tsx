@@ -89,13 +89,13 @@ export function ShareView(props: Readonly<{
     return () => document.body.removeAttribute("data-share-state");
   }, [view.state]);
 
-  if (view.state === "loading") return <main className="share-view share-view-state">
-    <div className="share-view-mark" aria-hidden="true">C</div>
+  if (view.state === "loading") return <main className="ui ui-display-flex ui-align-items-center ui-flex-direction-column ui-text-align-center ui-justify-content-center share-view share-view-state">
+    <div className="ui ui-display-grid ui-place-items-center share-view-mark" aria-hidden="true">C</div>
     <p role="status" aria-live="polite">Opening encrypted share…</p>
   </main>;
 
-  if (view.state === "error") return <main className="share-view share-view-state">
-    <div className="share-view-mark" aria-hidden="true">C</div>
+  if (view.state === "error") return <main className="ui ui-display-flex ui-align-items-center ui-flex-direction-column ui-text-align-center ui-justify-content-center share-view share-view-state">
+    <div className="ui ui-display-grid ui-place-items-center share-view-mark" aria-hidden="true">C</div>
     <h1>Share unavailable</h1>
     <p role="alert">{view.message}</p>
     <small>No account or sign-in is required. Ask the sender for a fresh link if needed.</small>
@@ -103,8 +103,8 @@ export function ShareView(props: Readonly<{
 
   const { projection } = view.share;
   return <main className="share-view">
-    <header className="share-view-header">
-      <div className="share-view-mark" aria-hidden="true">C</div>
+    <header className="ui ui-display-grid ui-align-items-center ui-gap-16px share-view-header">
+      <div className="ui ui-display-grid ui-place-items-center share-view-mark" aria-hidden="true">C</div>
       <div>
         <span>Shared from Clay</span>
         <h1>{projection.manifest.title}</h1>
@@ -115,12 +115,12 @@ export function ShareView(props: Readonly<{
       </time>
     </header>
 
-    <section className="share-view-card" aria-label="Shared result">
-      <div className="share-view-summary">
+    <section className="ui ui-overflow-hidden ui-base-border-radius-c431a0 share-view-card" aria-label="Shared result">
+      <div className="ui ui-display-flex ui-justify-content-space-between ui-font-size-13px ui-flex-wrap-wrap ui-gap-8px share-view-summary">
         <strong>{projection.manifest.rowCount} rows × {projection.manifest.fieldCount} fields</strong>
         <span>Complete snapshot · hidden and unselected fields excluded</span>
       </div>
-      <div className="share-view-table" role="region" aria-label="Shared result table" tabIndex={0}>
+      <div className="ui ui-overflow-auto share-view-table" role="region" aria-label="Shared result table" tabIndex={0}>
         <table>
           <thead><tr>{projection.manifest.fields.map((field, index) =>
             <th scope="col" key={`${field.name}-${index}`}>{field.label}</th>)}</tr></thead>
@@ -131,7 +131,7 @@ export function ShareView(props: Readonly<{
       </div>
     </section>
 
-    {view.share.attachments.length > 0 ? <section className="share-view-card share-files"
+    {view.share.attachments.length > 0 ? <section className="ui ui-overflow-hidden ui-base-border-radius-c431a0 ui-button-font-590948 ui-article-align-items-c91e3c share-view-card share-files"
       aria-label="Approved shared files">
       <h2>Approved files</h2>
       <p>Only files the sender checked separately are included.</p>
@@ -143,7 +143,7 @@ export function ShareView(props: Readonly<{
       </article>)}
     </section> : null}
 
-    <footer className="share-view-footer">
+    <footer className="ui ui-font-size-13px ui-text-align-center share-view-footer">
       This page can display this frozen result only. It cannot edit or access the sender’s Clay app.
     </footer>
   </main>;
