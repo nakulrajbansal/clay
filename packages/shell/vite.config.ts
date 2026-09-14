@@ -2,6 +2,8 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { sharedRuntimeChunk } from "./config/shared-runtime-chunks.mjs";
+import { createSharedSqliteRuntime } from "./config/shared-sqlite-runtime.mjs";
 
 import {
   createProductionCssOptimizer,
@@ -24,6 +26,7 @@ if (sourceTree !== "unbound") {
 
 export default defineConfig({
   plugins: [
+    createSharedSqliteRuntime(),
     createProductionCssOptimizer({
       sourceRoot: fileURLToPath(new URL("./src/", import.meta.url)),
     }),
@@ -45,17 +48,22 @@ export default defineConfig({
     terserOptions: { compress: { passes: 2 } },
     cssMinify: "lightningcss",
     cssTarget: CSS_BROWSER_TARGETS.vite,
+    rollupOptions: {
+      output: { onlyExplicitManualChunks: true, manualChunks: sharedRuntimeChunk },
+    },
   },
   optimizeDeps: {
     exclude: ["@sqlite.org/sqlite-wasm"],
   },
   worker: {
     format: "es",
+    plugins: () => [createSharedSqliteRuntime()],
     rollupOptions: {
       output: {
         onlyExplicitManualChunks: true,
-        manualChunks: id => id.replaceAll("\\", "/").endsWith("/planner-authority.ts")
-          ? "planner-authority" : undefined,
+        manualChunks: id => sharedRuntimeChunk(id)
+          ?? (id.replaceAll("\\", "/").endsWith("/planner-authority.ts")
+            ? "planner-authority" : undefined),
       },
     },
   },

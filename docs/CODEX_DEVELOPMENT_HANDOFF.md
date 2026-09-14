@@ -1,3 +1,165 @@
+# Aggregate bundle FIX checkpoint - 2026-09-14
+
+This section supersedes the prior FIX continuation below. A-F development remains
+complete; aggregate optimization is PARTIAL, not certification or shipment.
+Started clean in `D:\Clay`, `codex/clay-project`, HEAD and local origin tracking ref
+`b8187ed98cfea42381250c0c016d4e33cc816e66`. No network remote readback or Git writes.
+Preserve this coherent uncommitted diff; no other worktree or existing server was
+touched. No dependency download, production configuration, credential access,
+deployment, formal review, or historical release-evidence regeneration occurred.
+
+## What changed and why
+
+Read the complete actual module report and both frozen collector implementations
+before editing. Neither collector, their limits, nor the diagnostic scripts changed.
+Chunk sizes below are emitted bytes; Rollup `renderedLength` is pre-minification
+and must not be mistaken for emitted-byte savings.
+
+1. **Remove unused schema construction.** `packages/schema/src/*.ts` (except the
+   evidence-only factories) and kernel `import-contracts.ts` /
+   `import-staging-contracts.ts` now mark entire pure factory expressions, including
+   nested constructors. A lone annotation on the outer Zod call was insufficient.
+   The initial RED tests proved that importing only an app ID or parser chunk
+   validator still constructed intake/migration/bridge contracts. A third RED test
+   demonstrated the same backup-to-catalog-to-Daily-Home expansion. Validators,
+   refinements, defaults, strictness, schema versions and export identities remain
+   unchanged. The first four-file change saved 28,194 raw / 7,143 gzip browser bytes;
+   it saved only 2,816 raw / 654 gzip in the complete DB worker.
+2. **Deduplicate Zod across realms.** New schema `validation-runtime.ts` exposes a
+   closed, frozen vocabulary of the ORIGINAL installed Zod factories and authoring
+   types, not a replacement validator. Runtime imports use this facade. New shell
+   `config/shared-runtime-chunks.mjs` puts this dependency-only closure in the same
+   content-addressed asset in the shell, DB worker and import worker. A first
+   manual-chunk-only experiment emitted three different files and was insufficient;
+   the stable facade makes actual bytes identical. No schema instance, parse state,
+   authority or custody is shared across JavaScript realms. After schema pruning
+   plus actual runtime deduplication, browser payload was 3,889,226 / 1,255,066.
+3. **Minify the fixed panel bootstrap.** `packages/panel-runtime/vite.config.ts`
+   previously used `minify: false`. Standard Terser minification now reduces the
+   fixed IIFE from 81,093 / 19,380 to 44,487 / 14,376. The shell also stops embedding
+   that extra development whitespace/identifier copy. Saved/generated panel code,
+   persisted panel identities, CSP and component capabilities are NOT rewritten.
+   The new compiled-IIFE test renders components, evaluates the existing expression
+   API and checks captured native transport after the mutable port is changed.
+4. **Deduplicate the pinned SQLite initializer.** New shell
+   `config/shared-sqlite-runtime.mjs` extracts the intact bundler-friendly initializer
+   from the installed SQLite 3.53.0-build1 distribution at build time. Both the
+   public index/promiser facade and support-worker bootstrap import that identical
+   module. No dependency file, VFS/journal/lock implementation or production driver
+   guard was edited. Exact input SHA-256 checks reject any upstream drift, rather
+   than attempting a best-effort rewrite. Original licenses are retained. The
+   standard support-worker API still opens, executes, reports errors and closes;
+   the full initializer is counted in the DB and browser closures. This saved a
+   real second initializer copy, not bytes hidden from a collector. Production
+   `sqlite-initializer-BdPRzjJX.js` is 210,791 / 62,575 and is emitted once.
+
+Additional source changes are imports of the validation facade in kernel
+`daily-home-projection`, `inbox-dispositions`, `intake`, `private-metrics`,
+`production-daily`, `production-manual-backup`, and `production-relation`.
+Shell `vite.config.ts` wires the same sharing rules into ordinary and worker builds;
+the two new config helpers have `.d.mts` declarations. Use `git status --short
+--untracked-files=all` for the complete source/test/config inventory.
+
+## Rejected shortcuts / remaining source seams
+
+- Acorn is NOT incidentally imported provider/model HTTP code. The worker uses it
+  through `validate.ts` and `panel-rewrite.ts`: plan checks, syntactic field rename,
+  and archived live/historical panel validation in `store.ts`. The shell-only
+  `static-javascript-strings.ts` module does not appear in the worker report.
+  Removing or replacing Acorn without preserving those executable safety checks
+  would not be a valid optimization. It remains 231,930 *pre-minification* bytes.
+- The complete worker still contains `asyncstore` 506,007 / 142,114, authority
+  212,973 / 53,319, target/catalog authority 193,667 / 41,161, DB entry
+  180,649 / 44,746, shared SQLite 210,791 / 62,575 and validation 55,684 / 12,701.
+  `store.ts` is 265,257 rendered bytes; `device-catalog.ts` is 181,701. A next
+  structural pass must identify genuinely redundant/unused methods and repeated
+  validation/coordination routines, with route/caller and recovery tests first.
+  Moving these between lazy chunks alone will not reduce the complete closure.
+- CSS remains unchanged and RED. Another CSSO pass over actual emitted styles
+  saved only about 40 raw bytes and made aggregate gzip worse. Combining files
+  experimentally did not materially reduce raw bytes and would change lazy loading
+  and cascade order; it was NOT applied. Almost all static class names are already
+  compacted. The main stylesheet (48,391 raw) and Operations (19,471 raw) need
+  source-level shared primitive/declaration work with responsive/cascade coverage,
+  not weaker collection, omitted styles or blind rule deletion.
+- Shell-specific residuals include the React app/controller and retained workflows,
+  DataView/AutomationCenter, immutable prompt assets, and the remaining fixed frame.
+  These must retain all A-F controls, previews, recovery and immutable intents.
+
+## Actual verification for this optimization diff
+
+Package-local command form:
+`node node_modules/vitest/vitest.mjs run [files] --maxWorkers=1 --minWorkers=1 --reporter=dot`.
+Full suites additionally use `--reporter=json --outputFile.json=../../test-results/fix-batch/NAME-optimization.json`.
+Builds and broad suites are serial, using installed repository-local binaries.
+
+| Check | Observed result |
+| --- | --- |
+| Schema pruning boundary RED/GREEN | 2 initial failures, then 1 additional failure; all 3 GREEN |
+| Shell sharing/pruning focused packet | 3 files, 6 passed, 5.43 s |
+| Compiled panel bootstrap RED/GREEN | RED: 2,135 lines; GREEN: real compiled rendering/compute/port test |
+| Full kernel | 113 files passed / 1 skipped; 1,202 passed / 1 skipped; 465.83 s |
+| Full schema | 15 files, 157 passed, 5.92 s |
+| Full panel runtime | 4 files, 66 passed, 7.07 s |
+| Full shell | 128 files, 840 passed, 388.60 s; no reported unhandled errors |
+| Full mutation | 6 files, 48 passed, 4.29 s |
+| Full backend | 11 files, 111 passed, 10.05 s |
+| All six package typechecks | `node node_modules/typescript/bin/tsc --noEmit`: all exit 0 (shell helper declarations fixed after initial TS7016 RED) |
+| Frozen collector unit tests | `node --test scripts/bundle-budget.test.mjs`: 19 passed |
+| Panel production build | Exit 0; final 655 ms, IIFE 44,487 / 14,376 |
+| Production module-report build | `node scripts/bundle-module-report.mjs`: exit 0; final 13.42 s |
+| Full bundle diagnostic | Exit 1; 24 boundaries measured, four RED |
+| Actual frozen gate | `node scripts/bundle-budget.mjs`: freshness PASS, then exit 1 at total shell JavaScript (1,137,944 / 342,938 exceeds 980,000 / 290,000) |
+| Diff hygiene | `git diff --check`: exit 0; collectors, diagnostics and `evidence/` unchanged |
+
+The SQLite focused test executes the production-extracted initializer with the real
+pinned WASM: memory SQL write/rollback/readback, then support-worker open/query/error/
+close messages in an owned VM. It also rejects changed upstream bytes. This is NOT
+physical OPFS or browser certification. The validation test checks original factory
+identity, rejection/result equivalence and byte-identical independent realm builds.
+Changed-content hygiene found only the test-owned `clay.compute.eval("2 + 3", {})`
+fixture; no added credential literals, unsafe HTML, production eval, debug logging
+or shell execution were found by that bounded scan. This is not a security review.
+All six suite JSON reports were read back as successful with zero failed tests.
+The source-binding helper already inventories all package/config and installed
+dependency inputs; it was inspected, not changed or run as a certification gate.
+
+## Latest aggregate measurements (raw / gzip bytes)
+
+| Boundary | Starting checkpoint | Current | Frozen limit | Remaining gap |
+| --- | --- | --- | --- | --- |
+| Total shell JavaScript | 1,183,647 / 349,690 | 1,137,944 / 342,938 | 980,000 / 290,000 | 157,944 / 52,938 |
+| Complete worker | 1,461,057 / 392,375 | 1,459,870 / 391,399 | 1,010,000 / 280,000 | 449,870 / 111,399 |
+| Application styles | 78,807 / 20,198 | 78,807 / 20,198 | 67,000 / 17,000 | 11,807 / 3,198 |
+| Complete browser | 4,027,944 / 1,287,860 | 3,602,757 / 1,182,345 | 3,250,000 / 1,100,000 | 352,757 / 82,345 |
+
+Complete browser savings: **425,187 raw / 105,515 gzip**. Worker authority remains
+green at 212,973 / 53,319; ProductionBackupRuntime remains green at 32,098 / 10,845.
+All other measured boundaries remain green. Ordinary full bundle output and module
+membership are generated in ignored `test-results/fix-batch/bundles.json` and
+`bundle-modules.json`; they are diagnostics, not a certified immutable candidate.
+
+## Exact continuation
+
+1. Preserve this diff on `b8187ed...`. Do not redo the first FIX checkpoint, remove
+   roadmap capability, weaken validation/native exclusion or change frozen limits.
+2. Finish the four measured aggregate code gaps above. Shared content addressing
+   already removes duplicate Zod/SQLite copies; do not claim another split alone
+   solves the worker or shell aggregate. Preserve lazy semantic chunk identities.
+3. After source stabilizes, the parent workflow runs its owned sandboxed browser
+   gates. Parent-side Playwright launches successfully; Codex's earlier Windows
+   token/sandbox launch failures are a host limitation, not a product defect. Do not
+   bypass sandboxing or inflate product timeouts. No browser was launched this turn.
+4. Release B source binding and frozen-runtime evidence still require honest
+   regeneration after stabilization. Historical evidence was not changed. Retain
+   the clean immutable candidate requirement for local export, explicit loopback URL
+   for Release A, optional external credential-dependent model gate, and human-only
+   NVDA certification. No credentials are requested or configured here.
+
+No claim of all-green FIX, certification, release, or shipment is made.
+
+---
+
 # Integrated deterministic FIX checkpoint - 2026-09-13
 
 This section supersedes the old "integrated campaign is next" instruction below.

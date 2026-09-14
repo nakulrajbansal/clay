@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "@clay/schema/validation-runtime";
 import { RequestId } from "@clay/schema";
 import { ManualBackupDownloadV2 } from "@clay/schema/backup";
 import type { TargetEvidenceV1 } from "@clay/schema/catalog";

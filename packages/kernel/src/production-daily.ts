@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "@clay/schema/validation-runtime";
 import { DailyCapturePayloadV1, DailyCaptureUndoPayloadV1, DailySourceCasPayloadV1, DailyNavigationCasPayloadV1, DailyInboxActionPayloadV1, DailyInboxUndoPayloadV1, type TargetEvidenceV1 } from "@clay/schema/catalog";
 import { DailySourceLibraryV1 } from "@clay/schema/daily-home";
 import { ClayError } from "./errors";

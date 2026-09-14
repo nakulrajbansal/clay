@@ -1,6 +1,6 @@
-import { z } from "zod";
+import { z } from "./validation-runtime";
 
-const safeCount = z.number().int().nonnegative().safe();
+const safeCount = /*#__PURE__*/ (() => (z.number().int().nonnegative().safe()))();
 const UINT64_MAX = 18_446_744_073_709_551_615n;
 const boundedText = (max: number): z.ZodString => z.string().min(1).max(max);
 const lowerBase32Id = (prefix: string): z.ZodString =>
@@ -58,7 +58,7 @@ export const DAILY_HOME_SOURCE_IDS_V1 = [
   "recovery_notice",
   "saved_view",
 ] as const;
-export const DailyHomeSourceIdV1 = z.enum(DAILY_HOME_SOURCE_IDS_V1);
+export const DailyHomeSourceIdV1 = /*#__PURE__*/ (() => (z.enum(DAILY_HOME_SOURCE_IDS_V1)))();
 export type DailyHomeSourceIdV1 = z.infer<typeof DailyHomeSourceIdV1>;
 
 export const DAILY_HOME_SECTION_IDS_V1 = [
@@ -68,22 +68,22 @@ export const DAILY_HOME_SECTION_IDS_V1 = [
   "pinned",
   "recently_opened",
 ] as const;
-export const DailyHomeSectionIdV1 = z.enum(DAILY_HOME_SECTION_IDS_V1);
+export const DailyHomeSectionIdV1 = /*#__PURE__*/ (() => (z.enum(DAILY_HOME_SECTION_IDS_V1)))();
 export type DailyHomeSectionIdV1 = z.infer<typeof DailyHomeSectionIdV1>;
 
-export const CompletenessGapV1 = z.object({
+export const CompletenessGapV1 = /*#__PURE__*/ (() => (z.object({
   sourceId: DailyHomeSourceIdV1,
   reason: z.enum(["unavailable", "timeout", "invalid_source", "limit"]),
   retryable: z.boolean(),
-}).strict();
+}).strict()))();
 export type CompletenessGapV1 = z.infer<typeof CompletenessGapV1>;
 
-const ExactCompletenessV1 = z.object({
+const ExactCompletenessV1 = /*#__PURE__*/ (() => (z.object({
   kind: z.literal("exact"),
   total: safeCount,
-}).strict();
+}).strict()))();
 
-const PartialCompletenessV1 = z.object({
+const PartialCompletenessV1 = /*#__PURE__*/ (() => (z.object({
   kind: z.literal("partial"),
   knownMinimum: safeCount,
   gaps: z.array(CompletenessGapV1).min(1).max(7),
@@ -92,27 +92,27 @@ const PartialCompletenessV1 = z.object({
   if (!hasUniqueStrings(ids)) {
     ctx.addIssue({ code: "custom", path: ["gaps"], message: "completeness gaps must name unique sources" });
   }
-});
+})))();
 
-export const CompletenessV1 = z.union([
+export const CompletenessV1 = /*#__PURE__*/ (() => (z.union([
   ExactCompletenessV1,
   PartialCompletenessV1,
-]);
+])))();
 export type CompletenessV1 = z.infer<typeof CompletenessV1>;
 
-export const DailyHomeCursorStringV1 = z.string()
+export const DailyHomeCursorStringV1 = /*#__PURE__*/ (() => (z.string()
   .max(4_096)
-  .regex(/^dcur_[A-Za-z0-9_-]{16,4026}\.[0-9a-f]{64}$/);
-export const ContinuationV1 = z.discriminatedUnion("kind", [
+  .regex(/^dcur_[A-Za-z0-9_-]{16,4026}\.[0-9a-f]{64}$/)))();
+export const ContinuationV1 = /*#__PURE__*/ (() => (z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("end") }).strict(),
   z.object({
     kind: z.literal("cursor"),
     cursor: DailyHomeCursorStringV1,
   }).strict(),
-]);
+])))();
 export type ContinuationV1 = z.infer<typeof ContinuationV1>;
 
-export const CountSetV1 = z.object({
+export const CountSetV1 = /*#__PURE__*/ (() => (z.object({
   sourceOccurrences: CompletenessV1,
   renderedUnique: CompletenessV1,
 }).strict().superRefine((value, ctx) => {
@@ -127,7 +127,7 @@ export const CountSetV1 = z.object({
       message: "rendered unique count cannot exceed source occurrence count",
     });
   }
-});
+})))();
 export type CountSetV1 = z.infer<typeof CountSetV1>;
 
 export function dailyPageV1<T extends z.ZodTypeAny>(item: T) {
@@ -148,29 +148,29 @@ export function dailyPageV1<T extends z.ZodTypeAny>(item: T) {
   });
 }
 
-export const TableSemanticIdV1 = semanticId("tbl");
-export const FieldSemanticIdV1 = semanticId("fld");
-export const RowIdV1 = z.string().regex(
+export const TableSemanticIdV1 = /*#__PURE__*/ (() => (semanticId("tbl")))();
+export const FieldSemanticIdV1 = /*#__PURE__*/ (() => (semanticId("fld")))();
+export const RowIdV1 = /*#__PURE__*/ (() => (z.string().regex(
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-);
-export const AutomationIdV1 = z.string().regex(/^auto_[0-9a-f]{32}$/);
-export const SavedViewIdV1 = z.string().regex(/^view_[0-9a-f]{32}$/);
-export const DailySourceProfileIdV1 = lowerBase32Id("dsp");
-export const InboxSourceKeyV1 = lowerBase32Id("inb");
-export const SourceGenerationV1 = lowerBase32Id("gen");
-export const AppInstanceIdV1 = lowerBase32Id("app");
-export const Sha256V1 = z.string().regex(/^sha256:[0-9a-f]{64}$/);
-export const CanonicalUtcInstantV1 = z.string().refine(
+)))();
+export const AutomationIdV1 = /*#__PURE__*/ (() => (z.string().regex(/^auto_[0-9a-f]{32}$/)))();
+export const SavedViewIdV1 = /*#__PURE__*/ (() => (z.string().regex(/^view_[0-9a-f]{32}$/)))();
+export const DailySourceProfileIdV1 = /*#__PURE__*/ (() => (lowerBase32Id("dsp")))();
+export const InboxSourceKeyV1 = /*#__PURE__*/ (() => (lowerBase32Id("inb")))();
+export const SourceGenerationV1 = /*#__PURE__*/ (() => (lowerBase32Id("gen")))();
+export const AppInstanceIdV1 = /*#__PURE__*/ (() => (lowerBase32Id("app")))();
+export const Sha256V1 = /*#__PURE__*/ (() => (z.string().regex(/^sha256:[0-9a-f]{64}$/)))();
+export const CanonicalUtcInstantV1 = /*#__PURE__*/ (() => (z.string().refine(
   isCanonicalUtcInstant,
   "canonical UTC millisecond instant required",
-);
-export const CanonicalLocalDateV1 = z.string().refine(isCanonicalDate, "canonical local date required");
-export const CanonicalTimeZoneV1 = z.string().min(1).max(128).refine(
+)))();
+export const CanonicalLocalDateV1 = /*#__PURE__*/ (() => (z.string().refine(isCanonicalDate, "canonical local date required")))();
+export const CanonicalTimeZoneV1 = /*#__PURE__*/ (() => (z.string().min(1).max(128).refine(
   isSupportedTimeZone,
   "recognized IANA timezone required",
-);
+)))();
 
-const CompletionRuleV1 = z.union([
+const CompletionRuleV1 = /*#__PURE__*/ (() => (z.union([
   z.object({ kind: z.literal("none") }).strict(),
   z.object({
     kind: z.literal("boolean"),
@@ -194,10 +194,10 @@ const CompletionRuleV1 = z.union([
       });
     }
   }),
-]);
+])))();
 export type CompletionRuleV1 = z.infer<typeof CompletionRuleV1>;
 
-export const DailySourceProfileV1 = z.object({
+export const DailySourceProfileV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   profileId: DailySourceProfileIdV1,
   tableId: TableSemanticIdV1,
@@ -207,10 +207,10 @@ export const DailySourceProfileV1 = z.object({
   enabled: z.boolean(),
   labelSnapshot: boundedText(80).optional(),
   dueLabelSnapshot: boundedText(80).optional(),
-}).strict();
+}).strict()))();
 export type DailySourceProfileV1 = z.infer<typeof DailySourceProfileV1>;
 
-export const DailySourceLibraryV1 = z.object({
+export const DailySourceLibraryV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   revision: safeCount,
   profiles: z.array(DailySourceProfileV1).max(32),
@@ -227,13 +227,13 @@ export const DailySourceLibraryV1 = z.object({
       message: "only one enabled primary profile is allowed per table",
     });
   }
-});
+})))();
 export type DailySourceLibraryV1 = z.infer<typeof DailySourceLibraryV1>;
 
-export const SourceStatusV1 = z.enum(["ready", "partial", "unavailable"]);
+export const SourceStatusV1 = /*#__PURE__*/ (() => (z.enum(["ready", "partial", "unavailable"])))();
 export type SourceStatusV1 = z.infer<typeof SourceStatusV1>;
 
-export const DailyHomeProfileResolutionV1 = z.object({
+export const DailyHomeProfileResolutionV1 = /*#__PURE__*/ (() => (z.object({
   readyProfileIds: z.array(DailySourceProfileIdV1).max(32),
   issueProfileIds: z.array(DailySourceProfileIdV1).max(32),
 }).strict().superRefine((value, ctx) => {
@@ -246,10 +246,10 @@ export const DailyHomeProfileResolutionV1 = z.object({
       message: "profile resolution must be a disjoint canonical partition",
     });
   }
-});
+})))();
 export type DailyHomeProfileResolutionV1 = z.infer<typeof DailyHomeProfileResolutionV1>;
 
-export const SourceWatermarkV1 = z.object({
+export const SourceWatermarkV1 = /*#__PURE__*/ (() => (z.object({
   sourceId: DailyHomeSourceIdV1,
   watermark: z.string().min(1).max(256).nullable(),
   status: SourceStatusV1,
@@ -267,10 +267,10 @@ export const SourceWatermarkV1 = z.object({
       message: "D0 recovery source remains unavailable until the Recovery contract is integrated",
     });
   }
-});
+})))();
 export type SourceWatermarkV1 = z.infer<typeof SourceWatermarkV1>;
 
-export const SnapshotBasisV1 = z.object({
+export const SnapshotBasisV1 = /*#__PURE__*/ (() => (z.object({
   appInstanceId: AppInstanceIdV1,
   activeGenerationId: SourceGenerationV1,
   schemaHead: boundedText(256),
@@ -296,10 +296,10 @@ export const SnapshotBasisV1 = z.object({
   if (ids.some((id, index) => id !== DAILY_HOME_SOURCE_IDS_V1[index])) {
     ctx.addIssue({ code: "custom", path: ["sourceWatermarks"], message: "source basis must contain every source" });
   }
-});
+})))();
 export type SnapshotBasisV1 = z.infer<typeof SnapshotBasisV1>;
 
-export const DailyHomeAdapterContinuationsV1 = z.array(z.object({
+export const DailyHomeAdapterContinuationsV1 = /*#__PURE__*/ (() => (z.array(z.object({
   sourceId: DailyHomeSourceIdV1,
   continuation: z.string().min(1).max(256).nullable(),
 }).strict()).length(DAILY_HOME_SOURCE_IDS_V1.length).superRefine((value, ctx) => {
@@ -309,10 +309,10 @@ export const DailyHomeAdapterContinuationsV1 = z.array(z.object({
       message: "cursor must bind every adapter continuation in canonical source order",
     });
   }
-});
+})))();
 export type DailyHomeAdapterContinuationsV1 = z.infer<typeof DailyHomeAdapterContinuationsV1>;
 
-export const DailyHomePageScopeV1 = z.discriminatedUnion("kind", [
+export const DailyHomePageScopeV1 = /*#__PURE__*/ (() => (z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("source"),
     sourceId: DailyHomeSourceIdV1,
@@ -323,16 +323,16 @@ export const DailyHomePageScopeV1 = z.discriminatedUnion("kind", [
     sectionId: DailyHomeSectionIdV1,
     pageSize: z.number().int().min(1).max(20).safe(),
   }).strict(),
-]);
+])))();
 export type DailyHomePageScopeV1 = z.infer<typeof DailyHomePageScopeV1>;
 
-export const DailyHomeCursorStateV1 = z.object({
+export const DailyHomeCursorStateV1 = /*#__PURE__*/ (() => (z.object({
   adapterContinuations: DailyHomeAdapterContinuationsV1,
   pageScope: DailyHomePageScopeV1,
-}).strict();
+}).strict()))();
 export type DailyHomeCursorStateV1 = z.infer<typeof DailyHomeCursorStateV1>;
 
-export const DailyHomeCursorPayloadV1 = z.object({
+export const DailyHomeCursorPayloadV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   appInstanceId: AppInstanceIdV1,
   activeGenerationId: SourceGenerationV1,
@@ -343,10 +343,10 @@ export const DailyHomeCursorPayloadV1 = z.object({
   localDate: CanonicalLocalDateV1,
   timeZone: CanonicalTimeZoneV1,
   projectionValidUntil: CanonicalUtcInstantV1,
-}).strict();
+}).strict()))();
 export type DailyHomeCursorPayloadV1 = z.infer<typeof DailyHomeCursorPayloadV1>;
 
-export const DailyHomeProjectionAuthorityV1 = z.object({
+export const DailyHomeProjectionAuthorityV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   appInstanceId: AppInstanceIdV1,
   activeGenerationId: SourceGenerationV1,
@@ -375,10 +375,10 @@ export const DailyHomeProjectionAuthorityV1 = z.object({
   if ((ready.length === 0 || issues.length > 0) && due?.status === "ready") {
     ctx.addIssue({ code: "custom", path: ["sourceWatermarks"], message: "due source readiness contradicts profile resolution" });
   }
-});
+})))();
 export type DailyHomeProjectionAuthorityV1 = z.infer<typeof DailyHomeProjectionAuthorityV1>;
 
-export const TrustedRouteV1 = z.discriminatedUnion("kind", [
+export const TrustedRouteV1 = /*#__PURE__*/ (() => (z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("record"),
     tableId: TableSemanticIdV1,
@@ -397,11 +397,11 @@ export const TrustedRouteV1 = z.discriminatedUnion("kind", [
     area: z.enum(["daily_sources", "automations"]),
   }).strict(),
   z.object({ kind: z.literal("inbox") }).strict(),
-]);
+])))();
 export type TrustedRouteV1 = z.infer<typeof TrustedRouteV1>;
 
-const InboxActionV1 = z.enum(["open", "setup", "fix", "complete", "snooze", "dismiss"]);
-export const InboxItemV1 = z.object({
+const InboxActionV1 = /*#__PURE__*/ (() => (z.enum(["open", "setup", "fix", "complete", "snooze", "dismiss"])))();
+export const InboxItemV1 = /*#__PURE__*/ (() => (z.object({
   sourceKey: InboxSourceKeyV1,
   sourceGeneration: SourceGenerationV1,
   kind: z.enum(["due_record", "automation_notification"]),
@@ -437,11 +437,11 @@ export const InboxItemV1 = z.object({
   if (!setupRoute && value.route.kind !== expectedRoute) {
     ctx.addIssue({ code: "custom", path: ["route"], message: "route must match source kind" });
   }
-});
+})))();
 export type InboxItemV1 = z.infer<typeof InboxItemV1>;
 
 /** App-owned local presentation, not a second work queue or remote runtime. */
-export const InboxDispositionV1 = z.object({ schema: z.literal(1), sourceKey: InboxSourceKeyV1,
+export const InboxDispositionV1 = /*#__PURE__*/ (() => (z.object({ schema: z.literal(1), sourceKey: InboxSourceKeyV1,
   sourceGeneration: SourceGenerationV1, revision: safeCount.positive(), requestId: lowerBase32Id("req"),
   state: z.enum(["active", "snoozed", "dismissed"]), until: CanonicalUtcInstantV1.nullable(),
   localDate: CanonicalLocalDateV1.nullable(), timeZone: CanonicalTimeZoneV1.nullable(),
@@ -449,10 +449,10 @@ export const InboxDispositionV1 = z.object({ schema: z.literal(1), sourceKey: In
   const snoozed = value.state === "snoozed";
   if (snoozed !== (value.until !== null) || snoozed !== (value.localDate !== null) || snoozed !== (value.timeZone !== null))
     context.addIssue({ code: "custom", message: "Snooze requires an exact local-calendar boundary; other dispositions have none" });
-});
+})))();
 export type InboxDispositionV1 = z.infer<typeof InboxDispositionV1>;
 
-export const DailyHomeRecordProjectionV1 = z.object({
+export const DailyHomeRecordProjectionV1 = /*#__PURE__*/ (() => (z.object({
   kind: z.literal("record_projection"),
   sourceId: z.enum(["favorite_record", "recently_changed_record", "recently_opened_record"]),
   sourceKey: InboxSourceKeyV1,
@@ -478,10 +478,10 @@ export const DailyHomeRecordProjectionV1 = z.object({
   if ((value.sourceId === "favorite_record") !== (value.favoriteOrder !== undefined)) {
     ctx.addIssue({ code: "custom", path: ["favoriteOrder"], message: "favorite order must match favorite source" });
   }
-});
+})))();
 export type DailyHomeRecordProjectionV1 = z.infer<typeof DailyHomeRecordProjectionV1>;
 
-export const DailyHomeSavedViewProjectionV1 = z.object({
+export const DailyHomeSavedViewProjectionV1 = /*#__PURE__*/ (() => (z.object({
   kind: z.literal("saved_view_projection"),
   sourceId: z.literal("saved_view"),
   sourceKey: InboxSourceKeyV1,
@@ -496,14 +496,14 @@ export const DailyHomeSavedViewProjectionV1 = z.object({
   if (value.route.savedViewId !== value.savedViewId) {
     ctx.addIssue({ code: "custom", path: ["route"], message: "view route must bind the projected view" });
   }
-});
+})))();
 export type DailyHomeSavedViewProjectionV1 = z.infer<typeof DailyHomeSavedViewProjectionV1>;
 
-export const DailyHomeItemV1 = z.union([
+export const DailyHomeItemV1 = /*#__PURE__*/ (() => (z.union([
   InboxItemV1,
   DailyHomeRecordProjectionV1,
   DailyHomeSavedViewProjectionV1,
-]);
+])))();
 export type DailyHomeItemV1 = z.infer<typeof DailyHomeItemV1>;
 
 function renderedIdentity(item: DailyHomeItemV1): string {
@@ -514,8 +514,8 @@ function renderedIdentity(item: DailyHomeItemV1): string {
   return `occurrence:${item.sourceKey}\u0000${item.sourceGeneration}`;
 }
 
-const DailyItemPageV1 = dailyPageV1(DailyHomeItemV1);
-export const DailyHomeSourceSnapshotV1 = z.object({
+const DailyItemPageV1 = /*#__PURE__*/ (() => (dailyPageV1(DailyHomeItemV1)))();
+export const DailyHomeSourceSnapshotV1 = /*#__PURE__*/ (() => (z.object({
   sourceId: DailyHomeSourceIdV1,
   watermark: z.string().min(1).max(256).nullable(),
   status: SourceStatusV1,
@@ -595,16 +595,16 @@ export const DailyHomeSourceSnapshotV1 = z.object({
       });
     }
   }
-});
+})))();
 export type DailyHomeSourceSnapshotV1 = z.infer<typeof DailyHomeSourceSnapshotV1>;
 
 const SECTION_ORDER = DAILY_HOME_SECTION_IDS_V1;
-const DailyHomeSectionV1 = z.object({
+const DailyHomeSectionV1 = /*#__PURE__*/ (() => (z.object({
   sectionId: DailyHomeSectionIdV1,
   page: DailyItemPageV1,
-}).strict();
+}).strict()))();
 
-export const DailyHomeSnapshotV1 = z.object({
+export const DailyHomeSnapshotV1 = /*#__PURE__*/ (() => (z.object({
   generatedAt: CanonicalUtcInstantV1,
   basis: SnapshotBasisV1,
   snapshotDigest: Sha256V1,
@@ -656,5 +656,5 @@ export const DailyHomeSnapshotV1 = z.object({
       message: "projection validity must be after generation",
     });
   }
-});
+})))();
 export type DailyHomeSnapshotV1 = z.infer<typeof DailyHomeSnapshotV1>;

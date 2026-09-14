@@ -1,11 +1,11 @@
-import { z } from "zod";
+import { z } from "./validation-runtime";
 import { TargetEvidenceV1, PresentationIntentV1, IntakeCommandPayloadV1 } from "./catalog";
 import { IntakeFormId, IntakePublicationProposalV1, LocalIntakeFormV2, IntakeRelayTerminalResultV1, IntakePublicationClosureV1 } from "./intake";
 import { RequestId } from "./index";
 import { IntakeOwnerWitnessV1 } from "./owner-witness";
 
 /** Public-only presentation cache. Not a worker command or a custody record. */
-export const IntakePublicationJobV1 = z.object({ schema: z.literal(1), formId: IntakeFormId, source: TargetEvidenceV1,
+export const IntakePublicationJobV1 = /*#__PURE__*/ (() => (z.object({ schema: z.literal(1), formId: IntakeFormId, source: TargetEvidenceV1,
   configuration: z.object({ shellOrigin: z.string(), publicBaseUrl: z.string(), relayBaseUrl: z.string() }).strict(), proposal: IntakePublicationProposalV1,
   save: PresentationIntentV1.nullable(), publish: PresentationIntentV1.nullable(), complete: LocalIntakeFormV2.nullable(),
   relayInvoked: z.boolean(), relayConfirmed: z.boolean(),
@@ -80,9 +80,9 @@ export const IntakePublicationJobV1 = z.object({ schema: z.literal(1), formId: I
           || JSON.stringify(witness.claim.source) !== JSON.stringify(job.source) || JSON.stringify(witness.claim.form) !== JSON.stringify(draft)
           || (termination.complete && !termination.relayTerminal)) invalid();
     }
-  });
+  })))();
 export type IntakePublicationJobV1 = z.infer<typeof IntakePublicationJobV1>;
-export const IntakeRevocationJobV1 = z.object({ schema: z.literal(1), form: LocalIntakeFormV2,
+export const IntakeRevocationJobV1 = /*#__PURE__*/ (() => (z.object({ schema: z.literal(1), form: LocalIntakeFormV2,
   intent: PresentationIntentV1, relayConfirmed: z.boolean(),
   renewals: z.array(z.object({ previousRequestId: RequestId, terminalStatus: z.enum(["cancelled", "failed"]),
     relay: IntakeRelayTerminalResultV1, intent: PresentationIntentV1 }).strict()).max(8).optional(),
@@ -119,5 +119,5 @@ export const IntakeRevocationJobV1 = z.object({ schema: z.literal(1), form: Loca
           || proof.authorityTarget.lineageEpoch !== owner.lineageEpoch || proof.relay.formId !== job.form.publicForm.formId
           || proof.relay.expiresAt !== job.form.publicForm.delivery.expiresAt) invalid();
     }
-  });
+  })))();
 export type IntakeRevocationJobV1 = z.infer<typeof IntakeRevocationJobV1>;

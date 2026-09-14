@@ -1,27 +1,27 @@
 // Closed schemas for the trusted finite Release F projection boundary.
-import { z } from "zod";
+import { z } from "./validation-runtime";
 
-const ProjectionIdent = z.string().regex(/^[a-z][a-z0-9_]{0,40}$/);
-const ProjectionCondOp = z.enum([
+const ProjectionIdent = /*#__PURE__*/ (() => (z.string().regex(/^[a-z][a-z0-9_]{0,40}$/)))();
+const ProjectionCondOp = /*#__PURE__*/ (() => (z.enum([
   "eq", "neq", "gt", "gte", "lt", "lte", "contains", "in",
   "is_null", "not_null", "within_days", "older_than_days",
-]);
+])))();
 
 // ---------- trusted finite projection v1 (Release F / F-GATE-010) ----------
-const ProjectionTableId = z.string().regex(
+const ProjectionTableId = /*#__PURE__*/ (() => (z.string().regex(
   /^tbl_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-);
-const ProjectionFieldId = z.string().regex(
+)))();
+const ProjectionFieldId = /*#__PURE__*/ (() => (z.string().regex(
   /^fld_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-);
-const ProjectionRecordId = z.string().regex(
+)))();
+const ProjectionRecordId = /*#__PURE__*/ (() => (z.string().regex(
   /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-);
-const ProjectionFilterValueV1 = z.union([
+)))();
+const ProjectionFilterValueV1 = /*#__PURE__*/ (() => (z.union([
   z.string(), z.number().finite(), z.boolean(),
   z.array(z.union([z.string(), z.number().finite()])).max(50),
-]);
-const ProjectionFilterRequestV1 = z.object({
+])))();
+const ProjectionFilterRequestV1 = /*#__PURE__*/ (() => (z.object({
   fieldId: ProjectionFieldId,
   op: ProjectionCondOp,
   value: ProjectionFilterValueV1.optional(),
@@ -31,8 +31,8 @@ const ProjectionFilterRequestV1 = z.object({
     code: "custom",
     message: valueFree ? `${filter.op} does not take a value` : `${filter.op} requires a value`,
   });
-});
-const ProjectionRequestBaseV1 = {
+})))();
+const ProjectionRequestBaseV1 = /*#__PURE__*/ (() => ({
   schema: z.literal(1),
   expectedSchemaVersion: z.number().int().nonnegative(),
   tableId: ProjectionTableId,
@@ -41,8 +41,8 @@ const ProjectionRequestBaseV1 = {
     includeRecordIds: z.boolean(),
     redactedFieldIds: z.array(ProjectionFieldId).max(30),
   }).strict(),
-};
-const ProjectionCurrentViewRequestV1 = z.object({
+}))();
+const ProjectionCurrentViewRequestV1 = /*#__PURE__*/ (() => (z.object({
   ...ProjectionRequestBaseV1,
   kind: z.literal("current_view"),
   view: z.object({
@@ -52,23 +52,23 @@ const ProjectionCurrentViewRequestV1 = z.object({
       .strict().nullable(),
     dateAnchor: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   }).strict(),
-}).strict();
-const ProjectionRecordRequestV1 = z.object({
+}).strict()))();
+const ProjectionRecordRequestV1 = /*#__PURE__*/ (() => (z.object({
   ...ProjectionRequestBaseV1,
   kind: z.literal("record"),
   recordId: ProjectionRecordId,
-}).strict();
-export const ProjectionRequestV1 = z.discriminatedUnion("kind", [
+}).strict()))();
+export const ProjectionRequestV1 = /*#__PURE__*/ (() => (z.discriminatedUnion("kind", [
   ProjectionCurrentViewRequestV1, ProjectionRecordRequestV1,
 ]).superRefine((request, ctx) => {
   if (new Set(request.fieldIds).size !== request.fieldIds.length)
     ctx.addIssue({ code: "custom", message: "projection field ids must be unique" });
   if (new Set(request.options.redactedFieldIds).size !== request.options.redactedFieldIds.length)
     ctx.addIssue({ code: "custom", message: "redacted field ids must be unique" });
-});
+})))();
 export type ProjectionRequestV1 = z.infer<typeof ProjectionRequestV1>;
 
-export const ProjectionOutputFieldV1 = z.object({
+export const ProjectionOutputFieldV1 = /*#__PURE__*/ (() => (z.object({
   label: z.string().min(1).max(200),
   name: z.string().min(1).max(100),
   redacted: z.boolean(),
@@ -77,14 +77,14 @@ export const ProjectionOutputFieldV1 = z.object({
     "text", "number", "integer", "boolean", "date", "enum", "computed",
     "relation", "rich_text",
   ]),
-}).strict();
-const ProjectionManifestFilterV1 = z.object({
+}).strict()))();
+const ProjectionManifestFilterV1 = /*#__PURE__*/ (() => (z.object({
   field: z.string().min(1).max(100),
   label: z.string().min(1).max(200),
   op: ProjectionCondOp,
   value: ProjectionFilterValueV1.optional(),
-}).strict();
-const ProjectionManifestViewV1 = z.object({
+}).strict()))();
+const ProjectionManifestViewV1 = /*#__PURE__*/ (() => (z.object({
   dateAnchor: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   filter: ProjectionManifestFilterV1.nullable(),
   search: z.string().max(512),
@@ -93,8 +93,8 @@ const ProjectionManifestViewV1 = z.object({
     field: z.string().min(1).max(100),
     label: z.string().min(1).max(200),
   }).strict().nullable(),
-}).strict();
-const ProjectionDependencyV1 = z.object({
+}).strict()))();
+const ProjectionDependencyV1 = /*#__PURE__*/ (() => (z.object({
   fields: z.array(z.object({
     field: ProjectionIdent,
     label: z.string().min(1).max(200),
@@ -106,8 +106,8 @@ const ProjectionDependencyV1 = z.object({
   if (dependency.kind === "relation" && dependency.fields.length !== 1) ctx.addIssue({
     code: "custom", path: ["fields"], message: "relation output needs one display dependency",
   });
-});
-export const ProjectionManifestV1 = z.object({
+})))();
+export const ProjectionManifestV1 = /*#__PURE__*/ (() => (z.object({
   completeness: z.object({ reason: z.null(), truncated: z.literal(false) }).strict(),
   csv: z.object({
     byteCount: z.number().int().nonnegative().max(8 * 1024 * 1024),
@@ -166,9 +166,9 @@ export const ProjectionManifestV1 = z.object({
   if (outputs.size > 0) ctx.addIssue({
     code: "custom", path: ["dependencies"], message: "dependency refers to a missing output",
   });
-});
+})))();
 export type ProjectionManifestV1 = z.infer<typeof ProjectionManifestV1>;
-export const ProjectionPlaintextV1 = z.object({
+export const ProjectionPlaintextV1 = /*#__PURE__*/ (() => (z.object({
   manifest: ProjectionManifestV1,
   rows: z.array(z.array(z.string()).max(30)).max(5000),
   schema: z.literal("ProjectionPlaintextV1"),
@@ -182,5 +182,5 @@ export const ProjectionPlaintextV1 = z.object({
       code: "custom", path: ["rows", index], message: "projection row width does not match fields",
     });
   });
-});
+})))();
 export type ProjectionPlaintextV1 = z.infer<typeof ProjectionPlaintextV1>;

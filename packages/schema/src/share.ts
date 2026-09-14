@@ -1,6 +1,6 @@
 // Closed F1 schemas. Relay wire types intentionally cannot represent plaintext,
 // canonical writes, or a recipient decryption capability.
-import { z } from "zod";
+import { z } from "./validation-runtime";
 import { ProjectionPlaintextV1, ProjectionRequestV1 } from "./projection";
 
 export const SHARE_MAX_CIPHERTEXT_BYTES_V1 = 8 * 1024 * 1024 + 16;
@@ -8,102 +8,102 @@ export const SHARE_MAX_ATTACHMENTS_V1 = 20;
 export const SHARE_MAX_LIFETIME_MS_V1 = 30 * 24 * 60 * 60 * 1000;
 export const SHARE_CREATE_BODY_BYTES_V1 = 12 * 1024 * 1024;
 
-export const ShareIdV1 = z.string().regex(/^shr_[a-z2-7]{26}$/);
-export const ShareRevokeTokenV1 = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
+export const ShareIdV1 = /*#__PURE__*/ (() => (z.string().regex(/^shr_[a-z2-7]{26}$/)))();
+export const ShareRevokeTokenV1 = /*#__PURE__*/ (() => (z.string().regex(/^[A-Za-z0-9_-]{43}$/)))();
 export const ShareRevokeTokenHashV1 = ShareRevokeTokenV1;
-export const ShareKeyV1 = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
-const ShareFileIdV1 = z.string().regex(/^file_[0-9a-f]{32}$/);
-const ShareTableIdV1 = z.string().regex(/^tbl_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-const ShareFieldIdV1 = z.string().regex(/^fld_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-const ShareRecordIdV1 = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
-const DigestBase64UrlV1 = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
-const Base64UrlV1 = z.string().regex(/^[A-Za-z0-9_-]+$/);
-const IsoInstantV1 = z.string().datetime({ offset: true });
+export const ShareKeyV1 = /*#__PURE__*/ (() => (z.string().regex(/^[A-Za-z0-9_-]{43}$/)))();
+const ShareFileIdV1 = /*#__PURE__*/ (() => (z.string().regex(/^file_[0-9a-f]{32}$/)))();
+const ShareTableIdV1 = /*#__PURE__*/ (() => (z.string().regex(/^tbl_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)))();
+const ShareFieldIdV1 = /*#__PURE__*/ (() => (z.string().regex(/^fld_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)))();
+const ShareRecordIdV1 = /*#__PURE__*/ (() => (z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)))();
+const DigestBase64UrlV1 = /*#__PURE__*/ (() => (z.string().regex(/^[A-Za-z0-9_-]{43}$/)))();
+const Base64UrlV1 = /*#__PURE__*/ (() => (z.string().regex(/^[A-Za-z0-9_-]+$/)))();
+const IsoInstantV1 = /*#__PURE__*/ (() => (z.string().datetime({ offset: true })))();
 
-export const ShareCiphertextEnvelopeV1 = z.object({
+export const ShareCiphertextEnvelopeV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   algorithm: z.literal("A256GCM"),
   iv: z.string().regex(/^[A-Za-z0-9_-]{16}$/),
   ciphertext: Base64UrlV1.min(22).max(11_184_832),
-}).strict();
+}).strict()))();
 export type ShareCiphertextEnvelopeV1 = z.infer<typeof ShareCiphertextEnvelopeV1>;
 
-export const ShareCreateRequestV1 = z.object({
+export const ShareCreateRequestV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   shareId: ShareIdV1,
   expiresAt: IsoInstantV1,
   revokeTokenHash: ShareRevokeTokenHashV1,
   envelope: ShareCiphertextEnvelopeV1,
-}).strict();
+}).strict()))();
 export type ShareCreateRequestV1 = z.infer<typeof ShareCreateRequestV1>;
 
-export const ShareCreateResponseV1 = z.object({
+export const ShareCreateResponseV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   shareId: ShareIdV1,
   expiresAt: IsoInstantV1,
-}).strict();
+}).strict()))();
 export type ShareCreateResponseV1 = z.infer<typeof ShareCreateResponseV1>;
 
 // An absent-object read/revoke is not a fence against a delayed create. The
 // terminal operation retains the exact immutable request until its expiry.
-export const ShareTerminalRequestV1 = z.object({ schema: z.literal(1),
-  request: ShareCreateRequestV1, revokeToken: ShareRevokeTokenV1 }).strict();
-export const ShareTerminalResponseV1 = z.object({ schema: z.literal(1), shareId: ShareIdV1,
-  expiresAt: IsoInstantV1, requestSha256: z.string().regex(/^[0-9a-f]{64}$/), terminal: z.literal(true) }).strict();
+export const ShareTerminalRequestV1 = /*#__PURE__*/ (() => (z.object({ schema: z.literal(1),
+  request: ShareCreateRequestV1, revokeToken: ShareRevokeTokenV1 }).strict()))();
+export const ShareTerminalResponseV1 = /*#__PURE__*/ (() => (z.object({ schema: z.literal(1), shareId: ShareIdV1,
+  expiresAt: IsoInstantV1, requestSha256: z.string().regex(/^[0-9a-f]{64}$/), terminal: z.literal(true) }).strict()))();
 export type ShareTerminalResponseV1 = z.infer<typeof ShareTerminalResponseV1>;
 
-export const ShareRelaySnapshotV1 = z.object({
+export const ShareRelaySnapshotV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   shareId: ShareIdV1,
   expiresAt: IsoInstantV1,
   envelope: ShareCiphertextEnvelopeV1,
-}).strict();
+}).strict()))();
 export type ShareRelaySnapshotV1 = z.infer<typeof ShareRelaySnapshotV1>;
 
-export const ShareRevokeRequestV1 = z.object({
+export const ShareRevokeRequestV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   revokeToken: ShareRevokeTokenV1,
-}).strict();
+}).strict()))();
 export type ShareRevokeRequestV1 = z.infer<typeof ShareRevokeRequestV1>;
 
-export const ShareRevokeResponseV1 = z.object({
+export const ShareRevokeResponseV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   shareId: ShareIdV1,
   revoked: z.literal(true),
-}).strict();
+}).strict()))();
 export type ShareRevokeResponseV1 = z.infer<typeof ShareRevokeResponseV1>;
 
-export const ShareRelayErrorV1 = z.object({
+export const ShareRelayErrorV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   error: z.enum([
     "bad_request", "unauthorized", "not_found", "expired", "revoked",
     "conflict", "capacity", "forbidden",
   ]),
-}).strict();
+}).strict()))();
 export type ShareRelayErrorV1 = z.infer<typeof ShareRelayErrorV1>;
 
-export const ShareFieldBindingV1 = z.object({
+export const ShareFieldBindingV1 = /*#__PURE__*/ (() => (z.object({
   fieldId: ShareFieldIdV1,
   outputName: z.string().regex(/^[a-z][a-z0-9_]{0,40}$/),
-}).strict();
+}).strict()))();
 export type ShareFieldBindingV1 = z.infer<typeof ShareFieldBindingV1>;
 
-export const ShareAttachmentSourceV1 = z.object({
+export const ShareAttachmentSourceV1 = /*#__PURE__*/ (() => (z.object({
   tableId: ShareTableIdV1,
   fieldId: ShareFieldIdV1,
   recordId: ShareRecordIdV1,
-}).strict();
+}).strict()))();
 export type ShareAttachmentSourceV1 = z.infer<typeof ShareAttachmentSourceV1>;
 
-export const ShareAttachmentBindingV1 = z.object({
+export const ShareAttachmentBindingV1 = /*#__PURE__*/ (() => (z.object({
   id: ShareFileIdV1,
   size: z.number().int().positive().max(10 * 1024 * 1024),
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
   source: ShareAttachmentSourceV1,
-}).strict();
+}).strict()))();
 export type ShareAttachmentBindingV1 = z.infer<typeof ShareAttachmentBindingV1>;
 
-export const ShareApprovedScopeV1 = z.object({
+export const ShareApprovedScopeV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal("ShareApprovedScopeV1"),
   projectionRequest: ProjectionRequestV1,
   fieldBindings: z.array(ShareFieldBindingV1).min(1).max(30),
@@ -137,19 +137,19 @@ export const ShareApprovedScopeV1 = z.object({
       || (approvedRecordId !== null && binding.source.recordId !== approvedRecordId)))
     ctx.addIssue({ code: "custom", path: ["attachmentBindings"],
       message: "attachment sources must match the approved projection authority" });
-});
+})))();
 export type ShareApprovedScopeV1 = z.infer<typeof ShareApprovedScopeV1>;
 
-const ShareSafeMimeV1 = z.enum([
+const ShareSafeMimeV1 = /*#__PURE__*/ (() => (z.enum([
   "image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf",
   "text/plain", "text/csv", "application/json",
   "application/msword",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/vnd.ms-excel",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-]);
+])))();
 
-export const ShareAttachmentV1 = z.object({
+export const ShareAttachmentV1 = /*#__PURE__*/ (() => (z.object({
   id: ShareFileIdV1,
   name: z.string().min(1).max(255).refine(name => !/[\\/\u0000-\u001f]/.test(name),
     "safe file name required"),
@@ -158,10 +158,10 @@ export const ShareAttachmentV1 = z.object({
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
   source: ShareAttachmentSourceV1,
   bytes: Base64UrlV1.max(13_981_016),
-}).strict();
+}).strict()))();
 export type ShareAttachmentV1 = z.infer<typeof ShareAttachmentV1>;
 
-export const SharePayloadV1 = z.object({
+export const SharePayloadV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal("SharePayloadV1"),
   scope: ShareApprovedScopeV1,
   projection: ProjectionPlaintextV1,
@@ -198,5 +198,5 @@ export const SharePayloadV1 = z.object({
       }))
     ctx.addIssue({ code: "custom", path: ["attachments"],
       message: "attachments do not match approved digest and source bindings" });
-});
+})))();
 export type SharePayloadV1 = z.infer<typeof SharePayloadV1>;

@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "@clay/schema/validation-runtime";
 import { TargetEvidenceV1, RelationPreviewPayloadV1, RelationKeepPayloadV1, RelationUndoPayloadV1 } from "@clay/schema/catalog";
 import { ClayError } from "./errors";
 import { PRODUCTION_STORE_PRIMITIVES, type ClayStore } from "./store";

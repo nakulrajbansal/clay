@@ -4,39 +4,44 @@
 // mutation-plan-api.json (gap G1 / ADR-013).
 // Frozen per P0.3 on 2026-07-02 with gap resolutions G18–G26 applied;
 // changes from here on require an ADR in the same commit (CLAUDE.md §3).
-import { z } from "zod";
+import { z } from "./validation-runtime";
+
+// Schema factories have no observable initialization effects. The pure IIFE
+// covers nested construction as well as the outer call, so importing a primitive
+// need not instantiate unrelated contract families. Parsing/refinements, default
+// values, strictness, and exported schema identities are unchanged.
 
 // ---------- primitives ----------
-export const Ident = z.string().regex(/^[a-z][a-z0-9_]{0,40}$/);
-export const PanelId = z.string().regex(/^[a-z][a-z0-9_]{2,40}$/);
-export const ColumnType = z.enum([
+export const Ident = /*#__PURE__*/ (() => (z.string().regex(/^[a-z][a-z0-9_]{0,40}$/)))();
+export const PanelId = /*#__PURE__*/ (() => (z.string().regex(/^[a-z][a-z0-9_]{2,40}$/)))();
+export const ColumnType = /*#__PURE__*/ (() => (z.enum([
   "text","number","integer","boolean","date","enum","json","computed",
   "relation","lookup","rollup","rich_text","attachment",
-]);
+])))();
 
-export const RelationSpec = z.object({
+export const RelationSpec = /*#__PURE__*/ (() => (z.object({
   target_table: Ident,
   cardinality: z.enum(["one", "many"]),
   unique_targets: z.boolean().default(false),
   display_field: Ident.optional(),
-}).strict();
-export const LookupSpec = z.object({
+}).strict()))();
+export const LookupSpec = /*#__PURE__*/ (() => (z.object({
   relation_field: Ident,
   target_field: Ident,
-}).strict();
-export const RollupSpec = z.object({
+}).strict()))();
+export const RollupSpec = /*#__PURE__*/ (() => (z.object({
   relation_field: Ident,
   target_field: Ident.optional(),
   operation: z.enum(["count", "sum", "avg", "min", "max"]),
-}).strict();
+}).strict()))();
 
 // JSON without `any` (G26). Scalars for values the migration ops carry.
 export type Json =
   | string | number | boolean | null | Json[] | { [key: string]: Json };
-export const JsonValue: z.ZodType<Json> = z.lazy(() =>
+export const JsonValue: z.ZodType<Json> = /*#__PURE__*/ (() => (z.lazy(() =>
   z.union([z.string(), z.number(), z.boolean(), z.null(),
-           z.array(JsonValue), z.record(JsonValue)]));
-export const JsonScalar = z.union([z.string(), z.number(), z.boolean()]);
+           z.array(JsonValue), z.record(JsonValue)]))))();
+export const JsonScalar = /*#__PURE__*/ (() => (z.union([z.string(), z.number(), z.boolean()])))();
 
 // ---------- A/B target identity and Temporary eligibility (ADR-048) ----------
 const UINT64_MAX = 18_446_744_073_709_551_615n;
@@ -45,30 +50,30 @@ function isUInt64Decimal(value: string): boolean {
   try { return BigInt(value) <= UINT64_MAX; } catch { return false; }
 }
 
-export const UInt64Decimal = z.string().refine(isUInt64Decimal, "canonical uint64 decimal required");
+export const UInt64Decimal = /*#__PURE__*/ (() => (z.string().refine(isUInt64Decimal, "canonical uint64 decimal required")))();
 const lowerBase32Id = (prefix: string): z.ZodString =>
   z.string().regex(new RegExp(`^${prefix}_[a-z2-7]{26}$`));
-export const AppInstanceId = lowerBase32Id("app");
-export const GenerationId = lowerBase32Id("gen");
-export const AuthorityIncarnationId = lowerBase32Id("auth");
-export const NamespaceId = lowerBase32Id("ns");
-export const LeaseId = lowerBase32Id("lease");
-export const OperationId = lowerBase32Id("op");
-export const RequestId = lowerBase32Id("req");
-export const ReleaseId = lowerBase32Id("rel");
-export const Sha256 = z.string().regex(/^sha256:[0-9a-f]{64}$/);
+export const AppInstanceId = /*#__PURE__*/ (() => (lowerBase32Id("app")))();
+export const GenerationId = /*#__PURE__*/ (() => (lowerBase32Id("gen")))();
+export const AuthorityIncarnationId = /*#__PURE__*/ (() => (lowerBase32Id("auth")))();
+export const NamespaceId = /*#__PURE__*/ (() => (lowerBase32Id("ns")))();
+export const LeaseId = /*#__PURE__*/ (() => (lowerBase32Id("lease")))();
+export const OperationId = /*#__PURE__*/ (() => (lowerBase32Id("op")))();
+export const RequestId = /*#__PURE__*/ (() => (lowerBase32Id("req")))();
+export const ReleaseId = /*#__PURE__*/ (() => (lowerBase32Id("rel")))();
+export const Sha256 = /*#__PURE__*/ (() => (z.string().regex(/^sha256:[0-9a-f]{64}$/)))();
 
-export const TargetIdentityV1 = z.object({
+export const TargetIdentityV1 = /*#__PURE__*/ (() => (z.object({
   appInstanceId: AppInstanceId,
   activeGenerationId: GenerationId,
   lineageEpoch: UInt64Decimal,
   stateRevision: UInt64Decimal,
   stateDigest: Sha256,
-}).strict();
+}).strict()))();
 export type TargetIdentityV1 = z.infer<typeof TargetIdentityV1>;
 
-export const TemporaryUserChoice = z.literal("accepted_temporary_after_loss_boundary").nullable();
-export const TemporaryEligibilityV1 = z.object({
+export const TemporaryUserChoice = /*#__PURE__*/ (() => (z.literal("accepted_temporary_after_loss_boundary").nullable()))();
+export const TemporaryEligibilityV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   catalogReadable: z.literal(true),
   catalogAppCount: z.literal(0),
@@ -78,41 +83,41 @@ export const TemporaryEligibilityV1 = z.object({
   pendingOperationCount: z.literal(0),
   capability: z.enum(["unsupported", "non_persistent"]),
   userChoice: TemporaryUserChoice,
-}).strict();
+}).strict()))();
 export type TemporaryEligibilityV1 = z.infer<typeof TemporaryEligibilityV1>;
 
-export const DeviceState = z.enum([
+export const DeviceState = /*#__PURE__*/ (() => (z.enum([
   "checking", "temporary_choice_required", "temporary", "needs_protection",
   "checkpointing", "protected_on_device", "locked_or_unknown",
-]);
+])))();
 export type DeviceState = z.infer<typeof DeviceState>;
-export const DurableStoreCapability = z.enum([
+export const DurableStoreCapability = /*#__PURE__*/ (() => (z.enum([
   "supported", "unsupported", "non_persistent", "unknown",
-]);
+])))();
 export type DurableStoreCapability = z.infer<typeof DurableStoreCapability>;
-export const ExpectedStoreFailure = z.enum([
+export const ExpectedStoreFailure = /*#__PURE__*/ (() => (z.enum([
   "restricted", "denied", "thrown", "locked", "corrupt", "quota", "attach", "unclassified",
-]);
+])))();
 export type ExpectedStoreFailure = z.infer<typeof ExpectedStoreFailure>;
 export type TemporaryUserChoice = z.infer<typeof TemporaryUserChoice>;
-export const ProtectionReasonCode = z.enum([
+export const ProtectionReasonCode = /*#__PURE__*/ (() => (z.enum([
   "catalog_unavailable", "inventory_unavailable", "transaction_uncertified",
   "store_unavailable", "expected_store_failure", "temporary_ineligible",
   "temporary_choice_required", "persistence_unconfirmed", "checkpoint_missing",
   "checkpoint_stale", "checkpoint_invalid", "generation_not_selected",
   "adapter_uncertified", "target_unconfigured", "permission_required",
   "target_unreachable", "backup_stale", "backup_invalid", "stale_write_epoch",
-]);
+])))();
 export type ProtectionReasonCode = z.infer<typeof ProtectionReasonCode>;
-const NeedsProtectionReason = z.enum([
+const NeedsProtectionReason = /*#__PURE__*/ (() => (z.enum([
   "persistence_unconfirmed", "checkpoint_missing",
   "checkpoint_stale", "checkpoint_invalid", "generation_not_selected",
-]);
-const LockedOrUnknownReason = z.enum([
+])))();
+const LockedOrUnknownReason = /*#__PURE__*/ (() => (z.enum([
   "catalog_unavailable", "inventory_unavailable", "store_unavailable",
   "expected_store_failure", "temporary_ineligible", "transaction_uncertified",
-]);
-export const DeviceStateResultV1 = z.discriminatedUnion("state", [
+])))();
+export const DeviceStateResultV1 = /*#__PURE__*/ (() => (z.discriminatedUnion("state", [
   z.object({ state: z.literal("checking"), reasonCode: z.null() }).strict(),
   z.object({
     state: z.literal("temporary_choice_required"),
@@ -123,21 +128,21 @@ export const DeviceStateResultV1 = z.discriminatedUnion("state", [
   z.object({ state: z.literal("checkpointing"), reasonCode: z.null() }).strict(),
   z.object({ state: z.literal("protected_on_device"), reasonCode: z.null() }).strict(),
   z.object({ state: z.literal("locked_or_unknown"), reasonCode: LockedOrUnknownReason }).strict(),
-]);
+])))();
 export type DeviceStateResultV1 = z.infer<typeof DeviceStateResultV1>;
 
-const InventoryCount = z.number().int().nonnegative().safe().nullable();
-export const CheckpointObservationV1 = z.discriminatedUnion("state", [
+const InventoryCount = /*#__PURE__*/ (() => (z.number().int().nonnegative().safe().nullable()))();
+export const CheckpointObservationV1 = /*#__PURE__*/ (() => (z.discriminatedUnion("state", [
   z.object({ state: z.literal("none"), target: z.null() }).strict(),
   z.object({ state: z.literal("in_progress"), target: TargetIdentityV1 }).strict(),
   z.object({ state: z.literal("valid"), target: TargetIdentityV1 }).strict(),
   z.object({ state: z.literal("stale"), target: TargetIdentityV1.nullable() }).strict(),
   z.object({ state: z.literal("invalid"), target: TargetIdentityV1.nullable() }).strict(),
   z.object({ state: z.literal("generation_not_selected"), target: TargetIdentityV1.nullable() }).strict(),
-]);
+])))();
 export type CheckpointObservationV1 = z.infer<typeof CheckpointObservationV1>;
 
-export const DeviceProtectionInputV1 = z.object({
+export const DeviceProtectionInputV1 = /*#__PURE__*/ (() => (z.object({
   checksComplete: z.boolean(),
   expectedStoreFailure: ExpectedStoreFailure.nullable(),
   catalogReadable: z.boolean(),
@@ -168,11 +173,11 @@ export const DeviceProtectionInputV1 = z.object({
     ctx.addIssue({ code: "custom", message: "selected target requires catalog app and namespace" });
   if (value.target === null && value.checkpoint.target !== null)
     ctx.addIssue({ code: "custom", message: "checkpoint target requires selected target" });
-});
+})))();
 export type DeviceProtectionInputV1 = z.infer<typeof DeviceProtectionInputV1>;
 
 
-export const ColumnSpec = z.object({
+export const ColumnSpec = /*#__PURE__*/ (() => (z.object({
   name: Ident,
   label: z.string().min(1).max(60).optional(),
   type: ColumnType,
@@ -202,14 +207,14 @@ export const ColumnSpec = z.object({
     ctx.addIssue({ code: "custom", message: "non-count rollup needs target_field" });
   if ((c.type === "lookup" || c.type === "rollup" || c.type === "attachment") && c.required)
     ctx.addIssue({ code: "custom", message: `${c.type} fields cannot be required` });
-});
+})))();
 
 // ---------- Query ----------
-export const CondOp = z.enum([
+export const CondOp = /*#__PURE__*/ (() => (z.enum([
   "eq","neq","gt","gte","lt","lte","contains","in",
   "is_null","not_null","within_days","older_than_days",
-]);
-export const Condition = z.object({
+])))();
+export const Condition = /*#__PURE__*/ (() => (z.object({
   field: Ident,
   op: CondOp,
   value: z.union([
@@ -217,8 +222,8 @@ export const Condition = z.object({
     z.array(z.union([z.string(), z.number()])).max(50),
     z.object({ $var: z.literal(true) }),   // runtime placeholder (V4)
   ]).optional(),
-});
-export const Query = z.object({
+})))();
+export const Query = /*#__PURE__*/ (() => (z.object({
   from: Ident,
   select: z.array(Ident).max(30).optional(),
   where: z.array(Condition).max(10).optional(),
@@ -231,11 +236,11 @@ export const Query = z.object({
     field: Ident, as: Ident })).max(5).optional(),
   limit: z.number().int().positive().max(5000).optional(),
   includeDeleted: z.boolean().optional(),
-});
+})))();
 export type Query = z.infer<typeof Query>;
 
 // ---------- Migration ----------
-export const ForwardOp = z.discriminatedUnion("op", [
+export const ForwardOp = /*#__PURE__*/ (() => (z.discriminatedUnion("op", [
   z.object({ op: z.literal("create_table"), table: Ident,
              columns: z.array(ColumnSpec).min(1).max(20) }),
   z.object({ op: z.literal("add_column"), table: Ident, column: ColumnSpec }),
@@ -255,8 +260,8 @@ export const ForwardOp = z.discriminatedUnion("op", [
   z.object({ op: z.literal("set_required"), table: Ident, column: Ident,
              required: z.boolean(),
              default_for_existing: JsonScalar.optional() }),
-]);
-export const InverseOp = z.discriminatedUnion("op", [
+])))();
+export const InverseOp = /*#__PURE__*/ (() => (z.discriminatedUnion("op", [
   z.object({ op: z.literal("drop_table_if_created_by_this"), table: Ident }),
   z.object({ op: z.literal("drop_column_if_added_by_this"),
              table: Ident, column: Ident }),
@@ -269,8 +274,8 @@ export const InverseOp = z.discriminatedUnion("op", [
   z.object({ op: z.literal("unset_required"), table: Ident, column: Ident }),
   z.object({ op: z.literal("rename_column"), table: Ident,
              from: Ident, to: Ident }),
-]);
-export const MigrationPlan = z.object({
+])))();
+export const MigrationPlan = /*#__PURE__*/ (() => (z.object({
   operations: z.array(ForwardOp).min(1).max(12),
   inverse: z.array(InverseOp).min(1).max(12),
 }).superRefine((m, ctx) => {
@@ -280,15 +285,15 @@ export const MigrationPlan = z.object({
     if (op.op === "backfill" && (op.value === undefined) === (op.expr === undefined))
       ctx.addIssue({ code: "custom",
         message: "G23: backfill takes exactly one of value|expr" });
-});
+})))();
 
 // ---------- MutationPlan ----------
-export const DiffKind = z.enum([
+export const DiffKind = /*#__PURE__*/ (() => (z.enum([
   "add_field","change_field","add_panel","change_panel","remove_panel",
   "add_status","add_computed","add_chart","add_relation","add_automation",
   "add_attachment",
-]);
-export const PanelArtifact = z.object({
+])))();
+export const PanelArtifact = /*#__PURE__*/ (() => (z.object({
   panel_id: PanelId,
   title: z.string().min(1).max(60),
   placement: z.object({ region: z.enum(["top","main","side"]),
@@ -299,8 +304,8 @@ export const PanelArtifact = z.object({
   code: z.string().max(65_536),
   declared_queries: z.array(Query).max(8),
   declared_writes: z.array(Ident).max(4).default([]),   // G22 / ADR-014
-});
-export const MutationPlan = z.object({
+})))();
+export const MutationPlan = /*#__PURE__*/ (() => (z.object({
   api: z.literal(1),
   summary: z.string().max(200),      // non-empty unless clarifying (G18)
   user_facing_diff: z.array(z.object({ kind: DiffKind,
@@ -321,11 +326,11 @@ export const MutationPlan = z.object({
     ctx.addIssue({ code: "custom", message: "R5: low confidence must clarify" });
   if (!p.clarifying_question && p.summary.trim().length === 0)
     ctx.addIssue({ code: "custom", message: "G18: summary required unless clarifying" });
-});
+})))();
 export type MutationPlan = z.infer<typeof MutationPlan>;
 
 // ---------- Bridge protocol ----------
-export const BridgeCall = z.object({
+export const BridgeCall = /*#__PURE__*/ (() => (z.object({
   v: z.literal(1),
   panel: PanelId,
   seq: z.number().int().nonnegative(),
@@ -334,38 +339,38 @@ export const BridgeCall = z.object({
     "db.softDelete","ui.toast","ui.confirm","ui.openRecord","events.emit","events.on",
     "events.off"]),
   args: z.array(JsonValue).max(4),         // per-call schemas applied next
-});
+})))();
 /** Trusted panel-runtime signal emitted immediately before it invokes a
  * panel-authored callback from a rendered control. Generated modules never
  * receive the MessagePort and cannot mint this signal directly. */
-export const BridgeUserGesture = z.object({
+export const BridgeUserGesture = /*#__PURE__*/ (() => (z.object({
   v: z.literal(1),
   kind: z.literal("user_gesture"),
-});
-export const BridgeOpenRecord = z.object({
+})))();
+export const BridgeOpenRecord = /*#__PURE__*/ (() => (z.object({
   v: z.literal(1),
   kind: z.literal("open_record"),
   table: Ident,
   id: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i),
-});
+})))();
 
-export const BridgeReply = z.object({
+export const BridgeReply = /*#__PURE__*/ (() => (z.object({
   v: z.literal(1), seq: z.number().int(),
   ok: z.boolean(),
   result: JsonValue.optional(),
   error: z.object({ code: z.string(), message: z.string() }).optional(),
-});
+})))();
 /** Panel -> Kernel upstream error signal (ADR-015): fire-and-forget, no
  * seq/reply. Feeds the error boundary (doc 05 §7); never trusted beyond
  * display + repair-prompt input. */
-export const BridgePanelError = z.object({
+export const BridgePanelError = /*#__PURE__*/ (() => (z.object({
   v: z.literal(1),
   kind: z.literal("panel_error"),
   code: z.string().max(40),
   message: z.string().max(500),
-});
+})))();
 
-export const BridgePush = z.discriminatedUnion("kind", [
+export const BridgePush = /*#__PURE__*/ (() => (z.discriminatedUnion("kind", [
   z.object({ v: z.literal(1), kind: z.literal("watch"),
              watchId: z.string(), rows: z.array(z.record(JsonValue)) }),
   z.object({ v: z.literal(1), kind: z.literal("event"),
@@ -382,6 +387,6 @@ export const BridgePush = z.discriminatedUnion("kind", [
                                      col: z.number().int().min(0).max(3).optional() }),
              }),
              tokens: z.record(z.string()) }),       // design tokens (G21)
-]);
+])))();
 
 export * from "./intake";

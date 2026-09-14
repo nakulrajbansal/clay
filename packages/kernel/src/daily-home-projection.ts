@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "@clay/schema/validation-runtime";
 import {
   DAILY_HOME_SOURCE_IDS_V1,
   DailySourceLibraryV1,

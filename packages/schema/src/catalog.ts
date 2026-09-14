@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "./validation-runtime";
 import { DailySourceLibraryV1, SnapshotBasisV1, DailyHomeSnapshotV1, InboxItemV1, InboxDispositionV1, CanonicalLocalDateV1 } from "./daily-home";
 import {
   AppInstanceId,
@@ -14,104 +14,104 @@ import {
   UInt64Decimal,
 } from "./index";
 
-export const TargetEvidenceV1 = z.object({
+export const TargetEvidenceV1 = /*#__PURE__*/ (() => (z.object({
   appInstanceId: AppInstanceId,
   activeGenerationId: GenerationId,
   lineageEpoch: UInt64Decimal,
   protectionRevision: UInt64Decimal,
   digestSchema: z.literal(1),
   stateSha256: Sha256,
-}).strict();
+}).strict()))();
 export type TargetEvidenceV1 = z.infer<typeof TargetEvidenceV1>;
 
-const presentationName = z.string().regex(/^[a-z][a-z0-9_]{0,40}$/);
-const relationCount = z.number().int().nonnegative().max(5_000);
-export const RelationPreviewPayloadV1 = z.object({ sourceTable: presentationName, sourceField: presentationName,
-  targetTable: presentationName, displayField: presentationName }).strict();
-export const RelationKeepPayloadV1 = RelationPreviewPayloadV1.extend({
+const presentationName = /*#__PURE__*/ (() => (z.string().regex(/^[a-z][a-z0-9_]{0,40}$/)))();
+const relationCount = /*#__PURE__*/ (() => (z.number().int().nonnegative().max(5_000)))();
+export const RelationPreviewPayloadV1 = /*#__PURE__*/ (() => (z.object({ sourceTable: presentationName, sourceField: presentationName,
+  targetTable: presentationName, displayField: presentationName }).strict()))();
+export const RelationKeepPayloadV1 = /*#__PURE__*/ (() => (RelationPreviewPayloadV1.extend({
   atVersion: z.number().int().nonnegative().safe(), fingerprint: Sha256,
   matchedRows: relationCount, unmatchedRows: relationCount, ambiguousRows: relationCount, duplicateSourceRows: relationCount,
   unmatchedSamples: z.array(z.string().max(64_000)).max(5), ambiguousSamples: z.array(z.string().max(64_000)).max(5),
   cardinality: z.literal("one"), authorityTarget: TargetEvidenceV1,
-}).strict();
-export const RelationUndoPayloadV1 = z.object({ conversionRequestId: RequestId,
-  beforeVersion: z.number().int().nonnegative().safe(), authorityTarget: TargetEvidenceV1.optional() }).strict();
-export const DailyCapturePayloadV1 = z.object({ appInstanceId: AppInstanceId, table: presentationName,
-  tableId: z.string().regex(/^tbl_[0-9a-f-]{36}$/), row: z.record(JsonValue) }).strict();
-export const DailyCaptureUndoPayloadV1 = z.object({ batchId: z.string().uuid(), captureRequestId: RequestId,
+}).strict()))();
+export const RelationUndoPayloadV1 = /*#__PURE__*/ (() => (z.object({ conversionRequestId: RequestId,
+  beforeVersion: z.number().int().nonnegative().safe(), authorityTarget: TargetEvidenceV1.optional() }).strict()))();
+export const DailyCapturePayloadV1 = /*#__PURE__*/ (() => (z.object({ appInstanceId: AppInstanceId, table: presentationName,
+  tableId: z.string().regex(/^tbl_[0-9a-f-]{36}$/), row: z.record(JsonValue) }).strict()))();
+export const DailyCaptureUndoPayloadV1 = /*#__PURE__*/ (() => (z.object({ batchId: z.string().uuid(), captureRequestId: RequestId,
   capturePayload: DailyCapturePayloadV1, authorityTarget: TargetEvidenceV1 }).strict().superRefine((value, context) => {
   if (value.capturePayload.appInstanceId !== value.authorityTarget.appInstanceId)
     context.addIssue({ code: "custom", message: "Capture Undo belongs to another app" });
-});
+})))();
 export type DailyCaptureUndoPayloadV1 = z.infer<typeof DailyCaptureUndoPayloadV1>;
 
-export const DailyCasReviewV1 = z.object({ authorityTarget: TargetEvidenceV1, basis: SnapshotBasisV1, snapshotDigest: Sha256 }).strict()
+export const DailyCasReviewV1 = /*#__PURE__*/ (() => (z.object({ authorityTarget: TargetEvidenceV1, basis: SnapshotBasisV1, snapshotDigest: Sha256 }).strict()
   .superRefine((value, context) => {
     if (value.basis.appInstanceId !== value.authorityTarget.appInstanceId || value.basis.activeGenerationId !== value.authorityTarget.activeGenerationId)
       context.addIssue({ code: "custom", message: "Daily review belongs to another source" });
-  });
+  })))();
 export type DailyCasReviewV1 = z.infer<typeof DailyCasReviewV1>;
-const navigationRef = z.object({ tableId: z.string().regex(/^tbl_[0-9a-f-]{36}$/), rowId: z.string().uuid() });
-const navigationInstant = z.string().datetime().refine(value => new Date(value).toISOString() === value);
-export const DailyNavigationStateV1 = z.object({ schema: z.literal(1), revision: z.number().int().nonnegative().safe(),
+const navigationRef = /*#__PURE__*/ (() => (z.object({ tableId: z.string().regex(/^tbl_[0-9a-f-]{36}$/), rowId: z.string().uuid() })))();
+const navigationInstant = /*#__PURE__*/ (() => (z.string().datetime().refine(value => new Date(value).toISOString() === value)))();
+export const DailyNavigationStateV1 = /*#__PURE__*/ (() => (z.object({ schema: z.literal(1), revision: z.number().int().nonnegative().safe(),
   favorites: z.array(navigationRef.extend({ pinnedAt: navigationInstant }).strict()).max(50),
   recents: z.array(navigationRef.extend({ openedAt: navigationInstant }).strict()).max(20),
 }).strict().superRefine((value, context) => {
   for (const refs of [value.favorites, value.recents]) if (new Set(refs.map(ref => `${ref.tableId}/${ref.rowId}`)).size !== refs.length)
     context.addIssue({ code: "custom", message: "Duplicate navigation identity" });
-});
-export const DailySourceCasPayloadV1 = z.object({ review: DailyCasReviewV1,
-  expectedRevision: z.number().int().nonnegative().safe(), value: DailySourceLibraryV1 }).strict();
-export const DailyNavigationCasPayloadV1 = z.object({ review: DailyCasReviewV1,
-  expectedRevision: z.number().int().nonnegative().safe(), value: DailyNavigationStateV1 }).strict();
-export const DailyPresentationV1 = z.object({ authorityTarget: TargetEvidenceV1, snapshot: DailyHomeSnapshotV1,
-  sourceLibrary: JsonValue, navigation: JsonValue }).strict();
+})))();
+export const DailySourceCasPayloadV1 = /*#__PURE__*/ (() => (z.object({ review: DailyCasReviewV1,
+  expectedRevision: z.number().int().nonnegative().safe(), value: DailySourceLibraryV1 }).strict()))();
+export const DailyNavigationCasPayloadV1 = /*#__PURE__*/ (() => (z.object({ review: DailyCasReviewV1,
+  expectedRevision: z.number().int().nonnegative().safe(), value: DailyNavigationStateV1 }).strict()))();
+export const DailyPresentationV1 = /*#__PURE__*/ (() => (z.object({ authorityTarget: TargetEvidenceV1, snapshot: DailyHomeSnapshotV1,
+  sourceLibrary: JsonValue, navigation: JsonValue }).strict()))();
 export type DailyPresentationV1 = z.infer<typeof DailyPresentationV1>;
-export const DailyInboxActionPayloadV1 = z.object({ review: DailyCasReviewV1, item: InboxItemV1,
+export const DailyInboxActionPayloadV1 = /*#__PURE__*/ (() => (z.object({ review: DailyCasReviewV1, item: InboxItemV1,
   action: z.enum(["complete", "snooze", "dismiss"]), untilLocalDate: CanonicalLocalDateV1.optional() }).strict().superRefine((value, context) => {
   if ((value.action === "snooze") !== (value.untilLocalDate !== undefined))
     context.addIssue({ code: "custom", message: "Only Snooze takes a reviewed local date" });
-});
+})))();
 export type DailyInboxActionPayloadV1 = z.infer<typeof DailyInboxActionPayloadV1>;
-export const DailyInboxReceiptV1 = z.object({ disposition: InboxDispositionV1, previous: InboxDispositionV1.nullable(), batchId: z.string().uuid().nullable() }).strict();
+export const DailyInboxReceiptV1 = /*#__PURE__*/ (() => (z.object({ disposition: InboxDispositionV1, previous: InboxDispositionV1.nullable(), batchId: z.string().uuid().nullable() }).strict()))();
 export type DailyInboxReceiptV1 = z.infer<typeof DailyInboxReceiptV1>;
-export const DailyInboxUndoPayloadV1 = z.object({ actionRequestId: RequestId,
+export const DailyInboxUndoPayloadV1 = /*#__PURE__*/ (() => (z.object({ actionRequestId: RequestId,
   actionPayload: DailyInboxActionPayloadV1, authorityTarget: TargetEvidenceV1 }).strict().superRefine((value, context) => {
   if (value.actionPayload.review.authorityTarget.appInstanceId !== value.authorityTarget.appInstanceId)
     context.addIssue({ code: "custom", message: "Inbox Undo belongs to another app" });
-});
+})))();
 export type DailyInboxUndoPayloadV1 = z.infer<typeof DailyInboxUndoPayloadV1>;
 
-export const AutomationCommandRouteV1 = z.enum(["saveAutomationDraft", "saveAutomationRecipeDraft", "enableAutomation",
-  "pauseAutomation", "deleteAutomation", "runAutomationNow", "runDueAutomations", "undoAutomationRun", "markNotificationRead"]);
+export const AutomationCommandRouteV1 = /*#__PURE__*/ (() => (z.enum(["saveAutomationDraft", "saveAutomationRecipeDraft", "enableAutomation",
+  "pauseAutomation", "deleteAutomation", "runAutomationNow", "runDueAutomations", "undoAutomationRun", "markNotificationRead"])))();
 /** Each inner payload is separately closed by its existing kernel route. */
-export const AutomationCommandPayloadV1 = z.object({ authorityTarget: TargetEvidenceV1,
-  command: z.object({ route: AutomationCommandRouteV1, payload: z.record(JsonValue) }).strict() }).strict();
+export const AutomationCommandPayloadV1 = /*#__PURE__*/ (() => (z.object({ authorityTarget: TargetEvidenceV1,
+  command: z.object({ route: AutomationCommandRouteV1, payload: z.record(JsonValue) }).strict() }).strict()))();
 export type AutomationCommandPayloadV1 = z.infer<typeof AutomationCommandPayloadV1>;
-export const AutomationWorkspaceV1 = z.object({ schema: z.literal(1), draftId: RequestId, authorityTarget: TargetEvidenceV1,
+export const AutomationWorkspaceV1 = /*#__PURE__*/ (() => (z.object({ schema: z.literal(1), draftId: RequestId, authorityTarget: TargetEvidenceV1,
   kind: z.enum(["custom", "edit", "recipe", "legacy"]), fields: z.record(z.string().max(64_000)),
   definition: z.record(JsonValue).nullable(), expectedRevision: z.number().int().nonnegative().safe().nullable(),
   recipeId: z.enum(["overdue_invoice_reminder", "weekly_checklist", "new_customer_follow_up"]).nullable(),
-}).strict();
+}).strict()))();
 export type AutomationWorkspaceV1 = z.infer<typeof AutomationWorkspaceV1>;
 
-export const IntakeCommandRouteV1 = z.enum(["intake.saveForm", "intake.closePublication", "intake.markPublished", "intake.revokeForm", "intake.markExpired",
+export const IntakeCommandRouteV1 = /*#__PURE__*/ (() => (z.enum(["intake.saveForm", "intake.closePublication", "intake.markPublished", "intake.revokeForm", "intake.markExpired",
   "intake.stageSubmission", "intake.recordDeliveryFailure", "intake.authorizeDeliveryDiscard", "intake.resolveDeliveryFailure",
   "intake.rejectSubmission", "intake.simulateAutoAccept", "intake.enableAutoAccept", "intake.disableAutoAccept",
-  "intake.processAutoAccept", "intake.acceptSubmission", "intake.undoReceipt"]);
-export const IntakeCommandPayloadV1 = z.object({ authorityTarget: TargetEvidenceV1,
-  command: z.object({ route: IntakeCommandRouteV1, payload: z.record(JsonValue) }).strict() }).strict();
+  "intake.processAutoAccept", "intake.acceptSubmission", "intake.undoReceipt"])))();
+export const IntakeCommandPayloadV1 = /*#__PURE__*/ (() => (z.object({ authorityTarget: TargetEvidenceV1,
+  command: z.object({ route: IntakeCommandRouteV1, payload: z.record(JsonValue) }).strict() }).strict()))();
 export type IntakeCommandPayloadV1 = z.infer<typeof IntakeCommandPayloadV1>;
 
 /** Presentation retry metadata is not authority. The worker independently
  * captures the full payload and binds its hash to the mirrored request journal. */
-export const RecoverablePresentationRouteV1 = z.enum([
+export const RecoverablePresentationRouteV1 = /*#__PURE__*/ (() => (z.enum([
   "schema.convertTextToRelation", "schema.undoRelationConversion", "daily.capture", "daily.undoCapture", "batch.apply", "batch.undo",
   "daily.source", "daily.navigation",
   "daily.inbox", "daily.undoInbox",
   "automation.command", "intake.command",
-]);
-export const PresentationIntentV1 = z.object({
+])))();
+export const PresentationIntentV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1), appInstanceId: AppInstanceId, slot: z.enum(["relation", "capture", "conversionUndo", "captureUndo", "dailySource", "dailyNavigation", "dailyInbox", "dailyInboxUndo", "automation", "intake"]),
   requestId: RequestId, route: RecoverablePresentationRouteV1, payload: z.record(JsonValue),
 }).strict().superRefine((value, context) => {
@@ -136,18 +136,18 @@ export const PresentationIntentV1 = z.object({
     ? (value.payload.authorityTarget as TargetEvidenceV1).appInstanceId : value.appInstanceId;
   if (source !== value.appInstanceId)
     context.addIssue({ code: "custom", message: "Stored retry payload is bound to another app" });
-});
+})))();
 export type PresentationIntentV1 = z.infer<typeof PresentationIntentV1>;
-export const PresentationMutationOutcomeV1 = z.discriminatedUnion("status", [
+export const PresentationMutationOutcomeV1 = /*#__PURE__*/ (() => (z.discriminatedUnion("status", [
   z.object({ status: z.literal("not_invoked") }).strict(),
   z.object({ status: z.literal("uncertain") }).strict(),
   z.object({ status: z.literal("cancelled") }).strict(),
   z.object({ status: z.literal("failed") }).strict(),
   z.object({ status: z.literal("recorded"), current: z.boolean(), result: JsonValue, target: TargetEvidenceV1 }).strict(),
-]);
+])))();
 export type PresentationMutationOutcomeV1 = z.infer<typeof PresentationMutationOutcomeV1>;
 
-export const TargetAuthorityHeaderV1 = z.object({
+export const TargetAuthorityHeaderV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   appInstanceId: AppInstanceId,
   activeGenerationId: GenerationId,
@@ -161,14 +161,14 @@ export const TargetAuthorityHeaderV1 = z.object({
     context.addIssue({ code: "custom", message: "lineage epoch exceeds its high-water mark" });
   if (BigInt(value.protectionRevision) > BigInt(value.protectionRevisionHighWater))
     context.addIssue({ code: "custom", message: "protection revision exceeds its high-water mark" });
-});
+})))();
 export type TargetAuthorityHeaderV1 = z.infer<typeof TargetAuthorityHeaderV1>;
 
-export const CanonicalInstant = z.string().datetime({ offset: true }).refine((value) => {
+export const CanonicalInstant = /*#__PURE__*/ (() => (z.string().datetime({ offset: true }).refine((value) => {
   try { return new Date(value).toISOString() === value; } catch { return false; }
-}, "exact UTC millisecond instant required");
+}, "exact UTC millisecond instant required")))();
 
-export const ProductionRequestReceiptV1 = z.object({
+export const ProductionRequestReceiptV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   requestId: RequestId,
   operationId: OperationId,
@@ -214,12 +214,12 @@ export const ProductionRequestReceiptV1 = z.object({
     context.addIssue({ code: "custom", message: "request invocation predates preparation" });
   if (value.completedAt !== null && Date.parse(value.completedAt) < Date.parse(value.preparedAt))
     context.addIssue({ code: "custom", message: "request completion predates preparation" });
-});
+})))();
 export type ProductionRequestReceiptV1 = z.infer<typeof ProductionRequestReceiptV1>;
 
-const ProvenanceId = z.string().min(1).max(256)
-  .refine(value => value === value.trim(), "canonical provenance identity required");
-export const ImmutableAppGenerationV1 = z.object({
+const ProvenanceId = /*#__PURE__*/ (() => (z.string().min(1).max(256)
+  .refine(value => value === value.trim(), "canonical provenance identity required")))();
+export const ImmutableAppGenerationV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   generationId: GenerationId,
   target: TargetEvidenceV1,
@@ -231,21 +231,21 @@ export const ImmutableAppGenerationV1 = z.object({
 }).strict().superRefine((value, context) => {
   if (value.generationId !== value.target.activeGenerationId)
     context.addIssue({ code: "custom", message: "generation descriptor does not match target" });
-});
+})))();
 export type ImmutableAppGenerationV1 = z.infer<typeof ImmutableAppGenerationV1>;
 
-export const WriteFenceV1 = z.object({
+export const WriteFenceV1 = /*#__PURE__*/ (() => (z.object({
   authorityIncarnationId: AuthorityIncarnationId,
   writeEpoch: UInt64Decimal,
   leaseId: LeaseId,
   releaseId: ReleaseId,
-}).strict();
+}).strict()))();
 export type WriteFenceV1 = z.infer<typeof WriteFenceV1>;
 
-const CatalogDisplayName = z.string().min(1).max(40)
-  .refine(value => value === value.trim(), "canonical display name required");
-const CatalogShellId = z.string().regex(/^[a-z0-9_-]{1,64}$/);
-export const AppCatalogEntryV1 = z.object({
+const CatalogDisplayName = /*#__PURE__*/ (() => (z.string().min(1).max(40)
+  .refine(value => value === value.trim(), "canonical display name required")))();
+const CatalogShellId = /*#__PURE__*/ (() => (z.string().regex(/^[a-z0-9_-]{1,64}$/)))();
+export const AppCatalogEntryV1 = /*#__PURE__*/ (() => (z.object({
   appInstanceId: AppInstanceId,
   displayName: CatalogDisplayName,
   shellId: CatalogShellId,
@@ -269,10 +269,10 @@ export const AppCatalogEntryV1 = z.object({
   if (BigInt(value.journalGenesisLineageEpoch) > BigInt(value.currentLineageEpoch)
       || BigInt(value.journalGenesisProtectionRevision) > BigInt(value.currentProtectionRevision))
     context.addIssue({ code: "custom", message: "journal genesis exceeds current target" });
-});
+})))();
 export type AppCatalogEntryV1 = z.infer<typeof AppCatalogEntryV1>;
 
-export const AppCatalogSnapshotV1 = z.object({
+export const AppCatalogSnapshotV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   authorityIncarnationId: AuthorityIncarnationId,
   catalogGeneration: UInt64Decimal,
@@ -292,13 +292,13 @@ export const AppCatalogSnapshotV1 = z.object({
   }
   if (value.selectedAppInstanceId !== null && !appIds.has(value.selectedAppInstanceId))
     context.addIssue({ code: "custom", message: "selected app is not a live catalog entry" });
-});
+})))();
 export type AppCatalogSnapshotV1 = z.infer<typeof AppCatalogSnapshotV1>;
 
-const LifecycleJobId = z.string().regex(/^job_[a-z2-7]{26}$/);
-const LifecycleStorageKey = z.string()
-  .regex(/^(?:ns_[a-z2-7]{26}|[a-zA-Z0-9_][a-zA-Z0-9_-]{0,79})$/);
-export const LifecyclePhysicalTargetV1 = z.object({
+const LifecycleJobId = /*#__PURE__*/ (() => (z.string().regex(/^job_[a-z2-7]{26}$/)))();
+const LifecycleStorageKey = /*#__PURE__*/ (() => (z.string()
+  .regex(/^(?:ns_[a-z2-7]{26}|[a-zA-Z0-9_][a-zA-Z0-9_-]{0,79})$/)))();
+export const LifecyclePhysicalTargetV1 = /*#__PURE__*/ (() => (z.object({
   appInstanceId: AppInstanceId,
   generationId: GenerationId,
   namespaceId: NamespaceId,
@@ -319,10 +319,10 @@ export const LifecyclePhysicalTargetV1 = z.object({
   if ((value.storageKind === "generation" && !generation)
       || (value.storageKind === "legacy" && !legacy))
     context.addIssue({ code: "custom", message: "lifecycle physical target is not canonical" });
-});
+})))();
 export type LifecyclePhysicalTargetV1 = z.infer<typeof LifecyclePhysicalTargetV1>;
 
-export const PendingTargetLifecycleJobV1 = z.object({
+export const PendingTargetLifecycleJobV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   kind: z.enum(["create", "fork", "cleanup"]),
   jobId: LifecycleJobId,
@@ -343,10 +343,10 @@ export const PendingTargetLifecycleJobV1 = z.object({
   if (value.target.appInstanceId === value.expectedTarget.appInstanceId
       || value.target.generationId === value.expectedTarget.activeGenerationId)
     context.addIssue({ code: "custom", message: "created app target must have fresh identity" });
-});
+})))();
 export type PendingTargetLifecycleJobV1 = z.infer<typeof PendingTargetLifecycleJobV1>;
 
-const LegacyAppLifecycleReceiptV1 = z.object({
+const LegacyAppLifecycleReceiptV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   kind: z.enum(["create", "fork", "switch", "rename", "delete"]),
   jobId: LifecycleJobId,
@@ -358,9 +358,9 @@ const LegacyAppLifecycleReceiptV1 = z.object({
   resultingSelectedAppInstanceId: AppInstanceId,
   completedCatalogGeneration: UInt64Decimal,
   completedAt: CanonicalInstant,
-}).strict();
+}).strict()))();
 /** v1 is retained for historical readback only. All new/replayable outcomes are v2. */
-export const AppLifecycleReceiptV1 = z.discriminatedUnion("schema", [
+export const AppLifecycleReceiptV1 = /*#__PURE__*/ (() => (z.discriminatedUnion("schema", [
   LegacyAppLifecycleReceiptV1,
   LegacyAppLifecycleReceiptV1.extend({
     schema: z.literal(2),
@@ -386,10 +386,10 @@ export const AppLifecycleReceiptV1 = z.discriminatedUnion("schema", [
     context.addIssue({ code: "custom", message: "lifecycle receipt result target is inconsistent" });
   if (value.schema === 2 && value.initialPublication && value.kind !== "restore" && value.kind !== "fork")
     context.addIssue({ code: "custom", message: "only a fresh copied target may re-attest sample provenance" });
-});
+})))();
 export type AppLifecycleReceiptV1 = z.infer<typeof AppLifecycleReceiptV1>;
 
-export const CatalogCasPublicationV1 = z.object({
+export const CatalogCasPublicationV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   authorityIncarnationId: AuthorityIncarnationId,
   catalogGeneration: UInt64Decimal,
@@ -402,10 +402,10 @@ export const CatalogCasPublicationV1 = z.object({
       path: ["selectedAppInstanceId"],
       message: "selected app must match the published target",
     });
-});
+})))();
 export type CatalogCasPublicationV1 = z.infer<typeof CatalogCasPublicationV1>;
 
-export const CatalogGenerationEventV1 = z.object({
+export const CatalogGenerationEventV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   catalogGeneration: UInt64Decimal,
   eventKind: z.enum([
@@ -440,10 +440,10 @@ export const CatalogGenerationEventV1 = z.object({
   if (partialMetadata || (requiredMetadata && !hasMetadata)
       || (!requiredMetadata && value.eventKind !== "revision_committed" && hasMetadata))
     context.addIssue({ code: "custom", message: "catalog metadata event fields are invalid" });
-});
+})))();
 export type CatalogGenerationEventV1 = z.infer<typeof CatalogGenerationEventV1>;
 
-export const CatalogRevisionReservationV1 = z.object({
+export const CatalogRevisionReservationV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   authorityIncarnationId: AuthorityIncarnationId,
   reservedCatalogGeneration: UInt64Decimal,
@@ -498,10 +498,10 @@ export const CatalogRevisionReservationV1 = z.object({
         && (value.publishedActiveGenerationId !== null
           || value.publishedLineageEpoch !== null || value.stateSha256 !== null)))
     context.addIssue({ code: "custom", message: "catalog reservation outcome is invalid" });
-});
+})))();
 export type CatalogRevisionReservationV1 = z.infer<typeof CatalogRevisionReservationV1>;
 
-export const CatalogReservationRecoveryV1 = z.object({
+export const CatalogReservationRecoveryV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   catalogGeneration: UInt64Decimal,
   fence: WriteFenceV1,
@@ -515,5 +515,5 @@ export const CatalogReservationRecoveryV1 = z.object({
       || reservation.finalizedLeaseId !== value.fence.leaseId
       || reservation.finalizedReleaseId !== value.fence.releaseId)
     context.addIssue({ code: "custom", message: "catalog recovery authority is inconsistent" });
-});
+})))();
 export type CatalogReservationRecoveryV1 = z.infer<typeof CatalogReservationRecoveryV1>;

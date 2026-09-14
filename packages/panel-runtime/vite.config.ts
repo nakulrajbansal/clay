@@ -13,6 +13,9 @@ export default defineConfig({
     },
     outDir: "dist",
     emptyOutDir: true,
-    minify: false,
+    // The shell inlines this fixed bootstrap. Minify the trusted runtime itself;
+    // never transform saved/generated panel source or persisted panel identity.
+    minify: "terser",
+    terserOptions: { compress: { passes: 2 } },
   },
 });

@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "@clay/schema/validation-runtime";
 import {
   IntakeAutoAcceptDraftV1,
   IntakeAutoAcceptRuleV1,

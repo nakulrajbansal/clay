@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "@clay/schema/validation-runtime";
 import { InboxDispositionV1 } from "@clay/schema/daily-home";
 import type { DbDriver } from "./db";
 import { ClayError } from "./errors";

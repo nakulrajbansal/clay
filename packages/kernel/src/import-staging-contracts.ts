@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "@clay/schema/validation-runtime";
 import { AppInstanceId, Sha256 } from "@clay/schema";
 
 /**
@@ -7,7 +7,7 @@ import { AppInstanceId, Sha256 } from "@clay/schema";
  * facade so ordinary database-worker validation does not evaluate unrelated
  * workbook, mapping, and receipt schemas.
  */
-export const ImportAcquisitionLimitsSchema = /*#__PURE__*/ z.object({
+export const ImportAcquisitionLimitsSchema = /*#__PURE__*/ (() => (z.object({
   maxDataRows: z.literal(5_000),
   maxMappedColumns: z.literal(20),
   maxDecodedCellBytes: z.literal(16 * 1024),
@@ -20,7 +20,7 @@ export const ImportAcquisitionLimitsSchema = /*#__PURE__*/ z.object({
   maxParseMilliseconds: z.literal(8_000),
   maxChunkRows: z.literal(250),
   maxChunkBytes: z.literal(1024 * 1024),
-}).strict();
+}).strict()))();
 
 export type ImportAcquisitionLimits = z.infer<typeof ImportAcquisitionLimitsSchema>;
 
@@ -39,25 +39,25 @@ export const IMPORT_ACQUISITION_LIMITS: ImportAcquisitionLimits = /*#__PURE__*/ 
   maxChunkBytes: 1024 * 1024,
 });
 
-export const ImportSessionIdSchema = /*#__PURE__*/ z.string().regex(/^import_[a-z2-7]{26}$/);
-export const ImportSheetIdSchema = /*#__PURE__*/ z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/);
-export const ImportSourceKindSchema = /*#__PURE__*/ z.enum([
+export const ImportSessionIdSchema = /*#__PURE__*/ (() => (z.string().regex(/^import_[a-z2-7]{26}$/)))();
+export const ImportSheetIdSchema = /*#__PURE__*/ (() => (z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/)))();
+export const ImportSourceKindSchema = /*#__PURE__*/ (() => (z.enum([
   "csv", "xlsx", "paste", "tsv_compat", "json_compat",
-]);
+])))();
 
-export const ImportSourceRangeSchema = /*#__PURE__*/ z.object({
+export const ImportSourceRangeSchema = /*#__PURE__*/ (() => (z.object({
   rows: z.number().int().nonnegative().max(5_001),
   columns: z.number().int().nonnegative().max(20),
-}).strict();
+}).strict()))();
 
-export const ImportSheetDescriptorSchema = /*#__PURE__*/ z.object({
+export const ImportSheetDescriptorSchema = /*#__PURE__*/ (() => (z.object({
   sheetId: ImportSheetIdSchema,
   label: z.string().min(1).max(120),
   visibility: z.enum(["visible", "hidden", "very_hidden"]),
   range: ImportSourceRangeSchema,
-}).strict();
+}).strict()))();
 
-export const ImportSourceDescriptorSchema = /*#__PURE__*/ z.object({
+export const ImportSourceDescriptorSchema = /*#__PURE__*/ (() => (z.object({
   version: z.literal(1),
   sessionId: ImportSessionIdSchema,
   appInstanceId: AppInstanceId,
@@ -73,7 +73,7 @@ export const ImportSourceDescriptorSchema = /*#__PURE__*/ z.object({
     ctx.addIssue({ code: "custom", message: "a synthetic range must be visible" });
   if (new Set(source.sheets.map(sheet => sheet.sheetId)).size !== source.sheets.length)
     ctx.addIssue({ code: "custom", message: "sheet identifiers must be unique" });
-});
+})))();
 
 export type ImportHeaderChoice =
   | { mode: "header"; sourceRow: number }
@@ -103,18 +103,18 @@ export type ConfigureExistingTableImport = {
   mappings: ExistingTableImportMapping[];
 };
 
-const ImportRawCellSchema = /*#__PURE__*/ z.string().max(16 * 1024);
-export const ImportParserChunkSchema = /*#__PURE__*/ z.object({
+const ImportRawCellSchema = /*#__PURE__*/ (() => (z.string().max(16 * 1024)))();
+export const ImportParserChunkSchema = /*#__PURE__*/ (() => (z.object({
   sessionId: ImportSessionIdSchema,
   cursor: z.number().int().nonnegative().max(5_000),
   startRow: z.number().int().positive().max(5_001),
   rows: z.array(z.array(ImportRawCellSchema).min(1).max(20)).min(1).max(250),
   nextCursor: z.number().int().positive().max(5_000).nullable(),
   serializedBytes: z.number().int().positive().max(1024 * 1024),
-}).strict();
+}).strict()))();
 
-const ImportWarningCountSchema = /*#__PURE__*/ z.number().int().nonnegative().max(5_000);
-export const ImportWarningTotalsSchema = /*#__PURE__*/ z.object({
+const ImportWarningCountSchema = /*#__PURE__*/ (() => (z.number().int().nonnegative().max(5_000)))();
+export const ImportWarningTotalsSchema = /*#__PURE__*/ (() => (z.object({
   warnings: ImportWarningCountSchema,
   warningReasons: z.object({
     trimmed_whitespace: ImportWarningCountSchema,
@@ -126,7 +126,7 @@ export const ImportWarningTotalsSchema = /*#__PURE__*/ z.object({
     .reduce((sum, count) => sum + count, 0);
   if (classified !== totals.warnings)
     ctx.addIssue({ code: "custom", message: "warning reason totals do not balance" });
-});
+})))();
 
 export type ImportSessionId = z.infer<typeof ImportSessionIdSchema>;
 export type ImportSourceKind = z.infer<typeof ImportSourceKindSchema>;

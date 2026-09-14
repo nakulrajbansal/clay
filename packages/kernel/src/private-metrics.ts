@@ -1,5 +1,5 @@
 import { DiffKind as PlanDiffKindSchema } from "@clay/schema";
-import { z } from "zod";
+import { z } from "@clay/schema/validation-runtime";
 
 const DurationBucketSchema = z.enum([
   "under_3m", "3_to_10m", "10_to_30m", "over_30m",

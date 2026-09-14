@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "./validation-runtime";
 import {
   AppInstanceId, AuthorityIncarnationId, GenerationId, LeaseId, NamespaceId,
   OperationId, ReleaseId, RequestId, Sha256, UInt64Decimal,
@@ -11,22 +11,22 @@ import {
 import { BackupRecordV1, BackupRetentionHistoryV1 } from "./backup";
 import { AuthenticatedFormat5RestoreGrantV1 } from "./restore";
 
-const ArchiveCatalogDisplayName = z.string().min(1).max(40)
-  .refine(value => value === value.trim(), "canonical display name required");
-const ArchiveCatalogShellId = z.string().regex(/^[a-z0-9_-]{1,64}$/);
+const ArchiveCatalogDisplayName = /*#__PURE__*/ (() => (z.string().min(1).max(40)
+  .refine(value => value === value.trim(), "canonical display name required")))();
+const ArchiveCatalogShellId = /*#__PURE__*/ (() => (z.string().regex(/^[a-z0-9_-]{1,64}$/)))();
 
-const ArchiveFileBytes = z.number().int().nonnegative().safe().max(384 * 1024 * 1024);
-const ArchiveCount = z.number().int().nonnegative().safe();
-const ArchiveAttachmentsV1 = z.object({
+const ArchiveFileBytes = /*#__PURE__*/ (() => (z.number().int().nonnegative().safe().max(384 * 1024 * 1024)))();
+const ArchiveCount = /*#__PURE__*/ (() => (z.number().int().nonnegative().safe()))();
+const ArchiveAttachmentsV1 = /*#__PURE__*/ (() => (z.object({
   count: ArchiveCount,
   bytes: ArchiveCount,
-}).strict();
-const ArchiveFileDigestV1 = z.object({
+}).strict()))();
+const ArchiveFileDigestV1 = /*#__PURE__*/ (() => (z.object({
   bytes: ArchiveFileBytes,
   sha256: Sha256,
-}).strict();
+}).strict()))();
 
-export const ArchiveManifestV5 = z.object({
+export const ArchiveManifestV5 = /*#__PURE__*/ (() => (z.object({
   format: z.literal(5),
   app: z.string().min(1).max(120),
   exported_at: CanonicalInstant,
@@ -38,13 +38,13 @@ export const ArchiveManifestV5 = z.object({
     systemDb: ArchiveFileDigestV1,
     authority: ArchiveFileDigestV1,
   }).strict(),
-}).strict();
+}).strict()))();
 export type ArchiveManifestV5 = z.infer<typeof ArchiveManifestV5>;
 
 export const MAX_ARCHIVE_AUTHORITY_HISTORY_ENTRIES = 50_000;
 export const MAX_ARCHIVE_AUTHORITY_TOTAL_ENTRIES = 100_000;
 
-export const ArchiveTargetRevisionV1 = z.object({
+export const ArchiveTargetRevisionV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   operationId: OperationId,
   revision: UInt64Decimal,
@@ -65,10 +65,10 @@ export const ArchiveTargetRevisionV1 = z.object({
     context.addIssue({ code: "custom", message: "target revision finalization is invalid" });
   if (value.finalizedAt !== null && value.finalizedAt < value.reservedAt)
     context.addIssue({ code: "custom", message: "target revision finalization precedes reservation" });
-});
+})))();
 export type ArchiveTargetRevisionV1 = z.infer<typeof ArchiveTargetRevisionV1>;
 
-export const ArchiveCatalogLeaseV1 = z.object({
+export const ArchiveCatalogLeaseV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   leaseId: LeaseId,
   authorityIncarnationId: AuthorityIncarnationId,
@@ -83,18 +83,18 @@ export const ArchiveCatalogLeaseV1 = z.object({
   if (expires <= issued || expires - issued > 300_000n
       || expires > BigInt(Number.MAX_SAFE_INTEGER))
     context.addIssue({ code: "custom", message: "archive catalog lease interval is invalid" });
-});
+})))();
 export type ArchiveCatalogLeaseV1 = z.infer<typeof ArchiveCatalogLeaseV1>;
 
-export const ArchiveGenerationEvidenceV1 = z.object({
+export const ArchiveGenerationEvidenceV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   operationId: OperationId,
   storageKey: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/),
   descriptor: ImmutableAppGenerationV1,
-}).strict();
+}).strict()))();
 export type ArchiveGenerationEvidenceV1 = z.infer<typeof ArchiveGenerationEvidenceV1>;
 
-export const ArchiveCatalogEntryV1 = z.object({
+export const ArchiveCatalogEntryV1 = /*#__PURE__*/ (() => (z.object({
   appInstanceId: AppInstanceId,
   displayName: ArchiveCatalogDisplayName,
   shellId: ArchiveCatalogShellId,
@@ -118,10 +118,10 @@ export const ArchiveCatalogEntryV1 = z.object({
   if (BigInt(value.journalGenesisLineageEpoch) > BigInt(value.currentLineageEpoch)
       || BigInt(value.journalGenesisProtectionRevision) > BigInt(value.currentProtectionRevision))
     context.addIssue({ code: "custom", message: "journal genesis exceeds current target" });
-});
+})))();
 export type ArchiveCatalogEntryV1 = z.infer<typeof ArchiveCatalogEntryV1>;
 
-export const ArchiveCatalogSchemaObjectV1 = z.object({
+export const ArchiveCatalogSchemaObjectV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   type: z.literal("table"),
   name: z.string().regex(/^[a-z_][a-z0-9_]{0,63}$/),
@@ -130,30 +130,30 @@ export const ArchiveCatalogSchemaObjectV1 = z.object({
 }).strict().superRefine((value, context) => {
   if (value.name !== value.tableName)
     context.addIssue({ code: "custom", message: "catalog table object must name itself" });
-});
+})))();
 export type ArchiveCatalogSchemaObjectV1 = z.infer<typeof ArchiveCatalogSchemaObjectV1>;
 
-export const ArchiveCatalogIdV1 = z.object({
+export const ArchiveCatalogIdV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   idValue: z.string().min(1).max(256),
   idKind: z.enum([
     "authority", "app", "generation", "namespace", "lease", "operation", "job",
   ]),
   retainedAt: CanonicalInstant,
-}).strict();
+}).strict()))();
 export type ArchiveCatalogIdV1 = z.infer<typeof ArchiveCatalogIdV1>;
 
-export const ArchiveTargetRequestReceiptV1 = z.object({
+export const ArchiveTargetRequestReceiptV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   receipt: ProductionRequestReceiptV1,
   responseJson: z.string().max(2_000_000).nullable(),
 }).strict().superRefine((value, context) => {
   if ((value.receipt.responseSha256 === null) !== (value.responseJson === null))
     context.addIssue({ code: "custom", message: "target request response mirror is incomplete" });
-});
+})))();
 export type ArchiveTargetRequestReceiptV1 = z.infer<typeof ArchiveTargetRequestReceiptV1>;
 
-export const ArchiveBootstrapEntryV1 = z.object({
+export const ArchiveBootstrapEntryV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   storageKey: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/),
   userFile: z.string().min(1).max(256),
@@ -167,10 +167,10 @@ export const ArchiveBootstrapEntryV1 = z.object({
   shellId: ArchiveCatalogShellId,
   selected: z.boolean(),
   declaredAt: CanonicalInstant,
-}).strict();
+}).strict()))();
 export type ArchiveBootstrapEntryV1 = z.infer<typeof ArchiveBootstrapEntryV1>;
 
-export const ArchivePendingJobV1 = z.object({
+export const ArchivePendingJobV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   jobId: z.string().regex(/^job_[a-z2-7]{26}$/),
   authorityIncarnationId: AuthorityIncarnationId,
@@ -184,12 +184,12 @@ export const ArchivePendingJobV1 = z.object({
   sourceProvenanceId: z.string().regex(/^restoreval_[a-z2-7]{26}$/),
   createdAt: CanonicalInstant,
   updatedAt: CanonicalInstant,
-}).strict();
+}).strict()))();
 export type ArchivePendingJobV1 = z.infer<typeof ArchivePendingJobV1>;
 
 /** Durable, non-secret install/cleanup claim. Never included in an export:
  * collection is blocked until this job becomes a terminal lifecycle receipt. */
-export const CatalogRestoreJobV2 = ArchivePendingJobV1.extend({
+export const CatalogRestoreJobV2 = /*#__PURE__*/ (() => (ArchivePendingJobV1.extend({
   schema: z.literal(2),
   kind: z.literal("restore_as_new"),
   state: z.literal("prepared"),
@@ -211,30 +211,30 @@ export const CatalogRestoreJobV2 = ArchivePendingJobV1.extend({
         || intent.grant.archiveSha256 !== value.sourceArchiveSha256
         || intent.grant.validationId !== value.sourceProvenanceId)))
     context.addIssue({ code: "custom", message: "restore intent binding is invalid" });
-});
+})))();
 export type CatalogRestoreJobV2 = z.infer<typeof CatalogRestoreJobV2>;
 export type CatalogRestoreJob = ArchivePendingJobV1 | CatalogRestoreJobV2;
 
-export const ArchiveLineageReservationV1 = z.object({
+export const ArchiveLineageReservationV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   appInstanceId: AppInstanceId,
   lineageEpoch: UInt64Decimal,
   operationId: OperationId,
   state: z.string().min(1).max(64),
-}).strict();
+}).strict()))();
 export type ArchiveLineageReservationV1 = z.infer<typeof ArchiveLineageReservationV1>;
 
-export const ArchiveRestoreAsNewIdentityV1 = z.object({
+export const ArchiveRestoreAsNewIdentityV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   appInstanceId: AppInstanceId,
   generationId: GenerationId,
   namespaceId: NamespaceId,
   operationId: OperationId,
   restoredAt: CanonicalInstant,
-}).strict();
+}).strict()))();
 export type ArchiveRestoreAsNewIdentityV1 = z.infer<typeof ArchiveRestoreAsNewIdentityV1>;
 
-const ArchiveAuthorityBindingV1 = z.object({
+const ArchiveAuthorityBindingV1 = /*#__PURE__*/ (() => (z.object({
   format: z.literal(5),
   app: z.string().min(1).max(120),
   exportedAt: CanonicalInstant,
@@ -243,16 +243,16 @@ const ArchiveAuthorityBindingV1 = z.object({
   attachments: ArchiveAttachmentsV1,
   userDb: ArchiveFileDigestV1,
   systemDb: ArchiveFileDigestV1,
-}).strict();
+}).strict()))();
 
-export const ArchiveLifecycleReceiptV1 = z.object({
+export const ArchiveLifecycleReceiptV1 = /*#__PURE__*/ (() => (z.object({
   receipt: AppLifecycleReceiptV1,
   generationId: GenerationId,
   namespaceId: NamespaceId,
-}).strict();
+}).strict()))();
 export type ArchiveLifecycleReceiptV1 = z.infer<typeof ArchiveLifecycleReceiptV1>;
 
-const ArchiveCatalogAuthorityV1 = z.object({
+const ArchiveCatalogAuthorityV1 = /*#__PURE__*/ (() => (z.object({
     schema: z.literal(1),
     schemaObjects: z.array(ArchiveCatalogSchemaObjectV1).max(64),
     authorityIncarnationId: AuthorityIncarnationId,
@@ -280,19 +280,19 @@ const ArchiveCatalogAuthorityV1 = z.object({
       .max(MAX_ARCHIVE_AUTHORITY_HISTORY_ENTRIES),
     backupRecords: z.array(BackupRecordV1)
       .max(MAX_ARCHIVE_AUTHORITY_HISTORY_ENTRIES),
-}).strict();
+}).strict()))();
 
 // Version only the catalog evidence member. The format-5 authenticated envelope,
 // its authentication-before-parsing order, and all existing bindings are unchanged.
-const ArchiveCatalogAuthorityV2 = ArchiveCatalogAuthorityV1.extend({
+const ArchiveCatalogAuthorityV2 = /*#__PURE__*/ (() => (ArchiveCatalogAuthorityV1.extend({
   schema: z.literal(2),
   lifecycleReceipts: z.array(ArchiveLifecycleReceiptV1).max(MAX_ARCHIVE_AUTHORITY_HISTORY_ENTRIES),
-}).strict();
-const ArchiveCatalogAuthorityV3 = ArchiveCatalogAuthorityV2.extend({
+}).strict()))();
+const ArchiveCatalogAuthorityV3 = /*#__PURE__*/ (() => (ArchiveCatalogAuthorityV2.extend({
   schema: z.literal(3), retentionHistory: BackupRetentionHistoryV1,
-}).strict();
+}).strict()))();
 
-export const ArchiveAuthorityEvidenceV1 = z.object({
+export const ArchiveAuthorityEvidenceV1 = /*#__PURE__*/ (() => (z.object({
   schema: z.literal(1),
   binding: ArchiveAuthorityBindingV1,
   target: TargetEvidenceV1,
@@ -368,5 +368,5 @@ export const ArchiveAuthorityEvidenceV1 = z.object({
   if (entry.lineageEpochHighWater !== header.lineageEpochHighWater
       || entry.revisionHighWater !== header.protectionRevisionHighWater)
     context.addIssue({ code: "custom", message: "catalog and target high-water marks disagree" });
-});
+})))();
 export type ArchiveAuthorityEvidenceV1 = z.infer<typeof ArchiveAuthorityEvidenceV1>;

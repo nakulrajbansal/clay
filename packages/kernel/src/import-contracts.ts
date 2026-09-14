@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "@clay/schema/validation-runtime";
 import { AppInstanceId, Sha256 } from "@clay/schema";
 import {
   ImportAcquisitionLimitsSchema,
@@ -9,14 +9,14 @@ import {
 } from "./import-staging-contracts";
 export * from "./import-staging-contracts";
 
-// Zod schema construction has no observable side effects. These annotations
-// let each worker bundle discard contract families whose exports it does not use.
+// Pure factories include nested Zod construction, not just the outer call. Each
+// worker can discard unused contract families without changing their validation.
 
-export const ImportSheetChoiceSchema = /*#__PURE__*/ z.object({
+export const ImportSheetChoiceSchema = /*#__PURE__*/ (() => (z.object({
   sheetId: ImportSheetIdSchema,
-}).strict();
+}).strict()))();
 
-export const ImportRangeChoiceSchema = /*#__PURE__*/ z.object({
+export const ImportRangeChoiceSchema = /*#__PURE__*/ (() => (z.object({
   sheetId: ImportSheetIdSchema,
   startRow: z.number().int().positive().max(5_001),
   endRow: z.number().int().positive().max(5_001),
@@ -31,26 +31,26 @@ export const ImportRangeChoiceSchema = /*#__PURE__*/ z.object({
     ctx.addIssue({ code: "custom", message: "range exceeds the source-row ceiling" });
   if (range.endColumn - range.startColumn + 1 > 20)
     ctx.addIssue({ code: "custom", message: "range exceeds the mapped-column ceiling" });
-});
+})))();
 
-export const ImportHeaderChoiceSchema = /*#__PURE__*/ z.discriminatedUnion("mode", [
+export const ImportHeaderChoiceSchema = /*#__PURE__*/ (() => (z.discriminatedUnion("mode", [
   z.object({
     mode: z.literal("header"),
     sourceRow: z.number().int().positive().max(5_001),
   }).strict(),
   z.object({ mode: z.literal("no_header") }).strict(),
-]);
+])))();
 
-export const ImportDateRuleSchema = /*#__PURE__*/ z.discriminatedUnion("kind", [
+export const ImportDateRuleSchema = /*#__PURE__*/ (() => (z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("iso") }).strict(),
   z.object({
     kind: z.literal("ordered"),
     order: z.enum(["mdy", "dmy"]),
     separator: z.enum(["/", "-"]),
   }).strict(),
-]);
+])))();
 
-export const ImportNumberRuleSchema = /*#__PURE__*/ z.object({
+export const ImportNumberRuleSchema = /*#__PURE__*/ (() => (z.object({
   grammar: z.enum([
     "ungrouped_dot_decimal",
     "comma_grouped_dot_decimal",
@@ -64,12 +64,12 @@ export const ImportNumberRuleSchema = /*#__PURE__*/ z.object({
     }).strict(),
   ]),
   percentScale: z.enum(["none", "zero_to_one", "zero_to_hundred"]),
-}).strict();
+}).strict()))();
 
 export type ImportSheetChoice = z.infer<typeof ImportSheetChoiceSchema>;
 export type ImportRangeChoice = z.infer<typeof ImportRangeChoiceSchema>;
 
-export const HeaderCandidateReasonSchema = /*#__PURE__*/ z.enum([
+export const HeaderCandidateReasonSchema = /*#__PURE__*/ (() => (z.enum([
   "no_non_blank_row",
   "first_non_blank_row",
   "all_labels_present",
@@ -81,8 +81,8 @@ export const HeaderCandidateReasonSchema = /*#__PURE__*/ z.enum([
   "data_shape_contrast",
   "no_data_shape_contrast",
   "no_following_data",
-]);
-export const HeaderCandidateSchema = /*#__PURE__*/ z.object({
+])))();
+export const HeaderCandidateSchema = /*#__PURE__*/ (() => (z.object({
   recommendedRow: z.number().int().positive().max(10).nullable(),
   confidence: z.enum(["high", "low", "none"]),
   reasons: z.array(HeaderCandidateReasonSchema).min(1).max(5),
@@ -91,11 +91,11 @@ export const HeaderCandidateSchema = /*#__PURE__*/ z.object({
     ctx.addIssue({ code: "custom", message: "empty header candidates use none confidence" });
   if (new Set(candidate.reasons).size !== candidate.reasons.length)
     ctx.addIssue({ code: "custom", message: "header candidate reasons must be unique" });
-});
+})))();
 export type HeaderCandidateReason = z.infer<typeof HeaderCandidateReasonSchema>;
 export type HeaderCandidate = z.infer<typeof HeaderCandidateSchema>;
 
-export const ImportSkipCodeSchema = /*#__PURE__*/ z.enum([
+export const ImportSkipCodeSchema = /*#__PURE__*/ (() => (z.enum([
   "above_header",
   "blank_row",
   "user_skipped",
@@ -103,11 +103,11 @@ export const ImportSkipCodeSchema = /*#__PURE__*/ z.enum([
   "duplicate_skipped",
   "no_change",
   "unmapped_row",
-]);
-const SourceRowOrdinalSchema = /*#__PURE__*/ z.number().int().positive().max(5_001);
-const ImportIssueIdSchema = /*#__PURE__*/ z.string().regex(/^issue_[a-zA-Z0-9_-]{1,64}$/);
+])))();
+const SourceRowOrdinalSchema = /*#__PURE__*/ (() => (z.number().int().positive().max(5_001)))();
+const ImportIssueIdSchema = /*#__PURE__*/ (() => (z.string().regex(/^issue_[a-zA-Z0-9_-]{1,64}$/)))();
 
-export const SourceRowDispositionSchema = /*#__PURE__*/ z.discriminatedUnion("kind", [
+export const SourceRowDispositionSchema = /*#__PURE__*/ (() => (z.discriminatedUnion("kind", [
   z.object({ sourceRow: SourceRowOrdinalSchema, kind: z.literal("create") }).strict(),
   z.object({ sourceRow: SourceRowOrdinalSchema, kind: z.literal("update") }).strict(),
   z.object({
@@ -120,16 +120,16 @@ export const SourceRowDispositionSchema = /*#__PURE__*/ z.discriminatedUnion("ki
     kind: z.literal("blocked"),
     issueIds: z.array(ImportIssueIdSchema).min(1).max(100),
   }).strict(),
-]);
+])))();
 
-export const ImportSourceDispositionLedgerSchema = /*#__PURE__*/ z.array(SourceRowDispositionSchema)
+export const ImportSourceDispositionLedgerSchema = /*#__PURE__*/ (() => (z.array(SourceRowDispositionSchema)
   .max(5_000).superRefine((rows, ctx) => {
     if (new Set(rows.map(row => row.sourceRow)).size !== rows.length)
       ctx.addIssue({ code: "custom", message: "each source row needs exactly one disposition" });
-  });
+  })))();
 
-const BoundedImportCountSchema = /*#__PURE__*/ z.number().int().nonnegative().max(5_000);
-export const ImportSkipReasonCountsSchema = /*#__PURE__*/ z.object({
+const BoundedImportCountSchema = /*#__PURE__*/ (() => (z.number().int().nonnegative().max(5_000)))();
+export const ImportSkipReasonCountsSchema = /*#__PURE__*/ (() => (z.object({
   above_header: BoundedImportCountSchema,
   blank_row: BoundedImportCountSchema,
   user_skipped: BoundedImportCountSchema,
@@ -137,9 +137,9 @@ export const ImportSkipReasonCountsSchema = /*#__PURE__*/ z.object({
   duplicate_skipped: BoundedImportCountSchema,
   no_change: BoundedImportCountSchema,
   unmapped_row: BoundedImportCountSchema,
-}).strict();
+}).strict()))();
 
-export const SourceDispositionTotalsSchema = /*#__PURE__*/ z.object({
+export const SourceDispositionTotalsSchema = /*#__PURE__*/ (() => (z.object({
   sourceRows: BoundedImportCountSchema,
   createRows: BoundedImportCountSchema,
   updateRows: BoundedImportCountSchema,
@@ -154,9 +154,9 @@ export const SourceDispositionTotalsSchema = /*#__PURE__*/ z.object({
     .reduce((sum, count) => sum + count, 0);
   if (classifiedSkips !== totals.skipRows)
     ctx.addIssue({ code: "custom", message: "skip reason totals do not balance" });
-});
+})))();
 
-export const MutationTotalsSchema = /*#__PURE__*/ z.object({
+export const MutationTotalsSchema = /*#__PURE__*/ (() => (z.object({
   primaryTargetCreates: BoundedImportCountSchema,
   primaryTargetUpdates: BoundedImportCountSchema,
   auxiliaryRelatedCreates: BoundedImportCountSchema,
@@ -165,33 +165,33 @@ export const MutationTotalsSchema = /*#__PURE__*/ z.object({
   if (totals.changedCount !== totals.primaryTargetCreates
       + totals.primaryTargetUpdates + totals.auxiliaryRelatedCreates)
     ctx.addIssue({ code: "custom", message: "canonical mutation totals do not balance" });
-});
+})))();
 
 export type ImportSkipCode = z.infer<typeof ImportSkipCodeSchema>;
 export type SourceRowDisposition = z.infer<typeof SourceRowDispositionSchema>;
 export type SourceDispositionTotals = z.infer<typeof SourceDispositionTotalsSchema>;
 export type MutationTotals = z.infer<typeof MutationTotalsSchema>;
 
-const ImportMutationIdSchema = /*#__PURE__*/ z.string().regex(/^mutation_[a-z2-7]{26}$/);
-const ImportTableIdSchema = /*#__PURE__*/ z.string().regex(/^tbl_[a-z2-7]{26}$/);
-const ImportRowIdSchema = /*#__PURE__*/ z.string().regex(
+const ImportMutationIdSchema = /*#__PURE__*/ (() => (z.string().regex(/^mutation_[a-z2-7]{26}$/)))();
+const ImportTableIdSchema = /*#__PURE__*/ (() => (z.string().regex(/^tbl_[a-z2-7]{26}$/)))();
+const ImportRowIdSchema = /*#__PURE__*/ (() => (z.string().regex(
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-);
-const OriginSourceRowsSchema = /*#__PURE__*/ z.array(SourceRowOrdinalSchema).min(1).max(5_000)
+)))();
+const OriginSourceRowsSchema = /*#__PURE__*/ (() => (z.array(SourceRowOrdinalSchema).min(1).max(5_000)
   .superRefine((rows, ctx) => {
     if (new Set(rows).size !== rows.length)
       ctx.addIssue({ code: "custom", message: "mutation origins must be unique" });
     if (rows.some((row, index) => index > 0 && row <= rows[index - 1]!))
       ctx.addIssue({ code: "custom", message: "mutation origins must be ordered" });
-  });
-const PreparedMutationBase = {
+  })))();
+const PreparedMutationBase = /*#__PURE__*/ (() => ({
   mutationId: ImportMutationIdSchema,
   tableId: ImportTableIdSchema,
   rowId: ImportRowIdSchema,
   originSourceRows: OriginSourceRowsSchema,
   payloadDigest: Sha256,
-};
-export const PreparedImportMutationSchema = /*#__PURE__*/ z.discriminatedUnion("role", [
+}))();
+export const PreparedImportMutationSchema = /*#__PURE__*/ (() => (z.discriminatedUnion("role", [
   z.object({
     ...PreparedMutationBase,
     role: z.literal("primary_target"),
@@ -202,8 +202,8 @@ export const PreparedImportMutationSchema = /*#__PURE__*/ z.discriminatedUnion("
     role: z.literal("auxiliary_related"),
     kind: z.literal("create"),
   }).strict(),
-]);
-export const SourceRowMutationMapSchema = /*#__PURE__*/ z.object({
+])))();
+export const SourceRowMutationMapSchema = /*#__PURE__*/ (() => (z.object({
   sourceRow: SourceRowOrdinalSchema,
   primaryMutationId: ImportMutationIdSchema.nullable(),
   auxiliaryRelatedMutationIds: z.array(ImportMutationIdSchema).max(100),
@@ -211,9 +211,9 @@ export const SourceRowMutationMapSchema = /*#__PURE__*/ z.object({
   if (new Set(mapping.auxiliaryRelatedMutationIds).size
       !== mapping.auxiliaryRelatedMutationIds.length)
     ctx.addIssue({ code: "custom", message: "auxiliary mutation references must be unique" });
-});
+})))();
 
-export const ImportPreparedLedgerSchema = /*#__PURE__*/ z.object({
+export const ImportPreparedLedgerSchema = /*#__PURE__*/ (() => (z.object({
   dispositions: ImportSourceDispositionLedgerSchema,
   rowMutationMap: z.array(SourceRowMutationMapSchema).max(5_000),
   mutations: z.array(PreparedImportMutationSchema).max(5_000),
@@ -277,13 +277,13 @@ export const ImportPreparedLedgerSchema = /*#__PURE__*/ z.object({
       || actualTotals.primaryTargetUpdates !== ledger.mutationTotals.primaryTargetUpdates
       || actualTotals.auxiliaryRelatedCreates !== ledger.mutationTotals.auxiliaryRelatedCreates)
     fail("mutation totals must count the unique canonical ledger");
-});
+})))();
 
 export type PreparedImportMutation = z.infer<typeof PreparedImportMutationSchema>;
 export type SourceRowMutationMap = z.infer<typeof SourceRowMutationMapSchema>;
 export type ImportPreparedLedger = z.infer<typeof ImportPreparedLedgerSchema>;
 
-export const ImportParserErrorCodeSchema = /*#__PURE__*/ z.enum([
+export const ImportParserErrorCodeSchema = /*#__PURE__*/ (() => (z.enum([
   "E_IMPORT_SOURCE_LIMIT",
   "E_IMPORT_UTF8",
   "E_IMPORT_CONTROL_CHARACTER",
@@ -303,15 +303,15 @@ export const ImportParserErrorCodeSchema = /*#__PURE__*/ z.enum([
   "E_IMPORT_CHUNK_LIMIT",
   "E_IMPORT_SESSION_UNKNOWN",
   "E_IMPORT_PROTOCOL",
-]);
-export const ImportParserStageSchema = /*#__PURE__*/ z.enum([
+])))();
+export const ImportParserStageSchema = /*#__PURE__*/ (() => (z.enum([
   "acquire", "decode", "parse", "chunk", "session", "protocol",
-]);
-const ImportParserRpcIdSchema = /*#__PURE__*/ z.number().int().positive().safe();
-const ArrayBufferSchema = /*#__PURE__*/ z.custom<ArrayBuffer>(value =>
-  Object.prototype.toString.call(value) === "[object ArrayBuffer]", "ArrayBuffer required");
+])))();
+const ImportParserRpcIdSchema = /*#__PURE__*/ (() => (z.number().int().positive().safe()))();
+const ArrayBufferSchema = /*#__PURE__*/ (() => (z.custom<ArrayBuffer>(value =>
+  Object.prototype.toString.call(value) === "[object ArrayBuffer]", "ArrayBuffer required")))();
 
-export const OpenImportSourceRequestSchema = /*#__PURE__*/ z.object({
+export const OpenImportSourceRequestSchema = /*#__PURE__*/ (() => (z.object({
   version: z.literal(1),
   id: ImportParserRpcIdSchema,
   op: z.literal("openImportSource"),
@@ -320,8 +320,8 @@ export const OpenImportSourceRequestSchema = /*#__PURE__*/ z.object({
     kind: z.enum(["csv", "paste", "xlsx"]),
     bytes: ArrayBufferSchema,
   }).strict(),
-}).strict();
-export const ReadImportChunkRequestSchema = /*#__PURE__*/ z.object({
+}).strict()))();
+export const ReadImportChunkRequestSchema = /*#__PURE__*/ (() => (z.object({
   version: z.literal(1),
   id: ImportParserRpcIdSchema,
   op: z.literal("readImportChunk"),
@@ -331,8 +331,8 @@ export const ReadImportChunkRequestSchema = /*#__PURE__*/ z.object({
     sheetId: ImportSheetIdSchema.optional(),
     cursor: z.number().int().nonnegative().max(5_000),
   }).strict(),
-}).strict();
-export const CloseImportSourceRequestSchema = /*#__PURE__*/ z.object({
+}).strict()))();
+export const CloseImportSourceRequestSchema = /*#__PURE__*/ (() => (z.object({
   version: z.literal(1),
   id: ImportParserRpcIdSchema,
   op: z.literal("closeImportSource"),
@@ -341,16 +341,16 @@ export const CloseImportSourceRequestSchema = /*#__PURE__*/ z.object({
     sessionId: ImportSessionIdSchema,
     reason: z.enum(["cancel", "commit", "restart", "app_switch", "timeout"]),
   }).strict(),
-}).strict();
-export const ImportParserRequestSchema = /*#__PURE__*/ z.discriminatedUnion("op", [
+}).strict()))();
+export const ImportParserRequestSchema = /*#__PURE__*/ (() => (z.discriminatedUnion("op", [
   OpenImportSourceRequestSchema,
   ReadImportChunkRequestSchema,
   CloseImportSourceRequestSchema,
-]);
+])))();
 
-export const CloseImportSourceResultSchema = /*#__PURE__*/ z.object({ disposed: z.literal(true) }).strict();
+export const CloseImportSourceResultSchema = /*#__PURE__*/ (() => (z.object({ disposed: z.literal(true) }).strict()))();
 
-export const ImportParserSafeErrorSchema = /*#__PURE__*/ z.object({
+export const ImportParserSafeErrorSchema = /*#__PURE__*/ (() => (z.object({
   code: ImportParserErrorCodeSchema,
   stage: ImportParserStageSchema,
   message: z.literal("The import source could not be read safely."),
@@ -358,9 +358,9 @@ export const ImportParserSafeErrorSchema = /*#__PURE__*/ z.object({
   column: z.number().int().positive().max(20).optional(),
   limit: z.number().int().nonnegative().safe().optional(),
   actual: z.number().int().nonnegative().safe().optional(),
-}).strict();
+}).strict()))();
 
-export const ImportParserResponseSchema = /*#__PURE__*/ z.union([
+export const ImportParserResponseSchema = /*#__PURE__*/ (() => (z.union([
   z.object({
     version: z.literal(1),
     id: ImportParserRpcIdSchema,
@@ -377,7 +377,7 @@ export const ImportParserResponseSchema = /*#__PURE__*/ z.union([
     ok: z.literal(false),
     error: ImportParserSafeErrorSchema,
   }).strict(),
-]);
+])))();
 
 export type ImportParserRequest = z.infer<typeof ImportParserRequestSchema>;
 export type ImportParserSafeError = z.infer<typeof ImportParserSafeErrorSchema>;
