@@ -1428,6 +1428,7 @@ export class DeviceCatalog {
   private constructor(
     private readonly driver: DbDriver,
     private readonly allowPendingRestore = false,
+    private readonly legacyRetentionMigration = false,
   ) {}
 
   static isAbsent(driver: DbDriver): boolean {
@@ -1484,6 +1485,20 @@ export class DeviceCatalog {
     return new DeviceCatalog(driver, true);
   }
 
+  /** Closed READ-ONLY owner view before boot migration. A hot legacy catalog
+   * must be validated in its original shape; adding tables on the shadow first
+   * would manufacture the proof for the real rollback. No writer escapes here. */
+  static originalNativePreflight(driver: DbDriver) {
+    const legacy = hasExactSchema(catalogTables(driver), true);
+    if (!hasExactSchema(catalogTables(driver), legacy) || !hasOnlyExpectedObjects(driver, legacy)
+        || !hasExactTableShapes(driver, legacy) || !hasExactTableDdl(driver, legacy))
+      throw new ClayError("E_CATALOG_UNAVAILABLE", "original native catalog schema is unavailable");
+    readValidatedCatalog(driver, { allowPendingRestore: true, legacyRetentionMigration: legacy });
+    const view = new DeviceCatalog(driver, true, legacy);
+    return Object.freeze({ snapshot: () => view.snapshot(), activeTargetStorageInventory: () => view.activeTargetStorageInventory(),
+      pendingRestoreJobs: () => view.pendingRestoreJobs(), pendingLifecycleJobs: () => view.pendingLifecycleJobs() });
+  }
+
   static initializeFresh(driver: DbDriver): DeviceCatalog {
     if (catalogTables(driver).length !== 0)
       throw new ClayError("E_CATALOG_CONFLICT", "authoritative catalog is already initialized");
@@ -1512,7 +1527,7 @@ export class DeviceCatalog {
 
   snapshot(): AppCatalogSnapshot {
     return readValidatedCatalog(
-      this.driver, { allowPendingRestore: this.allowPendingRestore },
+      this.driver, { allowPendingRestore: this.allowPendingRestore, legacyRetentionMigration: this.legacyRetentionMigration },
     );
   }
 
@@ -1528,9 +1543,7 @@ export class DeviceCatalog {
   }
 
   pendingRestoreJobs(): ArchivePendingJob[] {
-    if (!this.allowPendingRestore)
-      readValidatedCatalog(this.driver);
-    else readValidatedCatalog(this.driver, { allowPendingRestore: true });
+    this.snapshot();
     return readPendingRestoreJobs(this.driver).map(job => Object.freeze({ ...job }));
   }
 
@@ -1673,7 +1686,7 @@ export class DeviceCatalog {
   activeTargetStorageInventory(): SelectedTargetStorage[] {
     return this.driver.tx(() => {
       const snapshot = readValidatedCatalog(
-        this.driver, { allowPendingRestore: this.allowPendingRestore },
+        this.driver, { allowPendingRestore: this.allowPendingRestore, legacyRetentionMigration: this.legacyRetentionMigration },
       );
       const entries = new Map(snapshot.entries
         .map(entry => [entry.appInstanceId, entry] as const));
@@ -1782,7 +1795,7 @@ export class DeviceCatalog {
   }
 
   pendingLifecycleJobs(): PendingTargetLifecycleJob[] {
-    readValidatedCatalog(this.driver);
+    this.snapshot();
     return readPendingLifecycleJobs(this.driver).map(job => ({
       ...job,
       expectedTarget: { ...job.expectedTarget },
@@ -1798,6 +1811,18 @@ export class DeviceCatalog {
     const receipt = readAppLifecycleReceipts(this.driver)
       .find(candidate => candidate.requestId === parsed.data);
     return receipt ? { ...receipt } : null;
+  }
+
+  /** Original-owner history only. Absence, an unfinished unlink, an old active
+   * generation, or another app's delete receipt never means terminal exclusion. */
+  completedOwnerRetirement(appInstanceId: string, generationId: string): AppLifecycleReceipt | null {
+    AppInstanceId.parse(appInstanceId); GenerationId.parse(generationId);
+    readValidatedCatalog(this.driver);
+    const rows = this.driver.select(`SELECT a.tombstoned,a.active_generation_id,g.app_instance_id FROM catalog.app_entries a
+      JOIN catalog.generations g ON g.generation_id=a.active_generation_id WHERE a.app_instance_id=? AND g.generation_id=?`, [appInstanceId, generationId]);
+    if (rows.length !== 1 || rows[0]!.tombstoned !== 1 || rows[0]!.app_instance_id !== appInstanceId) return null;
+    const receipts = readAppLifecycleReceipts(this.driver).filter(receipt => receipt.schema === 2 && receipt.kind === "delete" && receipt.requestedAppInstanceId === appInstanceId);
+    return receipts.length === 1 ? receipts[0]! : null;
   }
 
   assertAppLifecycleReplay(receipt: AppLifecycleReceipt): AppLifecycleReceipt {

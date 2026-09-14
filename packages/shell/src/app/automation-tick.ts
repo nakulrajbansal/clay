@@ -11,7 +11,7 @@ export async function runRetainedAutomationTick(cache: Cache, worker: WorkerClie
   const read = await worker.automationPresentation();
   if (read.authorityTarget.appInstanceId !== app) throw new Error("Scheduled source changed; nothing was invoked");
   const idle = (reason: string | null) => ({ available: read.availability.available, reason, runs: [] as AutomationRun[], notifications: read.notifications });
-  if (!read.availability.available) return idle("physical_transaction_uncertified");
+  if (!read.availability.available) return idle("physical_recovery_unavailable");
   let intent = readPresentationIntent(cache, app, "automation");
   if (intent && (intent.payload.command as { route: string }).route !== "runDueAutomations") return idle("pending_automation_request");
   if (intent) {

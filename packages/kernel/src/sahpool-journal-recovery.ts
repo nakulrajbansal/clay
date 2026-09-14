@@ -15,7 +15,7 @@ export function installSahpoolJournalRecovery(sqlite: any, pool: { getFileNames(
   const vfs = new capi.sqlite3_vfs(pointer), originalOpen = vfs.$xOpen, originalAccess = vfs.$xAccess, originalDelete = vfs.$xDelete;
   const callOpen = wasm.functionEntry(originalOpen);
   const handles = new Map<number, string>(), copies = new Map<number, any>();
-  let allowed: ReadonlySet<string> | null = null, disposed = false, poisoned = false;
+  let allowed: ReadonlySet<string> | null = null, disposed = false, poisoned = false, everOpened = false;
   let masters = new Map<string, Uint8Array>();
   let unownedPath = false;
   const child = (path: string) => !!allowed && [...allowed].some(file => path === `${file}-journal`);
@@ -67,6 +67,7 @@ export function installSahpoolJournalRecovery(sqlite: any, pool: { getFileNames(
       if (allowed && (!admits(path) || (main && (!allowed.has(path) || [...handles.values()].includes(path))))) return rejectPath();
       const rc = callOpen(pVfs, zName, pFile, flags, pOut);
       if (rc === 0 && main) {
+        everOpened = true;
         const file = new capi.sqlite3_file(pFile); file.$pMethods = methods(file.$pMethods).pointer; handles.set(pFile, path);
       }
       return rc;
@@ -97,10 +98,13 @@ export function installSahpoolJournalRecovery(sqlite: any, pool: { getFileNames(
   vfs.$xAccess = access; vfs.$xDelete = remove;
   installed.add(sqlite);
   return Object.freeze({
+    assertOriginallyUnopened(): void {
+      if (everOpened || disposed || poisoned || allowed || handles.size) throw new Error("Native recovery requires original unopened handle provenance");
+    },
     finish(db: any): void {
       if (!allowed || !sqlite.capi.sqlite3_get_autocommit(db.pointer)) throw new Error("Native recovery requires an idle owned tuple");
       const databases = db.selectObjects("PRAGMA database_list") as Array<{ name: string; file: string }>;
-      const durable = databases.filter(row => row.name !== "temp");
+      const durable = databases.filter(row => row.name !== "temp" && row.file !== "");
       if (durable.length !== allowed.size || durable.some(row => !allowed!.has(row.file) || !["main", "sys", "catalog"].includes(row.name)))
         throw new Error("Native recovery tuple changed");
       // SQLite leaves unused zero-header journals after recovering another

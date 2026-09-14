@@ -30,6 +30,7 @@ import { MANUAL_BACKUP_LEDGER } from "./production-manual-backup";
 import { executeCopiedSampleReattestation } from "./production-samples";
 import {
   automationPhysicalTransactionCapability,
+  withAutomationPhysicalTransaction,
   isThenable,
   type AutomationPhysicalTransactionCapability,
   type DbDriver,
@@ -43,7 +44,7 @@ import {
   parseFirstSuccessState,
 } from "./first-success";
 import type { LiveWriteAuthority } from "./live-write-guard";
-import { executeAutomationObserverAuthorityRoute } from "./production-automation-observer-routes";
+import { executeAutomationObserverAuthorityRoute, requiresAutomationPhysicalTransaction } from "./production-automation-observer-routes";
 import { assertClosedAutomationDraftInput } from "./production-automation-input";
 import { LocalIntakeFormV2 } from "@clay/schema/intake";
 import { assertIntakeCommandSource, assertIntakeResponsePublic } from "./production-intake-boundary";
@@ -2072,13 +2073,14 @@ export class ProductionMutationCoordinator {
       } catch { /* disposable snapshot */ }
     }
 
-    if (!shadowChanged)
-      return this.#executeNoOp(
+    const execute = () => !shadowChanged
+      ? this.#executeNoOp(
         request, expected, expectedCatalogGeneration, shadowResult,
+      ) : this.#executeMeaningful(
+        request, expected, expectedCatalogGeneration, executionInstant, operationId,
       );
-    return this.#executeMeaningful(
-      request, expected, expectedCatalogGeneration, executionInstant, operationId,
-    );
+    return requiresAutomationPhysicalTransaction(request.route)
+      ? withAutomationPhysicalTransaction(this.#driver, execute) : execute();
   }
 
   async #executeOperationalCaptured(

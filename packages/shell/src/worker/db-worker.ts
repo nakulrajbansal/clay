@@ -51,6 +51,7 @@ export type DeviceProtectionProjection = Readonly<{
   result: DeviceStateResult;
   target: TargetIdentityV1 | null;
   checkpoint: CheckpointObservation;
+  storageQuarantine?: Readonly<{ slots: number }>;
 }>;
 
 type Request = {
@@ -1000,7 +1001,7 @@ async function deviceProtection(): Promise<DeviceProtectionProjection> {
     target,
     checkpoint,
   });
-  return Object.freeze({ result: Object.freeze(result), target, checkpoint: Object.freeze(checkpoint) });
+  return Object.freeze({ result: Object.freeze(result), target, checkpoint: Object.freeze(checkpoint), storageQuarantine: await mustAuthority().storageQuarantine() });
 }
 
 async function executePipelineText(text: string, plannerPort: MessagePort): Promise<IntentOutcome> {
@@ -1359,6 +1360,8 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       return runAuthorityMutation("intakeCommand", rawPayload, req);
     case "intakePresentation":
       return mustAuthority().intakePresentation();
+    case "intakeOwnerWitness":
+      return mustAuthority().intakeOwnerWitness(rawPayload);
     case "automationPresentation":
       return mustAuthority().automationPresentation();
     case "dailyInboxAction":

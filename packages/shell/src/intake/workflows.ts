@@ -9,6 +9,7 @@ export type IntakeWorkflowRecord = { schema: 1; key: string; shellOrigin: string
 export interface IntakeWorkflows {
   read(key: string): Promise<IntakeWorkflowRecord | null>;
   compareAndSet(before: IntakeWorkflowRecord | null, after: IntakeWorkflowRecord): Promise<void>;
+  listKeys?(shellOrigin: string): Promise<string[]>;
 }
 export class UnfencedIntakeWorkflowError extends Error {
   constructor() { super("Legacy cache-only intake workflow is unfenced. Original work is quarantined until safe owner adoption is available; nothing was discarded."); }
@@ -33,7 +34,7 @@ function parse(input: unknown): IntakeWorkflowRecord {
     if (legacyOriginal) {
       if ("formId" in legacyOriginal && "formId" in job) {
         if (!job.termination || !same({ ...legacyOriginal, termination: null }, { ...job, termination: null })
-            || (job.termination.complete && !job.termination.authorityClosure)) throw new Error();
+            || (job.termination.complete && !job.termination.authorityClosure && !job.termination.deletedOwner)) throw new Error();
         // Independent schema validity does not prove that adoption preserved an
         // already-retained original closure. Validate the entire monotonic
         // termination history on physical readback, not only on new CAS writes.
@@ -65,7 +66,7 @@ function assertClosureHistory(a: IntakePublicationJobV1, b: IntakePublicationJob
   if (next.length < prior.length || (singleAppend && next.length > prior.length + 1) || !same(prior, next.slice(0, prior.length))
       || ((a.termination?.complete || a.termination?.closureReceipt) && !same(prior, next)))
     throw new Error("Original closure renewal history is immutable");
-  for (const proof of ["closureReceipt", "relayTerminal"] as const)
+  for (const proof of ["closureReceipt", "relayTerminal", "deletedOwner"] as const)
     if (a.termination?.[proof] && !same(a.termination[proof], b.termination?.[proof])) throw new Error("Original closure proof is immutable");
 }
 function transition(before: IntakeWorkflowRecord | null, after: IntakeWorkflowRecord): void {
@@ -119,6 +120,29 @@ export class IndexedDbIntakeWorkflows implements IntakeWorkflows {
       request.onsuccess = () => { result = request.result; };
       tx.onerror = tx.onabort = () => reject(new Error("Intake workflow read failed"));
       tx.oncomplete = () => { try { const row = result === undefined ? null : parse(result); if (row && row.key !== key) throw new Error(); resolve(row); } catch { reject(new Error("Intake workflow readback is invalid")); } };
+    }); } finally { db.close(); }
+  }
+  /** A bounded public-key inventory; callers read at most one small page of
+   * closed records. This never lists or reads the separate private owner vault. */
+  async listKeys(shellOrigin: string): Promise<string[]> {
+    const db = await this.open();
+    try { return await new Promise((resolve, reject) => {
+      const tx = db.transaction("workflows", "readonly"), store = tx.objectStore("workflows");
+      const keys = store.getAllKeys(undefined, 1001), count = store.count();
+      tx.onerror = tx.onabort = () => reject(new Error("Intake workflow inventory is unavailable"));
+      tx.oncomplete = () => { try {
+        if (count.result > 1000 || keys.result.length !== count.result || new Set(keys.result).size !== keys.result.length) throw new Error();
+        const result: string[] = [];
+        for (const key of keys.result) {
+          if (typeof key !== "string" || key.length > 500) throw new Error();
+          const value = JSON.parse(key);
+          if (!Array.isArray(value) || value.length !== 4 || value[0] !== 1 || typeof value[1] !== "string"
+              || new URL(value[1]).origin !== value[1] || !/^app_[a-z2-7]{26}$/.test(value[2]) || !["publication", "revocation"].includes(value[3])
+              || keyFor(value[1], value[2], value[3]) !== key) throw new Error();
+          if (value[1] === shellOrigin) result.push(key);
+        }
+        resolve(result.sort());
+      } catch { reject(new Error("Intake workflow inventory identity is invalid; originals were kept")); } };
     }); } finally { db.close(); }
   }
   async compareAndSet(beforeInput: IntakeWorkflowRecord | null, afterInput: IntakeWorkflowRecord): Promise<void> {
@@ -205,6 +229,10 @@ export class IntakeWorkflowSlot<K extends Kind> {
     this.record = after; this.cache.setItem(this.cacheKey, JSON.stringify(after.job));
   }
   requiresAuthorityClosure(): boolean { return !!this.record?.legacyOriginal; }
+  closedJob(): Jobs[K] | null {
+    if (!this.loaded) throw new Error("Read the original workflow before its terminal evidence");
+    return this.record?.closed ? structuredClone(this.record.job) as Jobs[K] : null;
+  }
   async finish(): Promise<void> {
     if (!this.record || !terminal(this.record.job)) throw new Error("Intake workflow is not complete or terminal");
     const after = { ...this.record, closed: true };

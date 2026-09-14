@@ -6,10 +6,23 @@ import { executeAutomationIntent, editableAutomation } from "../src/app/automati
 import { runRetainedAutomationTick } from "../src/app/automation-tick";
 import type { AutomationCommandPayloadV1 } from "@clay/schema/catalog";
 import type { AutomationDefinitionV2, AutomationExecutionResultV1 } from "@clay/kernel";
+import { initializedSahpool, OwnedSahDirectory } from "../../kernel/test/helpers/owned-sahpool";
+import { recoverIntakeWorkflows } from "../src/intake/workflows";
+import { createRequire } from "node:module";
 
-it("executes source-bound automation drafts, preview, enable, pause, edit, run, notification and Undo through the real worker", async () => {
+it.each(["memory", "owned_sahpool"])("executes source-bound automation drafts, preview, enable, pause, edit, run, notification and Undo through the real worker (%s)", async physical => {
   vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-09-13T12:00:00.000Z"));
-  const files = ownedBrowserStorage(); let drop = false; let dropped = false;
+  let files: { close(): void | Promise<void> };
+  if (physical === "memory") files = ownedBrowserStorage();
+  else {
+    const sqlite = await initializedSahpool(new OwnedSahDirectory());
+    // sqlite-wasm is a kernel dependency, not a shell dependency. Resolve the
+    // installed module actually imported by db.ts, not an unresolvable shell ID.
+    const module = createRequire(new URL("../../kernel/package.json", import.meta.url)).resolve("@sqlite.org/sqlite-wasm");
+    vi.resetModules(); vi.doMock(module, () => ({ default: async () => sqlite }));
+    files = { close: async () => { (await sqlite.installOpfsSAHPoolVfs()).pauseVfs(); vi.doUnmock(module); vi.resetModules(); } };
+  }
+  let drop = false; let dropped = false;
   const sent: Array<{ id: number; op: string; requestId?: string }> = [];
   const scope = { onmessage: null as ((event: MessageEvent) => void) | null, postMessage: (data: { id: number; ok: boolean }) => {
     if (drop && data.ok && sent.slice().reverse().find(row => row.id === data.id)?.op === "automationCommand") { drop = false; dropped = true; return; }
@@ -20,6 +33,10 @@ it("executes source-bound automation drafts, preview, enable, pause, edit, run, 
   vi.stubGlobal("self", scope); let client = new WorkerClient(transport as unknown as Worker);
   const values = new Map<string, string>(); const cache = { getItem: (key: string) => values.get(key) ?? null,
     setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } };
+  // The scheduler must obtain a trusted-shell ledger read even for an empty,
+  // disposable fixture. Never bypass the default-denied intake deferral.
+  const recoverIntake = (app: string) => recoverIntakeWorkflows(cache, "https://owned.invalid", app,
+    { read: async () => null, compareAndSet: async () => { throw new Error("No intake writes in this fixture"); } });
   const command = async <T>(route: AutomationCommandPayloadV1["command"]["route"], payload: unknown): Promise<T> => {
     const read = await client.automationPresentation();
     const intent = beginPresentationIntent(cache, read.authorityTarget.appInstanceId, "automation", "automation.command",
@@ -32,7 +49,7 @@ it("executes source-bound automation drafts, preview, enable, pause, edit, run, 
     await client.seed("tracker", client.createMutationContext());
     const table = (await client.registryTables()).find(row => row.name === "items")!;
     await client.quickCapture("items", { name: "Owned automation row", status: "todo" }, table.semantic!.tableId, client.createMutationContext(), boot.selectedAppInstanceId);
-    const read = await client.automationPresentation(); expect(read.availability.available).toBe(true); // owned in-memory driver, NOT an OPFS certificate
+    const read = await client.automationPresentation(); expect(read.availability.available).toBe(true); // Owned fixtures, NOT a physical browser certificate.
     const field = (name: string) => ({ tableId: table.semantic!.tableId, fieldId: table.columns.find(row => row.name === name)!.semantic!.fieldId, lastKnownName: name });
     drop = true;
     const lost = command<AutomationDefinitionV2>("saveAutomationDraft", { expectedRevision: null, input: { v: 2, name: "Two actions",
@@ -70,13 +87,13 @@ it("executes source-bound automation drafts, preview, enable, pause, edit, run, 
     recipe = await command("enableAutomation", { id: recipe.id, expectedRevision: recipe.definitionRevision,
       simulation: await client.simulateAutomation(recipe.id, recipe.definitionRevision, "enable") });
     vi.setSystemTime(new Date("2026-09-13T12:01:00.000Z")); drop = true; dropped = false;
-    const lostTick = runRetainedAutomationTick(cache, client, boot.selectedAppInstanceId).catch(error => error);
+    const lostTick = runRetainedAutomationTick(cache, client, boot.selectedAppInstanceId, () => recoverIntake(boot.selectedAppInstanceId)).catch(error => error);
     await vi.waitFor(() => expect(dropped).toBe(true));
     client = new WorkerClient(transport as unknown as Worker); expect(await lostTick).toMatchObject({ message: expect.stringContaining("outcome is unknown") });
     await client.boot({ requestedAppId: null, appCache: [] });
-    const recoveredTick = await runRetainedAutomationTick(cache, client, boot.selectedAppInstanceId);
+    const recoveredTick = await runRetainedAutomationTick(cache, client, boot.selectedAppInstanceId, () => recoverIntake(boot.selectedAppInstanceId));
     expect(recoveredTick.runs).toMatchObject([{ automationId: recipe.id, changed: 1 }]);
-    expect((await runRetainedAutomationTick(cache, client, boot.selectedAppInstanceId)).runs).toEqual([]);
+    expect((await runRetainedAutomationTick(cache, client, boot.selectedAppInstanceId, () => recoverIntake(boot.selectedAppInstanceId))).runs).toEqual([]);
     expect(await client.automationRuns(recipe.id)).toHaveLength(1);
     const stale = await client.automationPresentation();
     await command("deleteAutomation", { id: rule.id });
@@ -86,5 +103,5 @@ it("executes source-bound automation drafts, preview, enable, pause, edit, run, 
     client = new WorkerClient(transport as unknown as Worker); await client.boot({ requestedAppId: null, appCache: [] });
     expect(await client.automationRuns(rule.id)).toHaveLength(2);
     expect(sent.filter(row => row.op === "automationCommand" && row.requestId === original.requestId)).toHaveLength(1);
-  } finally { await client.shutdown().catch(() => {}); files.close(); vi.unstubAllGlobals(); vi.useRealTimers(); }
+  } finally { await client.shutdown().catch(() => {}); await files.close(); vi.unstubAllGlobals(); vi.useRealTimers(); }
 }, 60_000);

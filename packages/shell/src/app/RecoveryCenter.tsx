@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import type { BatchReceipt, HistoryEntry } from "@clay/kernel";
 import {
   parseAuthenticatedFormat5RestoreGrant,
@@ -50,6 +50,8 @@ export type RecoveryCenterProps = {
   /** Exact worker-owned identity. Null keeps restore fail-closed. */
   authoritativeAppInstanceId: string | null;
   opfsAvailable: boolean;
+  quarantinedStorageSlots?: number;
+  ownerRecovery?: ReactNode;
   backupTrustStatus: BackupTrustRuntimeStatus | null;
   backupAdapterStatus: "loading" | "available" | "unavailable" | "error";
   backupTarget: RecoveryBackupTarget | null;
@@ -273,6 +275,7 @@ export function RecoveryCenter(props: RecoveryCenterProps): React.JSX.Element {
 
       <div className="shape-column" style={{ overflowY: "auto", minHeight: 0 }}
         role="region" aria-label="Recovery Center details" tabIndex={0}>
+        {props.ownerRecovery}
         <section aria-labelledby="recovery-kit-title">
           <h3 id="recovery-kit-title">Recovery Kit</h3>
           <p>{trustMessage}</p>
@@ -333,6 +336,10 @@ export function RecoveryCenter(props: RecoveryCenterProps): React.JSX.Element {
 
         <section aria-labelledby="recovery-target-title">
           <h3 id="recovery-target-title">Protection target</h3>
+          {(props.quarantinedStorageSlots ?? 0) > 0 ? <p role="alert">
+            Some device storage has an uncertain identity and is quarantined. Its bytes were kept and will not be reused.
+            Current-app backups do not include this quarantined storage. No replacement or deletion is offered here.
+          </p> : null}
           <dl>
             <div><dt>Current app</dt><dd>{props.opfsAvailable
               ? props.lastVerifiedBackup && props.backupTarget

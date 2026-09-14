@@ -93,6 +93,16 @@ const button = (name: string): HTMLButtonElement => {
   return match;
 };
 
+it("shows preserved storage quarantine without claiming that current-app backups include it", async () => {
+  const { root } = await mount({ ...baseProps(), quarantinedStorageSlots: 2 });
+  try {
+    const warning = document.querySelector('[aria-label="Recovery Center details"] [role="alert"]');
+    expect(warning?.textContent).toContain("uncertain identity and is quarantined");
+    expect(warning?.textContent).toContain("Current-app backups do not include this quarantined storage");
+    expect(warning?.textContent).toContain("No replacement or deletion is offered here");
+  } finally { await act(async () => root.unmount()); }
+});
+
 it("distinguishes publication validation from availability and exposes exact quarantined retention retry", async () => {
   const retry = vi.fn(async () => {});
   const scope = { appInstanceId: otherAppInstanceId, targetId: id("tgt", "g"), adapterCertificationId: id("btc", "h") };

@@ -4,7 +4,7 @@ import type {
   AutomationRunNowRequestV1, AutomationSimulationProofV1, AutomationTargetIdentityV1,
 } from "./automation-v2";
 import { ClayStore } from "./store";
-import type { AutomationPhysicalTransactionCapability } from "./db";
+import { automationPhysicalTransactionAvailable, type AutomationPhysicalTransactionCapability } from "./db";
 
 export type AutomationObserverAuthorityRoute =
   | "upsertAutomation"
@@ -55,6 +55,10 @@ const AUTOMATION_MUTATION_ROUTES = new Set<AutomationObserverAuthorityRoute>([
   "runAutomationNow", "undoAutomationRun", "markNotificationRead",
 ]);
 
+export function requiresAutomationPhysicalTransaction(route: string): boolean {
+  return route === "automation.command" || AUTOMATION_MUTATION_ROUTES.has(route as AutomationObserverAuthorityRoute);
+}
+
 function automationInstant(instant: string | null): Date {
   if (instant === null)
     throw new ClayError("E_TARGET_AUTHORITY_INVALID", "trusted automation instant is unavailable");
@@ -71,10 +75,9 @@ export function executeAutomationObserverAuthorityRoute(
   transactionCapability: AutomationPhysicalTransactionCapability,
 ): unknown {
   if (AUTOMATION_MUTATION_ROUTES.has(route)
-      && (transactionCapability.kind !== "test_memory"
-        || transactionCapability.releaseCertificate !== true))
+      && !automationPhysicalTransactionAvailable(transactionCapability))
     throw new ClayError("E_CATALOG_UNAVAILABLE",
-      "automation mutation is unavailable: release-bound physical transaction is uncertified");
+      "automation mutation is unavailable: physical transaction recovery prerequisites are unproven");
   switch (route) {
     case "upsertAutomation": {
       const saved = STORE_UPSERT_AUTOMATION.call(

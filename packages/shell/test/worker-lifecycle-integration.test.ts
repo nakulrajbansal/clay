@@ -8,13 +8,16 @@ import { StoreRpcClient, portFromMessagePort } from "../../kernel/src/asyncstore
 
 /** Real SQLite + real WorkerClient + real db-worker + real ProductionStoreAuthority.
  * Only browser file acquisition and the message transport are substituted. This
- * is not OPFS/browser certification; the owned packaged gate covers that seam. */
+ * is not OPFS/browser certification; the deferred packaged gate must cover that seam. */
 it("executes isolated lifecycle and receipt-bound first-run import through the real worker protocol", async () => {
   const catalogFile = `/p0-worker-catalog-${crypto.randomUUID()}.db`;
   const targets = new Map<string, db.DbDriver>();
   const names = new Set<string>();
   const closers: Array<() => void> = [];
   const ports: MessagePort[] = [];
+  // This fixture supplies memory databases, not SAHPool protocol handles. Native
+  // recovery is exercised separately by the owned browser-WASM worker journey.
+  vi.spyOn(db, "recoverBrowserNativeJournals").mockResolvedValue();
   let fault: "partial-create" | "partial-unlink" | "retain-cleanup" | null = null;
   let unreadableApp: string | null = null;
   const sysAuthority = ["state_digest_leaves", "state_digest_buckets", "state_digest_root",

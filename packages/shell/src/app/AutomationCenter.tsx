@@ -927,10 +927,10 @@ export function AutomationCenter(props: {
 
       {reviewed && !reviewed.availability.available ? <div className="automation-unavailable" role="status">
         <strong>Automation changes are unavailable.</strong>
-        <span>This storage adapter lacks the required physical-transaction certificate. Draft preparation and readback are available; durable automation actions stay closed. No off-device runtime is implied.</span>
+        <span>This storage connection does not meet safe recovery prerequisites. Automated writes require exclusive file access, an intact catalog and usable database/journal files within the 32,000,000-byte recovery bound. Larger data is kept unchanged. Draft preparation and readback remain available; nothing runs off-device.</span>
       </div> : null}
       {recoveryError ? <p role="alert">Automation recovery is unavailable: {recoveryError}. The retained state was kept.</p> : null}
-      {props.schedulerWaitReason && props.schedulerWaitReason !== "physical_transaction_uncertified" ?
+      {props.schedulerWaitReason && props.schedulerWaitReason !== "physical_recovery_unavailable" ?
         <p role="status">Scheduled checks are waiting for a retained review, draft, or Undo to be reconciled. Nothing runs off-device.</p> : null}
       {pending ? <section className="automation-unavailable" role="status"><strong>An immutable automation request needs reconciliation.</strong>
         <small>Request {pending.requestId}</small>

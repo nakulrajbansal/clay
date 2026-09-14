@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TargetEvidenceV1, PresentationIntentV1, IntakeCommandPayloadV1 } from "./catalog";
 import { IntakeFormId, IntakePublicationProposalV1, LocalIntakeFormV2, IntakeRelayTerminalResultV1, IntakePublicationClosureV1 } from "./intake";
 import { RequestId } from "./index";
+import { IntakeOwnerWitnessV1 } from "./owner-witness";
 
 /** Public-only presentation cache. Not a worker command or a custody record. */
 export const IntakePublicationJobV1 = z.object({ schema: z.literal(1), formId: IntakeFormId, source: TargetEvidenceV1,
@@ -13,6 +14,7 @@ export const IntakePublicationJobV1 = z.object({ schema: z.literal(1), formId: I
     renewals: z.array(z.object({ previousRequestId: RequestId, terminalStatus: z.enum(["cancelled", "failed"]),
       relay: IntakeRelayTerminalResultV1, intent: PresentationIntentV1 }).strict()).max(8).optional(),
     closureReceipt: z.object({ requestId: RequestId, result: IntakePublicationClosureV1, target: TargetEvidenceV1 }).strict().optional(),
+    deletedOwner: IntakeOwnerWitnessV1.optional(),
     relayTerminal: IntakeRelayTerminalResultV1.optional() }).strict().optional(),
 }).strict().superRefine((job, context) => {
     const invalid = () => context.addIssue({ code: "custom", message: "Retained intake publication identity or transition is inconsistent" });
@@ -72,6 +74,12 @@ export const IntakePublicationJobV1 = z.object({ schema: z.literal(1), formId: I
         || identity(termination.closureReceipt.target) !== identity(job.source)
         || JSON.stringify(termination.closureReceipt.result.form) !== JSON.stringify(originalClosureForm))) invalid();
     if (termination?.relayTerminal && !relayMatches(termination.relayTerminal)) invalid();
+    if (termination?.deletedOwner) {
+      const witness = termination.deletedOwner;
+      if (witness.status !== "deleted" || !draft || witness.claim.requestId !== job.save?.requestId
+          || JSON.stringify(witness.claim.source) !== JSON.stringify(job.source) || JSON.stringify(witness.claim.form) !== JSON.stringify(draft)
+          || (termination.complete && !termination.relayTerminal)) invalid();
+    }
   });
 export type IntakePublicationJobV1 = z.infer<typeof IntakePublicationJobV1>;
 export const IntakeRevocationJobV1 = z.object({ schema: z.literal(1), form: LocalIntakeFormV2,

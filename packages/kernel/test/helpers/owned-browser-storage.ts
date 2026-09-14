@@ -11,6 +11,9 @@ export function ownedBrowserStorage() {
   const names = new Set<string>();
   const closers: Array<() => void> = [];
   const state = { fault: null as "create" | "install" | "unlink" | null, unlinked: [] as string[] };
+  // This fixture substitutes memory SQLite, not production SAHPool or native
+  // durability. Its tests must not claim the production recovery capability.
+  vi.spyOn(db, "recoverBrowserNativeJournals").mockResolvedValue();
   const authorityTables = ["state_digest_leaves", "state_digest_buckets", "state_digest_root",
     "target_authority_header", "target_revision_reservations", "production_request_receipts"];
   const open = async (key?: string) => {

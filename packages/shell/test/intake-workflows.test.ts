@@ -64,3 +64,14 @@ it("does not grant a durable invocation fence to an old cache-only workflow that
   await expect(slot.recover()).rejects.toThrow(/legacy|Legacy|unfenced/);
   expect(cached.getItem(slot.cacheKey) === raw).toBe(true); expect(await store.read(slot.key)).toBeNull();
 });
+
+it("lists only closed public workflow keys for this origin, rejects unknown physical keys, and never opens owner custody", async () => {
+  const factory = new OwnedFactory(), store = new IndexedDbIntakeWorkflows(factory as unknown as IDBFactory);
+  const slot = new IntakeWorkflowSlot(store, cache(), origin, app, "publication"); await slot.recover(); await slot.persist(job);
+  expect(typeof store.listKeys).toBe("function");
+  expect(await store.listKeys(origin)).toEqual([slot.key]);
+  expect(await store.listKeys("https://different.example")).toEqual([]);
+  factory.rows.set("unexplained-physical-row", { schema: 999 });
+  await expect(store.listKeys(origin)).rejects.toThrow(/inventory|identity/);
+  expect(factory.rows.has("unexplained-physical-row")).toBe(true);
+});

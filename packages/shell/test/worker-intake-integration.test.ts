@@ -103,7 +103,12 @@ it("executes custody publication, delivery loss, partial attachments, review/Und
     expect(await lost).toMatchObject({ message: expect.stringContaining("outcome is unknown") });
     await client.boot({ requestedAppId: null, appCache: [] }); session = await openSession();
     publication = new IntakePublication(session, vault, config, fetchImpl, workflows);
-    const published = await publication.resume(); await publication.finish(); expect(published.localForm.publicForm.formId).toBe(formId);
+    const published = await publication.resume();
+    const savedOwnerJob = publication.pending()!;
+    const ownerWitnessClaim = { schema: 1 as const, source: savedOwnerJob.source, requestId: savedOwnerJob.save!.requestId,
+      form: (savedOwnerJob.save!.payload.command as any).payload.form };
+    expect(await client.intakeOwnerWitness(ownerWitnessClaim)).toMatchObject({ status: "live", claim: ownerWitnessClaim });
+    await publication.finish(); expect(published.localForm.publicForm.formId).toBe(formId);
     let owner = new IntakeOwnerClient(session, vault, config, fetchImpl, workflows);
     const hydrated = await owner.hydrate(published.localForm);
     const bytes = new TextEncoder().encode("Owned passive file");

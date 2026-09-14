@@ -7,6 +7,7 @@ import { executeIntakeIntent, IntakeSession } from "./session";
 import { boundedRelayJson } from "../app/bounded-relay-response";
 import { IndexedDbIntakeWorkflows, IntakeWorkflowSlot, UnfencedIntakeWorkflowError, type IntakeWorkflows } from "./workflows";
 import { intakeRegistration, terminalizeIntakeRelay } from "./relay-terminal";
+import { IntakeOwnerClaimV1, IntakeOwnerWitnessV1 } from "@clay/schema/owner-witness";
 
 type FetchLike = typeof fetch;
 const activeClosure = (job: Job) => job.termination?.renewals?.at(-1)?.intent ?? job.termination?.authorityClosure;
@@ -114,6 +115,45 @@ export class IntakePublication {
   async finish(): Promise<void> {
     const job = this.pending(); if (!job?.complete) throw new Error("Intake publication is not reconciled");
     await this.workflow.finish(); if (this.pending()) throw new Error("Intake publication cleanup needs retry");
+  }
+  /** A completed original catalog deletion permanently excludes every delayed
+   * source-bound invocation, including unknown old IDs. It does not assert that
+   * a missing invocation never ran, modify local terminal metadata, or authorize
+   * another app. Exact relay tombstone and existing original custody are also
+   * mandatory. Only public proof enters this retained ledger. */
+  async closeDeletedOriginal(reviewedInput: IntakeOwnerWitnessV1): Promise<void> {
+    const reviewed = IntakeOwnerWitnessV1.parse(reviewedInput);
+    if (reviewed.status !== "deleted") throw new Error("Exact deleted original owner retirement proof is required");
+    await this.recover();
+    let job = this.pending(); const closed = job ? null : this.workflow.closedJob();
+    job ??= closed;
+    if (!job?.save || (closed && !closed.termination?.deletedOwner)) throw new Error("Original deletion recovery invocation is unavailable; work was kept");
+    const claim = IntakeOwnerClaimV1.parse({ schema: 1, source: job.source, requestId: job.save.requestId,
+      form: IntakeCommandPayloadV1.parse(job.save.payload).command.payload.form });
+    // Catalog generation may advance for another app or a lease. Every owner,
+    // request, response and permanent deletion identity must remain identical.
+    const immutable = (proof: IntakeOwnerWitnessV1) => JSON.stringify({ ...proof, catalogGeneration: "0" });
+    const prove = async () => {
+      const proof = IntakeOwnerWitnessV1.parse(await this.session.worker.intakeOwnerWitness(claim));
+      if (proof.status !== "deleted" || JSON.stringify(reviewed.claim) !== JSON.stringify(claim)
+          || immutable(proof) !== immutable(reviewed)
+          || (job!.termination?.deletedOwner && immutable(job!.termination.deletedOwner) !== immutable(proof)))
+        throw new Error("Reviewed original deletion identity changed; custody and requests were kept");
+      return proof;
+    };
+    await prove();
+    if (closed) return; // Exact durable close readback, never mere absence.
+    if (!job.termination?.deletedOwner) job = await this.persist({ ...job,
+      termination: { ...(job.termination ?? { requestedAt: new Date().toISOString(), complete: false }), deletedOwner: reviewed } });
+    const draft = await recoverIntakeOwnerForm(job.source, job.formId, this.configuration.shellOrigin, this.configuration.relayBaseUrl, this.vault);
+    if (JSON.stringify(draft) !== JSON.stringify(claim.form)) throw new Error("Original custody differs from its creation witness; work was kept");
+    const hydrated = await hydrateIntakeOwnerForm(draft, job.source, this.configuration.shellOrigin, this.vault);
+    const relay = await terminalizeIntakeRelay(hydrated, this.configuration.relayBaseUrl, this.fetchImpl);
+    await prove();
+    if (job.termination!.relayTerminal && JSON.stringify(job.termination!.relayTerminal) !== JSON.stringify(relay))
+      throw new Error("Original relay terminal identity changed; all identities were kept");
+    job = await this.persist({ ...job, termination: { ...job.termination!, relayTerminal: relay, complete: true } });
+    await this.workflow.finish();
   }
   /** Explicit owner recovery for public cache-only V2 work. It is never adopted
    * as resumable publication. Private V1 rows/receipts remain a separate boundary. */

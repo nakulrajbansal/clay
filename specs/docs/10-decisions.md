@@ -1522,3 +1522,73 @@ ADR-067 (2026-09-13) Retained closure renewal and preserving native initializati
   Merkle readback and runtime capability remain CODE work. No automation guard,
   archive authentication, private legacy quarantine or frozen budget is weakened.
   Physical browser certification and the integrated campaign remain deferred.
+
+ADR-068 (2026-09-13) Public original-owner witness and completed-source deletion.
+  CONTEXT: Current selection, copied semantic IDs, URL/key possession and missing
+  files cannot prove original ownership or exclude delayed publication. Historical
+  request responses can also contain private values and cannot become ordinary
+  worker readback. ADR-065/067 closure and renewal chains must remain immutable.
+  DECISION: Add the closed public intakeOwnerWitness read. It accepts an original
+  V2 creation invocation, not private or source-free V1 state. Validate the closed
+  catalog, original generation/lineage, route-anchored operation ID, exact public
+  request/response fingerprints and committed reservation metadata. Select only
+  explicit receipt metadata columns, never response_json. On the original live
+  target validate both mirrors; otherwise validate retained original catalog
+  history. Live/history_only proof grants no local terminal claim. Deleted proof
+  additionally requires the exact schema-2 completed deletion receipt, tombstoned
+  original generation and operation/request identity, not unfinished cleanup.
+  Recovery Center lists bounded public workflow keys independently of selected
+  app and requires explicit review. For a proven deleted original publication,
+  persist/read back that immutable proof before accessing existing original shell
+  custody. Verify original key/definition readback; mint nothing. Authenticate the
+  exact relay tombstone, recheck original owner/deletion evidence, then close the
+  public workflow ledger. Preserve every original request, prior closure/renewal,
+  receipt, public metadata and private custody record. Permanent catalog deletion
+  excludes delayed original-source DB commands; the relay tombstone excludes late
+  HTTP publication. Neither is inferred from absence. Copied apps gain no keys.
+  CONSEQUENCE: This is NOT sealed private legacy adoption. V1 with no original
+  witness, private/malformed historical envelopes, old source-free sharing receipts,
+  missing custody and unproven generation loss stay quarantined/export-denied.
+  No private value is transported through WorkerClient or copied into an archive.
+  Current active-form revoke/closure behavior remains unchanged. Physical browser
+  and end-to-end release certification are still deferred.
+
+ADR-069 (2026-09-13) Catalog-proven native preflight and bounded runtime capability.
+  CONTEXT: ADR-066/067 deliberately kept production recovery closed: a hot catalog
+  cannot establish ownership before its own native rollback, and cleared SAHPool
+  association headers can retain old payload which the SDK would otherwise reuse.
+  DECISION: Immediately after preserving initialization, install the scoped native
+  adapter BEFORE any main handle opens. Under lifecycle physical exclusion, retain
+  the original exclusive SAHs and snapshot a bounded exact-path private corpus.
+  Run SQLite's own rollback on a disposable private VFS first. Validate the original
+  catalog schema/history (including the exact pre-retention-migration schema), all
+  physical pending rows, catalog-owned active target tuples and their canonical /
+  Merkle state. Never derive owner authority from filenames or journal membership.
+  Revalidate original held bytes before granting only that tuple's real rollback.
+  Then revalidate the real original catalog and every active target against the
+  independently proved shadow. Only afterward run migration and fenced restore /
+  lifecycle recovery and ordinary strict boot classification. Any failure poisons
+  native recovery until worker reopen. Raw catalog/target opens retain their
+  pre-SQL journal barrier; reserved-lock correction is scoped, never global.
+  Malformed/torn or cleared associations with retained payload are quarantined
+  under their original handles, not exposed to SDK capacity/reuse. Duplicate valid
+  associations, I/O/handle uncertainty and pre-existing VFS still fail closed. If
+  the original catalog might be quarantined, do not mint a replacement catalog.
+  Recovery Center exposes only quarantine counts and explicitly excludes these
+  unidentified bytes from current-app backup claims.
+  After closed all-target boot proof, an unforgeable connection-bound runtime grant
+  may enable automation. Recheck original handles, coordinator readiness, exact
+  main/sys/catalog topology, DELETE journaling and FULL-or-higher synchronous mode
+  on each use. The grant is NOT a release certificate. Cap the private shadow corpus
+  at 64,000,000 bytes and guarded automation I/O at 32,000,000 bytes, reserving room
+  for native rollback while original journals remain. The synchronous scope spans
+  reservation/invocation/commit/rollback and checks EVERY original SAH write and
+  truncate before I/O, including cache spill and journal growth. Larger existing
+  data is kept unchanged and the runtime control stays unavailable; this is not
+  a truncation policy or a change to frozen bundle budgets. Normal user actions do
+  not acquire this automation I/O scope. No async work can escape the scope.
+  CONSEQUENCE: Installed browser-WASM/SAHPool owned-handle faults and real worker
+  journeys exercise production code, not a substituted memory certificate. They
+  remain development feedback, not OS/browser durability or release certification.
+  Unexplained/legacy-unadopted tuples and out-of-bound recovery remain fail-closed;
+  no repair, deletion or reuse is invented to obtain a green runtime flag.

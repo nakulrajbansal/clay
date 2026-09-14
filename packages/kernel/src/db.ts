@@ -10,7 +10,8 @@ import {
 } from "./durable-inventory";
 import { ClayError } from "./errors";
 import { inboxDispositionTablePresent, createInboxDispositionTable, readInboxDispositions } from "./inbox-dispositions";
-import { initializePreservingSahpool, assertPreservedSahpoolHandles } from "./sahpool-initialization";
+import { initializePreservingSahpool, assertPreservedSahpoolHandles, preservedSahpoolQuarantine,
+  assertSahpoolAutomationCapacity, withBoundedSahpoolAutomation } from "./sahpool-initialization";
 
 export type SqlValue = string | number | bigint | Uint8Array | null;
 export type SqlRow = Record<string, SqlValue>;
@@ -29,17 +30,41 @@ export interface DbDriver {
 
 export type AutomationPhysicalTransactionCapability = Readonly<
   | { kind: "test_memory"; releaseCertificate: true }
+  | { kind: "opfs_native_recovery"; releaseCertificate: false }
   | { kind: "unavailable"; releaseCertificate: false }
 >;
 
 const AUTOMATION_TRANSACTION_CAPABILITIES =
   new WeakMap<object, AutomationPhysicalTransactionCapability>();
+const NATIVE_AUTOMATION_GRANTS = new WeakMap<object, () => void>();
+const NATIVE_CONNECTIONS = new WeakMap<object, { db: Database; sqlite: Sqlite3Static; pool: PoolUtil; files: Readonly<Record<string, string>> }>();
+
+/** A serialized label is never a physical grant. Only the actual connection's
+ * private prerequisite check can satisfy the production branch, on every use. */
+export function automationPhysicalTransactionAvailable(capability: AutomationPhysicalTransactionCapability): boolean {
+  if (capability.kind === "test_memory" && capability.releaseCertificate) return true;
+  const check = NATIVE_AUTOMATION_GRANTS.get(capability);
+  if (!check || capability.kind !== "opfs_native_recovery") return false;
+  try { check(); return true; } catch { return false; }
+}
 
 export function automationPhysicalTransactionCapability(
   driver: DbDriver,
 ): AutomationPhysicalTransactionCapability {
   return AUTOMATION_TRANSACTION_CAPABILITIES.get(driver)
     ?? Object.freeze({ kind: "unavailable", releaseCertificate: false });
+}
+
+/** The route coordinator supplies only synchronous authority-owned work. A
+ * serialized kind or a disposable shadow cannot install a durable I/O scope. */
+export function withAutomationPhysicalTransaction<T>(driver: DbDriver, work: () => T): T {
+  const capability = automationPhysicalTransactionCapability(driver);
+  if (!automationPhysicalTransactionAvailable(capability))
+    throw new ClayError("E_CATALOG_UNAVAILABLE", "Automation physical recovery prerequisites are unavailable");
+  if (capability.kind === "test_memory") return work();
+  const connection = NATIVE_CONNECTIONS.get(driver);
+  if (!connection) throw new ClayError("E_CATALOG_UNAVAILABLE", "Original automation connection is unavailable");
+  return withBoundedSahpoolAutomation(connection.sqlite, connection.pool, work);
 }
 
 export function inheritAutomationPhysicalTransactionCapability(
@@ -50,13 +75,14 @@ export function inheritAutomationPhysicalTransactionCapability(
     target,
     automationPhysicalTransactionCapability(source),
   );
+  const connection = NATIVE_CONNECTIONS.get(source); if (connection) NATIVE_CONNECTIONS.set(target, connection);
 }
 
 function markAutomationTransactionCapability(
   driver: DbDriver,
   capability: AutomationPhysicalTransactionCapability,
 ): DbDriver {
-  AUTOMATION_TRANSACTION_CAPABILITIES.set(driver, Object.freeze({ ...capability }));
+  AUTOMATION_TRANSACTION_CAPABILITIES.set(driver, capability.kind === "opfs_native_recovery" ? capability : Object.freeze({ ...capability }));
   return driver;
 }
 
@@ -578,6 +604,9 @@ type PoolUtil = {
 };
 let activePool: PoolUtil | null = null;
 let strictPoolPromise: Promise<PoolUtil> | null = null;
+let nativeRecovery: { recover(): void; assertReady(): void } | null = null;
+let nativeBootRecovery: Promise<void> | null = null;
+let nativeBootReady = false;
 
 // Every open app consumes 2 pool slots (user.db + system.db), and SQLite
 // briefly needs additional slots for journal files during writes. Without
@@ -614,6 +643,8 @@ const CATALOG_FILE = "/clay-device-catalog-v1.db";
 function assertNoUnprovenNativeJournals(pool: PoolUtil, files: readonly string[]): void {
   if (!pool.getFileNames) throw new ClayError("E_CATALOG_UNAVAILABLE", "durable file inventory is unavailable");
   const names = pool.getFileNames();
+  if (preservedSahpoolQuarantine(pool).slots && !names.includes(CATALOG_FILE))
+    throw new ClayError("E_CATALOG_UNAVAILABLE", "Original catalog may be quarantined; replacement authority is forbidden");
   // A catalog read itself can trigger SQLite recovery. Until the boot recovery
   // coordinator proves the original tuple BEFORE that read, even a nominally
   // read-only ATTACH is forbidden. Lifecycle cleanup may still explain sidecars
@@ -630,9 +661,51 @@ async function strictBrowserPool(s: Sqlite3Static): Promise<PoolUtil> {
   // One initialization per worker, including failed initialization. Do not call
   // the SDK again after an uncertain header/handle outcome. A new worker can
   // reacquire without resetting or deleting any pre-existing pool file.
-  return strictPoolPromise ??= initializePreservingSahpool(s, 24).then(pool => {
+  return strictPoolPromise ??= initializePreservingSahpool(s, 24).then(async pool => {
+    nativeRecovery = (await import("./production-native-recovery")).productionNativeRecovery(s, pool, db => new SqliteWasmDriver(db, s));
     activePool = pool; return pool;
   });
+}
+
+/** First boot only, under crash-released physical exclusion, before catalog
+ * migration, restore or lifecycle reads. Failure is sticky until worker reopen. */
+export function recoverBrowserNativeJournals(): Promise<void> {
+  return nativeBootRecovery ??= (async () => {
+    const { withBrowserLifecycleLock } = await import("./lifecycle-recovery-inventory");
+    await withBrowserLifecycleLock(async () => {
+      await strictBrowserPool(await sqlite3());
+      if (!nativeRecovery) throw new ClayError("E_CATALOG_UNAVAILABLE", "Native journal coordinator is unavailable");
+      nativeRecovery.recover();
+      nativeBootReady = true;
+    });
+  })();
+}
+
+export function browserStorageQuarantine(): { slots: number } {
+  return activePool ? preservedSahpoolQuarantine(activePool) : { slots: 0 };
+}
+
+/** Called only after ProductionStoreAuthority's closed all-target boot audit.
+ * Memory fixtures and raw/native prototype handles cannot satisfy this path.
+ * This is a runtime capability, explicitly NOT a release/browser certificate. */
+export function grantProductionAutomationCapability(driver: DbDriver): void {
+  const connection = NATIVE_CONNECTIONS.get(driver); if (!connection) return;
+  const check = () => {
+    if (!nativeBootReady || !nativeRecovery || !connection.db.pointer || connection.pool !== activePool)
+      throw new Error("Original native recovery prerequisite is unavailable");
+    nativeRecovery.assertReady(); assertSahpoolAutomationCapacity(connection.sqlite, connection.pool);
+    const actual = connection.db.selectObjects("PRAGMA database_list").filter(row => row.name !== "temp");
+    if (actual.length !== 3 || actual.some(row => connection.files[String(row.name)] !== row.file))
+      throw new Error("Physical transaction topology differs");
+    for (const name of ["main", "sys", "catalog"]) {
+      const synchronous = Number(connection.db.selectValue(`PRAGMA ${name}.synchronous`));
+      if (connection.db.selectValue(`PRAGMA ${name}.journal_mode`) !== "delete" || !Number.isInteger(synchronous) || synchronous < 2 || synchronous > 3)
+        throw new Error("Native transaction requires DELETE journals and FULL synchronization");
+    }
+  };
+  try { check(); } catch { return; } // UI remains unavailable; never weaken a physical prerequisite.
+  const grant = Object.freeze({ kind: "opfs_native_recovery" as const, releaseCertificate: false as const });
+  NATIVE_AUTOMATION_GRANTS.set(grant, check); AUTOMATION_TRANSACTION_CAPABILITIES.set(driver, grant);
 }
 
 /** Trusted worker inventory names from the VFS itself. */
@@ -699,7 +772,9 @@ export async function openBrowserProductionTarget(
     db.exec("PRAGMA foreign_keys = ON");
     db.exec(`ATTACH 'file:${namespace.systemFile}?vfs=opfs-sahpool' AS sys`);
     db.exec(`ATTACH 'file:${CATALOG_FILE}?vfs=opfs-sahpool' AS catalog`);
-    return new SqliteWasmDriver(db, s);
+    const driver = new SqliteWasmDriver(db, s);
+    NATIVE_CONNECTIONS.set(driver, { db, sqlite: s, pool, files: Object.freeze({ main: namespace.userFile, sys: namespace.systemFile, catalog: CATALOG_FILE }) });
+    return driver;
   } catch (error) {
     try { db.close(); } catch { /* already closed */ }
     throw new ClayError("E_CATALOG_UNAVAILABLE",

@@ -22,6 +22,8 @@ import {
   openBrowserCatalogProbe,
   openBrowserProductionTarget,
   automationPhysicalTransactionCapability,
+  automationPhysicalTransactionAvailable,
+  grantProductionAutomationCapability,
   type DbDriver,
 } from "./db";
 import { DeviceCatalog, type LegacyBootstrapEntry } from "./device-catalog";
@@ -837,6 +839,7 @@ export class ProductionStoreAuthority {
     const target = TargetAuthorityStore.open(session.driver);
     this.#reader = createStoreReader(store, () => JSON.stringify(target.evidence()));
     this.#boot = boot;
+    grantProductionAutomationCapability(session.driver);
     this.#connectionAuthority = session.authority;
     this.#coordinator = new ProductionMutationCoordinator(
       session.driver,
@@ -895,6 +898,7 @@ export class ProductionStoreAuthority {
 
   static async bootBrowser(input: unknown): Promise<ProductionStoreAuthority> {
     const bootInput = captureBrowserBootInput(input);
+    await (await import("./db")).recoverBrowserNativeJournals();
     await (await import("./production-catalog-migration")).migrateBrowserCatalogRetention();
     await (await import("./production-restore")).reconcilePendingBrowserRestore();
     let inventory = await browserDurableInventory();
@@ -1596,6 +1600,12 @@ export class ProductionStoreAuthority {
   mutationOutcome(input: unknown) { return this.#coordinator.mutationOutcome(input); }
   cancelPresentation(input: unknown) { return this.#coordinator.cancelPresentation(input); }
   presentationSource() { return this.#coordinator.serializeRead(async () => this.inspectAuthority().target); }
+  intakeOwnerWitness(input: unknown) {
+    // Snapshot the public input before yielding to the serialized authority read.
+    const captured = captureAppImportRequest(input);
+    return this.#coordinator.serializeRead(async () => (await import("./production-owner-witness")).readIntakeOwnerWitness(this.#driver, captured));
+  }
+  async storageQuarantine() { return (await import("./db")).browserStorageQuarantine(); }
   intakePresentation() {
     return this.#coordinator.serializeRead(async () => {
       const authorityTarget = this.inspectAuthority().target;
@@ -1616,9 +1626,9 @@ export class ProductionStoreAuthority {
       const reader = this.readStore();
       const capability = automationPhysicalTransactionCapability(this.#driver);
       const target = this.currentAutomationTarget();
-      const available = capability.kind === "test_memory" && capability.releaseCertificate;
+      const available = automationPhysicalTransactionAvailable(capability);
       return { authorityTarget: this.inspectAuthority().target,
-        availability: { available, reason: available ? null : "physical_transaction_uncertified" as const },
+        availability: { available, reason: available ? null : "physical_recovery_unavailable" as const },
         rules: reader.listAutomations(target), runs: reader.automationRuns(target, undefined, 100),
         notifications: reader.listNotifications(100), recipes: reader.automationRecipes(),
         runtime: reader.automationRuntimeStatus(target), overview: reader.automationRuntimeOverview(target, 100), trace: reader.semanticSchemaTrace() };

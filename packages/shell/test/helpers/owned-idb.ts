@@ -57,6 +57,7 @@ export class OwnedFactory {
       put: (value: unknown) => request(() => { const key = this.keyPath.split(".").reduce((row: any, field) => row[field], value) as string; staged.set(key, structuredClone(value)); return key; }),
       count: () => request(() => staged.size),
       getAll: (_query: unknown, count: number) => request(() => [...staged.values()].slice(0, count).map(row => structuredClone(row))),
+      getAllKeys: (_query: unknown, count: number) => request(() => [...staged.keys()].sort().slice(0, count)),
     }) });
     return tx;
   }

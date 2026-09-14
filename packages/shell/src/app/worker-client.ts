@@ -1,4 +1,5 @@
 // Typed promise wrapper over the DB worker's command protocol.
+import { IntakeOwnerClaimV1, type IntakeOwnerWitnessV1 } from "@clay/schema/owner-witness";
 import type {
   AttachmentFile, AttachmentMetadata, AttachmentStorageSummary,
   AutomationDefinition, AutomationDefinitionAny, AutomationDefinitionInput,
@@ -1592,6 +1593,12 @@ export class WorkerClient {
   intakeCommand<T>(payload: import("@clay/schema/catalog").IntakeCommandPayloadV1, context: WorkerMutationContext): Promise<T> {
     return this.mutationCall("intakeCommand", structuredClone(payload), captureWorkerMutationContext(context));
   }
+  intakeOwnerWitness(claim: IntakeOwnerClaimV1): Promise<IntakeOwnerWitnessV1> {
+    let captured: IntakeOwnerClaimV1;
+    try { captured = IntakeOwnerClaimV1.parse(claim); }
+    catch { return Promise.reject(new ClayError("E_CONFLICT", "Only the closed public original owner claim may cross the worker boundary")); }
+    return this.ephemeralCall("intakeOwnerWitness", captured);
+  }
   intakePresentation(): Promise<{ authorityTarget: import("@clay/schema/catalog").TargetEvidenceV1; legacyCustody: "none" | "quarantined";
     forms: LocalIntakeFormV2[]; rules: IntakeAutoAcceptRuleV1[]; inbox: IntakeInboxItem[]; receipts: IntakeAcceptanceReceipt[]; deliveryFailures: IntakeDeliveryFailure[];
     tables: RegTable[]; trace: SemanticSchemaTraceV1 }> { return this.ephemeralCall("intakePresentation", {}); }
@@ -1615,7 +1622,7 @@ export class WorkerClient {
   }
   automationPresentation(): Promise<{
     authorityTarget: import("@clay/schema/catalog").TargetEvidenceV1;
-    availability: { available: boolean; reason: "physical_transaction_uncertified" | null };
+    availability: { available: boolean; reason: "physical_recovery_unavailable" | null };
     rules: AutomationDefinitionAny[]; runs: AutomationRun[]; notifications: ClayNotification[];
     recipes: AutomationRecipeCardV1[]; runtime: AutomationRuntimeStatusV1; overview: AutomationRuntimeOverviewV1; trace: SemanticSchemaTraceV1;
   }> { return this.ephemeralCall("automationPresentation", {}); }

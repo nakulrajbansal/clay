@@ -15,7 +15,7 @@ const target = { appInstanceId: app, activeGenerationId: `gen_${"b".repeat(26)}`
 it("does not claim a recipe is saving when physical authority is unavailable", async () => {
   const command = vi.fn();
   const worker = { createMutationContext: () => ({ requestId: `req_${"d".repeat(26)}` }), automationCommand: command,
-    automationPresentation: async () => ({ authorityTarget: target, availability: { available: false, reason: "physical_transaction_uncertified" },
+    automationPresentation: async () => ({ authorityTarget: target, availability: { available: false, reason: "physical_recovery_unavailable" },
       rules: [], runs: [], notifications: [], overview: { rules: [], runs: [] }, trace: { tables: [], fields: [] },
       runtime: { headline: "Local only", detail: "While open", enabledDefinitions: 0, needsRepairDefinitions: 0 },
       recipes: [{ v: 1, id: "weekly_checklist", version: 1, title: "Owned weekly recipe", result: "Owned fixture", requiredMappings: [],

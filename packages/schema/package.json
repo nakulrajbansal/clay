@@ -12,6 +12,7 @@
     "./evidence": "./src/evidence.ts",
     "./intake": "./src/intake.ts",
     "./intake-workflow": "./src/intake-workflow.ts",
+    "./owner-witness": "./src/owner-witness.ts",
     "./projection": "./src/projection.ts",
     "./share": "./src/share.ts",
     "./daily-home": "./src/daily-home.ts",

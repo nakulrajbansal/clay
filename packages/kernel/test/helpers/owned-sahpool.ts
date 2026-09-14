@@ -38,7 +38,12 @@ export class OwnedSahDirectory {
   installGlobals(): void {
     vi.stubGlobal("WorkerGlobalScope", class {});
     vi.stubGlobal("location", { href: "https://owned.invalid/worker.js" });
-    vi.stubGlobal("navigator", { storage: { getDirectory: async () => this.root } });
+    let tail: Promise<unknown> = Promise.resolve();
+    vi.stubGlobal("navigator", { storage: { getDirectory: async () => this.root }, locks: {
+      request: (_name: string, _options: unknown, work: () => Promise<unknown>) => {
+        const task = tail.then(work); tail = task.catch(() => {}); return task;
+      },
+    } });
     vi.stubGlobal("FileSystemHandle", OwnedHandle);
     vi.stubGlobal("FileSystemDirectoryHandle", OwnedDirectoryHandle);
     vi.stubGlobal("FileSystemFileHandle", OwnedFileHandle);

@@ -102,6 +102,8 @@ const PrivateMetricsView = lazy(() => import("./PrivateMetricsView")
   .then(module => ({ default: module.PrivateMetricsView })));
 const RecoveryCenter = lazy(() => import("./RecoveryCenter")
   .then(module => ({ default: module.RecoveryCenter })));
+const OriginalOwnerRecovery = lazy(() => import("./OriginalOwnerRecovery")
+  .then(module => ({ default: module.OriginalOwnerRecovery })));
 
 type ProductionBackupRuntime = typeof import("./production-backup.browser");
 type ProductionBackupAdapter = ReturnType<typeof createProductionBackupAdapter>;
@@ -2622,6 +2624,9 @@ export function App(): React.JSX.Element {
               appName={apps.find(app => app.id === currentId)?.name ?? "This app"}
               authoritativeAppInstanceId={currentId}
               opfsAvailable={persistent}
+              quarantinedStorageSlots={deviceProtectionState?.storageQuarantine?.slots ?? 0}
+              ownerRecovery={workerRef.current ? <OriginalOwnerRecovery worker={workerRef.current}
+                relayBaseUrl={getRelayOwnerUrl()} publicBaseUrl={location.origin} /> : undefined}
               backupTrustStatus={backupTrustStatus}
               backupAdapterStatus={backupAdapterStatus}
               backupTarget={backupTarget ? {
