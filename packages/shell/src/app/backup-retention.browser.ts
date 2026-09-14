@@ -3,7 +3,7 @@ import {
   BackupRetentionReceiptV1, BackupRetentionScopeV1,
   type BackupRecordV1 as Record, type BackupRemovalPendingV1 as Pending,
   type BackupRetentionScopeV1 as Scope,
-} from "@clay/schema/backup";
+} from "@clay/schema/standalone/backup";
 import type { ExternalBackupDirectory } from "@clay/kernel/backup";
 import { BackupDirectoryIoError } from "./backup-target.browser";
 import { withBackupTrustLock } from "../worker/backup-operation-lock";

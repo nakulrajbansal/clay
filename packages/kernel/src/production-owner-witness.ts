@@ -1,4 +1,4 @@
-import { IntakeOwnerClaimV1, IntakeOwnerWitnessV1 } from "@clay/schema/owner-witness";
+import { IntakeOwnerClaimV1, IntakeOwnerWitnessV1 } from "@clay/schema/standalone/owner-witness";
 import type { DbDriver } from "./db";
 import { DeviceCatalog } from "./device-catalog";
 import { TargetAuthorityStore } from "./target-authority";

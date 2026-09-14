@@ -1,4 +1,4 @@
-import { OperationId, RequestId } from "@clay/schema";
+import { OperationId, RequestId } from "@clay/schema/standalone/index";
 import {
   TargetEvidenceV1,
   RecoverablePresentationRouteV1,
@@ -8,7 +8,7 @@ import {
   type ProductionRequestReceiptV1 as ProductionRequestReceipt,
   type TargetEvidenceV1 as TargetEvidence,
   type WriteFenceV1 as WriteFence,
-} from "@clay/schema/catalog";
+} from "@clay/schema/standalone/catalog";
 import {
   BackupPublicationRequestV1,
   BackupSelectedTargetV1,
@@ -18,7 +18,7 @@ import {
   type BackupPublicationRequestV1 as BackupPublicationRequest,
   type BackupRecordV1 as BackupRecord,
   type BackupSelectedTargetV1 as BackupSelectedTarget,
-} from "@clay/schema/backup";
+} from "@clay/schema/standalone/backup";
 import { enumerateCanonicalStateV1 } from "./canonical-state";
 import { DAILY_TIME_ZONE_SETTING } from "./daily-calendar";
 import {
@@ -46,7 +46,7 @@ import {
 import type { LiveWriteAuthority } from "./live-write-guard";
 import { executeAutomationObserverAuthorityRoute, requiresAutomationPhysicalTransaction } from "./production-automation-observer-routes";
 import { assertClosedAutomationDraftInput } from "./production-automation-input";
-import { LocalIntakeFormV2 } from "@clay/schema/intake";
+import { LocalIntakeFormV2 } from "@clay/schema/standalone/intake";
 import { assertIntakeCommandSource, assertIntakeResponsePublic } from "./production-intake-boundary";
 import {
   copyPrivateMetricOperationalState,

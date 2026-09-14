@@ -1,5 +1,5 @@
-import { OperationId, UInt64Decimal } from "@clay/schema";
-import { TargetEvidenceV1, WriteFenceV1 } from "@clay/schema/catalog";
+import { OperationId, UInt64Decimal } from "@clay/schema/standalone/index";
+import { TargetEvidenceV1, WriteFenceV1 } from "@clay/schema/standalone/catalog";
 import type {
   CatalogReservationRecoveryV1 as CatalogReservationRecovery,
   TargetEvidenceV1 as TargetEvidence,

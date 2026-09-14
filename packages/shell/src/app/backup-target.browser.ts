@@ -5,7 +5,7 @@ import {
   BackupTargetId,
   BackupTargetV1,
   MAX_BACKUP_ARCHIVE_BYTES,
-} from "@clay/schema/backup";
+} from "@clay/schema/standalone/backup";
 import {
   type BackupAdapterArtifactBinding,
   type BackupTarget,

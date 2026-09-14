@@ -1,5 +1,6 @@
-import { z } from "@clay/schema/validation-runtime";
-import { InboxDispositionV1 } from "@clay/schema/daily-home";
+import { InboxDispositionWriteV1 } from "@clay/schema/standalone/worker-contracts";
+export { InboxDispositionWriteV1 };
+import { InboxDispositionV1 } from "@clay/schema/standalone/daily-home";
 import type { DbDriver } from "./db";
 import { ClayError } from "./errors";
 import { resolveLocalDateTime } from "./daily-calendar";
@@ -44,7 +45,6 @@ export function readInboxDispositions(driver: DbDriver, database: Database = "sy
   if (new Set(parsed.map(row => row.sourceKey)).size !== rows.length || new Set(parsed.map(row => row.revision)).size !== rows.length) return fail();
   return parsed;
 }
-export const InboxDispositionWriteV1 = z.object({ expectedRevision: z.number().int().nonnegative().safe(), value: InboxDispositionV1 }).strict();
 export function writeInboxDisposition(driver: DbDriver, input: unknown): { disposition: InboxDispositionV1; previous: InboxDispositionV1 | null } {
   const { expectedRevision, value } = InboxDispositionWriteV1.parse(input);
   return driver.tx(() => {

@@ -2,12 +2,11 @@
 // execution. Forward ops are non-destructive by vocabulary (I3); inverse
 // ops may drop only what the mirrored forward op created (I2). All DDL is
 // emitted with quoted identifiers (G26).
-import type { z } from "zod";
 import {
   ForwardOp as ForwardOpSchema,
   InverseOp as InverseOpSchema,
   MigrationPlan as MigrationPlanSchema,
-} from "@clay/schema";
+} from "@clay/schema/standalone/index";
 import { ClayError } from "./errors";
 import type { DbDriver, SqlValue } from "./db";
 import { compileExpr, evalExpr, exprFields, type ExprValue } from "./expr";
@@ -18,9 +17,9 @@ import {
 } from "./registry";
 import { coerceValue, nowIso, uuidv7 } from "./rows";
 
-export type ForwardOpT = z.infer<typeof ForwardOpSchema>;
-export type InverseOpT = z.infer<typeof InverseOpSchema>;
-export type MigrationPlanT = z.infer<typeof MigrationPlanSchema>;
+export type ForwardOpT = ReturnType<typeof ForwardOpSchema.parse>;
+export type InverseOpT = ReturnType<typeof InverseOpSchema.parse>;
+export type MigrationPlanT = ReturnType<typeof MigrationPlanSchema.parse>;
 
 type PhysicalColumnKind = Exclude<ColumnKind, "computed" | "lookup" | "rollup">;
 const SQL_TYPE: Record<PhysicalColumnKind, string> = {

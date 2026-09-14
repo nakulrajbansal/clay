@@ -1,4 +1,4 @@
-import { AppInstanceId, GenerationId, NamespaceId, OperationId } from "@clay/schema";
+import { AppInstanceId, GenerationId, NamespaceId, OperationId } from "@clay/schema/standalone/index";
 import type {
   TargetEvidenceV1 as TargetEvidence,
   WriteFenceV1 as WriteFence,

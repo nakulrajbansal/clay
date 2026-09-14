@@ -1,4 +1,4 @@
-import { ForwardOp } from "@clay/schema";
+import { ForwardOpListV1 } from "@clay/schema/standalone/worker-contracts";
 import type { DbDriver } from "./db";
 import { ClayError } from "./errors";
 import type { Registry } from "./registry";
@@ -40,7 +40,7 @@ export function userIndexAuthorities(
       throw invalid("index migration history is invalid");
     const version = row.version;
     const operations = row.migration_json === null ? []
-      : ForwardOp.array().parse(JSON.parse(row.migration_json));
+      : ForwardOpListV1.parse(JSON.parse(row.migration_json));
     operations.forEach((operation, operationIndex) => {
       if (operation.op !== "add_index") return;
       const name = `idx_${operation.table}_${operation.column}`;

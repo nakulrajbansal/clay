@@ -1,5 +1,5 @@
 import type { ProductionStoreAuthority } from "@clay/kernel/worker-authority";
-import { LegacyOwnerCandidateV1 } from "@clay/schema/legacy-owner";
+import { LegacyOwnerCandidateV1 } from "@clay/schema/standalone/legacy-owner";
 import { closed, legacyOwnerFailure, ownerOrigin, portMessage } from "../legacy/owner-protocol";
 
 /** Only ciphertext travels on this private port. Ordinary response contains a

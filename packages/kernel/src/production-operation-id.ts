@@ -1,4 +1,4 @@
-import { OperationId } from "@clay/schema";
+import { OperationId } from "@clay/schema/standalone/index";
 import { targetAuthorityInvalid as invalid } from "./production-input-capture";
 import { sha256HexSync } from "./state-digest";
 

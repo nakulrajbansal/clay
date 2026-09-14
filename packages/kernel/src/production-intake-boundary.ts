@@ -1,4 +1,4 @@
-import { LocalIntakeFormV2 } from "@clay/schema/intake";
+import { LocalIntakeFormV2 } from "@clay/schema/standalone/intake";
 import type { TargetEvidenceV1 } from "@clay/schema/catalog";
 import { ClayStore } from "./store";
 import { ClayError } from "./errors";

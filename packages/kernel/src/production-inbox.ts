@@ -1,5 +1,5 @@
-import { DailyInboxReceiptV1, type DailyInboxActionPayloadV1, type DailyInboxUndoPayloadV1, type TargetEvidenceV1 } from "@clay/schema/catalog";
-import { InboxDispositionV1 } from "@clay/schema/daily-home";
+import { DailyInboxReceiptV1, type DailyInboxActionPayloadV1, type DailyInboxUndoPayloadV1, type TargetEvidenceV1 } from "@clay/schema/standalone/catalog";
+import { InboxDispositionV1 } from "@clay/schema/standalone/daily-home";
 import type { DbDriver } from "./db";
 import { ClayError } from "./errors";
 import { PRODUCTION_STORE_PRIMITIVES as ops, type ClayStore } from "./store";

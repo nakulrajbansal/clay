@@ -17,6 +17,14 @@ async function compile(contents) {
 }
 
 describe("schema construction boundaries", () => {
+  it("a standalone primitive does not retain domain refinements or authoring machinery", async () => {
+    const {code,exports}=await compile(`import {AppInstanceId} from '@clay/schema/standalone/index';
+      export const parse=value=>AppInstanceId.safeParse(value);`);
+    for(const unused of ['only text fields require maxLength','snapshot must contain every source','ZodObject','ZodString'])
+      expect(code.includes(unused),unused).toBe(false);
+    const value='app_'+'a'.repeat(26);expect(exports.parse(value)).toEqual({success:true,data:value});
+    for(const bad of [undefined,null,{},value+'a','app_'+'0'.repeat(26)])expect(exports.parse(bad).success).toBe(false);
+  });
   it("a primitive import does not retain intake, migration or bridge schema construction", async () => {
     const { code, exports } = await compile(`
       import { AppInstanceId } from '@clay/schema';

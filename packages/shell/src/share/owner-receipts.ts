@@ -1,4 +1,4 @@
-import { ShareIdV1, ShareRevokeTokenV1 } from "@clay/schema/share";
+import { ShareIdV1, ShareRevokeTokenV1 } from "@clay/schema/standalone/share";
 import { parseRecipientShareLocationV1 } from "./crypto";
 
 export type OwnerShareReceiptV1 = Readonly<{

@@ -4,7 +4,7 @@
 // no physical form (doc 04 §2): they are evaluated post-SQL and projected;
 // conditions/ordering on them run post-SQL too. Computed fields inside
 // groupBy/aggregate are rejected in v1 (OPEN-QUESTIONS Q16).
-import { Query as QuerySchema } from "@clay/schema";
+import { Query as QuerySchema } from "@clay/schema/standalone/index";
 import { ClayError } from "./errors";
 import type { DbDriver, SqlValue } from "./db";
 import {

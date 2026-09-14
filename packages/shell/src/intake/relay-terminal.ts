@@ -1,4 +1,4 @@
-import { IntakeRelayFormRegistrationV1, IntakeRelayTerminalResultV1 } from "@clay/schema/intake";
+import { IntakeRelayFormRegistrationV1, IntakeRelayTerminalResultV1 } from "@clay/schema/standalone/intake";
 import { boundedRelayJson } from "../app/bounded-relay-response";
 import { relayRequestSha256 } from "../app/relay-request-identity";
 import type { IntakeOwnerTransport } from "./client";

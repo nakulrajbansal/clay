@@ -1,5 +1,5 @@
-import { TargetEvidenceV1 } from "@clay/schema/catalog";
-import { ShareApprovedScopeV1, ShareCreateRequestV1, ShareCreateResponseV1, ShareTerminalResponseV1 } from "@clay/schema/share";
+import { TargetEvidenceV1 } from "@clay/schema/standalone/catalog";
+import { ShareApprovedScopeV1, ShareCreateRequestV1, ShareCreateResponseV1, ShareTerminalResponseV1 } from "@clay/schema/standalone/share";
 import { relayRequestSha256 } from "../app/relay-request-identity";
 import { buildRecipientShareUrlV1, decryptShareSnapshotV1, hashShareRevokeTokenV1, parseRecipientShareLocationV1, type encryptApprovedShareV1 } from "./crypto";
 import { parseOwnerShareReceiptV1, type OwnerShareReceiptV1 } from "./owner-receipts";

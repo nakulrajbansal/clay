@@ -1,5 +1,5 @@
-import { RequestId } from "@clay/schema";
-import { TargetEvidenceV1 } from "@clay/schema/catalog";
+import { RequestId } from "@clay/schema/standalone/index";
+import { TargetEvidenceV1 } from "@clay/schema/standalone/catalog";
 import type {
   PendingTargetLifecycleJobV1 as PendingTargetLifecycleJob,
   TargetEvidenceV1 as TargetEvidence,

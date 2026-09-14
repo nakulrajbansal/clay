@@ -1,5 +1,5 @@
 import type { AuthenticatedFormat5RestoreGrantV1 } from "@clay/schema/restore";
-import { BackupAuthenticationV1 } from "@clay/schema/backup";
+import { BackupAuthenticationV1 } from "@clay/schema/standalone/backup";
 export type AuthenticatedFormat5RestoreGrant = AuthenticatedFormat5RestoreGrantV1;
 export type { BackupFailureReasonCodeV1 as BackupFailureReasonCode } from "@clay/schema/backup";
 

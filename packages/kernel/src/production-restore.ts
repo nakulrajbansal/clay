@@ -1,7 +1,7 @@
-import { RequestId } from "@clay/schema";
-import { BackupAuthenticationV1 } from "@clay/schema/backup";
-import { CatalogRestoreJobV2 } from "@clay/schema/archive";
-import { AuthenticatedFormat5RestoreGrantV1 } from "@clay/schema/restore";
+import { RequestId } from "@clay/schema/standalone/index";
+import { BackupAuthenticationV1 } from "@clay/schema/standalone/backup";
+import { CatalogRestoreJobV2 } from "@clay/schema/standalone/archive";
+import { AuthenticatedFormat5RestoreGrantV1 } from "@clay/schema/standalone/restore";
 import { captureAppImportRequest, deriveLifecycleId } from "./app-lifecycle-request";
 import { sha256HexSync } from "./state-digest";
 import { importAuthorityArchive, restoreAuthorityArchiveAsNew } from "./archive-authority";

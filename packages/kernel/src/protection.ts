@@ -1,4 +1,4 @@
-import { DeviceProtectionInputV1, DeviceStateResultV1 } from "@clay/schema";
+import { DeviceProtectionInputV1, DeviceStateResultV1 } from "@clay/schema/standalone/index";
 import type {
   CheckpointObservationV1 as SchemaCheckpointObservationV1,
   DeviceProtectionInputV1 as SchemaDeviceProtectionInputV1,

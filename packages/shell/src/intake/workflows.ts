@@ -1,4 +1,4 @@
-import { IntakePublicationJobV1, IntakeRevocationJobV1 } from "@clay/schema/intake-workflow";
+import { IntakePublicationJobV1, IntakeRevocationJobV1 } from "@clay/schema/standalone/intake-workflow";
 import type { IntakeCache } from "./session";
 
 type Jobs = { publication: IntakePublicationJobV1; revocation: IntakeRevocationJobV1 };

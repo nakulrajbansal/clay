@@ -1,6 +1,6 @@
-import { z } from "@clay/schema/validation-runtime";
-import { DailyCapturePayloadV1, DailyCaptureUndoPayloadV1, DailySourceCasPayloadV1, DailyNavigationCasPayloadV1, DailyInboxActionPayloadV1, DailyInboxUndoPayloadV1, type TargetEvidenceV1 } from "@clay/schema/catalog";
-import { DailySourceLibraryV1 } from "@clay/schema/daily-home";
+import { captureLedger, dailyRequest, CaptureResultV1 } from "@clay/schema/standalone/worker-contracts";
+import { DailyCapturePayloadV1, DailyCaptureUndoPayloadV1, DailySourceCasPayloadV1, DailyNavigationCasPayloadV1, DailyInboxActionPayloadV1, DailyInboxUndoPayloadV1, type TargetEvidenceV1 } from "@clay/schema/standalone/catalog";
+import { DailySourceLibraryV1 } from "@clay/schema/standalone/daily-home";
 import { ClayError } from "./errors";
 import { DAILY_TIME_ZONE_SETTING, localCalendarContext } from "./daily-calendar";
 import { DAILY_NAVIGATION_SETTING, loadDailyNavigationState } from "./daily-navigation";
@@ -13,23 +13,7 @@ import { executeInboxAction, undoInboxAction } from "./production-inbox";
 
 export const DAILY_CAPTURE_LEDGER = "daily_capture_receipts_v1";
 const lastTable = "quick_capture_last_table_v1";
-const name = z.string().regex(/^[a-z][a-z0-9_]{0,40}$/);
-const tableId = z.string().regex(/^tbl_[0-9a-f-]{36}$/);
-const revision = z.number().int().nonnegative().safe();
-const rowId = z.string().uuid();
-const captureLedger = z.object({ schema: z.literal(1), entries: z.array(z.object({
-  id: rowId, tableId, table: name,
-}).strict()).max(200) }).strict();
-const dailyRequest = z.discriminatedUnion("route", [
-  z.object({ route: z.literal("daily.source"), payload: DailySourceCasPayloadV1 }),
-  z.object({ route: z.literal("daily.navigation"), payload: DailyNavigationCasPayloadV1 }),
-  z.object({ route: z.literal("daily.timeZone"), payload: z.object({ timeZone: z.string().min(1).max(128) }).strict() }),
-  z.object({ route: z.literal("daily.capture"), payload: DailyCapturePayloadV1 }),
-  z.object({ route: z.literal("daily.undoCapture"), payload: DailyCaptureUndoPayloadV1 }),
-  z.object({ route: z.literal("daily.inbox"), payload: DailyInboxActionPayloadV1 }),
-  z.object({ route: z.literal("daily.undoInbox"), payload: DailyInboxUndoPayloadV1 }),
-]);
-export type CapturedDaily = z.infer<typeof dailyRequest> & { requestId: string };
+export type CapturedDaily = import("@clay/schema/standalone/worker-contracts").DailyCommand & { requestId: string };
 
 /** Input is already deeply descriptor-captured and charged to the full 2 MB envelope. */
 export function captureDaily(requestId: string, route: string, payload: unknown): CapturedDaily {
@@ -123,7 +107,7 @@ export function executeDaily(store: ClayStore, request: CapturedDaily, target?: 
       assertExactPresentationTarget(request.payload.authorityTarget, target);
       const proof = originalPresentationResult(driver, target, request.payload.captureRequestId, "daily.capture", request.payload.capturePayload);
       assertExactPresentationTarget(proof.target, request.payload.authorityTarget);
-      const result = z.object({ id: rowId, created: z.array(z.object({ table: name, id: rowId }).strict()).length(1) }).passthrough().parse(proof.result);
+      const result = CaptureResultV1.parse(proof.result);
       if (result.id !== request.payload.batchId || result.created[0]!.table !== request.payload.capturePayload.table)
         conflict("capture Undo receipt differs from its original batch");
       const ledger = captureLedger.parse(read(store, DAILY_CAPTURE_LEDGER) ?? { schema: 1, entries: [] });

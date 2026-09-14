@@ -1,6 +1,6 @@
-import { RequestId } from "@clay/schema";
-import { LocalIntakeFormV1, LocalIntakeFormV2 } from "@clay/schema/intake";
-import { LegacyOwnerCandidateV1, LegacyOwnerProofV1, LegacyOwnerInventoryV1, LegacyOwnerRouteV1 } from "@clay/schema/legacy-owner";
+import { RequestId } from "@clay/schema/standalone/index";
+import { LocalIntakeFormV1, LocalIntakeFormV2 } from "@clay/schema/standalone/intake";
+import { LegacyOwnerCandidateV1, LegacyOwnerProofV1, LegacyOwnerInventoryV1, LegacyOwnerRouteV1 } from "@clay/schema/standalone/legacy-owner";
 import type { DbDriver } from "./db";
 import { DeviceCatalog } from "./device-catalog";
 import { TargetAuthorityStore } from "./target-authority";

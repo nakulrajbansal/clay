@@ -18,7 +18,7 @@ import {
   type ArchiveAuthorityEvidenceV1 as ArchiveAuthorityEvidence,
   type ArchiveManifestV5 as ArchiveManifest,
   type ArchiveRestoreAsNewIdentityV1 as ArchiveRestoreIdentity,
-} from "@clay/schema/archive";
+} from "@clay/schema/standalone/archive";
 import {
   type CatalogGenerationEventV1 as CatalogGenerationEvent,
   type CatalogRevisionReservationV1 as CatalogRevisionReservation,
@@ -27,11 +27,11 @@ import {
   ProductionRequestReceiptV1,
   type TargetEvidenceV1 as TargetEvidence,
   TargetEvidenceV1,
-} from "@clay/schema/catalog";
+} from "@clay/schema/standalone/catalog";
 import {
   BackupStageValidationV1,
   type BackupStageValidationV1 as BackupStageValidation,
-} from "@clay/schema/backup";
+} from "@clay/schema/standalone/backup";
 import {
   CLAY_ARCHIVE_CONTENT_TYPE,
   sealAuthenticatedArchiveV5,

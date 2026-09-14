@@ -1,5 +1,6 @@
-import { z } from "@clay/schema/validation-runtime";
-import { TargetEvidenceV1, RelationPreviewPayloadV1, RelationKeepPayloadV1, RelationUndoPayloadV1 } from "@clay/schema/catalog";
+import type { z } from "@clay/schema/validation-runtime";
+import { ConversionResultV1 as parsed } from "@clay/schema/standalone/worker-contracts";
+import { TargetEvidenceV1, RelationPreviewPayloadV1, RelationKeepPayloadV1, RelationUndoPayloadV1 } from "@clay/schema/standalone/catalog";
 import { ClayError } from "./errors";
 import { PRODUCTION_STORE_PRIMITIVES, type ClayStore } from "./store";
 import type { DbDriver } from "./db";
@@ -11,13 +12,11 @@ import { TargetAuthorityStore } from "./target-authority";
 import { assertCommittedReceiptReservationBinding } from "./sample-provenance-proof";
 import { assertExactPresentationTarget } from "./production-presentation-proof";
 
-const name = z.string().regex(/^[a-z][a-z0-9_]{0,40}$/);
 export const RelationPreviewRequest = RelationPreviewPayloadV1;
-const count = z.number().int().nonnegative().max(5_000);
 export const RelationKeepRequest = RelationKeepPayloadV1;
-export type CapturedRelationKeep = z.infer<typeof RelationKeepRequest>;
+export type CapturedRelationKeep = z.infer<typeof import("@clay/schema/catalog").RelationKeepPayloadV1>;
 export const RelationUndoRequest = RelationUndoPayloadV1;
-export type CapturedRelationUndo = z.infer<typeof RelationUndoRequest>;
+export type CapturedRelationUndo = z.infer<typeof import("@clay/schema/catalog").RelationUndoPayloadV1>;
 
 export function undoRelation(store: ClayStore, driver: DbDriver, input: CapturedRelationUndo, target: TargetEvidenceV1) {
   if (input.authorityTarget) assertExactPresentationTarget(input.authorityTarget, target);
@@ -28,7 +27,6 @@ export function undoRelation(store: ClayStore, driver: DbDriver, input: Captured
       || receipt.resultingStateSha256 !== target.stateSha256)
     throw new ClayError("E_CONFLICT", "Conversion Undo is bounded to its exact committed state; intervening edits were kept");
   const response = decodeProductionResponse(receipt.responseJson);
-  const parsed = z.object({ version: z.number().int().positive(), convertedRows: count, sourceField: name, relationField: name }).strict();
   if (response.kind !== "envelope" || response.route !== "schema.convertTextToRelation")
     throw new ClayError("E_CONFLICT", "Undo receipt is not a relation conversion");
   const catalog = DeviceCatalog.openExisting(driver);

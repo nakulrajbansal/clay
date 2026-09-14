@@ -3,6 +3,7 @@ import {
   ShareApprovedScopeV1 as ShareApprovedScopeSchema,
   ShareCreateRequestV1 as ShareCreateRequestSchema,
   ShareKeyV1,
+  ShareIdV1,
   SharePayloadV1 as SharePayloadSchema,
   ShareRelaySnapshotV1 as ShareRelaySnapshotSchema,
   ShareRevokeTokenV1,
@@ -14,7 +15,7 @@ import {
   type ShareFieldBindingV1,
   type SharePayloadV1,
   type ShareRelaySnapshotV1,
-} from "@clay/schema/share";
+} from "@clay/schema/standalone/share";
 import {
   canonicalProjectionJsonV1, decodeProjectionArtifactV1,
   type ProjectionArtifactV1, type ProjectionPlaintextV1, type ProjectionRequestV1,
@@ -412,7 +413,7 @@ export function buildRecipientShareUrlV1(input: Readonly<{
   const viewer = new URL(input.viewerOrigin);
   const relay = normalizeRelayBaseUrlV1(input.relayBaseUrl);
   ShareKeyV1.parse(input.key);
-  const shareId = ShareCreateRequestSchema.shape.shareId.parse(input.shareId);
+  const shareId = ShareIdV1.parse(input.shareId);
   const result = new URL(`/share/${shareId}`, viewer.origin);
   if (relay !== viewer.origin) result.searchParams.set("relay", relay);
   result.hash = `k=${input.key}`;
@@ -425,7 +426,7 @@ export function parseRecipientShareLocationV1(href: string): {
   const url = new URL(href);
   const match = url.pathname.match(/^\/share\/(shr_[a-z2-7]{26})$/);
   if (!match) throw new Error("This is not a valid Clay share URL.");
-  const shareId = ShareCreateRequestSchema.shape.shareId.parse(match[1]);
+  const shareId = ShareIdV1.parse(match[1]);
   const params = new URLSearchParams(url.hash.slice(1));
   if ([...params.keys()].some(name => name !== "k") || !params.get("k"))
     throw new Error("The share URL is missing its decryption key fragment.");

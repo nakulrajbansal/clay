@@ -1,13 +1,13 @@
-import { TargetEvidenceV1, PresentationIntentV1, IntakeCommandPayloadV1 } from "@clay/schema/catalog";
-import { IntakePublicationProposalV1 as Proposal, IntakeRelayFormRegistrationResultV1, LocalIntakeFormV2, IntakePublicationClosureV1 } from "@clay/schema/intake";
-import { IntakePublicationJobV1 as Job } from "@clay/schema/intake-workflow";
+import { TargetEvidenceV1, PresentationIntentV1, IntakeCommandPayloadV1 } from "@clay/schema/standalone/catalog";
+import { IntakePublicationProposalV1 as Proposal, IntakeRelayFormRegistrationResultV1, LocalIntakeFormV2, IntakePublicationClosureV1 } from "@clay/schema/standalone/intake";
+import { IntakePublicationJobV1 as Job } from "@clay/schema/standalone/intake-workflow";
 import { hydrateIntakeOwnerForm, prepareIntakeOwnerForm, recoverIntakeOwnerForm, type IntakeOwnerVault } from "./owner-custody";
 import { buildPublicIntakeLink, mintIntakeFormId } from "./client";
 import { executeIntakeIntent, IntakeSession } from "./session";
 import { boundedRelayJson } from "../app/bounded-relay-response";
 import { IndexedDbIntakeWorkflows, IntakeWorkflowSlot, UnfencedIntakeWorkflowError, type IntakeWorkflows } from "./workflows";
 import { intakeRegistration, terminalizeIntakeRelay } from "./relay-terminal";
-import { IntakeOwnerClaimV1, IntakeOwnerWitnessV1 } from "@clay/schema/owner-witness";
+import { IntakeOwnerClaimV1, IntakeOwnerWitnessV1 } from "@clay/schema/standalone/owner-witness";
 
 type FetchLike = typeof fetch;
 const activeClosure = (job: Job) => job.termination?.renewals?.at(-1)?.intent ?? job.termination?.authorityClosure;

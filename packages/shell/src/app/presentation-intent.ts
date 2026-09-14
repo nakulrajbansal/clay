@@ -1,4 +1,4 @@
-import { DailyCaptureUndoPayloadV1, PresentationIntentV1 } from "@clay/schema/catalog";
+import { DailyCaptureUndoPayloadV1, PresentationIntentV1 } from "@clay/schema/standalone/catalog";
 import type { WorkerMutationContext } from "./worker-client";
 import type { WorkerClient } from "./worker-client";
 type Storage = Pick<globalThis.Storage, "getItem" | "setItem" | "removeItem">;

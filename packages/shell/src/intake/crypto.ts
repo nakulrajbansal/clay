@@ -2,7 +2,7 @@ import {
   IntakeRelaySubmissionV1,
   IntakeSubmissionPlaintextV1,
   PublicIntakeFormV1,
-} from "@clay/schema/intake";
+} from "@clay/schema/standalone/intake";
 
 export type IntakeOwnerKeyPair = Readonly<{ publicKey: string; privateKey: string }>;
 

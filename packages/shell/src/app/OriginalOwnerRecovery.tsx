@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
-import { IntakeCommandPayloadV1 } from "@clay/schema/catalog";
-import { IntakeOwnerClaimV1, IntakeOwnerWitnessV1 } from "@clay/schema/owner-witness";
+import { IntakeCommandPayloadV1 } from "@clay/schema/standalone/catalog";
+import { IntakeOwnerClaimV1, IntakeOwnerWitnessV1 } from "@clay/schema/standalone/owner-witness";
 import { IndexedDbIntakeWorkflows, type IntakeWorkflows, type IntakeWorkflowRecord } from "../intake/workflows";
 import { IndexedDbIntakeOwnerVault } from "../intake/owner-custody.browser";
 import type { IntakeOwnerVault } from "../intake/owner-custody";

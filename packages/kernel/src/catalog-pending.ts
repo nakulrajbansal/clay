@@ -1,6 +1,6 @@
-import { GenerationId, NamespaceId } from "@clay/schema";
-import { AppLifecycleReceiptV1, PendingTargetLifecycleJobV1 } from "@clay/schema/catalog";
-import { ArchivePendingJobV1, CatalogRestoreJobV2, type CatalogRestoreJob, type ArchiveLifecycleReceiptV1 } from "@clay/schema/archive";
+import { GenerationId, NamespaceId } from "@clay/schema/standalone/index";
+import { AppLifecycleReceiptV1, PendingTargetLifecycleJobV1 } from "@clay/schema/standalone/catalog";
+import { ArchivePendingJobV1, CatalogRestoreJobV2, type CatalogRestoreJob, type ArchiveLifecycleReceiptV1 } from "@clay/schema/standalone/archive";
 import type { DbDriver } from "./db";
 import { ClayError } from "./errors";
 

@@ -5,8 +5,7 @@
 // S3 or S4. Second failure -> visible failure (amber card in the shell).
 // The Planner is a structural interface so the kernel never depends on
 // @clay/mutation; the shell passes a MutationClient.
-import { MutationPlan as MutationPlanSchema } from "@clay/schema";
-import type { z } from "zod";
+import { MutationPlan as MutationPlanSchema } from "@clay/schema/standalone/index";
 import { ClayError } from "./errors";
 import { deriveInverse, validateMigrationPlan } from "./migrate";
 import { expandBlueprint, parseBlueprintDirective } from "./blueprints";
@@ -25,7 +24,7 @@ export type {
 } from "./planner-authority";
 import { missingDiffLines, validateMutationPlan, type ValidationIssue } from "./validate";
 
-type MutationPlanT = z.infer<typeof MutationPlanSchema>;
+type MutationPlanT = ReturnType<typeof MutationPlanSchema.parse>;
 type QueryT = import("@clay/schema").Query;
 
 export type PlannerContext = {

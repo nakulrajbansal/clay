@@ -3,7 +3,7 @@ import { FocusInput, FocusSelect } from "./FocusControl";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import type { AsyncStore, GlobalSearchResult, RegColumn, RegTable } from "@clay/kernel";
 import type { WorkerClient } from "./worker-client";
-import { DailyCaptureUndoPayloadV1 } from "@clay/schema/catalog";
+import { DailyCaptureUndoPayloadV1 } from "@clay/schema/standalone/catalog";
 import { ModalDialog } from "./ModalDialog";
 import { beginPresentationIntent, cancelPresentationIntent, finishPresentationIntent, readPresentationIntent, reconcilePresentation, retainCaptureUndo, type PresentationIntent } from "./presentation-intent";
 import "./Operations.css";

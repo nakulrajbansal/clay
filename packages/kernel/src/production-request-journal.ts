@@ -5,11 +5,11 @@ import {
   OperationId,
   RequestId,
   UInt64Decimal,
-} from "@clay/schema";
+} from "@clay/schema/standalone/index";
 import {
   ProductionRequestReceiptV1,
   type ProductionRequestReceiptV1 as ProductionRequestReceipt,
-} from "@clay/schema/catalog";
+} from "@clay/schema/standalone/catalog";
 import type { DbDriver, SqlRow, SqlValue } from "./db";
 import {
   PRODUCTION_REQUEST_PREFIX,

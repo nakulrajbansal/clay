@@ -1,4 +1,4 @@
-import { Query as QuerySchema, type Query } from "@clay/schema";
+import { Query as QuerySchema, type Query } from "@clay/schema/standalone/index";
 import { ClayError } from "./errors";
 import { compileQuery } from "./query";
 import {

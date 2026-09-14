@@ -1,5 +1,5 @@
-import { BackupPublicationRequestV1, BackupStageValidationV1, ManualBackupDownloadV2 } from "@clay/schema/backup";
-import { TargetEvidenceV1 } from "@clay/schema/catalog";
+import { BackupPublicationRequestV1, BackupStageValidationV1, ManualBackupDownloadV2 } from "@clay/schema/standalone/backup";
+import { TargetEvidenceV1 } from "@clay/schema/standalone/catalog";
 import { stageProductionRestore, type ProductionStoreAuthority } from "@clay/kernel/worker-authority";
 import { verifyArchiveThroughPort } from "./archive-verification-channel";
 

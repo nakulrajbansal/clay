@@ -6,7 +6,7 @@ import {
   type IntakeUploadedFileV1,
   type PublicFileRequestV1,
   type PublicIntakeLinkPayloadV1,
-} from "@clay/schema/intake";
+} from "@clay/schema/standalone/intake";
 import { encodeBase64Url } from "./crypto";
 import {
   mintIntakeSubmissionId, mintIntakeUploadId, parsePublicIntakeLink,

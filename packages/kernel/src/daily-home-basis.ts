@@ -15,7 +15,7 @@ import {
   type DailyHomeProjectionAuthorityV1 as DailyHomeProjectionAuthority,
   type DailyHomeSnapshotV1 as DailyHomeSnapshot,
   type SnapshotBasisV1 as SnapshotBasis,
-} from "@clay/schema/daily-home";
+} from "@clay/schema/standalone/daily-home";
 import { sha256HexSync } from "./state-digest";
 
 const ENCODER = new TextEncoder();

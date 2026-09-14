@@ -6,7 +6,7 @@ import {
   type ShareCreateResponseV1 as ShareCreateResponse,
   type ShareRelaySnapshotV1 as ShareRelaySnapshot,
   type ShareRevokeResponseV1 as ShareRevokeResponse,
-} from "@clay/schema/share";
+} from "@clay/schema/standalone/share";
 import { boundedRelayJson } from "../app/bounded-relay-response";
 import { relayRequestSha256 } from "../app/relay-request-identity";
 

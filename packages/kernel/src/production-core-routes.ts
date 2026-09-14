@@ -6,7 +6,7 @@ import { RelationKeepRequest, RelationUndoRequest, keepRelation, undoRelation, t
 import type { DbDriver } from "./db";
 import type { TargetEvidenceV1 } from "@clay/schema/catalog";
 import { captureDaily, executeDaily, type CapturedDaily } from "./production-daily";
-import { ManualBackupDownloadV2 } from "@clay/schema/backup";
+import { ManualBackupDownloadV2 } from "@clay/schema/standalone/backup";
 import { recordManualBackupDownload } from "./production-manual-backup";
 
 const IDENT = /^[a-z][a-z0-9_]{0,40}$/;

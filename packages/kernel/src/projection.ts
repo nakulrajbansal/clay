@@ -5,7 +5,7 @@ import {
   type ProjectionManifestV1,
   type ProjectionPlaintextV1,
   type ProjectionRequestV1,
-} from "@clay/schema/projection";
+} from "@clay/schema/standalone/projection";
 import type { Query } from "@clay/schema";
 import { ClayError } from "./errors";
 import type { QueryByteBudget, QueryRow, QueryValue, RecordLink } from "./query";

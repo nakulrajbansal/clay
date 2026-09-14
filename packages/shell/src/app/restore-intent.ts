@@ -1,4 +1,4 @@
-import { RequestId } from "@clay/schema";
+import { RequestId } from "@clay/schema/standalone/index";
 import { parseAuthenticatedFormat5RestoreGrant, type AuthenticatedFormat5RestoreGrant } from "@clay/kernel/recovery";
 import type { WorkerMutationContext } from "./worker-client";
 

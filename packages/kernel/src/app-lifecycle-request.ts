@@ -1,4 +1,4 @@
-import { AppInstanceId, RequestId } from "@clay/schema";
+import { AppInstanceId, RequestId } from "@clay/schema/standalone/index";
 import { ClayError } from "./errors";
 import { sha256HexSync } from "./state-digest";
 import { captureStrictJson } from "./strict-json-capture";

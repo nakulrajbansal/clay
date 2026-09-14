@@ -47,7 +47,7 @@ export {
   type DailyHomeItemV1 as DailyHomeItem,
   type DailyHomeSnapshotV1 as DailyHomeSnapshot,
   type DailySourceLibraryV1 as DailySourceLibrary,
-} from "@clay/schema/daily-home";
+} from "@clay/schema/standalone/daily-home";
 export {
   buildDailyHomeSnapshot, decodeDailyHomeCursor, deriveDailyHomeSections,
   encodeDailyHomeCursor,

@@ -1,5 +1,5 @@
-import { AppInstanceId } from "@clay/schema";
-import { ManualBackupDownloadV2, ManualDownloadIntentV1 as intent } from "@clay/schema/backup";
+import { AppInstanceId } from "@clay/schema/standalone/index";
+import { ManualBackupDownloadV2, ManualDownloadIntentV1 as intent } from "@clay/schema/standalone/backup";
 import type { WorkerClient } from "./worker-client";
 
 export type ManualDownloadIntent = import("@clay/schema/backup").ManualDownloadIntentV1;

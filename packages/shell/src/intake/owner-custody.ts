@@ -1,5 +1,5 @@
-import { IntakeOwnerSourceV1, IntakeToken, LocalIntakeFormV2, PublicIntakeFormV1, type IntakeFormDefinitionV1 } from "@clay/schema/intake";
-import { TargetEvidenceV1 } from "@clay/schema/catalog";
+import { IntakeOwnerSourceV1, IntakeToken, LocalIntakeFormV2, PublicIntakeFormV1, type IntakeFormDefinitionV1 } from "@clay/schema/standalone/intake";
+import { TargetEvidenceV1 } from "@clay/schema/standalone/catalog";
 import { decodeBase64Url, encodeBase64Url, generateIntakeOwnerKeyPair } from "./crypto";
 
 /** Trusted-shell only. Never serialize this record through WorkerClient, a

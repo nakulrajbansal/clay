@@ -1,5 +1,5 @@
 // Typed promise wrapper over the DB worker's command protocol.
-import { IntakeOwnerClaimV1, type IntakeOwnerWitnessV1 } from "@clay/schema/owner-witness";
+import { IntakeOwnerClaimV1, type IntakeOwnerWitnessV1 } from "@clay/schema/standalone/owner-witness";
 import type {
   AttachmentFile, AttachmentMetadata, AttachmentStorageSummary,
   AutomationDefinition, AutomationDefinitionAny, AutomationDefinitionInput,
@@ -39,9 +39,9 @@ import type {
   IntakeAutoAcceptDraftV1, IntakeAutoAcceptRuleV1,
   IntakeSubmissionPlaintextV1, LocalIntakeFormV2,
 } from "@clay/schema/intake";
-import { DailyPresentationV1, PresentationMutationOutcomeV1, TargetEvidenceV1 } from "@clay/schema/catalog";
+import { DailyPresentationV1, PresentationMutationOutcomeV1, TargetEvidenceV1 } from "@clay/schema/standalone/catalog";
 import { BackupRetentionPlanV1, BackupRetentionHistoryV1, BackupRemovalAuthorizationV1, BackupRetentionReceiptV1,
-  type BackupRemovalIntentV1, type BackupRetentionScopeV1 } from "@clay/schema/backup";
+  type BackupRemovalIntentV1, type BackupRetentionScopeV1 } from "@clay/schema/standalone/backup";
 import type { IntentOutcome } from "../worker/db-worker";
 import type { FirstSuccessState } from "./first-success-state";
 import { readPresentationIntent } from "./presentation-intent";
@@ -1997,11 +1997,11 @@ export class WorkerClient {
     return BackupRetentionHistoryV1.parse(await this.ephemeralCall("backupRetentionHistory"));
   }
   async legacyOwnerInventory(after: string | null = null) {
-    const { LegacyOwnerInventoryV1 } = await import("@clay/schema/legacy-owner");
+    const { LegacyOwnerInventoryV1 } = await import("@clay/schema/standalone/legacy-owner");
     return LegacyOwnerInventoryV1.parse(await this.ephemeralCall("legacyOwnerInventory", { after }));
   }
   async transferLegacyOwner(candidate: import("@clay/schema/legacy-owner").LegacyOwnerCandidateV1, port: MessagePort) {
-    const { LegacyOwnerCandidateV1, LegacyOwnerProofV1 } = await import("@clay/schema/legacy-owner");
+    const { LegacyOwnerCandidateV1, LegacyOwnerProofV1 } = await import("@clay/schema/standalone/legacy-owner");
     // Only closed public metadata and an owned port cross WorkerClient. Private
     // decryption and vault adapters are confined to the separate shell runtime.
     let captured: import("@clay/schema/legacy-owner").LegacyOwnerCandidateV1;

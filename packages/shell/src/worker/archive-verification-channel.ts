@@ -1,4 +1,4 @@
-import { BackupAuthenticationV1, MAX_BACKUP_ARCHIVE_BYTES } from "@clay/schema/backup";
+import { BackupAuthenticationV1, MAX_BACKUP_ARCHIVE_BYTES } from "@clay/schema/standalone/backup";
 
 export const ARCHIVE_ENVELOPE_LIMIT = MAX_BACKUP_ARCHIVE_BYTES + 512;
 export type VerifiedArchivePayload = {

@@ -3,8 +3,8 @@ import {
   OperationId,
   Sha256,
   UInt64Decimal,
-} from "@clay/schema";
-import { TargetAuthorityHeaderV1, TargetEvidenceV1 } from "@clay/schema/catalog";
+} from "@clay/schema/standalone/index";
+import { TargetAuthorityHeaderV1, TargetEvidenceV1 } from "@clay/schema/standalone/catalog";
 import type {
   TargetAuthorityHeaderV1 as TargetAuthorityHeader,
   TargetEvidenceV1 as TargetEvidence,

@@ -1,4 +1,4 @@
-import { BackupId } from "@clay/schema/backup";
+import { BackupId } from "@clay/schema/standalone/backup";
 import { ClayError } from "./errors";
 import {
   decodeRecoveryKitV1,

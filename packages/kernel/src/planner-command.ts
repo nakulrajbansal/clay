@@ -1,4 +1,4 @@
-import { MutationPlan } from "@clay/schema";
+import { MutationPlan } from "@clay/schema/standalone/index";
 import { ClayError } from "./errors";
 import { cloneFieldSemantic, cloneTableSemantic } from "./registry";
 import { parseFieldId, parseRelationshipId, parseTableId } from "./semantic";

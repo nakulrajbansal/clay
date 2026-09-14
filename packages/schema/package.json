@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./standalone/*": "./src/standalone/*.mjs",
     "./validation-runtime": "./src/validation-runtime.ts",
     "./archive": "./src/archive.ts",
     "./backup": "./src/backup.ts",

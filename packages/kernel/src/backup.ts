@@ -41,7 +41,7 @@ export {
   type BackupTargetV1 as BackupTarget,
   type ManualBackupDownloadV1 as ManualBackupDownload,
   type ValidatedBackupArtifactV1 as ValidatedBackupArtifact,
-} from "@clay/schema/backup";
+} from "@clay/schema/standalone/backup";
 export {
   BackupTrustCoordinator,
   type BackupFreshnessAssessment,

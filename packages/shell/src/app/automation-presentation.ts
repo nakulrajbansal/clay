@@ -1,4 +1,4 @@
-import { AutomationCommandPayloadV1, AutomationWorkspaceV1 } from "@clay/schema/catalog";
+import { AutomationCommandPayloadV1, AutomationWorkspaceV1 } from "@clay/schema/standalone/catalog";
 import type { AutomationDefinitionV2, AutomationDraftInputV2 } from "@clay/kernel";
 import type { WorkerClient } from "./worker-client";
 import { readPresentationIntent, reconcilePresentation, type PresentationIntent } from "./presentation-intent";

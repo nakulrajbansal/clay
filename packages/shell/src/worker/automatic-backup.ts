@@ -3,7 +3,7 @@ import {
   BackupRunV1,
   BackupStageValidationV1,
   BackupTargetV1,
-} from "@clay/schema/backup";
+} from "@clay/schema/standalone/backup";
 import { buildAutomaticBackupFileName } from "@clay/kernel/external-backup";
 import { inspectAuthenticatedArchiveV5Header } from "@clay/kernel/archive-authentication";
 import {
@@ -21,7 +21,7 @@ import type {
 import { ClayError } from "@clay/kernel/errors";
 import type { BackupTrustRuntime } from "./backup-trust-runtime";
 import { withBackupTrustLock } from "./backup-operation-lock";
-import { BackupResultV1 } from "@clay/schema/backup";
+import { BackupResultV1 } from "@clay/schema/standalone/backup";
 
 type TargetEvidence = ProductionBackupSelection["selected"]["target"];
 

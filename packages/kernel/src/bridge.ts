@@ -5,7 +5,7 @@
 // access is checked against declared_queries (V4 runtime match, with
 // {$var:true} wildcards) and declared_writes (G22/ADR-014); rate limits and
 // strikes per doc 03/06.
-import { BridgeCall, BridgeOpenRecord, BridgePanelError, BridgeUserGesture } from "@clay/schema";
+import { BridgeCall, BridgeOpenRecord, BridgePanelError, BridgeUserGesture } from "@clay/schema/standalone/index";
 import { ClayError } from "./errors";
 import {
   createStoreMutationContext,

@@ -1,6 +1,6 @@
-import { LocalIntakeFormV2 } from "@clay/schema/intake";
-import { IntakeRevocationJobV1 } from "@clay/schema/intake-workflow";
-import { IntakeCommandPayloadV1, PresentationIntentV1, TargetEvidenceV1 } from "@clay/schema/catalog";
+import { LocalIntakeFormV2 } from "@clay/schema/standalone/intake";
+import { IntakeRevocationJobV1 } from "@clay/schema/standalone/intake-workflow";
+import { IntakeCommandPayloadV1, PresentationIntentV1, TargetEvidenceV1 } from "@clay/schema/standalone/catalog";
 import { hydrateIntakeOwnerForm, type IntakeOwnerVault } from "./owner-custody";
 import { buildPublicIntakeLink, discardFailedIntakeDelivery, fetchAndStageIntake, type IntakeOwnerTransport } from "./client";
 import { executeIntakeIntent, IntakeSession } from "./session";

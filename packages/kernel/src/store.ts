@@ -75,8 +75,8 @@ import type {
   IntakeSubmissionPlaintextV1,
   LocalIntakeFormV2,
 } from "@clay/schema/intake";
-import { IntakePublicationClosureV1 } from "@clay/schema/intake";
-import { IntakeAutoAcceptRuleV1 } from "@clay/schema/intake";
+import { IntakePublicationClosureV1 } from "@clay/schema/standalone/intake";
+import { IntakeAutoAcceptRuleV1 } from "@clay/schema/standalone/intake";
 import { assertNoLegacyIntakeArchive } from "./intake-archive-boundary";
 import {
   autoAcceptFingerprint, encodeIntakeFileBytes, hydrateStoredIntakeSubmission,

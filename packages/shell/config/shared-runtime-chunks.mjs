@@ -7,5 +7,7 @@ export function sharedRuntimeChunk(id) {
     return "sqlite-initializer";
   return normalized.includes("/node_modules/zod/")
     || normalized.endsWith("/schema/src/validation-runtime.ts")
+    || normalized.endsWith("/schema/src/standalone/runtime.mjs")
+    || normalized.endsWith("/schema/src/standalone/programs.mjs")
     ? "validation-runtime" : undefined;
 }

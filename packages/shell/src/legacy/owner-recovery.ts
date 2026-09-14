@@ -1,5 +1,5 @@
-import { LocalIntakeFormV1 } from "@clay/schema/intake";
-import { LegacyOwnerCandidateV1, LegacyOwnerProofV1 } from "@clay/schema/legacy-owner";
+import { LocalIntakeFormV1 } from "@clay/schema/standalone/intake";
+import { LegacyOwnerCandidateV1, LegacyOwnerProofV1 } from "@clay/schema/standalone/legacy-owner";
 import { decodeProductionResponse } from "@clay/kernel/production-response-envelope";
 import type { IntakeOwnerVault } from "../intake/owner-custody";
 import { hydrateIntakeOwnerForm, validateIntakeOwnerCustody } from "../intake/owner-custody";
@@ -7,7 +7,7 @@ import { closed, legacyOwnerFailure, ownerDigest, ownerOrigin, portMessage } fro
 import type { WorkerClient } from "../app/worker-client";
 import { IndexedDbIntakeOwnerVault } from "../intake/owner-custody.browser";
 import type { PresentationIntent } from "../app/presentation-intent";
-import { PresentationIntentV1, IntakeCommandPayloadV1 } from "@clay/schema/catalog";
+import { PresentationIntentV1, IntakeCommandPayloadV1 } from "@clay/schema/standalone/catalog";
 
 export type LegacyOwnerRecord = { schema: 1; key: string; shellOrigin: string; proof: LegacyOwnerProofV1;
   bytes: Uint8Array<ArrayBuffer>; custodyCommitted: boolean; actions: Array<{ intent: PresentationIntent; outcome: "pending" | "applied" | "cancelled" }> };

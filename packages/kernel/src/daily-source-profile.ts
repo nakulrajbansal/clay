@@ -2,7 +2,7 @@ import {
   DailySourceLibraryV1,
   type CompletionRuleV1,
   DailySourceProfileV1,
-} from "@clay/schema/daily-home";
+} from "@clay/schema/standalone/daily-home";
 import type { RegColumn, RegTable, Registry } from "./registry";
 import { sha256HexSync } from "./state-digest";
 

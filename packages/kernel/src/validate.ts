@@ -8,13 +8,12 @@
 // statically and are enforced at the Bridge (runtime V4). Write calls'
 // table argument must be a string literal in declared_writes (G22/ADR-014).
 import { parseValidatedPanel, type PanelProgramNode } from "./panel-program";
-import { MutationPlan as MutationPlanSchema } from "@clay/schema";
-import type { z } from "zod";
+import { MutationPlan as MutationPlanSchema } from "@clay/schema/standalone/index";
 import { ClayError } from "./errors";
 import { validateMigrationPlan } from "./migrate";
 import { getTable, resolveField, type Registry } from "./registry";
 
-type MutationPlanT = z.infer<typeof MutationPlanSchema>;
+type MutationPlanT = ReturnType<typeof MutationPlanSchema.parse>;
 type PanelT = MutationPlanT["panels"][number];
 type QueryT = import("@clay/schema").Query;
 type DiffKind = MutationPlanT["user_facing_diff"][number]["kind"];

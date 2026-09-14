@@ -4,7 +4,7 @@ import {
   type IntakeSubmissionPlaintextV1,
   type LocalIntakeFormV2,
   type PublicIntakeFormV1,
-} from "@clay/schema/intake";
+} from "@clay/schema/standalone/intake";
 import type { IntakeDeliveryFailure, IntakeInboxItem } from "@clay/kernel";
 import type { IntakeSession } from "./session";
 import type { hydrateIntakeOwnerForm } from "./owner-custody";

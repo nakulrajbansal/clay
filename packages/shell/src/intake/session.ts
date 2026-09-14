@@ -1,4 +1,4 @@
-import { IntakeCommandPayloadV1, TargetEvidenceV1 } from "@clay/schema/catalog";
+import { IntakeCommandPayloadV1, TargetEvidenceV1 } from "@clay/schema/standalone/catalog";
 import type { WorkerClient } from "../app/worker-client";
 import { beginPresentationIntent, cancelPresentationIntent, finishPresentationIntent, readPresentationIntent,
   reconcilePresentation, type PresentationIntent } from "../app/presentation-intent";

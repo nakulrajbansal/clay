@@ -1,5 +1,5 @@
 import { DailyNavigationCasPayloadV1, DailyNavigationStateV1, DailySourceCasPayloadV1, type DailyCasReviewV1,
-  type DailyPresentationV1, DailyInboxActionPayloadV1, DailyInboxUndoPayloadV1, DailyInboxReceiptV1 } from "@clay/schema/catalog";
+  type DailyPresentationV1, DailyInboxActionPayloadV1, DailyInboxUndoPayloadV1, DailyInboxReceiptV1 } from "@clay/schema/standalone/catalog";
 import { DAILY_SOURCE_LIBRARY_SETTING, type DailySourceProfileStorage } from "@clay/kernel/daily-source-profile";
 import { beginPresentationIntent, readPresentationIntent, reconcilePresentation, type PresentationIntent } from "./presentation-intent";
 import type { WorkerClient } from "./worker-client";

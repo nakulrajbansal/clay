@@ -1,5 +1,5 @@
 import { BackupRemovalAcknowledgementV1, BackupRemovalIntentV1, BackupRetentionHistoryV1,
-  BackupRetentionPlanV1, BackupRetentionReceiptV1, BackupRetentionScopeV1, type BackupRecordV1 } from "@clay/schema/backup";
+  BackupRetentionPlanV1, BackupRetentionReceiptV1, BackupRetentionScopeV1, type BackupRecordV1 } from "@clay/schema/standalone/backup";
 import type { DbDriver } from "./db";
 import { ClayError } from "./errors";
 import { encodeAuthorityIdBytes, productionOperationIdV2 } from "./production-operation-id";

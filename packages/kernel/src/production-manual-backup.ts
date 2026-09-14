@@ -1,6 +1,6 @@
-import { z } from "@clay/schema/validation-runtime";
-import { RequestId } from "@clay/schema";
-import { ManualBackupDownloadV2 } from "@clay/schema/backup";
+import { ledger } from "@clay/schema/standalone/worker-contracts";
+import { RequestId } from "@clay/schema/standalone/index";
+import { ManualBackupDownloadV2 } from "@clay/schema/standalone/backup";
 import type { TargetEvidenceV1 } from "@clay/schema/catalog";
 import { PRODUCTION_STORE_PRIMITIVES as ops, type ClayStore } from "./store";
 import { ClayError } from "./errors";
@@ -14,10 +14,6 @@ import { TargetAuthorityStore } from "./target-authority";
 import { assertCommittedReceiptReservationBinding } from "./sample-provenance-proof";
 
 export const MANUAL_BACKUP_LEDGER = "manual_backup_downloads_v2";
-const ledger = z.object({ schema: z.literal(1), entries: z.array(z.object({
-  requestId: RequestId, record: ManualBackupDownloadV2,
-}).strict()).max(100) }).strict().refine(value => new Set(value.entries.map(entry => entry.requestId)).size === value.entries.length,
-  "duplicate manual-download identities");
 
 export function manualBackupDownloadOutcome(store: ClayStore, driver: DbDriver, authorityId: string,
   target: TargetEvidenceV1, input: unknown, requestId: string): { status: "recorded" | "not_recorded" | "uncertain" } {

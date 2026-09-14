@@ -9,7 +9,7 @@ import {
   ReleaseId,
   Sha256,
   UInt64Decimal,
-} from "@clay/schema";
+} from "@clay/schema/standalone/index";
 import {
   AppLifecycleReceiptV1,
   AppCatalogEntryV1,
@@ -22,7 +22,7 @@ import {
   PendingTargetLifecycleJobV1,
   TargetEvidenceV1,
   WriteFenceV1,
-} from "@clay/schema/catalog";
+} from "@clay/schema/standalone/catalog";
 import {
   BackupPublicationReceiptV1,
   BackupPublicationRequestV1,
@@ -34,12 +34,12 @@ import {
   type BackupPublicationReceiptV1 as BackupPublicationReceipt,
   type BackupPublicationRequestV1 as BackupPublicationRequest,
   type BackupRecordV1 as BackupRecord,
-} from "@clay/schema/backup";
+} from "@clay/schema/standalone/backup";
 import {
   ArchivePendingJobV1,
   CatalogRestoreJobV2,
   type CatalogRestoreJob as ArchivePendingJob,
-} from "@clay/schema/archive";
+} from "@clay/schema/standalone/archive";
 import type {
   AppLifecycleReceiptV1 as AppLifecycleReceipt,
   AppCatalogSnapshotV1 as AppCatalogSnapshot,

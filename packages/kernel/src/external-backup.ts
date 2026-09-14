@@ -18,8 +18,8 @@ import {
   type BackupSelectedTargetV1 as BackupSelectedTarget,
   type BackupStageValidationV1 as BackupStageValidation,
   type ValidatedBackupArtifactV1 as ValidatedBackupArtifact,
-} from "@clay/schema/backup";
-import { CanonicalInstant, type TargetEvidenceV1 as TargetEvidence } from "@clay/schema/catalog";
+} from "@clay/schema/standalone/backup";
+import { CanonicalInstant, type TargetEvidenceV1 as TargetEvidence } from "@clay/schema/standalone/catalog";
 import { sha256HexSync } from "./state-digest";
 
 export interface ExternalBackupWriter {

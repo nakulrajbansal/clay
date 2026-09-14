@@ -1,4 +1,175 @@
-# FIX phase 1 — Preact and shared styles — 2026-09-14
+# Worker FIX phase 1 — closed standalone validators — 2026-09-14
+
+Base: `da925383ea11398291ca4bbc5163a1ad99c2d7f9`, `D:\Clay`,
+`codex/clay-project`; HEAD and the origin tracking ref matched at entry. This is
+one uncommitted source/test refactor by the sole writer, not a release candidate.
+No dependency installation, Git write, deployment, credential access, other
+worktree, browser launch, server termination, collector change or budget change.
+Prior A–F, Preact, CSS, shared SQLite and Acorn specialization are preserved.
+
+## Current worker-refactor boundary
+
+- Added a deterministic, build-time compiler and 18 source-bound standalone
+  contract modules (368 named validators; 38 generated source/type files).
+  `@clay/schema/standalone/*` exposes parse/safeParse and typed enum options;
+  the original Zod exports remain the development/test oracle. Import/staging,
+  metrics, saved-view, intake-state and command schemas were lifted verbatim
+  into authoring files so no production caller constructs a Zod schema.
+- The closed compiler pins all authoring/helper inputs and the complete pinned
+  Zod ESM dependency closure, checks the resolved package identity, rejects
+  unexpected input paths and schema AST/hooks, and has no auto-approval flag.
+  Refinement code remains ordinary static source, with distinct spans for
+  chained refinements. Arbitrary transforms, coercion, defaults, recursion,
+  custom validators and maps fail closed. The existing JSON recursion and import
+  ArrayBuffer predicate are explicitly supported, not generalized fallbacks.
+- `standalone/runtime.mjs` interprets generated validation data only; programs
+  are not accepted through any worker command. A deterministic literal pool
+  removes repeated inert program data; callbacks, lexical references, stateful
+  regexes and externally exposed enum options are not pooled. Whole schema
+  construction uses PURE IIFEs, preserving the existing narrow-import boundary
+  under both Rollup and esbuild. Parse calls themselves are never marked pure.
+- Kernel and trusted-shell value imports now use standalone modules. Existing
+  captureStrictJson, the full 2,000,000-byte input envelope, ClayError adapters,
+  request/receipt identity, journal/fence checks, SQL and durable writes remain
+  in their original worker/authority paths. No authority relationship or
+  transition algorithm has yet been consolidated (phases 2/3 are NOT done).
+- Build guards run deterministic generation `--check`, reject authoring/Zod
+  production modules, and verify a single shared interpreter asset. Existing
+  renderer and planner transport guards still pass. Generator operation and
+  supported contracts are documented in `packages/schema/scripts/README.md`.
+- `node scripts/schema-production-inventory.mjs --output` records actual-module
+  source imports plus source-bound per-declaration policies/checks in ignored
+  `test-results/fix-batch/schema-production-inventory.json`: **117 imports,
+  zero authoring factories, 18 contract sources**. This is development inventory,
+  not certification. The unchanged A–F route census remains authoritative.
+
+## Worker-refactor verification
+
+Deterministic REDs caught issue-order/own-property differences, chained-hook
+identity collision, unsupported AST/manifest handling, enum-option aliasing,
+and old-runtime module presence. Differential packets now cover every generated
+public validator, nested alternatives/bounds, canonical outputs, issue paths and
+messages, unknown keys, prototypes/accessors, symbols, sparse arrays, Unicode,
+non-finite inputs, defaults, transforms supported as string checks, and refinements.
+This is executable differential coverage, not a claim of exhaustive equivalence.
+
+Real results so far (repository-local installed binaries, broad commands serial):
+
+| Command / working directory | Result |
+| --- | --- |
+| Package-local Vitest, initial full kernel after adapter switch | PASS: 1,202 passed / 1 skipped, 114 files, 463.03s |
+| Package-local Vitest, initial full schema | PASS: 505 tests / 21 files, 17.95s |
+| Full shell with JSON output `shell-standalone.json` | RED: 878 passed / 1 failed, 137 files, 408.05s; no unhandled-error report |
+| Full shell with JSON output `shell-standalone-final.json`, before final proxy read-order adjustment | PASS: 881 tests / 137 files, 397.48s; no unhandled-error report |
+| `test/schema-tree-shaking.test.mjs` after construction fix / shell | GREEN: 3 tests; original staging-only assertion retained |
+| `test/shared-validation-runtime.test.mjs test/schema-tree-shaking.test.mjs` / shell | PASS: 6 tests, including independent standalone realm compilation |
+| Standalone compiler/pool/runtime/effects/generated focused packet / schema | PASS: 351 tests / 5 files, 8.54s |
+| `node packages/schema/scripts/generate-standalone.mjs --check` / root | PASS: 18 modules, 368 validators, 38 files |
+| Kernel and shell package-local `tsc --noEmit` after import/type adaptation | Both exited 0 |
+| Panel Vite build / panel-runtime | PASS: 5 modules, 660ms |
+| `node scripts/bundle-module-report.mjs` / root, final construction source | PASS: actual production build, 162 modules, 14.84s |
+| `node scripts/renderer-module-check.mjs` / root | PASS: one Preact closure; no React/ReactDOM/Scheduler; raw shell planner + closed worker decoder |
+| `node scripts/standalone-module-check.mjs` / root | PASS: no Zod/authoring factories; one shared standalone interpreter asset |
+| `node scripts/bundle-diagnostic.mjs` / root | Exit 1: only completeWorker and completeBrowser are over budget |
+
+Final full-suite/typecheck/collector reruns are complete and recorded below.
+The initial kernel/schema results precede the final literal-pooling/construction
+adjustments and must not be substituted for final-source package results.
+An additional RED/GREEN accessor test corrected exact-length array read order
+and the simultaneous-too-big/too-small issue shape for a changing proxy.
+The runtime packet is now seven tests. Reports/builds preceding that adjustment
+are explicitly superseded by the final-source reruns below.
+
+Final-source results (all six package suites passed; 2,832 tests passed / 1 skipped):
+
+| Gate | Result |
+| --- | --- |
+| Full schema, `schema-standalone-verified.json` | PASS: 512 tests / 22 files, 18.09s |
+| Full mutation, `mutation-standalone-verified.json` | PASS: 60 tests / 8 files, 5.19s |
+| Full panel-runtime, `panel-runtime-standalone-verified.json` | PASS: 66 tests / 4 files, 6.90s |
+| Full backend, `backend-standalone-verified.json` | PASS: 111 tests / 11 files, 10.48s |
+| Full kernel, `kernel-standalone-verified.json` | PASS: 1,202 passed / 1 skipped, 114 files, 463.88s |
+| Full shell, `shell-standalone-verified.json` | PASS: 881 tests / 137 files, 398.40s; no unhandled-error report |
+| `node node_modules/typescript/bin/tsc --noEmit` in each of six packages | All six exited 0; the shell finder first caught a missing build-guard declaration, now provided without an any-cast |
+| `node node_modules/vite/bin/vite.js build` / panel-runtime | PASS: 5 modules, 676ms |
+| `node scripts/bundle-module-report.mjs` / root | PASS: actual production build, 162 modules, 15.03s |
+| Renderer/planner and standalone module checks / root | Both exited 0: one Preact closure, closed worker decoder, no Zod/authoring factories, one shared standalone engine |
+| `node scripts/bundle-diagnostic.mjs` / root | Exit 1: exactly completeWorker and completeBrowser remain red; measurements below |
+| `node scripts/bundle-budget.mjs` / root, unchanged | Exit 1: freshness PASS, then `database worker JavaScript closure: 1381089 B raw / 377530 B gzip exceeds 1010000 B / 280000 B` |
+| `node --test scripts/bundle-budget.test.mjs` / root | PASS: 19 tests, 124.49ms |
+| `node scripts/schema-production-inventory.mjs --output` / root | Exit 0: 117 imports, zero authoring factories, 18 contract sources |
+| `node scripts/roadmap-development-census.mjs` / root | Exit 0: developmentComplete=true, 21 capabilities; inventory only, no tests/browser proof executed by this command |
+| Added-content scan / root | No flagged dynamic execution, unsafe HTML assignment, debugger or credential literal. Bounded scan, not security certification |
+
+Full package commands used the installed package-local Vitest binary, serially:
+`node node_modules/vitest/vitest.mjs run --maxWorkers=1 --minWorkers=1 --reporter=dot --reporter=json --outputFile.json=../../test-results/fix-batch/<package>-standalone-verified.json`.
+The full kernel/shell runs include the catalog, target, archive, planner, import,
+Daily Home, automation, intake, lifecycle, restore, owner-recovery and native
+recovery packets, including real WorkerClient/db-worker integration fixtures.
+These are not packaged browser certification. A prior generated historical
+bundle-report side effect was reverted to exact HEAD bytes; current measurements
+remain only in ignored diagnostic outputs. Collectors, limits and lockfile are
+unchanged.
+
+## Measured worker-refactor checkpoint
+
+The latest actual module report and full diagnostic are in
+`test-results/fix-batch/bundle-modules.json` and `bundles.json` (not release evidence).
+
+| Boundary | Entry raw / gzip | Current raw / gzip | Frozen raw / gzip | Result |
+| --- | ---: | ---: | ---: | --- |
+| totalShellJavaScript | 947,561 / 289,911 | **892,215 / 279,135** | 980,000 / 290,000 | PASS |
+| applicationStyles | 60,905 / 16,825 | **60,905 / 16,825** | 67,000 / 17,000 | PASS |
+| completeWorker | 1,434,812 / 387,687 | **1,381,089 / 377,530** | 1,010,000 / 280,000 | FAIL: 371,089 / 97,530 over |
+| completeBrowser | 3,369,405 / 1,122,212 | **3,306,124 / 1,110,773** | 3,250,000 / 1,100,000 | FAIL: 56,124 / 10,773 over |
+| workerAuthority | 212,957 / 53,228 | **231,268 / 58,286** | 240,000 / 60,000 | PASS |
+
+Actual net savings: worker **53,723 raw / 10,157 gzip**; browser **63,281 / 11,439**;
+shell **55,346 / 10,776**. The proposed standalone design target of 83,000 / 20,000
+was NOT reached. Schema representation and chunk membership offset part of the
+removed runtime. Splitting assets is not a substitute for further source deletion.
+All other measured boundaries pass. Worker-authority headroom is now only
+8,732 / 1,714; styles gzip headroom remains 175. Do not assume new headroom.
+
+## Exact continuation — shared authority graph, not certification
+
+1. Preserve this standalone implementation and its oracle/build guards. Begin
+   phase 2 at `device-catalog.ts:821` (`readValidatedCatalog`, 34,236 source
+   characters) and `archive-authority.ts:866` (`validateAuthorityHistory`, 26,398).
+   Capture independent live/archive fixtures and corruption differentials FIRST.
+   Normalize only already-captured, bounded rows into a shared `AuthorityGraph`;
+   use closed live/recovery/archive-version discriminants, not permissive booleans.
+   Keep exact DDL/object allowlists, physical cardinality, codecs and live pending
+   job semantics in the live adapter. Keep authentication-before-ZIP, member/
+   canonical JSON/checksum/Merkle/cardinality and archive compatibility at the
+   archive adapter. Do not mask nonterminal lifecycle work or legacy quarantine.
+2. Concrete duplicated relationship seams are generation/app/genesis binding;
+   retained identity reference accounting; reservation-to-lease and finalizer
+   time/epoch binding; generation event ordering/reservation publication mirrors;
+   lifecycle/backup receipt history. Live and archive have real differences in
+   pending work, tombstones, old no-op identity migration and sealed history.
+   Preserve them explicitly and retain error adapters. No graph implementation
+   or graph differential oracle has been added in this turn.
+3. Actual rendered source membership: DeviceCatalog **181,701** bytes in target
+   authority; archive-authority **69,728** and production-mutation-coordinator
+   **106,003** in worker authority; Store **265,257** in asyncstore. These are
+   Rollup rendered lengths, NOT additive gzip savings. Current large chunks:
+   asyncstore ~498 KB, target authority ~188 KB, DB entry ~160 KB, focused worker
+   authority ~231 KB, SQLite ~211 KB. Use fresh reports after every structural move.
+4. Only after shared graph parity and measurement, attempt phase 3. The next
+   coordinator seams are captureMutation / executeCapturedMutation /
+   #executeMeaningful; Store prepareSemanticAssignments, runDueAutomations,
+   acceptIntakeSubmission and commitImport remain large. Migrate one closed
+   route family at a time with independent-store/failpoint differentials;
+   lifecycle/create/delete/restore stay dedicated. Preserve stable routes,
+   error ordering, no-op/replay, poisoning, native recovery and sole worker ownership.
+5. Browser execution, Release B rebinding/frozen runtime, clean-tree local export,
+   manual NVDA and final integrated review remain for the parent workflow after
+   source stabilizes. No certification, release or full FIX completion is claimed.
+
+---
+
+# Historical checkpoint — Preact and shared styles — 2026-09-14
 
 Base: `7b4a905351a97fe2f7d0c79e7ba028a9d22a037c`, `D:\Clay`,
 `codex/clay-project`. The base and origin tracking ref matched at entry. Sole
