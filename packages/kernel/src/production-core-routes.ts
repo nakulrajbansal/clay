@@ -8,8 +8,11 @@ import type { TargetEvidenceV1 } from "@clay/schema/catalog";
 import { captureDaily, executeDaily, type CapturedDaily } from "./production-daily";
 import { ManualBackupDownloadV2 } from "@clay/schema/standalone/backup";
 import { recordManualBackupDownload } from "./production-manual-backup";
-import { captureJsonValue } from "./production-json-capture";
-import type { ProductionResponseJson } from "./production-response-envelope";
+import { captureJsonValue, capturedExecution, type CapturedMutationExecution } from "./production-json-capture";
+import { assertExactSampleProvenance } from "./production-response-envelope";
+import { captureSampleFill, captureSampleRemoval, executeCapturedSampleFill, executeCapturedSampleRemoval,
+  sampleProvenanceCoordinates, type CapturedSampleFill, type SampleFillExecutionOutcome } from "./production-samples";
+import { targetAuthorityInvalid as invalid } from "./production-input-capture";
 
 const IDENT = /^[a-z][a-z0-9_]{0,40}$/;
 const PANEL_ID = /^[a-z][a-z0-9_]{2,40}$/;
@@ -35,6 +38,8 @@ type CapturedRelationColumn = Readonly<{
 
 export type CapturedCoreMutation =
   | CapturedDaily
+  | Readonly<{ requestId: string; route: "samples.fill"; payload: CapturedSampleFill }>
+  | Readonly<{ requestId: string; route: "samples.remove"; payload: Readonly<Record<string, never>> }>
   | Readonly<{ requestId: string; route: "backup.manualDownload"; payload: ManualBackupDownloadV2 }>
   | Readonly<{ requestId: string; route: "schema.convertTextToRelation"; payload: CapturedRelationKeep }>
   | Readonly<{ requestId: string; route: "schema.undoRelationConversion"; payload: CapturedRelationUndo }>
@@ -192,14 +197,17 @@ const canonicalPolicy = Object.freeze({
   kind: "canonical-shadow-journal-v1", native: "guarded-transaction", clock: "none",
 } as const);
 const timedPolicy = Object.freeze({ ...canonicalPolicy, clock: "trusted-instant" } as const);
-type TransitionContext = Readonly<{ requestId: string; target?: TargetEvidenceV1; driver?: DbDriver; now?: string }>;
+// Same journal/fence/no-op protocol, distinct input and producer-envelope contracts.
+const sampleProducerPolicy = Object.freeze({ ...canonicalPolicy, kind: "canonical-sample-producer-v1" } as const);
+const sampleRemovalPolicy = Object.freeze({ ...canonicalPolicy, kind: "canonical-sample-removal-v1" } as const);
+type TransitionContext = Readonly<{ requestId: string; target?: TargetEvidenceV1; driver?: DbDriver; now?: string; operationId?: string }>;
 export type ProductionRouteSpec<R extends TransitionRoute = TransitionRoute> = Readonly<{
   route: R;
-  policy: typeof canonicalPolicy | typeof timedPolicy;
+  policy: typeof canonicalPolicy | typeof timedPolicy | typeof sampleProducerPolicy | typeof sampleRemovalPolicy;
   capture: (requestId: string, input: unknown) => TransitionRequest<R>;
   prepare: (request: TransitionRequest<R>) => StoreCommand;
   execute: (store: ClayStore, payload: TransitionRequest<R>["payload"], context: TransitionContext) => unknown;
-  result: (value: unknown) => ProductionResponseJson;
+  result: (value: unknown) => CapturedMutationExecution;
 }>;
 const requests = new WeakSet<object>();
 // Only schema-returned bounded plain data reaches this freezer (never caller data).
@@ -226,7 +234,7 @@ function spec<R extends TransitionRoute>(route: R, policy: ProductionRouteSpec["
       const request = input as TransitionRequest;
       return Object.freeze([route, request.payload, request.requestId]) as StoreCommand;
     },
-    execute, result: (value: unknown) => captureJsonValue(value, new WeakSet()),
+    execute, result: (value: unknown) => capturedExecution(captureJsonValue(value, new WeakSet())),
   });
 }
 const panels = (store: ClayStore) => PRODUCTION_STORE_PRIMITIVES.livePanels.call(store);
@@ -242,6 +250,20 @@ function columnPayload<T>(input: unknown, capture: (input: unknown) => T): Reado
   return Object.freeze({ table: payload.table, column: capture(payload.column) });
 }
 const specifications = Object.freeze(Object.fromEntries([
+  Object.freeze({ ...spec("samples.fill", sampleProducerPolicy, captureSampleFill, (store, payload, { operationId }) => {
+    if (!operationId) throw invalid("sample fill operation identity is unavailable");
+    if (sampleProvenanceCoordinates(store, operationId).length !== 0)
+      throw invalid("sample fill operation provenance already exists");
+    const outcome = executeCapturedSampleFill(store, payload, operationId);
+    const expected = payload.tables.reduce((total, table) => total + table.rows.length, 0);
+    assertExactSampleProvenance(outcome.sampleProvenance, sampleProvenanceCoordinates(store, operationId), expected, "sample fill operation");
+    return outcome;
+  }), result: (value: unknown) => {
+    // Only the pinned producer above returns this already checked immutable outcome.
+    const outcome = value as SampleFillExecutionOutcome;
+    return capturedExecution(captureJsonValue(outcome.result, new WeakSet()), outcome.sampleProvenance);
+  } }),
+  spec("samples.remove", sampleRemovalPolicy, captureSampleRemoval, store => executeCapturedSampleRemoval(store)),
   spec("backup.manualDownload", canonicalPolicy, input => ManualBackupDownloadV2.parse(input), (store, payload, { target, requestId }) => {
     if (!target) throw new ClayError("E_CONFLICT", "Download record requires an authority target");
     return recordManualBackupDownload(store, requestId, payload, target);
@@ -310,10 +332,10 @@ export function prepareProductionTransition(request: CapturedCoreMutation): Prod
 /** Called in disposable shadow or LiveWriteAuthority's synchronous transaction.
  * The original coordinator owns all capture/fence/reserve/publish/readback stages. */
 export function executeProductionTransition(store: ClayStore, transition: ProductionTransition,
-  target?: TargetEvidenceV1, driver?: DbDriver, now?: string): ProductionResponseJson {
+  target?: TargetEvidenceV1, driver?: DbDriver, now?: string, operationId?: string): CapturedMutationExecution {
   if (!transitions.has(transition)) throw new ClayError("E_TARGET_AUTHORITY_INVALID", "production transition is not captured");
   return transition.spec.result(transition.spec.execute(store, transition.command[1], {
-    requestId: transition.command[2], target, driver, now,
+    requestId: transition.command[2], target, driver, now, operationId,
   }));
 }
 
@@ -408,6 +430,6 @@ function renameColumn(store: ClayStore, table: string, from: string, to: string)
 export function executeCapturedCoreMutation(store: ClayStore, request: CapturedCoreMutation,
   target?: TargetEvidenceV1, driver?: DbDriver, now?: string): unknown {
   const transition = prepareProductionTransition(request);
-  if (transition) return executeProductionTransition(store, transition, target, driver, now);
+  if (transition) return executeProductionTransition(store, transition, target, driver, now).result;
   throw new ClayError("E_TARGET_AUTHORITY_INVALID", "production transition route is unavailable");
 }

@@ -1,3 +1,193 @@
+# Worker FIX samples and Store reducers — 2026-09-14
+
+Base: `a8aa18742783cf358e6313f387923bdd63d9c110`, `D:\Clay`,
+`codex/clay-project`. HEAD and the local origin tracking ref matched and the tree
+was clean at entry. This section supersedes the earlier continuation below.
+Sole writer; no Git writes, installs, credential access, other-worktree edits,
+server termination, deployment/configuration, browser launches or formal review.
+Frozen collectors/limits and release evidence are unchanged. All A–F source
+capabilities remain; **aggregate optimization and certification are not complete**.
+
+## Implemented boundary and independent parity
+
+- Migrated only `samples.fill` / `samples.remove` into the existing closed
+  transition registry (20 routes, previously 18). Separate producer/removal
+  policy discriminants retain the original strict captures, operation identity,
+  provenance accounting and optional producer result envelope, including the
+  empty producer case. Removed their duplicate coordinator capture/dispatch
+  paths. The physical protocol, canonical/no-op/receipt semantics, fencing,
+  poisoning and recovery are unchanged; lifecycle/restore remain dedicated.
+- Relocated the exact `capturedExecution` envelope into `production-json-capture`
+  and `sampleProvenanceCoordinates` into `production-samples`. No runtime command,
+  SQL transport, setting capability, route name, caller or durable owner changed.
+  The 25 callerless compatibility routes remain retired and fail closed.
+- Captured the **whole pre-change Store** as the test-only `test/oracles/store.ts`.
+  Only relative imports, a provenance header and a test-only schema-check export
+  differ from the base. LF-normalized SHA-256:
+  `80ab194f69db122898dc2d6853e8f47f285a775ac9490aff622f62e09efb4fd7`.
+  Existing coordinator/core/AuthorityGraph oracles and their pins are untouched.
+- `prepareSemanticAssignments` now shares field introduction/reactivation and
+  annotation dispatch. Reference/computed synchronization retains its original
+  per-operation ordering, identities, aliases, tombstones and error behavior.
+- `runDueAutomations` shares bounded match consumption/execution and the original
+  event-origin/kind predicate. Trigger eligibility, cursor progress, persisted
+  matches, successful-run checks, per-rule calendar behavior, failure and retry
+  policies remain in their original branches. Native transaction availability
+  and retained scheduler reconciliation are unchanged.
+- `acceptIntakeSubmission` / captured attachment add now share one private fixed
+  attachment-row insert; `commitImport` / `applyBatch` share one private fixed
+  operation-batch insert. These helpers have no caller-selected SQL target,
+  SQL, setting, code or unvalidated mutation program. Existing input/signature/digest limits,
+  transaction boundaries, distinct no-op policies, provenance/history, private
+  custody boundaries, receipt validation/readback and Undo remain at their
+  original call sites. `rawArchiveSchemaIssues` was inspected but not changed:
+  its version-specific schema/index checks are not a duplicate row reducer.
+- `store-reducer-fixture` opens independent original/current Store classes on
+  separate guarded database copies, preserving the original Store's own private
+  attachment executor. It compares results/errors, exact physical DDL/rows and
+  exported user/system bytes, registry/history, canonical leaves and independent
+  Merkle materialization. Store-level tests do not pretend to publish catalog
+  receipts. Samples coordinator tests separately compare catalog/target/journal
+  state and recovery through ProductionStoreAuthority.
+
+## RED/GREEN and measurement stop rule
+
+The sample differential added 13 cases: fill/remove/replay/reload, empty/no-op,
+provenance, stale/colliding identities, capture errors, and both routes at
+reservation/invocation/publication/readback failpoints. The missing closed policy
+was RED before switching. A fixture initially carried a prior fill's terminal
+marker into a removal fault; that was corrected before production switching.
+Focused GREEN: **75 tests / 4 files, 166.12s** (`samples-transition.json`).
+
+The immediate samples build **grew** completeWorker by **243 raw / 101 gzip**.
+This fails the user's 10,000 / 2,000 threshold. **The stop rule was honored: no
+automation/intake/import descriptor-family migration followed.**
+
+Store differentials froze original behavior before each move. Structural REDs
+required one semantic introduction path, one due-run call site, and single fixed
+row inserts. Behavioral checks include all six semantic origins, all five due
+trigger kinds, import append/upsert/no-change and replay, all three batch sources,
+manual/automatic intake and attachments, Undo, stale identities, reopen and
+physical-write/durable-readback faults. Invalid fixture assumptions (an oversized
+migration plan, backfill on an old field, missing `required: false`, and an empty
+batch treated as a no-op) were corrected to match the original bounded contracts,
+not by weakening production. Empty batches still fail with E_LIMIT.
+
+Focused GREEN packets actually run:
+
+- Semantic reducer + semantic-store + semantic-ids: **31 passed / 3 files, 20.15s**.
+- Store reducers + automation-release-e + automations: **78 passed / 3 files,
+  31.36s** (`store-due.json`).
+- Row reducers + import-journey + intake + all three attachment suites:
+  **50 passed / 6 files, 24.57s**.
+- After adding Keep/Undo readback faults: row reducers **20 passed, 23.26s**
+  (`store-row-green.json`, supersedes that file's earlier packet).
+- Kernel typecheck after all production changes: exit 0.
+
+Every production step was built/measured with the unchanged diagnostic and
+frozen gate. Values below are actual complete-worker output, not source-length
+estimates. A negative saving means growth; shared strings already gzip well.
+
+| Step | Complete worker raw / gzip | Saving from preceding step raw / gzip |
+| --- | ---: | ---: |
+| Entry | 1,371,604 / 376,955 | — |
+| Samples | 1,371,847 / 377,056 | -243 / -101 |
+| Semantic reducer | 1,371,419 / 377,072 | 428 / -16 |
+| Due-run reducer | 1,371,162 / 377,010 | 257 / 62 |
+| Fixed row/receipt writers | 1,370,834 / 377,042 | 328 / -32 |
+
+Final net: **770 raw bytes saved, 87 gzip bytes larger**. This is not a material
+aggregate-budget solution. Further small reducer/descriptor extraction is not
+the next optimization strategy.
+
+## Final verification
+
+All six full suites passed on final production source: **3,002 passed / 1 skipped**,
+with no reported unhandled errors. Commands were run serially from each package:
+`node node_modules/vitest/vitest.mjs run --maxWorkers=1 --minWorkers=1 --reporter=dot --reporter=json --outputFile=../../test-results/fix-batch/<package>-store-reducers.json`.
+
+| Final-source gate | Actual result |
+| --- | --- |
+| Full kernel | 1,372 passed / 1 skipped; 119 passing / 1 skipped files; 670.50s |
+| Full schema | 512 passed / 22 files; 17.93s |
+| Full mutation | 60 passed / 8 files; 4.91s |
+| Full panel-runtime | 66 passed / 4 files; 14.07s |
+| Full backend | 111 passed / 11 files; 10.75s |
+| Full shell (including A–F real WorkerClient/db-worker and native recovery fixtures) | 881 passed / 137 files; 402.45s |
+| `node node_modules/typescript/bin/tsc --noEmit` in each of six packages | All six exited 0 |
+| Panel `node node_modules/vite/bin/vite.js build` | PASS: 5 modules; 662ms |
+| `node scripts/bundle-module-report.mjs` | PASS: actual production build, 162 modules; 14.77s |
+| Renderer / standalone / AuthorityGraph / production-transition module checks | All four exited 0; no renderer/validator duplication, shell authority graph, production oracle or test-fault branch |
+| `node packages/schema/scripts/generate-standalone.mjs --check` | Exit 0: 18 modules, 368 validators, 38 current generated files |
+| `node --test scripts/bundle-budget.test.mjs` | 19 passed; 241.347ms |
+| `node scripts/bundle-diagnostic.mjs` | Exit 1: only completeWorker and completeBrowser fail |
+| Unchanged `node scripts/bundle-budget.mjs` | Freshness PASS; exit 1 at complete worker, exact error below |
+| `node scripts/roadmap-development-census.mjs` | Exit 0: developmentComplete=true, 21 capabilities, no development blockers/hard-disable flags, 25 retired routes; inventory only |
+| `git diff --check`; frozen collector/limit/lockfile/census/evidence comparison | Exit 0; those inputs and release evidence are unchanged |
+| Bounded scan of all five changed production modules | No flagged eval/Function/debugger/unsafe HTML assignment/private-key or bearer literal; not security certification |
+
+```text
+Error: database worker JavaScript closure: 1370834 B raw / 377042 B gzip exceeds 1010000 B / 280000 B
+```
+
+Final actual boundaries (raw / gzip):
+
+| Boundary | Final | Frozen limit | Result |
+| --- | ---: | ---: | --- |
+| totalShellJavaScript | 892,215 / 279,146 | 980,000 / 290,000 | PASS |
+| applicationStyles | 60,905 / 16,825 | 67,000 / 17,000 | PASS |
+| workerAuthority | 218,583 / 56,541 | 240,000 / 60,000 | PASS |
+| completeWorker | 1,370,834 / 377,042 | 1,010,000 / 280,000 | FAIL: 360,834 / 97,042 over |
+| completeBrowser | 3,295,869 / 1,110,298 | 3,250,000 / 1,100,000 | FAIL: 45,869 / 10,298 over |
+
+All other measured boundaries pass. Worker raw saving is 770; browser raw saving
+is also 770 but browser gzip grew 84. Shell raw/styles are unchanged; shell gzip
+varied by -2 bytes with emitted asset references. No code was shifted into shell.
+The final `asyncstore` chunk is **497,379 / 143,281**, `target-authority`
+**191,808 / 41,103**, and shared SQLite **210,779 / 62,560**.
+
+Reports are ignored development output in `test-results/fix-batch/`:
+`bundle-modules.json`, `bundles.json`, `samples-transition.json`, `store-due.json`,
+`store-row-green.json` and six `<package>-store-reducers.json` files. No packaged
+browser/certification evidence or immutable review artifact was generated.
+The uncommitted diff is twelve paths: five production kernel modules, the
+existing transition test, three new Store fixture/test modules, the frozen Store
+oracle, oracle README and this handoff. HEAD/origin tracking ref are unchanged.
+No additional tool cache or unrelated untracked path is present.
+
+## Exact continuation
+
+1. Preserve these independent Store/coordinator/graph oracles and A–F tests.
+   Do not mechanically migrate more descriptors or extract small duplicate
+   strings expecting gzip savings. The controlling gaps after the last build
+   are **360,834 raw / 97,042 gzip worker**, **45,869 / 10,298 browser**.
+2. Highest-leverage next isolated edge: prove and generate a **closed SQLite API
+   use trace** from `db.ts`, SAHPool initialization/native recovery/observer
+   consumers, Worker1, OO1 and the pinned initializer's internal calls before any
+   minimal-initializer omission. The current shared initializer is **210,779 raw /
+   62,560 gzip**, with **566,876 rendered source bytes**. The source investigation
+   found optional KVVFS (~48,997 source chars) and JS vtab helpers (~12,999), but
+   **no unreachable-API proof or omission is implemented**. KVVFS 3.53 initializes
+   callbacks/struct APIs and supports named in-memory storage even in workers;
+   absence of direct Clay `kvvfs` strings is insufficient proof. Vtab also adds
+   struct prototype helpers and is used internally by KVVFS. Trace aliases,
+   callbacks, dynamic property access and initialization effects; unresolved
+   escape/drift must fail closed. Preserve exact 3.53.0-build1 WASM, required
+   CAPI/OO1/struct/VFS/Worker1/SAHPool/journal/locking behavior. No VFS change here.
+3. The other substantial production memberships are Store (263,224 rendered),
+   DeviceCatalog (166,513), coordinator (98,032), seed panels (60,830), seed data
+   (30,120), projection (27,113), and Daily basis (25,844). These are not additive
+   minified savings. Pure seed/projection work may be reconsidered only with a
+   real product/performance benefit and closed recapture/freshness/loss tests;
+   merely emitting another worker/chunk does not reduce completeBrowser.
+   No helper worker, authority split or final-validation relocation was made.
+4. Parent runs source-bound packaged browsers after stabilization. Release B
+   rebinding/frozen-runtime evidence, clean-tree local export, human NVDA and
+   final review remain external/later gates. Do not treat this development parity
+   checkpoint or a green census as certification or shipment.
+
+---
+
 # Worker FIX phase 3A — core transition foundation — 2026-09-14
 
 Base: `f53ac67eb3541b56c5d6bedadc0acbfd78563c64`, `D:\Clay`,

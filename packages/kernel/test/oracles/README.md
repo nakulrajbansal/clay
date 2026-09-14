@@ -1,5 +1,30 @@
 # AuthorityGraph pre-refactor oracles
 
+## Whole Store oracle (samples / reducer continuation)
+
+`store.ts` was captured from `a8aa18742783cf358e6313f387923bdd63d9c110`
+before any Store reducer changes. Only the provenance header, relocated relative
+imports and test-only `rawArchiveSchemaIssuesOracle` export differ. Its
+LF-normalized SHA-256 is
+`80ab194f69db122898dc2d6853e8f47f285a775ac9490aff622f62e09efb4fd7`;
+`store-reducers.test.ts` pins it. Do not update this oracle to fit production.
+
+`store-reducer-fixture.ts` opens independent old/new Store classes on separately
+cloned, guarded synthetic databases. The old Store's private weak-map attachment
+executor and all reducer bodies remain original. The fixture compares exact
+user/system database exports, DDL/rows, semantic registry/history, canonical
+enumeration and independent Merkle materialization. Store reducers do not publish
+catalog receipts; their catalog/authority behavior is instead covered by the
+coordinator differential and WorkerClient integration packets. Faults pass
+through the real guard/transaction implementation and throw at selected physical
+writes or durable receipt readback. Reopen reconstructs each original/current
+Store without changing the connection's authority.
+
+The samples differential remains in `production-transition.test.ts` and uses the
+older frozen coordinator on independent catalog/user/system copies, including
+reservation/invocation/publication/readback faults and terminal recovery. The
+samples helpers themselves were relocated without changing their algorithms.
+
 ## Transition coordinator oracle (Phase 3A)
 
 `production-mutation-coordinator.ts` and `production-core-routes.ts` were captured

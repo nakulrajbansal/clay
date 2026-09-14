@@ -1,52 +1,54 @@
+// Frozen Store oracle from a8aa18742783cf358e6313f387923bdd63d9c110.
+// Only relative imports, provenance and the test-only archive export are changed.
 // ClayStore: the trusted facade over user.db + system.db. Commits span
 // DDL + backfills + registry update + version_log append in ONE
 // transaction (doc 04 §4). Versioning is a linear chain (doc 04 §5):
 // rollback applies inverses; roll-forward (pre-truncation) re-applies
 // forward ops; truncation is the only destructive-ish operation (ADR-007).
-import { ClayError } from "./errors";
-import { readInboxDispositions, writeInboxDisposition } from "./inbox-dispositions";
-import { LEGACY_CREDENTIAL_SETTING_KEYS } from "./credential-policy";
-import { userIndexAuthorities } from "./index-authority";
+import { ClayError } from "../../src/errors";
+import { readInboxDispositions, writeInboxDisposition } from "../../src/inbox-dispositions";
+import { LEGACY_CREDENTIAL_SETTING_KEYS } from "../../src/credential-policy";
+import { userIndexAuthorities } from "../../src/index-authority";
 import {
   copyDatabase, createSystemTables, openDriverFromBytes, openMemoryDriver,
   type DatabaseCopyShape, type DbDriver, type SqlRow, type SqlValue,
-} from "./db";
-import { renamePanelFieldReferences } from "./panel-rewrite";
-import { zipRead, zipWrite } from "./zip";
-import { validateMutationPlan } from "./validate";
+} from "../../src/db";
+import { renamePanelFieldReferences } from "../../src/panel-rewrite";
+import { zipRead, zipWrite } from "../../src/zip";
+import { validateMutationPlan } from "../../src/validate";
 import {
   cloneActiveRegistry, cloneFieldSemantic, cloneRegistry, cloneTableSemantic,
   findColumn, findStoredColumn, getTable, isVirtualColumn,
   type Registry, type RegColumn, type RegTable,
-} from "./registry";
-import { isUuidV7, nowIso, uuidv7, validateInsert, validatePatch } from "./rows";
+} from "../../src/registry";
+import { isUuidV7, nowIso, uuidv7, validateInsert, validatePatch } from "../../src/rows";
 import {
   applyForwardOps, applyInverseOps, createTableSql, deriveInverse, validateMigrationPlan,
   type MigrationPlanT,
-} from "./migrate";
+} from "../../src/migrate";
 import {
   rowMatchesConditions, runQuery, type QueryByteBudget, type QueryRow,
-} from "./query";
-import { exprFields, parseExpr } from "./expr";
-import { Observer, type Suggestion, type UsageEvent } from "./observe";
+} from "../../src/query";
+import { exprFields, parseExpr } from "../../src/expr";
+import { Observer, type Suggestion, type UsageEvent } from "../../src/observe";
 import {
   PrivateMetricsReducer, type PrivateMetricEvent, type PrivateMetricsSummary,
-} from "./private-metrics";
-import { SqlitePrivateMetricDriver } from "./private-metrics-sqlite";
+} from "../../src/private-metrics";
+import { SqlitePrivateMetricDriver } from "../../src/private-metrics-sqlite";
 import {
   validateAutomationDefinition,
   type AutomationAction, type AutomationDefinition, type AutomationDefinitionInput,
   type AutomationRun, type AutomationSimulation, type AutomationValue, type ClayNotification,
-} from "./automation";
+} from "../../src/automation";
 import {
   importValueFingerprint,
   type CommitExistingImportInput,
   type CommitImportResult,
   type ImportReceipt,
   type PreparedExistingImportMutation,
-} from "./import-journey";
-import type { MutationTotals, SourceDispositionTotals } from "./import-contracts";
-import { ImportWarningTotalsSchema } from "./import-staging-contracts";
+} from "../../src/import-journey";
+import type { MutationTotals, SourceDispositionTotals } from "../../src/import-contracts";
+import { ImportWarningTotalsSchema } from "../../src/import-staging-contracts";
 import {
   automationDefinitionDigest, automationRecipeCatalog, automationSha256,
   compileAutomationRecipeDraft, plannedEffectsFor, resolveAutomationDraftV2,
@@ -61,15 +63,15 @@ import {
   type AutomationRuntimeOverviewV1, type AutomationRuntimeStatusV1,
   type AutomationSimulationProofV1, type AutomationSimulationRequestV1,
   type AutomationTargetIdentityV1,
-} from "./automation-v2";
+} from "../../src/automation-v2";
 import {
   createFieldId, createRelationshipId, createTableId, isTableId, semanticRegistryIssues,
   type FieldId, type FieldSemanticV1, type PreparedSemanticAssignmentsV1,
   type SemanticIdentityEventV1, type SemanticOperationBounds, type SemanticOrigin,
   type SemanticRelationshipRecordV1, type SemanticSchemaTraceV1,
   type TableId, type TableSemanticV1,
-} from "./semantic";
-import { sha256HexSync } from "./state-digest";
+} from "../../src/semantic";
+import { sha256HexSync } from "../../src/state-digest";
 import type {
   IntakeAutoAcceptDraftV1,
   IntakeSubmissionPlaintextV1,
@@ -77,7 +79,7 @@ import type {
 } from "@clay/schema/intake";
 import { IntakePublicationClosureV1 } from "@clay/schema/standalone/intake";
 import { IntakeAutoAcceptRuleV1 } from "@clay/schema/standalone/intake";
-import { assertNoLegacyIntakeArchive } from "./intake-archive-boundary";
+import { assertNoLegacyIntakeArchive } from "../../src/intake-archive-boundary";
 import {
   autoAcceptFingerprint, encodeIntakeFileBytes, hydrateStoredIntakeSubmission,
   intakeInboxItem, mintIntakeReceiptId,
@@ -87,7 +89,7 @@ import {
   type IntakeAcceptanceReceipt, type IntakeAutoAcceptSimulation,
   type IntakeDeliveryFailure, type IntakeDeliveryFailureStatus,
   type IntakeInboxItem, type IntakeLocalStateV2,
-} from "./intake";
+} from "../../src/intake";
 
 type QueryT = import("@clay/schema").Query;
 
@@ -1117,26 +1119,6 @@ export class ClayStore {
       }
     };
 
-    // All declarations have passed validateMigrationPlan. This reducer owns the
-    // shared identity/event/contains ordering; callers retain their distinct
-    // reference/computed synchronization order and reactivation policy.
-    const introduceField = (table: RegTable, name: string, operationIndex: number,
-      makeColumn: () => RegColumn, columnIndex?: number) => {
-      let column = findStoredColumn(table, name);
-      const disposition = column?.inactive ? "reactivate" as const : "introduce" as const;
-      if (column) {
-        delete column.inactive;
-        pushFieldEvent(column, operationIndex, disposition, columnIndex);
-      } else {
-        column = makeColumn();
-        column.semantic = newFieldSemantic(name, operationIndex, disposition, columnIndex);
-        table.columns.push(column);
-      }
-      const reactivated = disposition === "reactivate";
-      activateContains(table, column, operationIndex, columnIndex, reactivated);
-      return { column, reactivated };
-    };
-
     // A store created before semantic metadata is upgraded without pretending
     // that its true introduction coordinates are known.
     for (const table of sim.values()) {
@@ -1188,9 +1170,18 @@ export class ClayStore {
             sim.set(op.table, table);
           }
           op.columns.forEach((spec, columnIndex) => {
-            const introduced = introduceField(table, spec.name, operationIndex,
-              () => columnFrom(spec as Parameters<typeof columnFrom>[0]), columnIndex);
-            syncReference(table, introduced.column, operationIndex, introduced.reactivated);
+            let column = table.columns.find(candidate => candidate.name === spec.name);
+            const disposition = column?.inactive ? "reactivate" as const : "introduce" as const;
+            if (column) {
+              delete column.inactive;
+              pushFieldEvent(column, operationIndex, disposition, columnIndex);
+            } else {
+              column = columnFrom(spec as Parameters<typeof columnFrom>[0]);
+              column.semantic = newFieldSemantic(spec.name, operationIndex, disposition, columnIndex);
+              table.columns.push(column);
+            }
+            activateContains(table, column, operationIndex, columnIndex, disposition === "reactivate");
+            syncReference(table, column, operationIndex, disposition === "reactivate");
           });
           for (const spec of op.columns) {
             const column = table.columns.find(candidate => candidate.name === spec.name)!;
@@ -1201,41 +1192,79 @@ export class ClayStore {
         }
         case "add_column": {
           const table = getTable(sim, op.table);
-          const { column, reactivated } = introduceField(table, op.column.name, operationIndex,
-            () => columnFrom(op.column as Parameters<typeof columnFrom>[0]));
-          syncReference(table, column, operationIndex, reactivated);
+          let column = findStoredColumn(table, op.column.name);
+          const disposition = column?.inactive ? "reactivate" as const : "introduce" as const;
+          if (column) {
+            delete column.inactive;
+            pushFieldEvent(column, operationIndex, disposition);
+          } else {
+            column = columnFrom(op.column as Parameters<typeof columnFrom>[0]);
+            column.semantic = newFieldSemantic(column.name, operationIndex, disposition);
+            table.columns.push(column);
+          }
+          activateContains(table, column, operationIndex, undefined, disposition === "reactivate");
+          syncReference(table, column, operationIndex, disposition === "reactivate");
           if (column.type === "computed" && column.expr)
-            syncDerived(table, column, column.expr, operationIndex, reactivated);
+            syncDerived(table, column, column.expr, operationIndex, disposition === "reactivate");
           break;
         }
         case "create_computed": {
           const table = getTable(sim, op.table);
-          const { column, reactivated } = introduceField(table, op.column, operationIndex,
-            () => ({ name: op.column, type: "computed", required: false, expr: op.expr }));
-          syncDerived(table, column, op.expr, operationIndex, reactivated);
+          let column = findStoredColumn(table, op.column);
+          const disposition = column?.inactive ? "reactivate" as const : "introduce" as const;
+          if (column) {
+            delete column.inactive;
+            pushFieldEvent(column, operationIndex, disposition);
+          } else {
+            column = { name: op.column, type: "computed", required: false, expr: op.expr,
+              semantic: newFieldSemantic(op.column, operationIndex, disposition) };
+            table.columns.push(column);
+          }
+          activateContains(table, column, operationIndex, undefined, disposition === "reactivate");
+          syncDerived(table, column, op.expr, operationIndex, disposition === "reactivate");
           break;
         }
-        case "rename_column":
-        case "update_computed":
-        case "add_enum_value":
-        case "hide_column":
-        case "set_required":
+        case "rename_column": {
+          const table = getTable(sim, op.table);
+          const column = table.columns.find(candidate => candidate.name === op.from)!;
+          pushFieldEvent(column, operationIndex);
+          addAlias(column.semantic!.aliases, column.semantic!.label);
+          column.name = op.to;
+          column.semantic!.label = op.to;
+          break;
+        }
+        case "update_computed": {
+          const table = getTable(sim, op.table);
+          const column = table.columns.find(candidate => candidate.name === op.column)!;
+          pushFieldEvent(column, operationIndex);
+          column.expr = op.expr;
+          syncDerived(table, column, op.expr, operationIndex);
+          break;
+        }
+        case "add_enum_value": {
+          const column = getTable(sim, op.table).columns.find(candidate =>
+            candidate.name === op.column)!;
+          pushFieldEvent(column, operationIndex);
+          column.values = [...(column.values ?? []), op.value];
+          break;
+        }
+        case "hide_column": {
+          const column = getTable(sim, op.table).columns.find(candidate =>
+            candidate.name === op.column)!;
+          pushFieldEvent(column, operationIndex); column.hidden = true;
+          break;
+        }
+        case "set_required": {
+          const column = getTable(sim, op.table).columns.find(candidate =>
+            candidate.name === op.column)!;
+          pushFieldEvent(column, operationIndex); column.required = true;
+          break;
+        }
         case "add_index":
         case "backfill": {
-          const table = getTable(sim, op.table);
-          const name = op.op === "rename_column" ? op.from : op.column;
-          const column = table.columns.find(candidate => candidate.name === name)!;
+          const column = getTable(sim, op.table).columns.find(candidate =>
+            candidate.name === op.column)!;
           pushFieldEvent(column, operationIndex);
-          switch (op.op) {
-            case "rename_column":
-              addAlias(column.semantic!.aliases, column.semantic!.label);
-              column.name = op.to; column.semantic!.label = op.to; break;
-            case "update_computed":
-              column.expr = op.expr; syncDerived(table, column, op.expr, operationIndex); break;
-            case "add_enum_value": column.values = [...(column.values ?? []), op.value]; break;
-            case "hide_column": column.hidden = true; break;
-            case "set_required": column.required = true; break;
-          }
           break;
         }
       }
@@ -2579,7 +2608,12 @@ export class ClayStore {
           > MAX_RETAINED_ATTACHMENT_BYTES)
         throw new ClayError("E_LIMIT",
           "this app is limited to 250 MB of retained files; clean up old removed files first");
-      this.#insertAttachmentBytes(id, identity, input.bytes, digest, createdAt);
+      this.#driver.exec(
+        `INSERT INTO "__clay_attachments"(
+           id, name, mime, size, sha256, bytes, created_at, deleted_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
+        [id, identity.name, identity.mime, input.bytes.byteLength,
+         digest, input.bytes, createdAt]);
       this.writeRowHistory(input.table, input.rowId, "attachment_add");
       this.#driver.exec(
         `UPDATE ${qid(input.table)} SET ${qid(input.field)} = ?, "updated_at" = ? WHERE "id" = ?`,
@@ -2599,15 +2633,6 @@ export class ClayStore {
         throw new ClayError("E_INTERNAL", "attachment write failed atomic read-back");
       return this.attachmentMetadata(inserted);
     });
-  }
-
-  #insertAttachmentBytes(id: string, identity: { name: string; mime: string },
-    bytes: Uint8Array, digest: string, at: string): void {
-    this.#driver.exec(
-      `INSERT INTO "__clay_attachments"(
-         id, name, mime, size, sha256, bytes, created_at, deleted_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
-      [id, identity.name, identity.mime, bytes.byteLength, digest, bytes, at]);
   }
 
   attachmentsForRecord(table: string, rowId: string, field: string): AttachmentMetadata[] {
@@ -3190,7 +3215,11 @@ export class ClayStore {
         const identity = safeAttachmentIdentity(upload.name, upload.mime);
         validateAttachmentSignature(bytes, identity.mime);
         const id = `file_${uuidv7().replaceAll("-", "")}`;
-        this.#insertAttachmentBytes(id, identity, bytes, upload.sha256, acceptedAt);
+        this.#driver.exec(
+          `INSERT INTO "__clay_attachments"(
+             id, name, mime, size, sha256, bytes, created_at, deleted_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
+          [id, identity.name, identity.mime, bytes.byteLength, upload.sha256, bytes, acceptedAt]);
         attachmentByUpload.set(upload.uploadId, id);
         grouped.set(column.name, [...(grouped.get(column.name) ?? []), id]);
       }
@@ -4711,15 +4740,11 @@ export class ClayStore {
     return this.#driver.tx(() => {
       const completed: AutomationRun[] = [];
       let matchedRecords = 0;
-      const executeMatch = (definition: AutomationDefinitionV2, rows: QueryRow[], key: string,
-        onSuccess?: (runId: string) => void): AutomationRun | null => {
+      const consumeMatch = (): void => {
         matchedRecords += 1;
         if (matchedRecords > 100)
           throw new ClayError("E_LIMIT",
             "automation run request matches more than 100 records; narrow its rules");
-        const run = this.executeAutomation(definition, rows, key, now, currentTarget, onSuccess);
-        if (run) completed.push(run);
-        return run;
       };
       for (const storedDefinition of this.runnableAutomations(currentTarget)) {
         const definition = this.executableAutomationV2(storedDefinition);
@@ -4756,11 +4781,10 @@ export class ClayStore {
           );
           const eligible = new Map<number, QueryRow>();
           let blocked = false;
-          const sourceEvent = (event: SqlRow) => (event.origin === "user" || event.origin === "import")
-            && (trigger.kind !== "record_created" || event.kind === "created")
-            && (trigger.kind !== "record_updated" || event.kind === "updated");
           for (const event of events) {
-            if (!sourceEvent(event)) continue;
+            if ((event.origin !== "user" && event.origin !== "import")
+                || (trigger.kind === "record_created" && event.kind !== "created")
+                || (trigger.kind === "record_updated" && event.kind !== "updated")) continue;
             try {
               const snapshot = this.automationEventSnapshot(event, storedDefinition);
               if (rowMatchesConditions(snapshot, trigger.conditions, now)) {
@@ -4783,7 +4807,9 @@ export class ClayStore {
           if (blocked) continue;
           for (const event of events) {
             const sequence = Number(event.seq);
-            if (!sourceEvent(event)) {
+            if ((event.origin !== "user" && event.origin !== "import")
+                || (trigger.kind === "record_created" && event.kind !== "created")
+                || (trigger.kind === "record_updated" && event.kind !== "updated")) {
               cursor = sequence;
               continue;
             }
@@ -4797,7 +4823,11 @@ export class ClayStore {
               cursor = sequence;
               continue;
             }
-            const run = executeMatch(storedDefinition, [snapshot], key);
+            consumeMatch();
+            const run = this.executeAutomation(
+              storedDefinition, [snapshot], key, now, currentTarget,
+            );
+            if (run) completed.push(run);
             if (run?.status === "failed") { blocked = true; break; }
             if (run?.status === "success" || this.automationTriggerSucceeded(storedDefinition, currentTarget, key))
               cursor = sequence;
@@ -4849,7 +4879,11 @@ export class ClayStore {
               persistMatch();
               continue;
             }
-            const run = executeMatch(storedDefinition, [row], key, persistMatch);
+            consumeMatch();
+            const run = this.executeAutomation(
+              storedDefinition, [row], key, now, currentTarget, persistMatch,
+            );
+            if (run) completed.push(run);
             if (!run && this.automationTriggerSucceeded(storedDefinition, currentTarget, key)) persistMatch();
           }
           continue;
@@ -4860,7 +4894,9 @@ export class ClayStore {
             const due = String(row[trigger.dateField] ?? "");
             const key = `due:${String(row.id)}:${due}:${trigger.daysBefore}`;
             if (this.automationTriggerSucceeded(storedDefinition, currentTarget, key)) continue;
-            executeMatch(storedDefinition, [row], key);
+            consumeMatch();
+            const run = this.executeAutomation(storedDefinition, [row], key, now, currentTarget);
+            if (run) completed.push(run);
           }
           continue;
         }
@@ -4875,7 +4911,9 @@ export class ClayStore {
           const day = `${clock.year}-${String(clock.month).padStart(2, "0")}-${String(clock.day).padStart(2, "0")}`;
           const key = `schedule:${day}`;
           if (this.automationTriggerSucceeded(storedDefinition, currentTarget, key)) continue;
-          executeMatch(storedDefinition, [], key);
+          consumeMatch();
+          const run = this.executeAutomation(storedDefinition, [], key, now, currentTarget);
+          if (run) completed.push(run);
         }
       }
       return completed;
@@ -5278,8 +5316,12 @@ export class ClayStore {
               || input.mutations.some(mutation =>
                 !historyRows.has(`${mutation.table}\u0000${mutation.rowId}`)))
             throw new ClayError("E_CONFLICT", "import history does not match the prepared mutations");
-          this.#recordOperationBatch(id, at, "import", input.summary.trim(), changed,
-            created.map(item => ({ table: item.table, id: item.id })));
+          this.#driver.exec(
+            `INSERT INTO sys.operation_batches(
+               id, at, source, summary, changed_count, created_json, undone_at)
+             VALUES (?, ?, 'import', ?, ?, ?, NULL)`,
+            [id, at, input.summary.trim(), changed,
+             JSON.stringify(created.map(item => ({ table: item.table, id: item.id })))]);
           const receipt: ImportReceipt = {
             kind: "receipt", durable: true, id, at, source: "import",
             summary: input.summary.trim(), changed, created, undone: false,
@@ -5368,7 +5410,12 @@ export class ClayStore {
               changed: 0, created: [], undone: true,
             };
           }
-          this.#recordOperationBatch(id, at, input.source, input.summary.trim(), changed, created);
+          this.#driver.exec(
+            `INSERT INTO sys.operation_batches(
+               id, at, source, summary, changed_count, created_json, undone_at)
+             VALUES (?, ?, ?, ?, ?, ?, NULL)`,
+            [id, at, input.source, input.summary.trim(), changed,
+             JSON.stringify(created)]);
           return {
             id, at, source: input.source, summary: input.summary.trim(),
             changed, created, undone: false,
@@ -5379,15 +5426,6 @@ export class ClayStore {
       this.batchContext = previous;
       throw error;
     }
-  }
-
-  #recordOperationBatch(id: string, at: string, source: BatchSource, summary: string,
-    changed: number, created: BatchReceipt["created"]): void {
-    this.#driver.exec(
-      `INSERT INTO sys.operation_batches(
-         id, at, source, summary, changed_count, created_json, undone_at)
-       VALUES (?, ?, ?, ?, ?, ?, NULL)`,
-      [id, at, source, summary, changed, JSON.stringify(created)]);
   }
 
   operationBatches(limit = 50): BatchReceipt[] {
@@ -6100,3 +6138,5 @@ export type ClayManifest = {
   versions: number;
   attachments?: { count: number; bytes: number };
 };
+
+export { rawArchiveSchemaIssues as rawArchiveSchemaIssuesOracle };

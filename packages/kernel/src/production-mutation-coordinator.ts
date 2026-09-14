@@ -1,5 +1,5 @@
 import { OperationId, RequestId } from "@clay/schema/standalone/index";
-import { MAX_CAPTURE_BYTES, captureJsonValue, invalidCapturedJson } from "./production-json-capture";
+import { MAX_CAPTURE_BYTES, captureJsonValue, invalidCapturedJson, capturedExecution, type CapturedMutationExecution } from "./production-json-capture";
 import {
   TargetEvidenceV1,
   RecoverablePresentationRouteV1,
@@ -108,13 +108,7 @@ import {
   starterSeedCatalogMetadata,
   type CapturedStarterSeedBundle,
 } from "./production-seed";
-import {
-  captureSampleFill,
-  captureSampleRemoval,
-  executeCapturedSampleFill,
-  executeCapturedSampleRemoval,
-  type CapturedSampleFill,
-} from "./production-samples";
+import { sampleProvenanceCoordinates } from "./production-samples";
 import { productionJsonRequestFingerprint, originalPresentationResult } from "./production-presentation-proof";
 import {
   captureStrictJson,
@@ -184,11 +178,9 @@ type CapturedProductionMutation = CapturedCoreMutation | Readonly<{
   | { route: "planner.discard"; payload: PreparedMutationCommand }
   | { route: "planner.keep"; payload: PreparedMutationCommand }
   | { route: "table.import"; payload: CapturedTableImport }
-  | { route: "samples.fill"; payload: CapturedSampleFill }
   // No public capture/dispatch case. This request can only be created by the
   // authenticated fresh-install helper below, inside its physical transaction.
   | { route: "archive.restore.samples" | "app.fork.samples"; payload: Readonly<{ sourceSha256: string; sourceAuthorityIncarnationId: string; sourceTargetStateSha256: string }> }
-  | { route: "samples.remove"; payload: Readonly<Record<string, never>> }
   | { route: "starter.seed"; payload: CapturedStarterSeedBundle }
   | {
     route: "attachment.add";
@@ -299,10 +291,6 @@ type CapturedOperationalMetricMutation = Readonly<{
   | { route: "clearPrivateMetrics"; payload: Readonly<JsonRecord> }
 )>;
 
-type CapturedMutationExecution = Readonly<{
-  result: JsonValue;
-  sampleProvenance?: readonly SampleProvenanceCoordinate[];
-}>;
 
 export type ProductionMutationResult = {
   requestId: string;
@@ -627,7 +615,7 @@ function captureMutation(input: unknown): CapturedProductionMutation {
     const done = (captured: unknown): CapturedProductionMutation =>
       capturedProductionMutation(requestId, route, captured);
     const spec = productionRouteSpec(route);
-    if (spec) return spec.capture(requestId, captureJsonRecord(payload));
+    if (spec) return spec.capture(requestId, spec.policy.kind === "canonical-shadow-journal-v1" ? captureJsonRecord(payload) : payload);
     switch (route) {
       case "intake.command": {
         const captured = IntakeCommandPayloadV1.parse(captureJsonRecord(payload));
@@ -647,8 +635,6 @@ function captureMutation(input: unknown): CapturedProductionMutation {
       case "planner.keep": return done(capturePreparedMutationCommand(payload));
       case "table.import": return done(captureTableImport(payload));
       case "import.commit": return done(captureImportCommitPayload(payload));
-      case "samples.remove": return done(captureSampleRemoval(payload));
-      case "samples.fill": return done(captureSampleFill(payload));
       case "starter.seed": return done(captureStarterSeedBundle(payload));
       case "attachment.add": {
         const keys = ["table", "rowId", "field", "name", "mime", "bytes"] as const;
@@ -998,15 +984,6 @@ const STORE_PROCESS_INTAKE_AUTO: ClayStore["processIntakeAutoAccept"] =
 const STORE_ACCEPT_INTAKE: ClayStore["acceptIntakeSubmission"] = ClayStore.prototype.acceptIntakeSubmission;
 const STORE_UNDO_INTAKE: ClayStore["undoIntakeReceipt"] = ClayStore.prototype.undoIntakeReceipt;
 
-function sampleProvenanceCoordinates(
-  store: ClayStore,
-  operationId: string,
-): SampleProvenanceCoordinate[] {
-  return STORE_SAMPLE_PROVENANCE.call(store)
-    .filter(entry => entry.operationId === operationId)
-    .map(entry => Object.freeze({ tableId: entry.tableId, rowId: entry.rowId }));
-}
-
 function executeFirstSuccessEveryday(
   store: ClayStore,
   payload: Readonly<{ action: "open"; table: string; rowId: string }>,
@@ -1044,16 +1021,6 @@ function executeFirstSuccessEveryday(
   return captureJsonValue(next, new WeakSet());
 }
 
-function capturedExecution(
-  result: JsonValue,
-  sampleProvenance?: readonly SampleProvenanceCoordinate[],
-): CapturedMutationExecution {
-  return Object.freeze({
-    result,
-    ...(sampleProvenance === undefined ? {} : { sampleProvenance }),
-  });
-}
-
 function usesSampleProvenance(route: string): boolean {
   return isSampleProducingRoute(route) || route === "samples.remove";
 }
@@ -1084,7 +1051,7 @@ function executeCapturedMutation(
   if (isCapturedCoreMutation(request)) {
     const transition = prepareProductionTransition(request);
     if (!transition) throw invalid("production transition route is unavailable");
-    return capturedExecution(executeProductionTransition(store, transition, expectedTarget, driver, executionInstant ?? undefined));
+    return executeProductionTransition(store, transition, expectedTarget, driver, executionInstant ?? undefined, operationId);
   }
   switch (request.route) {
     case "store.insert":
@@ -1141,24 +1108,6 @@ function executeCapturedMutation(
       return capturedExecution(executePreparedPlannerKeep(store, request.payload));
     case "table.import":
       return capturedJsonExecution(executeCapturedTableImport(store, request.payload));
-    case "samples.remove":
-      return capturedJsonExecution(executeCapturedSampleRemoval(store));
-    case "samples.fill":
-      if (sampleProvenanceCoordinates(store, operationId).length !== 0)
-        throw invalid("sample fill operation provenance already exists");
-      {
-        const outcome = executeCapturedSampleFill(store, request.payload, operationId);
-        const expected = request.payload.tables.reduce(
-          (total, table) => total + table.rows.length, 0,
-        );
-        const persisted = sampleProvenanceCoordinates(store, operationId);
-        assertExactSampleProvenance(
-          outcome.sampleProvenance, persisted, expected, "sample fill operation",
-        );
-        return capturedExecution(
-          captureJsonValue(outcome.result, new WeakSet()), outcome.sampleProvenance,
-        );
-      }
     case "starter.seed":
       if (executionInstant === null)
         throw invalid("trusted starter seed instant is unavailable");

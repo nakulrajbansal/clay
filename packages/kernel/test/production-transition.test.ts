@@ -146,6 +146,10 @@ const cases = [
   ["schema.renameColumn", { table: "projects", from: "owner", to: "Assigned owner" }],
 ] as const;
 const target = (f: Owned) => TargetAuthorityStore.open(f.driver).evidence();
+const fillPayload = { tables: [{ table: "people", rows: [{ name: "Sample one" }, { name: "Sample two" }] }] };
+async function fillSamples(f: Owned) {
+  return f.coordinator.execute({ requestId: id("req", "j"), route: "samples.fill", payload: fillPayload });
+}
 const review = (f: Owned) => {
   const p = productionDailyPresentation(f.store, target(f), new Date().toISOString());
   return { authorityTarget: p.authorityTarget, basis: p.snapshot.basis, snapshotDigest: p.snapshot.snapshotDigest };
@@ -161,6 +165,91 @@ async function dailySetup(f: Owned) {
   return { table, value };
 }
 describe("independent transition coordinator differential", () => {
+  it("samples preserve exact provenance, fill/remove receipts, user rows and reload", async () => {
+    const result = await runPair(async f => {
+      const filled = await fillSamples(f);
+      const fillReplay = await fillSamples(f);
+      const provenance = f.store.sampleRowProvenance();
+      const removed = await f.coordinator.execute({ requestId: id("req", "k"), route: "samples.remove", payload: {} });
+      const Ctor = f.old ? OriginalCoordinator : ProductionMutationCoordinator;
+      const replacement = new Ctor(f.driver, f.authority, f.store, base.fence,
+        DeviceCatalog.openExisting(f.driver).snapshot().catalogGeneration, target(f), 60_000, () => Date.now());
+      const replay = await replacement.execute({ requestId: id("req", "k"), route: "samples.remove", payload: {} });
+      const noOp = await replacement.execute({ requestId: id("req", "l"), route: "samples.remove", payload: {} });
+      return { filled, fillReplay, provenance, removed, replay, noOp,
+        rows: f.store.query({ from: "people" }), retained: f.store.sampleRowProvenance(),
+        restorable: f.store.restorableRows("people") };
+    }) as any;
+    expect(result.filled.result).toEqual({ added: 2, tables: 1 });
+    expect(result.fillReplay).toEqual({ ...result.filled, replayed: true });
+    expect(result.removed.result).toEqual({ affected: 2, recovery: { kind: "soft_delete", recoverable: 2 } });
+    expect(result.replay).toEqual({ ...result.removed, replayed: true });
+    expect(result.noOp.changed).toBe(false);
+    expect(result.provenance).toHaveLength(2); expect(result.retained).toEqual(result.provenance);
+    expect(result.rows.map((row: any) => row.name)).toEqual(["Dev", "Kim"]);
+    expect(result.restorable).toHaveLength(2);
+  });
+  it("samples retain empty producer envelopes and terminal no-op responses", async () => {
+    const result = await runPair(async f => {
+      const requests = [
+        { requestId: id("req", "j"), route: "samples.fill", payload: { tables: [] } },
+        { requestId: id("req", "k"), route: "samples.fill", payload: { tables: [{ table: "people", rows: [] }] } },
+        { requestId: id("req", "l"), route: "samples.remove", payload: {} },
+      ];
+      const outcomes = [];
+      for (const request of requests) {
+        const first = await f.coordinator.execute(request), replay = await f.coordinator.execute(request);
+        outcomes.push({ first, replay });
+      }
+      return { outcomes, ledger: f.store.sampleRowProvenance(), reservations: TargetAuthorityStore.open(f.driver).reservations() };
+    }) as any;
+    expect(result.outcomes.every((r: any) => !r.first.changed && r.replay.replayed)).toBe(true);
+    expect(result.ledger).toEqual([]); expect(result.reservations).toEqual([]);
+  });
+  for (const route of ["samples.fill", "samples.remove"] as const)
+    for (const stage of ["reservation", "invocation", "publication", "readback"] as const)
+      it(`${route}: ${stage} failure retains exact provenance and terminal outcome`, async () => {
+        const result = await runPair(async f => {
+          if (route === "samples.remove") await fillSamples(f);
+          const request = { requestId: id("req", "k"), route, payload: route === "samples.fill" ? fillPayload : {} };
+          f.fault.terminalWritten = false;
+          f.fault.stage = stage;
+          const failed = await outcome(() => f.coordinator.execute(request));
+          const afterFailure = physical(f.driver);
+          return { failed, afterFailure, retry: await outcome(() => f.coordinator.execute(request)), hit: f.fault.hit };
+        }) as any;
+        expect(result.hit).toBe(1); expect(result.failed.ok).toBe(false);
+        expect(result.retry.ok).toBe(stage === "reservation");
+      });
+  it("samples reject stale receipt/payload collisions without another reservation", async () => {
+    const result = await runPair(async f => {
+      await fillSamples(f);
+      const collision = await outcome(() => f.coordinator.execute({ requestId: id("req", "j"), route: "samples.fill", payload: { tables: [] } }));
+      await f.coordinator.execute({ requestId: id("req", "k"), route: "samples.remove", payload: {} });
+      return { collision, stale: await outcome(() => fillSamples(f)) };
+    }) as any;
+    expect(result.collision.ok).toBe(false); expect(result.stale.ok).toBe(false);
+  });
+  it("samples preserve strict capture errors without invoking accessors", async () => {
+    let getterCalls = 0;
+    const accessor = Object.defineProperty({}, "tables", { enumerable: true, get() { getterCalls++; return []; } });
+    const result = await runPair(async f => {
+      const outputs = [];
+      for (const payload of [accessor, { tables: [], extra: 1 }, { tables: [{ table: "people", rows: [{ name: { nested: true } }] }] },
+        { tables: Array(1) }, Object.assign(Object.create({ inherited: true }), { tables: [] })])
+        outputs.push(await outcome(() => f.coordinator.execute({ requestId: id("req", "j"), route: "samples.fill", payload })));
+      outputs.push(await outcome(() => f.coordinator.execute({ requestId: id("req", "j"), route: "samples.remove", payload: { all: true } })));
+      return outputs;
+    }) as any[];
+    expect(result.every(entry => !entry.ok)).toBe(true); expect(getterCalls).toBe(0);
+  });
+  it("samples have closed distinct provenance policies and no duplicate coordinator execution", async () => {
+    const { productionRouteSpec } = await import("../src/production-core-routes");
+    expect(productionRouteSpec("samples.fill")).toMatchObject({ policy: { kind: "canonical-sample-producer-v1" } });
+    expect(productionRouteSpec("samples.remove")).toMatchObject({ policy: { kind: "canonical-sample-removal-v1" } });
+    const coordinator = readFileSync(new URL("../src/production-mutation-coordinator.ts", import.meta.url), "utf8");
+    expect(coordinator).not.toContain('case "samples.fill":'); expect(coordinator).not.toContain('case "samples.remove":');
+  });
   for (const [route, payload] of cases) it(`${route}: commit, exact replay, no-op and replacement coordinator`, async () => {
     const result = await runPair(async f => {
       const request = { requestId: id("req", "r"), route, payload };

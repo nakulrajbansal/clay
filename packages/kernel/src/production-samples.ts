@@ -179,6 +179,11 @@ const STORE_PROVENANCE_STATE: ClayStore["sampleRowProvenanceState"] =
 const STORE_RECORD_PROVENANCE: ClayStore["recordSampleRowProvenance"] =
   ClayStore.prototype.recordSampleRowProvenance;
 
+export function sampleProvenanceCoordinates(store: ClayStore, operationId: string): SampleProvenanceCoordinate[] {
+  return STORE_PROVENANCE.call(store).filter(entry => entry.operationId === operationId)
+    .map(entry => Object.freeze({ tableId: entry.tableId, rowId: entry.rowId }));
+}
+
 function verifiedProvenance(store: ClayStore): SampleRowProvenanceState[] {
   if (STORE_GET_SETTING.call(store, "sample_rows") !== undefined)
     throw invalid("legacy sample provenance is unauthenticated");

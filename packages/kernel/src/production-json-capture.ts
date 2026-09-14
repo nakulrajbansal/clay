@@ -1,10 +1,17 @@
 import { ClayError } from "./errors";
 import { PRODUCTION_MUTATION_PREFIX } from "./production-input-capture";
 import { captureStrictJson, type StrictJsonCaptureBudget as CaptureBudget, type StrictJsonCapturePolicy } from "./strict-json-capture";
-import type { ProductionResponseJson as JsonValue } from "./production-response-envelope";
+import type { ProductionResponseJson as JsonValue, SampleProvenanceCoordinate } from "./production-response-envelope";
 const unavailable = (message: string) => new ClayError("E_CATALOG_UNAVAILABLE", message);
 
 export const MAX_CAPTURE_BYTES = 2_000_000;
+export type CapturedMutationExecution = Readonly<{
+  result: JsonValue;
+  sampleProvenance?: readonly SampleProvenanceCoordinate[];
+}>;
+export function capturedExecution(result: JsonValue, sampleProvenance?: readonly SampleProvenanceCoordinate[]): CapturedMutationExecution {
+  return Object.freeze({ result, ...(sampleProvenance === undefined ? {} : { sampleProvenance }) });
+}
 const PRODUCTION_CAPTURE_POLICY: StrictJsonCapturePolicy = [
   64, 100_000, 1_000_000, MAX_CAPTURE_BYTES, 10_000, 10_000, 128, true, true,
   reason => {
