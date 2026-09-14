@@ -14,9 +14,10 @@
   },
   "dependencies": {
     "@clay/kernel": "workspace:*",
-    "@clay/schema": "workspace:*",
     "@clay/mutation": "workspace:*",
     "@clay/panel-runtime": "workspace:*",
+    "@clay/schema": "workspace:*",
+    "preact": "10.29.8",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
