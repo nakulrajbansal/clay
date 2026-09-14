@@ -1509,8 +1509,8 @@ export class ProductionStoreAuthority {
     return activeSampleRowCount(this.#store);
   }
 
-  executeMutation(input: unknown): Promise<ProductionMutationResult> {
-    return this.#coordinator.execute(input);
+  executeMutation(input: unknown, computedSource?: unknown): Promise<ProductionMutationResult> {
+    return this.#coordinator.execute(input, computedSource);
   }
 
   async replayPlannerDecision(

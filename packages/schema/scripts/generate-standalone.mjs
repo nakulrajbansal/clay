@@ -8,7 +8,7 @@ import { internProgramFiles } from "./standalone-pool.mjs";
 
 const root = fileURLToPath(new URL("../../..", import.meta.url));
 const schemaRoot = resolve(root, "packages/schema");
-export const sourceModules = ["index", "archive", "backup", "catalog", "daily-home", "intake", "intake-workflow", "legacy-owner", "owner-witness", "projection", "restore", "share", "import-staging", "import", "private-metrics", "saved-views", "intake-state", "worker-contracts"];
+export const sourceModules = ["index", "archive", "backup", "catalog", "daily-home", "intake", "intake-workflow", "legacy-owner", "owner-witness", "projection", "restore", "share", "import-staging", "import", "private-metrics", "saved-views", "intake-state", "worker-contracts", "pure-compute"];
 const approvedFile = resolve(schemaRoot, "scripts/standalone-approved.json");
 const outputRoot = resolve(schemaRoot, "src/standalone");
 const isSchema = value => value && typeof value === "object" && typeof value._def?.typeName === "string";

@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { WorkerClient } from "../src/app/worker-client";
+import { OwnedComputeWorker } from "./helpers/owned-compute-worker";
 import { ownedBrowserStorage } from "../../kernel/test/helpers/owned-browser-storage";
 import { beginPresentationIntent, finishPresentationIntent, readPresentationIntent } from "../src/app/presentation-intent";
 import { executeAutomationIntent, editableAutomation } from "../src/app/automation-presentation";
@@ -30,7 +31,8 @@ it.each(["memory", "owned_sahpool"])("executes source-bound automation drafts, p
   } };
   const transport = { onmessage: null as ((event: MessageEvent) => void) | null,
     postMessage: (data: { id: number; op: string }) => { sent.push(structuredClone(data)); queueMicrotask(() => scope.onmessage?.({ data: structuredClone(data) } as MessageEvent)); }, terminate: () => {} };
-  vi.stubGlobal("self", scope); let client = new WorkerClient(transport as unknown as Worker);
+  vi.stubGlobal("self", scope); vi.stubGlobal("Worker", OwnedComputeWorker); OwnedComputeWorker.reset();
+  let client = new WorkerClient(transport as unknown as Worker);
   const values = new Map<string, string>(); const cache = { getItem: (key: string) => values.get(key) ?? null,
     setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } };
   // The scheduler must obtain a trusted-shell ledger read even for an empty,

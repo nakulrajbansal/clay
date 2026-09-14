@@ -18,6 +18,7 @@
     "./recovery": "./src/recovery.ts",
     "./expr": "./src/expr.ts",
     "./errors": "./src/errors.ts",
+    "./strict-json-capture": "./src/strict-json-capture.ts",
     "./first-success": "./src/first-success.ts",
     "./import-contracts": "./src/import-contracts.ts",
     "./import-review": "./src/import-review.ts",

@@ -1,4 +1,5 @@
 {
+  "packages/schema/src/pure-compute.ts": "f10f35fc64c82e43dc9e953f4b362005dcbcbec825e2915a42fbd065df4dc057",
   "packages/schema/src/index.ts": "8ef1bfbf5b392cf6638a68a768921ebdbb935928b7d736698eb263ff3201f28a",
   "packages/schema/src/archive.ts": "c3fce0a7c2672c1e6b6abcde3572a9d3857234b231ad43579fe49206d35bb815",
   "packages/schema/src/backup.ts": "de36b18d7c9b9c1c70b59199341ae5e46bbbae86a0f0e3998e65b90812050f4d",

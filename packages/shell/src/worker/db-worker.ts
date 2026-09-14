@@ -27,7 +27,7 @@ import type {
 import type {
   Planner, PlannerContext, PlannerResult,
 } from "@clay/kernel/planner-pipeline";
-import { createStarterSeedBundle } from "../shells/seed";
+import { SeedComputeClient } from "./pure-compute-client";
 import { parseSampleProvenanceLedger } from "../shells/sample-provenance";
 import { createSampleFillBundle } from "./samples";
 import { DB_WORKER_ROUTE_CENSUS } from "./mutation-route-census";
@@ -63,6 +63,7 @@ type Request = {
 
 
 let authority: ProductionStoreAuthority | null = null;
+const seedCompute = new SeedComputeClient();
 type WorkerBootProjection = {
   persistent: true; seeded: boolean; shellId: string | null;
   selectedAppInstanceId: string; catalogGeneration: string;
@@ -679,7 +680,7 @@ async function runAuthorityMutation(
   route:
     | DirectAuthorityRoute
     | "backupSelection" | "publishBackup" | "recordManualBackupDownload" | "authorizeBackupRemoval" | "acknowledgeBackupRemoval" | "cancelPresentation"
-    | "seed" | "importTable" | "removeSamples" | "fillSamples"
+    | "importTable" | "removeSamples" | "fillSamples"
     | "setSetting" | "deleteSetting" | "compareAndSetSetting" | "completeEverydayAction"
     | "commitLayout"
     | "addAttachment" | "removeAttachment" | "purgeDeletedAttachments"
@@ -762,9 +763,6 @@ async function runAuthorityMutation(
     requestId,
     route: intakeRoutes[route as keyof typeof intakeRoutes],
     payload,
-  })).result;
-  if (route === "seed") return (await target.executeMutation({
-    requestId, route: "starter.seed", payload,
   })).result;
   if (route === "importTable") return (await target.executeMutation({
     requestId,
@@ -1184,6 +1182,7 @@ function serveProductionStore(target: "live" | "shadow", port: MessagePort): voi
 function quiesceWorker(req: Request): Promise<null> {
   if (shutdownRun) return shutdownRun;
   shuttingDown = true;
+  seedCompute.close();
   shutdownRun = (async () => {
     await Promise.all([...storeServers].map(server => server.quiesce()));
     storeAdmissionClosed = true;
@@ -1279,8 +1278,15 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
       return (await mustImportCoordinator()).cancelImport(String((p as Record<string, unknown>).sessionId));
     case "undoImport":
       return runAuthorityMutation("undoImport", p, req);
-    case "seed":
-      return runAuthorityMutation("seed", createStarterSeedBundle(p.shellId), req);
+    case "seed": {
+      const target = mustAuthority();
+      const requestId = authorityRequestId(req);
+      const state = target.inspectAuthority();
+      const source = { catalogGeneration: state.catalog.catalogGeneration, target: state.target };
+      const fragment = await seedCompute.seed(p.shellId, source);
+      if (target !== mustAuthority()) throw new ClayError("E_CONFLICT", "Starter computation target changed");
+      return (await target.executeMutation({ requestId, route: "starter.seed", payload: fragment }, source)).result;
+    }
     case "firstRunEvidence":
       return firstRunEvidence();
     case "firstEverydayActionTarget":

@@ -38,7 +38,9 @@ describe("Release A foundation boundary", () => {
 
   it("keeps MVP starter creation on the production seed authority", () => {
     expect(workerSource).toContain('case "seed":');
-    expect(workerSource).toContain('runAuthorityMutation("seed", createStarterSeedBundle');
+    expect(workerSource).toContain("const fragment = await seedCompute.seed(p.shellId, source)");
+    expect(workerSource).toContain('target.executeMutation({ requestId, route: "starter.seed", payload: fragment }, source)');
+    expect(workerSource).not.toContain("createStarterSeedBundle");
     expect(appSource).toContain("firstRunTargetId.current = boot.selectedAppInstanceId");
     expect(appSource).toContain("{ requestId: setup.nameRequestId }, id");
     expect(appSource).toContain("{ requestId: setup.applyRequestId }");

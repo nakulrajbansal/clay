@@ -134,9 +134,13 @@ describe("production mutation route census", () => {
         expect(body).not.toContain("p.appId");
         expect(body).not.toContain("openBrowserDriver(");
       }
-      if (classification.enforcement === "authority")
-        expect(body, `${name} must use ProductionStoreAuthority`)
+      if (classification.enforcement === "authority") {
+        if (name === "seed") {
+          expect(body).toContain("const target = mustAuthority()");
+          expect(body).toContain('target.executeMutation({ requestId, route: "starter.seed", payload: fragment }, source)');
+        } else expect(body, `${name} must use ProductionStoreAuthority`)
           .toContain(`runAuthorityMutation("${name}"`);
+      }
       if (classification.enforcement === "planner-authority") {
         const expected = name === "keep" ? "keepPendingPreview("
           : name === "discard" ? "discardPendingPreview(" : "runPipelineText(";
@@ -332,17 +336,30 @@ describe("production mutation route census", () => {
     expect(worker).toContain("return null");
   });
 
-  it("routes starter seed through a static bundle with the stable worker request identity", () => {
+  it("routes verified static seed computation through source-bound authority with the stable request identity", () => {
     const worker = source("packages/shell/src/worker/db-worker.ts");
     const body = caseBody(worker, "seed");
     expect(DB_WORKER_ROUTE_CENSUS.seed)
       .toEqual({ enforcement: "authority", mutates: "live" });
-    expect(body).toContain("createStarterSeedBundle(p.shellId)");
-    expect(body).toContain('runAuthorityMutation("seed"');
+    const ordered = [
+      "const target = mustAuthority()", "const requestId = authorityRequestId(req)",
+      "const state = target.inspectAuthority()",
+      "const source = { catalogGeneration: state.catalog.catalogGeneration, target: state.target }",
+      "const fragment = await seedCompute.seed(p.shellId, source)",
+      "if (target !== mustAuthority()) throw new ClayError",
+      'target.executeMutation({ requestId, route: "starter.seed", payload: fragment }, source)',
+    ];
+    let previous = -1;
+    for (const step of ordered) {
+      const position = body.indexOf(step);
+      expect(position, step).toBeGreaterThan(previous);
+      previous = position;
+    }
+    expect(worker).not.toContain("createStarterSeedBundle");
+    expect(body).not.toContain("mustStore()");
+    expect(body).not.toContain("createMutationContext");
     expect(body).not.toContain("seedStarterShell(");
     expect(body).not.toContain("failClosedMutation(");
-    expect(worker).toContain('route: "starter.seed"');
-    expect(worker).toContain("const requestId = authorityRequestId(req)");
   });
 
   it("routes data lifecycle commands through authority without an ambient Store", () => {

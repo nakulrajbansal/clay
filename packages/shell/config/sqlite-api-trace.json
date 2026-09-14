@@ -25,7 +25,7 @@
       "package": "kernel",
       "files": 113,
       "pathsSha256": "1f8d8d6d122d4fb68a109a0c372470e547f41e45fff6970d45ff6f852ae0205b",
-      "sourceSha256": "df53ee07427f0c726afae1386902a5ede9f9834589ccd47f9790f40076b838fa"
+      "sourceSha256": "9748acc4aa4877f924772df7ad9dc71ad4a08a6ec645531ce45f97bbb3696e3d"
     },
     {
       "package": "mutation",
@@ -41,22 +41,22 @@
     },
     {
       "package": "schema",
-      "files": 60,
-      "pathsSha256": "63c4a549de3e3c9a7b3de1b843c1968ce0e9017fd4bf89d472f732ed03dab47b",
-      "sourceSha256": "c4cc3bb2a4f46d788e1e6aeba82c4405416b48d8b083ab512c1f49baceb7e0c9"
+      "files": 63,
+      "pathsSha256": "56228fc2e807ab9b7d124f4aef6e44c37179d73114ec37c4f715f296909abe23",
+      "sourceSha256": "79d46cbd48c2432ebc99d144498b80fb5827c6b53b7512877bab06da05ddbfca"
     },
     {
       "package": "shell",
-      "files": 118,
-      "pathsSha256": "95bbc50383c44fcd02a40dbc6487f6034df1e19980851a82173f52705e8a8455",
-      "sourceSha256": "c56eb20e9b5d71b21d1e0e09e97505b47bbba809f522f6e9e81167c301623432"
+      "files": 122,
+      "pathsSha256": "038e1c36a95824361d6d4c652d76f979502da68c9870939e5fd5c773677ee9e2",
+      "sourceSha256": "d006c9824d3f80eac15c611b5e849b4456eaeff6f8750632948d17930c0b6b79"
     }
   ],
   "inputs": [
     {
       "path": "packages/kernel/package.json",
-      "sha256": "7d29d6a9de42218e1cf369c24eed8aae92415387871a944e34d0564eea18a796",
-      "bytes": 1787
+      "sha256": "aee91cb59c5a937281028d93dfdd5aa20c7a9aa5c931c55d2ae3fd7354ead01a",
+      "bytes": 1848
     },
     {
       "path": "packages/kernel/src/db.ts",
@@ -85,8 +85,8 @@
     },
     {
       "path": "packages/kernel/src/production-authority.ts",
-      "sha256": "37a85e33f73c0ea63ec0cdb99935848d59d38191d4278c052f8a1eedcd9a784b",
-      "bytes": 81312
+      "sha256": "6dce24644222fd9953bad93f33ab3a8d829bc46f6db62d75ccc50b1ac3307ae7",
+      "bytes": 81354
     },
     {
       "path": "packages/kernel/src/production-automation-observer-routes.ts",
@@ -95,8 +95,8 @@
     },
     {
       "path": "packages/kernel/src/production-mutation-coordinator.ts",
-      "sha256": "e752abec73272c4835faa43d28753a15e8140c76c599659c96541111f6e68886",
-      "bytes": 119904
+      "sha256": "246581a22b3b62cbe44403cab8b83bf1688d17ebc83cd37fea00eb7fbf0900a7",
+      "bytes": 120421
     },
     {
       "path": "packages/kernel/src/production-native-recovery.ts",
@@ -160,8 +160,8 @@
     },
     {
       "path": "packages/shell/src/worker/db-worker.ts",
-      "sha256": "90d51e63ce03ff4f662dc07fdea475941910e27ec4e47a0242ecd43cca86c685",
-      "bytes": 70770
+      "sha256": "49b1425e1d160089bcf15e4061e85ad881827000839e2ce5b47051fe2a646edb",
+      "bytes": 71157
     },
     {
       "path": "packages/shell/test/shared-sqlite-runtime.test.mjs",
@@ -180,8 +180,8 @@
     },
     {
       "path": "packages/shell/vite.config.ts",
-      "sha256": "1cdf5af209d978efb3ea108155fd035780be04f42024d2ad64e0e3b330822983",
-      "bytes": 3229
+      "sha256": "01a37a73d264933317525f977a896aa1af1d57ee24b083170caa838065412b89",
+      "bytes": 3396
     },
     {
       "path": "pnpm-lock.yaml",
@@ -936,12 +936,12 @@
         "construct": 20,
         "function-or-callback": 173,
         "member": 1295,
-        "possible-callback-or-object-escape": 557,
+        "possible-callback-or-object-escape": 558,
         "return-escape": 98,
         "spread-escape": 21,
         "write-or-alias": 40
       },
-      "siteSha256": "251c5a471dd033f5836a7c0882ed2efb800862f6301a154fc2c02ce4ae2e0a10",
+      "siteSha256": "bf7778e7f83d70a53864d0aced3b124ec214815c13ba06ef70548fd9cd219863",
       "calls": [
         "<indirect>",
         "<indirect>.acquireWriteLease",
@@ -1459,18 +1459,18 @@
         "VoidKeyword"
       ],
       "counts": {
-        "binding-or-alias": 329,
-        "call": 882,
+        "binding-or-alias": 330,
+        "call": 886,
         "computed-access": 12,
         "construct": 69,
         "function-or-callback": 144,
-        "member": 1564,
-        "possible-callback-or-object-escape": 865,
+        "member": 1569,
+        "possible-callback-or-object-escape": 868,
         "return-escape": 161,
         "spread-escape": 13,
         "write-or-alias": 76
       },
-      "siteSha256": "29f9857e1489a61fe7404087ca7189fa8577131df4aaa7017df572021144ed9f",
+      "siteSha256": "43caf717ea7c840b58d97e80956d60525dd6eafeaccb9c7375c78f22c70230a5",
       "calls": [
         "<indirect>",
         "<indirect>.acquireWriteLease",
@@ -1504,6 +1504,7 @@
         "BigInt",
         "ClayError",
         "ClayStore.fromDriver",
+        "ComputeSourceV1.parse",
         "Date",
         "DeviceCatalog.openExisting",
         "Error",
@@ -2421,18 +2422,18 @@
         "WhileStatement"
       ],
       "counts": {
-        "binding-or-alias": 180,
-        "call": 616,
+        "binding-or-alias": 186,
+        "call": 620,
         "computed-access": 15,
-        "construct": 79,
+        "construct": 81,
         "function-or-callback": 86,
-        "member": 652,
-        "possible-callback-or-object-escape": 422,
-        "return-escape": 228,
+        "member": 658,
+        "possible-callback-or-object-escape": 424,
+        "return-escape": 227,
         "spread-escape": 19,
         "write-or-alias": 80
       },
-      "siteSha256": "8acc6d7a7ed488c93a7da78f49d39051cfed2a015641d1f00d824c4fcf74659f",
+      "siteSha256": "921b4c74a838d6ef8e5d5843be61b1080885cac2e18ad410ff76b3c1b6240022",
       "calls": [
         "<indirect>",
         "<indirect>.ProductionStoreAuthority.bootBrowser",
@@ -2542,6 +2543,7 @@
         "Promise.resolve",
         "Reflect.getOwnPropertyDescriptor",
         "Reflect.ownKeys",
+        "SeedComputeClient",
         "Set",
         "String",
         "Uint8Array",
@@ -2576,7 +2578,6 @@
         "clearTimeout",
         "clearWatchdog",
         "createSampleFillBundle",
-        "createStarterSeedBundle",
         "crypto.getRandomValues",
         "current.preview.shadow.close",
         "currentAuthority.plannerMutations",
@@ -2656,6 +2657,8 @@
         "sampleKeys.has",
         "samples.has",
         "samples.map",
+        "seedCompute.close",
+        "seedCompute.seed",
         "serveProductionStore",
         "serveStore",
         "server.quiesce",
@@ -2675,6 +2678,7 @@
         "target.executeMutation",
         "target.executeNewAppImport",
         "target.executeOperationalMetricMutation",
+        "target.inspectAuthority",
         "target.undoNewAppImport",
         "targetIdentity",
         "targetIdentityEquals",
@@ -2734,13 +2738,13 @@
       ],
       "counts": {
         "binding-or-alias": 3,
-        "call": 19,
+        "call": 21,
         "construct": 4,
         "function-or-callback": 3,
         "member": 15,
-        "possible-callback-or-object-escape": 9
+        "possible-callback-or-object-escape": 10
       },
-      "siteSha256": "b657d7c0f48b687f26e151bb14751693737f7f08ee8d182b7fe90ddda4b29d29",
+      "siteSha256": "189a65d32e18aa9968a958279b2a8b62fcea78ec6825781b51727c62f5820215",
       "calls": [
         "<indirect>.endsWith",
         "<indirect>.test",
@@ -2755,6 +2759,7 @@
         "fileURLToPath",
         "html.replace",
         "id.replaceAll",
+        "productionPureComputeGuard",
         "productionRendererGuard",
         "productionStandaloneGuard",
         "react",

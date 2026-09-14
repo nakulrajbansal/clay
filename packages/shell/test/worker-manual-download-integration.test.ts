@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { WorkerClient } from "../src/app/worker-client";
+import { OwnedComputeWorker } from "./helpers/owned-compute-worker";
 import { dailyCasReview } from "../src/app/daily-intent";
 import { ownedBrowserStorage } from "../../kernel/test/helpers/owned-browser-storage";
 vi.mock("../src/app/backup-trust-store.browser", async () => {
@@ -16,7 +17,8 @@ it("recovers download records after worker loss with private authentication and 
       const sent = transfer.filter(item => item instanceof MessagePort) as MessagePort[]; ports.push(...sent);
       queueMicrotask(() => scope.onmessage?.({ data: structuredClone(data), ports: sent } as unknown as MessageEvent));
     }, terminate: () => {} };
-  vi.stubGlobal("self", scope); let client = new WorkerClient(transport as unknown as Worker);
+  vi.stubGlobal("self", scope); vi.stubGlobal("Worker", OwnedComputeWorker); OwnedComputeWorker.reset();
+  let client = new WorkerClient(transport as unknown as Worker);
   const reload = async (suffix: string) => {
     await client.shutdown(); const module = "../src/worker/db-worker.ts";
     await import(`${module}?manual-${suffix}`); client = new WorkerClient(transport as unknown as Worker);

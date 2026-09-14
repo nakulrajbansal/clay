@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { generateStandalone } from "../scripts/generate-standalone.mjs";
 const oracles=import.meta.glob('../src/*.ts',{eager:true});
 const generated=import.meta.glob('../src/standalone/*.mjs',{eager:true});
-const modules=['index','archive','backup','catalog','daily-home','intake','intake-workflow','legacy-owner','owner-witness','projection','restore','share','import','import-staging','private-metrics','saved-views','intake-state','worker-contracts'];
+const modules=['index','archive','backup','catalog','daily-home','intake','intake-workflow','legacy-owner','owner-witness','projection','restore','share','import','import-staging','private-metrics','saved-views','intake-state','worker-contracts','pure-compute'];
 const base=[undefined,null,true,false,0,-0,NaN,Infinity,-Infinity,0.2,'','💠','\ud800',1n,Symbol('synthetic'),()=>1,[],{},new Date(0),new Map(),new Set(),/x/];
 const texts=['x','0','1','2026-09-14','2026-09-14T00:00:00.000Z','UTC','America/New_York','https://example.test',
   '019922e0-0000-7000-8000-000000000001','00000000-0000-0000-0000-000000000000',
@@ -73,7 +73,7 @@ function* variants(schema, depth=0) {
 }
 describe('generated standalone closed production contracts',()=>{
   it('is deterministic and bound to exact approved source and pinned Zod implementation',async()=>{
-    const report=await generateStandalone({check:true}); expect(report).toMatchObject({modules:18,validators:368,files:38});
+  const report=await generateStandalone({check:true}); expect(report).toMatchObject({modules:19,validators:372,files:40});
   });
   for(const name of modules) {
     const oracle=oracles[`../src/${name}.ts`]; const compact=generated[`../src/standalone/${name}.mjs`];

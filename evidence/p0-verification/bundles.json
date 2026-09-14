@@ -6,13 +6,13 @@
       "name": "workerAuthority",
       "files": [
         {
-          "file": "assets/worker-authority-CrLJJSKC.js",
-          "raw": 218583,
-          "gzip": 56541
+          "file": "assets/worker-authority-DqhjwpR4.js",
+          "raw": 218846,
+          "gzip": 56633
         }
       ],
-      "raw": 218583,
-      "gzip": 56541,
+      "raw": 218846,
+      "gzip": 56633,
       "limits": {
         "raw": 240000,
         "gzip": 60000
@@ -23,7 +23,7 @@
       "name": "completeWorker",
       "files": [
         {
-          "file": "assets/asyncstore-lKNUUiCM.js",
+          "file": "assets/asyncstore-DISxyk00.js",
           "raw": 497379,
           "gzip": 143281
         },
@@ -33,69 +33,69 @@
           "gzip": 4728
         },
         {
-          "file": "assets/db-worker-DtGwO_Lm.js",
-          "raw": 159584,
-          "gzip": 39838
+          "file": "assets/db-worker-Bt70A5LF.js",
+          "raw": 87884,
+          "gzip": 27475
         },
         {
-          "file": "assets/import-session-coordinator-C6WKSxzF.js",
+          "file": "assets/import-session-coordinator-BlV1KvnP.js",
           "raw": 9298,
-          "gzip": 3402
+          "gzip": 3400
         },
         {
-          "file": "assets/legacy-owner-C3vwppgL.js",
+          "file": "assets/legacy-owner-BfZvYrP4.js",
           "raw": 1438,
-          "gzip": 665
+          "gzip": 664
         },
         {
-          "file": "assets/legacy-owner-channel-BikGpsN8.js",
+          "file": "assets/legacy-owner-channel-BmPFtSL4.js",
           "raw": 2084,
-          "gzip": 1109
+          "gzip": 1111
         },
         {
-          "file": "assets/legacy-owner-recovery-CZ3rh4UT.js",
+          "file": "assets/legacy-owner-recovery-B-MefRWA.js",
           "raw": 6947,
-          "gzip": 2552
+          "gzip": 2555
         },
         {
-          "file": "assets/lifecycle-recovery-inventory-ByCpA_7l.js",
+          "file": "assets/lifecycle-recovery-inventory-jzG6Add7.js",
           "raw": 845,
           "gzip": 521
         },
         {
-          "file": "assets/planner-authority-D8v9Y3Hd.js",
+          "file": "assets/planner-authority-lVMxJokr.js",
           "raw": 2695,
           "gzip": 1144
         },
         {
-          "file": "assets/planner-pipeline-entry-Bl9GJFyP.js",
+          "file": "assets/planner-pipeline-entry-CRcXYWhM.js",
           "raw": 7281,
-          "gzip": 2652
+          "gzip": 2650
         },
         {
-          "file": "assets/production-app-lifecycle-3tvrbm-B.js",
+          "file": "assets/production-app-lifecycle-BwLJGZ7V.js",
           "raw": 16586,
-          "gzip": 5203
+          "gzip": 5205
         },
         {
-          "file": "assets/production-backup-routes-cw4lElWs.js",
+          "file": "assets/production-backup-routes-B8eYdnkR.js",
           "raw": 5390,
           "gzip": 1966
         },
         {
-          "file": "assets/production-catalog-migration-BRo4u23V.js",
+          "file": "assets/production-catalog-migration-DbNUJzw8.js",
           "raw": 781,
-          "gzip": 462
+          "gzip": 465
         },
         {
-          "file": "assets/production-native-recovery-DoIabm_G.js",
+          "file": "assets/production-native-recovery-SplKBdpR.js",
           "raw": 11466,
           "gzip": 4420
         },
         {
-          "file": "assets/production-owner-witness-DtambRmE.js",
+          "file": "assets/production-owner-witness-x4kJkR-V.js",
           "raw": 4487,
-          "gzip": 1701
+          "gzip": 1704
         },
         {
           "file": "assets/sqlite-initializer-C0GOx_Zk.js",
@@ -103,9 +103,9 @@
           "gzip": 62560
         },
         {
-          "file": "assets/target-authority-Ct9u6s3L.js",
+          "file": "assets/target-authority-m8mHcm89.js",
           "raw": 191808,
-          "gzip": 41103
+          "gzip": 41102
         },
         {
           "file": "assets/validation-runtime-hY6B-hAU.js",
@@ -113,13 +113,13 @@
           "gzip": 3194
         },
         {
-          "file": "assets/worker-authority-CrLJJSKC.js",
-          "raw": 218583,
-          "gzip": 56541
+          "file": "assets/worker-authority-DqhjwpR4.js",
+          "raw": 218846,
+          "gzip": 56633
         }
       ],
-      "raw": 1370834,
-      "gzip": 377042,
+      "raw": 1299397,
+      "gzip": 364778,
       "limits": {
         "raw": 1010000,
         "gzip": 280000
@@ -128,23 +128,23 @@
     },
     {
       "name": "completeBrowser",
-      "raw": 3295869,
-      "gzip": 1110298,
+      "raw": 3299607,
+      "gzip": 1114842,
       "files": [
         {
-          "file": "assets/AutomationCenter-58X3CJZK.js",
+          "file": "assets/AutomationCenter-CoJhic7-.js",
           "raw": 39298,
-          "gzip": 10943
+          "gzip": 10945
         },
         {
-          "file": "assets/CommandPalette-CWXqIAQM.js",
+          "file": "assets/CommandPalette-C9LlMZ0d.js",
           "raw": 10510,
-          "gzip": 3803
+          "gzip": 3805
         },
         {
-          "file": "assets/DataView-CyetbkaQ.js",
+          "file": "assets/DataView-B1ImXoVp.js",
           "raw": 42868,
-          "gzip": 12987
+          "gzip": 12991
         },
         {
           "file": "assets/ExportDialog-C7JxOhuB.css",
@@ -152,29 +152,29 @@
           "gzip": 681
         },
         {
-          "file": "assets/ExportDialog-CtWRCm7V.js",
+          "file": "assets/ExportDialog-OU8g0eZ4.js",
           "raw": 10602,
           "gzip": 4201
         },
         {
-          "file": "assets/FirstSuccessChecklist-B_mvlPDL.js",
+          "file": "assets/FirstSuccessChecklist-DMGV6uZ7.js",
           "raw": 3182,
-          "gzip": 1245
+          "gzip": 1246
         },
         {
-          "file": "assets/HistoryView-CHBKw72X.js",
+          "file": "assets/HistoryView-Bn-vrQ2-.js",
           "raw": 3001,
           "gzip": 1326
         },
         {
-          "file": "assets/ImportWizard-Cuwe5lDf.js",
+          "file": "assets/ImportWizard-C63kOw_2.js",
           "raw": 11182,
-          "gzip": 3742
+          "gzip": 3743
         },
         {
-          "file": "assets/IntakeCenter-DKsa6Keg.js",
+          "file": "assets/IntakeCenter-CYMcAM9F.js",
           "raw": 34163,
-          "gzip": 9717
+          "gzip": 9719
         },
         {
           "file": "assets/Operations-RGR73zdY.css",
@@ -182,19 +182,14 @@
           "gzip": 1356
         },
         {
-          "file": "assets/OriginalOwnerRecovery-rjiCBWkk.js",
+          "file": "assets/OriginalOwnerRecovery-H12m4DVl.js",
           "raw": 23004,
           "gzip": 7867
         },
         {
-          "file": "assets/PanelFrame-D98TGwMx.js",
+          "file": "assets/PanelFrame-UJYyY32F.js",
           "raw": 75608,
           "gzip": 22949
-        },
-        {
-          "file": "assets/PrivateMetricsView-B-5_FqLe.js",
-          "raw": 5643,
-          "gzip": 2062
         },
         {
           "file": "assets/PrivateMetricsView-CF7FiYRP.css",
@@ -202,29 +197,39 @@
           "gzip": 215
         },
         {
-          "file": "assets/PublicIntakeForm-NrMaRtSF.js",
+          "file": "assets/PrivateMetricsView-DZ1evv3P.js",
+          "raw": 5643,
+          "gzip": 2064
+        },
+        {
+          "file": "assets/PublicIntakeForm-CO7x11h4.js",
           "raw": 5574,
           "gzip": 2427
         },
         {
-          "file": "assets/RecordDetail-BO-Px_yI.js",
+          "file": "assets/RecordDetail-DvrO3PZS.js",
           "raw": 17827,
-          "gzip": 6003
+          "gzip": 6004
         },
         {
-          "file": "assets/RecoveryCenter-BIYoQgYQ.js",
+          "file": "assets/RecoveryCenter-CKftZC6_.js",
           "raw": 18331,
-          "gzip": 5944
+          "gzip": 5945
         },
         {
-          "file": "assets/RelationConversionDialog-XPcPjSPZ.js",
+          "file": "assets/RelationConversionDialog-ULK9r57-.js",
           "raw": 7482,
-          "gzip": 2570
+          "gzip": 2572
         },
         {
-          "file": "assets/ShapeMapView-3X37yyjL.js",
+          "file": "assets/ShapeMapView-BhrLnLMi.js",
           "raw": 9118,
-          "gzip": 2995
+          "gzip": 2994
+        },
+        {
+          "file": "assets/ShareDialog-CVEVEksv.js",
+          "raw": 18918,
+          "gzip": 6271
         },
         {
           "file": "assets/ShareDialog-CYBAyIpe.css",
@@ -232,14 +237,9 @@
           "gzip": 222
         },
         {
-          "file": "assets/ShareDialog-Dj2h4yYw.js",
-          "raw": 18918,
-          "gzip": 6269
-        },
-        {
-          "file": "assets/TodayView-DEzGcsNV.js",
+          "file": "assets/TodayView-Bmez6_oa.js",
           "raw": 22240,
-          "gzip": 6570
+          "gzip": 6571
         },
         {
           "file": "assets/TodayView-DhQx980-.css",
@@ -247,17 +247,17 @@
           "gzip": 402
         },
         {
-          "file": "assets/archive-verification-Bc5BLy14.js",
+          "file": "assets/archive-verification-D7rN4FZk.js",
           "raw": 10203,
-          "gzip": 3646
+          "gzip": 3644
         },
         {
-          "file": "assets/archive-verification-channel-CYpUMuJA.js",
+          "file": "assets/archive-verification-channel-DXBUhdi5.js",
           "raw": 1414,
-          "gzip": 794
+          "gzip": 793
         },
         {
-          "file": "assets/asyncstore-lKNUUiCM.js",
+          "file": "assets/asyncstore-DISxyk00.js",
           "raw": 497379,
           "gzip": 143281
         },
@@ -267,7 +267,7 @@
           "gzip": 886
         },
         {
-          "file": "assets/backup-operation-lock-B6WhB4fH.js",
+          "file": "assets/backup-operation-lock-BTLbpws1.js",
           "raw": 6807,
           "gzip": 2471
         },
@@ -277,24 +277,24 @@
           "gzip": 4728
         },
         {
-          "file": "assets/client-Cgj5tAM2.js",
+          "file": "assets/client-CLm961p9.js",
           "raw": 8805,
           "gzip": 3276
         },
         {
-          "file": "assets/daily-intent-Dd2ZTm6e.js",
+          "file": "assets/daily-intent-ClI-8rg2.js",
           "raw": 7679,
-          "gzip": 2622
+          "gzip": 2623
         },
         {
-          "file": "assets/db-worker-DtGwO_Lm.js",
-          "raw": 159584,
-          "gzip": 39838
+          "file": "assets/db-worker-Bt70A5LF.js",
+          "raw": 87884,
+          "gzip": 27475
         },
         {
-          "file": "assets/import-session-coordinator-C6WKSxzF.js",
+          "file": "assets/import-session-coordinator-BlV1KvnP.js",
           "raw": 9298,
-          "gzip": 3402
+          "gzip": 3400
         },
         {
           "file": "assets/import-worker-CzLrz9KJ.js",
@@ -302,9 +302,14 @@
           "gzip": 4276
         },
         {
-          "file": "assets/import-worker-client-DBJ-UYha.js",
+          "file": "assets/import-worker-client-D0z-_RLH.js",
           "raw": 5056,
           "gzip": 2032
+        },
+        {
+          "file": "assets/index-B5LMuxv6.js",
+          "raw": 319561,
+          "gzip": 97637
         },
         {
           "file": "assets/index-B92ZNIFj.css",
@@ -312,87 +317,87 @@
           "gzip": 13949
         },
         {
-          "file": "assets/index-jCWP0ekl.js",
-          "raw": 319561,
-          "gzip": 97653
-        },
-        {
-          "file": "assets/legacy-owner-C3vwppgL.js",
+          "file": "assets/legacy-owner-BfZvYrP4.js",
           "raw": 1438,
-          "gzip": 665
+          "gzip": 664
         },
         {
-          "file": "assets/legacy-owner-C9lQykYC.js",
+          "file": "assets/legacy-owner-Cu-MqhuY.js",
           "raw": 1511,
           "gzip": 687
         },
         {
-          "file": "assets/legacy-owner-channel-BikGpsN8.js",
+          "file": "assets/legacy-owner-channel-BmPFtSL4.js",
           "raw": 2084,
-          "gzip": 1109
+          "gzip": 1111
         },
         {
-          "file": "assets/legacy-owner-recovery-CZ3rh4UT.js",
+          "file": "assets/legacy-owner-recovery-B-MefRWA.js",
           "raw": 6947,
-          "gzip": 2552
+          "gzip": 2555
         },
         {
-          "file": "assets/lifecycle-recovery-inventory-ByCpA_7l.js",
+          "file": "assets/lifecycle-recovery-inventory-jzG6Add7.js",
           "raw": 845,
           "gzip": 521
         },
         {
-          "file": "assets/new-app-import-B0KAmgsM.js",
+          "file": "assets/new-app-import-DqoWHGi0.js",
           "raw": 8125,
-          "gzip": 3255
+          "gzip": 3258
         },
         {
-          "file": "assets/owner-custody.browser-DkvWS-jy.js",
+          "file": "assets/owner-custody.browser-1rQWYAdG.js",
           "raw": 23941,
-          "gzip": 6520
+          "gzip": 6521
         },
         {
-          "file": "assets/planner-authority-D8v9Y3Hd.js",
+          "file": "assets/planner-authority-lVMxJokr.js",
           "raw": 2695,
           "gzip": 1144
         },
         {
-          "file": "assets/planner-pipeline-entry-Bl9GJFyP.js",
+          "file": "assets/planner-pipeline-entry-CRcXYWhM.js",
           "raw": 7281,
-          "gzip": 2652
+          "gzip": 2650
         },
         {
-          "file": "assets/production-app-lifecycle-3tvrbm-B.js",
+          "file": "assets/production-app-lifecycle-BwLJGZ7V.js",
           "raw": 16586,
-          "gzip": 5203
+          "gzip": 5205
         },
         {
-          "file": "assets/production-backup-routes-cw4lElWs.js",
+          "file": "assets/production-backup-routes-B8eYdnkR.js",
           "raw": 5390,
           "gzip": 1966
         },
         {
-          "file": "assets/production-backup.browser-D4e8_u94.js",
+          "file": "assets/production-backup.browser-Bm2Bsbeu.js",
           "raw": 22216,
           "gzip": 6977
         },
         {
-          "file": "assets/production-catalog-migration-BRo4u23V.js",
+          "file": "assets/production-catalog-migration-DbNUJzw8.js",
           "raw": 781,
-          "gzip": 462
+          "gzip": 465
         },
         {
-          "file": "assets/production-native-recovery-DoIabm_G.js",
+          "file": "assets/production-native-recovery-SplKBdpR.js",
           "raw": 11466,
           "gzip": 4420
         },
         {
-          "file": "assets/production-owner-witness-DtambRmE.js",
+          "file": "assets/production-owner-witness-x4kJkR-V.js",
           "raw": 4487,
-          "gzip": 1701
+          "gzip": 1704
         },
         {
-          "file": "assets/raw-client-BqHzP7oH.js",
+          "file": "assets/pure-compute-worker-BuzJqeXx.js",
+          "raw": 75175,
+          "gzip": 16800
+        },
+        {
+          "file": "assets/raw-client-9BbSAj3J.js",
           "raw": 63529,
           "gzip": 19604
         },
@@ -422,14 +427,14 @@
           "gzip": 1403
         },
         {
-          "file": "assets/target-authority-Ct9u6s3L.js",
+          "file": "assets/target-authority-m8mHcm89.js",
           "raw": 191808,
-          "gzip": 41103
+          "gzip": 41102
         },
         {
-          "file": "assets/trusted-backup-runtime-BzU47zCk.js",
+          "file": "assets/trusted-backup-runtime-BHxu4Yjv.js",
           "raw": 40517,
-          "gzip": 10506
+          "gzip": 10507
         },
         {
           "file": "assets/validation-runtime-hY6B-hAU.js",
@@ -437,9 +442,9 @@
           "gzip": 3194
         },
         {
-          "file": "assets/worker-authority-CrLJJSKC.js",
-          "raw": 218583,
-          "gzip": 56541
+          "file": "assets/worker-authority-DqhjwpR4.js",
+          "raw": 218846,
+          "gzip": 56633
         },
         {
           "file": "assets/xlsx-adapter-BHSFWV0D.js",
@@ -449,7 +454,7 @@
         {
           "file": "index.html",
           "raw": 1123,
-          "gzip": 622
+          "gzip": 623
         },
         {
           "file": "panel-runtime.iife.js",

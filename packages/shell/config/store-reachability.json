@@ -1,0 +1,3239 @@
+{
+  "kind": "conservative_store_reference_graph_v1",
+  "escapes": [
+    {
+      "at": "packages/kernel/src/store.ts:699",
+      "kind": "unresolved_callable_alias"
+    },
+    {
+      "at": "packages/kernel/src/store.ts:718",
+      "kind": "unresolved_callable_alias"
+    },
+    {
+      "at": "packages/kernel/src/store.ts:725",
+      "kind": "unresolved_callable_alias"
+    },
+    {
+      "at": "packages/kernel/src/store.ts:743",
+      "kind": "unresolved_callable_alias"
+    },
+    {
+      "at": "packages/kernel/src/store.ts:747",
+      "kind": "unresolved_callable_alias"
+    },
+    {
+      "at": "packages/kernel/src/store.ts:748",
+      "kind": "unresolved_callable_alias"
+    },
+    {
+      "at": "packages/kernel/src/store.ts:752",
+      "kind": "returned_store_capability"
+    },
+    {
+      "at": "packages/kernel/src/store.ts:851",
+      "kind": "returned_store_capability"
+    },
+    {
+      "at": "packages/kernel/src/store.ts:888",
+      "kind": "unresolved_callable_alias"
+    },
+    {
+      "at": "packages/kernel/src/store.ts:889",
+      "kind": "unresolved_callable_alias"
+    },
+    {
+      "at": "packages/kernel/src/store.ts:2003",
+      "kind": "returned_store_capability"
+    },
+    {
+      "at": "packages/kernel/src/store.ts:6017",
+      "kind": "stored_capability_alias"
+    },
+    {
+      "at": "packages/kernel/src/store.ts:6036",
+      "kind": "unresolved_callable_alias"
+    },
+    {
+      "at": "packages/kernel/src/store.ts:6053",
+      "kind": "stored_capability_alias"
+    },
+    {
+      "at": "packages/kernel/src/production-automation-observer-routes.ts:120",
+      "kind": "unresolved_callable_alias"
+    },
+    {
+      "at": "packages/kernel/src/production-core-routes.ts:337",
+      "kind": "unresolved_callable_alias"
+    },
+    {
+      "at": "packages/kernel/src/archive-authority.ts:1175",
+      "kind": "stored_capability_alias"
+    },
+    {
+      "at": "packages/kernel/src/archive-authority.ts:1216",
+      "kind": "stored_capability_alias"
+    },
+    {
+      "at": "packages/kernel/src/archive-authority.ts:1411",
+      "kind": "stored_capability_alias"
+    },
+    {
+      "at": "packages/kernel/src/archive-authority.ts:1436",
+      "kind": "stored_capability_alias"
+    },
+    {
+      "at": "packages/kernel/src/production-restore.ts:156",
+      "kind": "stored_capability_alias"
+    },
+    {
+      "at": "packages/kernel/src/production-app-lifecycle.ts:266",
+      "kind": "stored_capability_alias"
+    },
+    {
+      "at": "packages/kernel/src/production-authority.ts:298",
+      "kind": "returned_store_capability"
+    },
+    {
+      "at": "packages/kernel/src/production-authority.ts:298",
+      "kind": "reflection"
+    },
+    {
+      "at": "packages/kernel/src/production-authority.ts:570",
+      "kind": "stored_capability_alias"
+    },
+    {
+      "at": "packages/kernel/src/production-authority.ts:1263",
+      "kind": "returned_store_capability"
+    },
+    {
+      "at": "packages/kernel/src/production-authority.ts:1467",
+      "kind": "returned_store_capability"
+    },
+    {
+      "at": "packages/shell/src/worker/db-worker.ts:420",
+      "kind": "returned_store_capability"
+    }
+  ],
+  "nodes": [
+    {
+      "name": "ClayStore.constructor",
+      "sourceBytes": 483,
+      "roots": [],
+      "calls": [
+        "ClayStore.#addCapturedAttachment",
+        "ClayStore.#exportArchiveReadOnly",
+        "ClayStore.loadRegistry"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.openMemory",
+      "sourceBytes": 110,
+      "roots": [],
+      "calls": [
+        "ClayStore.fromDriver",
+        "ClayStore.openMemory"
+      ],
+      "reachable": false
+    },
+    {
+      "name": "ClayStore.fromDriver",
+      "sourceBytes": 4998,
+      "roots": [
+        "packages/kernel/src/app-generation.ts:61",
+        "packages/kernel/src/production-app-lifecycle.ts:237",
+        "packages/kernel/src/production-app-lifecycle.ts:361",
+        "packages/kernel/src/production-authority.ts:1224",
+        "packages/kernel/src/production-authority.ts:1319",
+        "packages/kernel/src/production-authority.ts:1558",
+        "packages/kernel/src/production-authority.ts:347",
+        "packages/kernel/src/production-authority.ts:461",
+        "packages/kernel/src/production-mutation-coordinator.ts:1908",
+        "packages/kernel/src/production-mutation-coordinator.ts:1982",
+        "packages/kernel/src/production-native-recovery.ts:23"
+      ],
+      "calls": [
+        "ClayStore.constructor",
+        "ClayStore.currentVersion",
+        "ClayStore.ensureSemanticMetadata",
+        "ClayStore.fromDriver",
+        "ClayStore.headVersion",
+        "ClayStore.loadRegistry",
+        "ClayStore.migrateLayoutScheme",
+        "ClayStore.persistRegistry",
+        "ClayStore.prepareSemanticAssignments",
+        "ClayStore.semanticOperationBounds"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.migrateLayoutScheme",
+      "sourceBytes": 919,
+      "roots": [],
+      "calls": [
+        "ClayStore.migrateLayoutScheme"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.close",
+      "sourceBytes": 133,
+      "roots": [
+        "packages/kernel/src/archive-authority.ts:1212",
+        "packages/kernel/src/archive-authority.ts:1260",
+        "packages/kernel/src/archive-authority.ts:1307",
+        "packages/kernel/src/archive-authority.ts:1316",
+        "packages/kernel/src/archive-authority.ts:1324",
+        "packages/kernel/src/archive-authority.ts:1430",
+        "packages/kernel/src/archive-authority.ts:1444",
+        "packages/kernel/src/archive-authority.ts:433",
+        "packages/kernel/src/planner-authority.ts:134",
+        "packages/kernel/src/planner-authority.ts:202",
+        "packages/kernel/src/planner-authority.ts:85",
+        "packages/kernel/src/production-app-lifecycle.ts:385",
+        "packages/kernel/src/production-app-lifecycle.ts:386",
+        "packages/kernel/src/production-app-lifecycle.ts:681",
+        "packages/kernel/src/production-authority.ts:1564",
+        "packages/kernel/src/production-authority.ts:1712",
+        "packages/kernel/src/production-authority.ts:478",
+        "packages/kernel/src/production-mutation-coordinator.ts:1941",
+        "packages/kernel/src/production-mutation-coordinator.ts:1999",
+        "packages/kernel/src/production-restore.ts:164",
+        "packages/kernel/src/production-restore.ts:63"
+      ],
+      "calls": [
+        "ClayStore.close"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.loadRegistry",
+      "sourceBytes": 259,
+      "roots": [],
+      "calls": [
+        "ClayStore.loadRegistry"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.ensureSemanticMetadata",
+      "sourceBytes": 2790,
+      "roots": [],
+      "calls": [
+        "ClayStore.ensureSemanticMetadata"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.prepareSemanticAssignments",
+      "sourceBytes": 14555,
+      "roots": [
+        "packages/kernel/src/planner-authority.ts:173",
+        "packages/kernel/src/planner-authority.ts:220",
+        "packages/kernel/src/planner-authority.ts:74",
+        "packages/kernel/src/planner-authority.ts:75",
+        "packages/kernel/src/store.ts:6084"
+      ],
+      "calls": [
+        "ClayStore.headVersion",
+        "ClayStore.prepareSemanticAssignments"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.pruneSemanticAfter",
+      "sourceBytes": 576,
+      "roots": [],
+      "calls": [
+        "ClayStore.pruneSemanticAfter"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.alignSemanticLabelsToPhysicalShape",
+      "sourceBytes": 665,
+      "roots": [],
+      "calls": [
+        "ClayStore.alignSemanticLabelsToPhysicalShape"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.persistRegistry",
+      "sourceBytes": 380,
+      "roots": [],
+      "calls": [
+        "ClayStore.persistRegistry"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.registrySnapshot",
+      "sourceBytes": 76,
+      "roots": [
+        "packages/kernel/src/asyncstore.ts:54",
+        "packages/kernel/src/planner-authority.ts:158",
+        "packages/kernel/src/planner-authority.ts:69",
+        "packages/kernel/src/production-app-lifecycle.ts:113",
+        "packages/kernel/src/production-app-lifecycle.ts:171",
+        "packages/kernel/src/production-app-lifecycle.ts:472",
+        "packages/kernel/src/production-authority.ts:1630",
+        "packages/kernel/src/production-authority.ts:1798",
+        "packages/kernel/src/production-authority.ts:242",
+        "packages/kernel/src/production-authority.ts:292",
+        "packages/kernel/src/production-core-routes.ts:359",
+        "packages/kernel/src/production-core-routes.ts:396",
+        "packages/kernel/src/production-core-routes.ts:408",
+        "packages/kernel/src/production-core-routes.ts:421",
+        "packages/kernel/src/production-import.ts:197",
+        "packages/kernel/src/production-import.ts:238",
+        "packages/kernel/src/production-mutation-coordinator.ts:1181",
+        "packages/kernel/src/production-mutation-coordinator.ts:950",
+        "packages/kernel/src/production-seed.ts:324",
+        "packages/kernel/src/production-seed.ts:399",
+        "packages/kernel/src/production-seed.ts:413",
+        "packages/kernel/src/store.ts:6085",
+        "packages/shell/src/worker/db-worker.ts:922",
+        "packages/shell/src/worker/db-worker.ts:948",
+        "packages/shell/src/worker/release-c/import-session-coordinator.ts:179",
+        "packages/shell/src/worker/release-c/import-session-coordinator.ts:238",
+        "packages/shell/src/worker/release-c/import-session-coordinator.ts:293",
+        "packages/shell/src/worker/samples.ts:150",
+        "packages/shell/src/worker/samples.ts:186"
+      ],
+      "calls": [
+        "ClayStore.registrySnapshot"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.validationRegistrySnapshot",
+      "sourceBytes": 80,
+      "roots": [
+        "packages/kernel/src/archive-authority.ts:1363",
+        "packages/kernel/src/legacy-owner-recovery.ts:132",
+        "packages/kernel/src/planner-authority.ts:159",
+        "packages/kernel/src/planner-authority.ts:70",
+        "packages/kernel/src/planner-authority.ts:71",
+        "packages/kernel/src/planner-authority.ts:89",
+        "packages/kernel/src/production-app-lifecycle.ts:235",
+        "packages/kernel/src/production-app-lifecycle.ts:240",
+        "packages/kernel/src/production-app-lifecycle.ts:363",
+        "packages/kernel/src/production-authority.ts:1228",
+        "packages/kernel/src/production-authority.ts:1323",
+        "packages/kernel/src/production-authority.ts:1472",
+        "packages/kernel/src/production-authority.ts:352",
+        "packages/kernel/src/production-authority.ts:464",
+        "packages/kernel/src/production-authority.ts:470",
+        "packages/kernel/src/production-authority.ts:533",
+        "packages/kernel/src/production-daily-projection.ts:19",
+        "packages/kernel/src/production-daily.ts:31",
+        "packages/kernel/src/production-import.ts:153",
+        "packages/kernel/src/production-import.ts:198",
+        "packages/kernel/src/production-import.ts:199",
+        "packages/kernel/src/production-inbox.ts:35",
+        "packages/kernel/src/production-manual-backup.ts:21",
+        "packages/kernel/src/production-mutation-coordinator.ts:1435",
+        "packages/kernel/src/production-mutation-coordinator.ts:1449",
+        "packages/kernel/src/production-mutation-coordinator.ts:1454",
+        "packages/kernel/src/production-mutation-coordinator.ts:1823",
+        "packages/kernel/src/production-mutation-coordinator.ts:1910",
+        "packages/kernel/src/production-mutation-coordinator.ts:1936",
+        "packages/kernel/src/production-mutation-coordinator.ts:1985",
+        "packages/kernel/src/production-mutation-coordinator.ts:1992",
+        "packages/kernel/src/production-mutation-coordinator.ts:2446",
+        "packages/kernel/src/production-mutation-coordinator.ts:951",
+        "packages/kernel/src/production-mutation-coordinator.ts:952",
+        "packages/kernel/src/production-mutation-coordinator.ts:992",
+        "packages/kernel/src/production-native-recovery.ts:24",
+        "packages/kernel/src/production-samples.ts:171",
+        "packages/kernel/src/production-samples.ts:172",
+        "packages/kernel/src/production-samples.ts:231",
+        "packages/kernel/src/production-seed.ts:325",
+        "packages/kernel/src/production-seed.ts:326",
+        "packages/kernel/src/production-seed.ts:414",
+        "packages/kernel/src/store.ts:6074",
+        "packages/shell/src/shells/sample-provenance.ts:163",
+        "packages/shell/src/shells/sample-provenance.ts:222"
+      ],
+      "calls": [
+        "ClayStore.validationRegistrySnapshot"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.semanticSchemaTrace",
+      "sourceBytes": 3706,
+      "roots": [
+        "packages/kernel/src/planner-authority.ts:125",
+        "packages/kernel/src/planner-authority.ts:83",
+        "packages/kernel/src/planner-authority.ts:84",
+        "packages/kernel/src/production-authority.ts:1630",
+        "packages/kernel/src/production-authority.ts:1643",
+        "packages/kernel/src/production-authority.ts:245",
+        "packages/kernel/src/production-authority.ts:295",
+        "packages/shell/src/worker/db-worker.ts:1305"
+      ],
+      "calls": [
+        "ClayStore.currentVersion",
+        "ClayStore.ensureSemanticMetadata",
+        "ClayStore.semanticSchemaTrace"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.fieldProvenance",
+      "sourceBytes": 1592,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:221",
+        "packages/kernel/src/production-authority.ts:267",
+        "packages/shell/src/worker/db-worker.ts:1307"
+      ],
+      "calls": [
+        "ClayStore.currentVersion",
+        "ClayStore.ensureSemanticMetadata",
+        "ClayStore.fieldProvenance"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.recordPrivateMetric",
+      "sourceBytes": 98,
+      "roots": [
+        "packages/kernel/src/production-private-metric-authority.ts:106",
+        "packages/kernel/src/production-private-metric-authority.ts:11",
+        "packages/kernel/src/production-private-metric-authority.ts:12"
+      ],
+      "calls": [
+        "ClayStore.recordPrivateMetric"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.privateMetricsSummary",
+      "sourceBytes": 95,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:238",
+        "packages/kernel/src/production-authority.ts:288",
+        "packages/kernel/src/production-private-metric-authority.ts:112",
+        "packages/kernel/src/production-private-metric-authority.ts:115",
+        "packages/kernel/src/production-private-metric-authority.ts:15",
+        "packages/kernel/src/production-private-metric-authority.ts:16",
+        "packages/shell/src/worker/db-worker.ts:1317"
+      ],
+      "calls": [
+        "ClayStore.privateMetricsSummary"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.setPrivateMetricsEnabled",
+      "sourceBytes": 110,
+      "roots": [
+        "packages/kernel/src/production-private-metric-authority.ts:111",
+        "packages/kernel/src/production-private-metric-authority.ts:13",
+        "packages/kernel/src/production-private-metric-authority.ts:14"
+      ],
+      "calls": [
+        "ClayStore.setPrivateMetricsEnabled"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.clearPrivateMetrics",
+      "sourceBytes": 61,
+      "roots": [
+        "packages/kernel/src/production-private-metric-authority.ts:114",
+        "packages/kernel/src/production-private-metric-authority.ts:17",
+        "packages/kernel/src/production-private-metric-authority.ts:18"
+      ],
+      "calls": [
+        "ClayStore.clearPrivateMetrics"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.headVersion",
+      "sourceBytes": 150,
+      "roots": [
+        "packages/kernel/src/planner-authority.ts:68",
+        "packages/kernel/src/planner-authority.ts:88",
+        "packages/kernel/src/production-app-lifecycle.ts:112",
+        "packages/kernel/src/production-app-lifecycle.ts:239",
+        "packages/kernel/src/production-app-lifecycle.ts:420",
+        "packages/kernel/src/production-app-lifecycle.ts:461",
+        "packages/kernel/src/production-app-lifecycle.ts:471",
+        "packages/kernel/src/production-authority.ts:1227",
+        "packages/kernel/src/production-authority.ts:1322",
+        "packages/kernel/src/production-authority.ts:1675",
+        "packages/kernel/src/production-authority.ts:224",
+        "packages/kernel/src/production-authority.ts:273",
+        "packages/kernel/src/production-authority.ts:807",
+        "packages/kernel/src/production-daily-projection.ts:26",
+        "packages/kernel/src/production-relation.ts:37",
+        "packages/kernel/src/store.ts:6081",
+        "packages/shell/src/worker/db-worker.ts:1621",
+        "packages/shell/src/worker/release-c/import-session-coordinator.ts:300"
+      ],
+      "calls": [
+        "ClayStore.headVersion"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.currentVersion",
+      "sourceBytes": 234,
+      "roots": [
+        "packages/kernel/src/legacy-owner-recovery.ts:132",
+        "packages/kernel/src/store.ts:6078"
+      ],
+      "calls": [
+        "ClayStore.currentVersion",
+        "ClayStore.getSetting",
+        "ClayStore.headVersion"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.setCurrentVersion",
+      "sourceBytes": 125,
+      "roots": [],
+      "calls": [
+        "ClayStore.setCurrentVersion",
+        "ClayStore.setSetting"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.getSetting",
+      "sourceBytes": 262,
+      "roots": [
+        "packages/kernel/src/archive-authority.ts:125",
+        "packages/kernel/src/archive-authority.ts:128",
+        "packages/kernel/src/production-app-lifecycle.ts:238",
+        "packages/kernel/src/production-app-lifecycle.ts:560",
+        "packages/kernel/src/production-authority.ts:1226",
+        "packages/kernel/src/production-authority.ts:1321",
+        "packages/kernel/src/production-authority.ts:1343",
+        "packages/kernel/src/production-authority.ts:1498",
+        "packages/kernel/src/production-authority.ts:1676",
+        "packages/kernel/src/production-authority.ts:222",
+        "packages/kernel/src/production-authority.ts:270",
+        "packages/kernel/src/production-authority.ts:808",
+        "packages/kernel/src/production-daily-projection.ts:17",
+        "packages/kernel/src/production-daily-projection.ts:29",
+        "packages/kernel/src/production-daily-projection.ts:31",
+        "packages/kernel/src/production-daily-projection.ts:32",
+        "packages/kernel/src/production-daily.ts:27",
+        "packages/kernel/src/production-import.ts:201",
+        "packages/kernel/src/production-import.ts:250",
+        "packages/kernel/src/production-inbox.ts:34",
+        "packages/kernel/src/production-manual-backup.ts:27",
+        "packages/kernel/src/production-manual-backup.ts:49",
+        "packages/kernel/src/production-manual-backup.ts:55",
+        "packages/kernel/src/production-mutation-coordinator.ts:1007",
+        "packages/kernel/src/production-mutation-coordinator.ts:1191",
+        "packages/kernel/src/production-mutation-coordinator.ts:2094",
+        "packages/kernel/src/production-mutation-coordinator.ts:2420",
+        "packages/kernel/src/production-mutation-coordinator.ts:957",
+        "packages/kernel/src/production-samples.ts:170",
+        "packages/kernel/src/production-samples.ts:188",
+        "packages/kernel/src/sample-provenance-proof.ts:251",
+        "packages/kernel/src/sample-provenance-proof.ts:260",
+        "packages/kernel/src/store.ts:6080",
+        "packages/shell/src/shells/sample-provenance.ts:160",
+        "packages/shell/src/shells/sample-provenance.ts:162",
+        "packages/shell/src/shells/sample-provenance.ts:208",
+        "packages/shell/src/shells/sample-provenance.ts:253",
+        "packages/shell/src/worker/db-worker.ts:1352",
+        "packages/shell/src/worker/db-worker.ts:1633",
+        "packages/shell/src/worker/db-worker.ts:887",
+        "packages/shell/src/worker/db-worker.ts:889",
+        "packages/shell/src/worker/samples.ts:183",
+        "packages/shell/src/worker/samples.ts:216"
+      ],
+      "calls": [
+        "ClayStore.getSetting"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.setSetting",
+      "sourceBytes": 247,
+      "roots": [
+        "packages/kernel/src/production-app-lifecycle.ts:239",
+        "packages/kernel/src/production-authority.ts:1227",
+        "packages/kernel/src/production-authority.ts:1322",
+        "packages/kernel/src/production-daily.ts:28",
+        "packages/kernel/src/production-import.ts:202",
+        "packages/kernel/src/production-import.ts:251",
+        "packages/kernel/src/production-manual-backup.ts:57",
+        "packages/kernel/src/production-mutation-coordinator.ts:1021",
+        "packages/kernel/src/production-mutation-coordinator.ts:1185",
+        "packages/kernel/src/production-mutation-coordinator.ts:1197",
+        "packages/kernel/src/production-mutation-coordinator.ts:958",
+        "packages/kernel/src/production-samples.ts:15",
+        "packages/kernel/src/production-samples.ts:25",
+        "packages/kernel/src/production-seed.ts:323",
+        "packages/kernel/src/production-seed.ts:470",
+        "packages/kernel/src/store.ts:6091",
+        "packages/shell/src/shells/sample-provenance.ts:207",
+        "packages/shell/src/shells/sample-provenance.ts:252",
+        "packages/shell/src/worker/samples.ts:210"
+      ],
+      "calls": [
+        "ClayStore.setSetting"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.deleteSetting",
+      "sourceBytes": 110,
+      "roots": [
+        "packages/kernel/src/production-mutation-coordinator.ts:1188",
+        "packages/kernel/src/production-mutation-coordinator.ts:959"
+      ],
+      "calls": [
+        "ClayStore.deleteSetting"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.sampleRowProvenance",
+      "sourceBytes": 95,
+      "roots": [
+        "packages/kernel/src/production-app-lifecycle.ts:263",
+        "packages/kernel/src/production-mutation-coordinator.ts:1915",
+        "packages/kernel/src/production-mutation-coordinator.ts:960",
+        "packages/kernel/src/production-mutation-coordinator.ts:961",
+        "packages/kernel/src/production-mutation-coordinator.ts:996",
+        "packages/kernel/src/production-restore.ts:154",
+        "packages/kernel/src/production-samples.ts:175",
+        "packages/kernel/src/production-samples.ts:176",
+        "packages/kernel/src/production-samples.ts:183",
+        "packages/kernel/src/production-samples.ts:190",
+        "packages/kernel/src/sample-provenance-proof.ts:252",
+        "packages/kernel/src/sample-provenance-proof.ts:253",
+        "packages/kernel/src/sample-provenance-proof.ts:262"
+      ],
+      "calls": [
+        "ClayStore.#sampleRowProvenance",
+        "ClayStore.sampleRowProvenance"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.#sampleRowProvenance",
+      "sourceBytes": 2154,
+      "roots": [],
+      "calls": [],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.sampleRowProvenanceState",
+      "sourceBytes": 139,
+      "roots": [
+        "packages/kernel/src/production-samples.ts:177",
+        "packages/kernel/src/production-samples.ts:178",
+        "packages/kernel/src/production-samples.ts:191"
+      ],
+      "calls": [
+        "ClayStore.#sampleRowProvenanceState",
+        "ClayStore.sampleRowProvenanceState"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.#sampleRowProvenanceState",
+      "sourceBytes": 806,
+      "roots": [],
+      "calls": [
+        "helper.qid"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.recordSampleRowProvenance",
+      "sourceBytes": 1795,
+      "roots": [
+        "packages/kernel/src/production-samples.ts:179",
+        "packages/kernel/src/production-samples.ts:180",
+        "packages/kernel/src/production-samples.ts:257",
+        "packages/kernel/src/production-seed.ts:327",
+        "packages/kernel/src/production-seed.ts:328",
+        "packages/kernel/src/production-seed.ts:469"
+      ],
+      "calls": [
+        "ClayStore.#sampleRowProvenance",
+        "ClayStore.#sampleRowProvenanceState",
+        "ClayStore.recordSampleRowProvenance"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.scrubLegacyCredentialSettings",
+      "sourceBytes": 160,
+      "roots": [],
+      "calls": [
+        "ClayStore.deleteSetting",
+        "ClayStore.scrubLegacyCredentialSettings"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.getEntry",
+      "sourceBytes": 708,
+      "roots": [
+        "packages/kernel/src/store.ts:6079"
+      ],
+      "calls": [
+        "ClayStore.getEntry"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.semanticOperationBounds",
+      "sourceBytes": 688,
+      "roots": [],
+      "calls": [
+        "ClayStore.semanticOperationBounds"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.commit",
+      "sourceBytes": 5325,
+      "roots": [
+        "packages/kernel/src/planner-authority.ts:177",
+        "packages/kernel/src/planner-authority.ts:77",
+        "packages/kernel/src/production-core-routes.ts:391",
+        "packages/kernel/src/production-core-routes.ts:416",
+        "packages/kernel/src/production-import.ts:195",
+        "packages/kernel/src/production-import.ts:232",
+        "packages/kernel/src/production-mutation-coordinator.ts:1075",
+        "packages/kernel/src/production-mutation-coordinator.ts:1170",
+        "packages/kernel/src/production-mutation-coordinator.ts:940",
+        "packages/kernel/src/production-seed.ts:321",
+        "packages/kernel/src/production-seed.ts:400",
+        "packages/kernel/src/production-seed.ts:441",
+        "packages/kernel/src/store.ts:6075"
+      ],
+      "calls": [
+        "ClayStore.assertAutomationsCompatible",
+        "ClayStore.assertRelationIntegrity",
+        "ClayStore.commit",
+        "ClayStore.currentVersion",
+        "ClayStore.ensureSemanticMetadata",
+        "ClayStore.headVersion",
+        "ClayStore.livePanels",
+        "ClayStore.loadRegistry",
+        "ClayStore.persistRegistry",
+        "ClayStore.prepareSemanticAssignments",
+        "ClayStore.setCurrentVersion",
+        "ClayStore.writePanelBlob",
+        "helper.renameQueryFields"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.writePanelBlob",
+      "sourceBytes": 490,
+      "roots": [],
+      "calls": [
+        "ClayStore.writePanelBlob"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.commitLayout",
+      "sourceBytes": 1610,
+      "roots": [],
+      "calls": [
+        "ClayStore.commit",
+        "ClayStore.commitLayout",
+        "ClayStore.headVersion",
+        "ClayStore.livePanels"
+      ],
+      "reachable": false
+    },
+    {
+      "name": "ClayStore.renamePanel",
+      "sourceBytes": 965,
+      "roots": [
+        "packages/kernel/src/production-core-routes.ts:296",
+        "packages/kernel/src/store.ts:6087"
+      ],
+      "calls": [
+        "ClayStore.commit",
+        "ClayStore.headVersion",
+        "ClayStore.livePanels",
+        "ClayStore.renamePanel"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.removePanel",
+      "sourceBytes": 537,
+      "roots": [
+        "packages/kernel/src/production-core-routes.ts:289",
+        "packages/kernel/src/store.ts:6086"
+      ],
+      "calls": [
+        "ClayStore.commit",
+        "ClayStore.livePanels",
+        "ClayStore.removePanel"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.livePanels",
+      "sourceBytes": 1358,
+      "roots": [
+        "packages/kernel/src/planner-authority.ts:160",
+        "packages/kernel/src/planner-authority.ts:72",
+        "packages/kernel/src/planner-authority.ts:91",
+        "packages/kernel/src/production-app-lifecycle.ts:114",
+        "packages/kernel/src/production-app-lifecycle.ts:176",
+        "packages/kernel/src/production-app-lifecycle.ts:472",
+        "packages/kernel/src/production-authority.ts:233",
+        "packages/kernel/src/production-authority.ts:282",
+        "packages/kernel/src/production-core-routes.ts:240",
+        "packages/kernel/src/production-import.ts:165",
+        "packages/kernel/src/production-import.ts:200",
+        "packages/kernel/src/store.ts:6083",
+        "packages/shell/src/worker/db-worker.ts:1299",
+        "packages/shell/src/worker/db-worker.ts:1301",
+        "packages/shell/src/worker/db-worker.ts:1323",
+        "packages/shell/src/worker/db-worker.ts:1400"
+      ],
+      "calls": [
+        "ClayStore.currentVersion",
+        "ClayStore.livePanels"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.panelProvenance",
+      "sourceBytes": 1292,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:235",
+        "packages/kernel/src/production-authority.ts:284",
+        "packages/shell/src/worker/db-worker.ts:1302"
+      ],
+      "calls": [
+        "ClayStore.currentVersion",
+        "ClayStore.getEntry",
+        "ClayStore.panelProvenance"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.history",
+      "sourceBytes": 610,
+      "roots": [
+        "packages/kernel/src/production-app-lifecycle.ts:112",
+        "packages/kernel/src/production-app-lifecycle.ts:420",
+        "packages/kernel/src/production-app-lifecycle.ts:461",
+        "packages/kernel/src/production-app-lifecycle.ts:471",
+        "packages/kernel/src/production-app-lifecycle.ts:559",
+        "packages/kernel/src/production-authority.ts:225",
+        "packages/kernel/src/production-authority.ts:274",
+        "packages/kernel/src/production-core-routes.ts:278",
+        "packages/kernel/src/store.ts:6082",
+        "packages/shell/src/worker/db-worker.ts:1319"
+      ],
+      "calls": [
+        "ClayStore.history",
+        "helper.parseDiff"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.setCheckpoint",
+      "sourceBytes": 442,
+      "roots": [
+        "packages/kernel/src/production-core-routes.ts:277",
+        "packages/kernel/src/store.ts:6090"
+      ],
+      "calls": [
+        "ClayStore.setCheckpoint"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.recentSummaries",
+      "sourceBytes": 190,
+      "roots": [
+        "packages/kernel/src/planner-authority.ts:161",
+        "packages/kernel/src/planner-authority.ts:73"
+      ],
+      "calls": [
+        "ClayStore.recentSummaries"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.beginAttempt",
+      "sourceBytes": 246,
+      "roots": [
+        "packages/kernel/src/planner-authority.ts:239",
+        "packages/kernel/src/planner-authority.ts:80",
+        "packages/kernel/src/production-mutation-coordinator.ts:1090",
+        "packages/kernel/src/production-mutation-coordinator.ts:953"
+      ],
+      "calls": [
+        "ClayStore.beginAttempt"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.pendingPlannerAttempts",
+      "sourceBytes": 301,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:1532",
+        "packages/kernel/src/production-authority.ts:1538",
+        "packages/kernel/src/production-authority.ts:248",
+        "packages/kernel/src/production-authority.ts:249",
+        "packages/kernel/src/production-authority.ts:375",
+        "packages/kernel/src/production-authority.ts:396",
+        "packages/kernel/src/production-authority.ts:419",
+        "packages/kernel/src/production-authority.ts:508",
+        "packages/kernel/src/production-authority.ts:567"
+      ],
+      "calls": [
+        "ClayStore.pendingPlannerAttempts"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.#assertPendingAttempt",
+      "sourceBytes": 547,
+      "roots": [],
+      "calls": [],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.#finishAttempt",
+      "sourceBytes": 691,
+      "roots": [],
+      "calls": [
+        "ClayStore.#assertPendingAttempt"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.finishAttempt",
+      "sourceBytes": 198,
+      "roots": [
+        "packages/kernel/src/planner-authority.ts:241",
+        "packages/kernel/src/planner-authority.ts:246",
+        "packages/kernel/src/planner-authority.ts:81",
+        "packages/kernel/src/production-authority.ts:250",
+        "packages/kernel/src/production-authority.ts:251",
+        "packages/kernel/src/production-authority.ts:466",
+        "packages/kernel/src/production-authority.ts:541",
+        "packages/kernel/src/production-mutation-coordinator.ts:1092",
+        "packages/kernel/src/production-mutation-coordinator.ts:1100",
+        "packages/kernel/src/production-mutation-coordinator.ts:954"
+      ],
+      "calls": [
+        "ClayStore.#finishAttempt",
+        "ClayStore.finishAttempt"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.commitPreparedMutation",
+      "sourceBytes": 437,
+      "roots": [
+        "packages/kernel/src/planner-authority.ts:223",
+        "packages/kernel/src/planner-authority.ts:78",
+        "packages/kernel/src/planner-authority.ts:79"
+      ],
+      "calls": [
+        "ClayStore.#assertPendingAttempt",
+        "ClayStore.#finishAttempt",
+        "ClayStore.commit",
+        "ClayStore.commitPreparedMutation",
+        "ClayStore.loadRegistry"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.reloadRegistryAfterRollback",
+      "sourceBytes": 66,
+      "roots": [
+        "packages/kernel/src/production-mutation-coordinator.ts:2508",
+        "packages/kernel/src/production-mutation-coordinator.ts:955",
+        "packages/kernel/src/production-mutation-coordinator.ts:956"
+      ],
+      "calls": [
+        "ClayStore.loadRegistry",
+        "ClayStore.reloadRegistryAfterRollback"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.shadowCopy",
+      "sourceBytes": 149,
+      "roots": [
+        "packages/kernel/src/planner-authority.ts:174",
+        "packages/kernel/src/planner-authority.ts:76"
+      ],
+      "calls": [
+        "ClayStore.constructor",
+        "ClayStore.loadRegistry",
+        "ClayStore.shadowCopy"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.rollbackTo",
+      "sourceBytes": 1317,
+      "roots": [
+        "packages/kernel/src/production-core-routes.ts:284",
+        "packages/kernel/src/production-relation.ts:39",
+        "packages/kernel/src/store.ts:6089"
+      ],
+      "calls": [
+        "ClayStore.alignSemanticLabelsToPhysicalShape",
+        "ClayStore.assertAutomationsCompatible",
+        "ClayStore.assertRelationIntegrity",
+        "ClayStore.currentVersion",
+        "ClayStore.getEntry",
+        "ClayStore.loadRegistry",
+        "ClayStore.persistRegistry",
+        "ClayStore.pruneSemanticAfter",
+        "ClayStore.rollbackTo",
+        "ClayStore.setCurrentVersion"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.rollForwardTo",
+      "sourceBytes": 806,
+      "roots": [],
+      "calls": [
+        "ClayStore.alignSemanticLabelsToPhysicalShape",
+        "ClayStore.assertAutomationsCompatible",
+        "ClayStore.assertRelationIntegrity",
+        "ClayStore.currentVersion",
+        "ClayStore.getEntry",
+        "ClayStore.headVersion",
+        "ClayStore.loadRegistry",
+        "ClayStore.persistRegistry",
+        "ClayStore.rollForwardTo",
+        "ClayStore.setCurrentVersion"
+      ],
+      "reachable": false
+    },
+    {
+      "name": "ClayStore.relationIdsForInput",
+      "sourceBytes": 350,
+      "roots": [],
+      "calls": [
+        "ClayStore.relationIdsForInput"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.validateRelationReferences",
+      "sourceBytes": 2055,
+      "roots": [],
+      "calls": [
+        "ClayStore.relationIdsForInput",
+        "ClayStore.validateRelationReferences",
+        "helper.qid"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.decodeStoredRelation",
+      "sourceBytes": 858,
+      "roots": [],
+      "calls": [
+        "ClayStore.decodeStoredRelation"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.assertRelationIntegrity",
+      "sourceBytes": 683,
+      "roots": [],
+      "calls": [
+        "ClayStore.assertRelationIntegrity",
+        "ClayStore.decodeStoredRelation",
+        "ClayStore.validateRelationReferences",
+        "helper.qid"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.freshColumnName",
+      "sourceBytes": 572,
+      "roots": [],
+      "calls": [
+        "ClayStore.freshColumnName"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.analyzeRelationConversion",
+      "sourceBytes": 3424,
+      "roots": [],
+      "calls": [
+        "ClayStore.analyzeRelationConversion",
+        "ClayStore.currentVersion",
+        "helper.normalizedLabel",
+        "helper.qid"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.previewRelationConversion",
+      "sourceBytes": 150,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:1554",
+        "packages/kernel/src/production-authority.ts:237",
+        "packages/kernel/src/production-authority.ts:287",
+        "packages/kernel/src/production-relation.ts:46",
+        "packages/kernel/src/store.ts:6077"
+      ],
+      "calls": [
+        "ClayStore.analyzeRelationConversion",
+        "ClayStore.previewRelationConversion"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.convertTextToRelation",
+      "sourceBytes": 2745,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:1560",
+        "packages/kernel/src/production-relation.ts:53",
+        "packages/kernel/src/store.ts:6076"
+      ],
+      "calls": [
+        "ClayStore.analyzeRelationConversion",
+        "ClayStore.commit",
+        "ClayStore.convertTextToRelation",
+        "ClayStore.freshColumnName",
+        "ClayStore.loadRegistry",
+        "helper.qid"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.recordRowEvent",
+      "sourceBytes": 1987,
+      "roots": [],
+      "calls": [
+        "ClayStore.currentVersion",
+        "ClayStore.recordRowEvent",
+        "ClayStore.rowById"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.#insertWithId",
+      "sourceBytes": 1630,
+      "roots": [],
+      "calls": [
+        "ClayStore.recordRowEvent",
+        "ClayStore.rowById",
+        "ClayStore.validateRelationReferences",
+        "helper.qid"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.insert",
+      "sourceBytes": 143,
+      "roots": [
+        "packages/kernel/src/asyncstore.ts:41",
+        "packages/kernel/src/production-import.ts:196",
+        "packages/kernel/src/production-import.ts:247",
+        "packages/kernel/src/production-mutation-coordinator.ts:1059",
+        "packages/kernel/src/production-mutation-coordinator.ts:937",
+        "packages/kernel/src/production-samples.ts:174",
+        "packages/kernel/src/production-samples.ts:242",
+        "packages/kernel/src/production-seed.ts:322",
+        "packages/kernel/src/production-seed.ts:456",
+        "packages/shell/src/worker/samples.ts:204"
+      ],
+      "calls": [
+        "ClayStore.#insertWithId",
+        "ClayStore.insert"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.recordUsage",
+      "sourceBytes": 64,
+      "roots": [
+        "packages/kernel/src/production-automation-observer-routes.ts:134",
+        "packages/kernel/src/production-automation-observer-routes.ts:46"
+      ],
+      "calls": [
+        "ClayStore.recordUsage"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.suggestions",
+      "sourceBytes": 969,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:246",
+        "packages/kernel/src/production-authority.ts:296",
+        "packages/shell/src/worker/db-worker.ts:1554"
+      ],
+      "calls": [
+        "ClayStore.livePanels",
+        "ClayStore.registrySnapshot",
+        "ClayStore.suggestions"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.markSuggestionShown",
+      "sourceBytes": 107,
+      "roots": [],
+      "calls": [
+        "ClayStore.markSuggestionShown"
+      ],
+      "reachable": false
+    },
+    {
+      "name": "ClayStore.dismissSuggestion",
+      "sourceBytes": 103,
+      "roots": [
+        "packages/kernel/src/production-automation-observer-routes.ts:142",
+        "packages/kernel/src/production-automation-observer-routes.ts:49",
+        "packages/kernel/src/production-automation-observer-routes.ts:50"
+      ],
+      "calls": [
+        "ClayStore.dismissSuggestion"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.acceptSuggestion",
+      "sourceBytes": 101,
+      "roots": [
+        "packages/kernel/src/production-automation-observer-routes.ts:139",
+        "packages/kernel/src/production-automation-observer-routes.ts:47",
+        "packages/kernel/src/production-automation-observer-routes.ts:48"
+      ],
+      "calls": [
+        "ClayStore.acceptSuggestion"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.attachmentColumn",
+      "sourceBytes": 334,
+      "roots": [],
+      "calls": [
+        "ClayStore.attachmentColumn"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.attachmentIds",
+      "sourceBytes": 764,
+      "roots": [],
+      "calls": [
+        "ClayStore.attachmentColumn",
+        "ClayStore.attachmentIds",
+        "helper.qid"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.attachmentMetadata",
+      "sourceBytes": 252,
+      "roots": [],
+      "calls": [
+        "ClayStore.attachmentMetadata"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.attachmentActivelyReferenced",
+      "sourceBytes": 721,
+      "roots": [],
+      "calls": [
+        "ClayStore.attachmentActivelyReferenced",
+        "helper.qid"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.attachmentRecoverablyReferenced",
+      "sourceBytes": 1707,
+      "roots": [],
+      "calls": [
+        "ClayStore.attachmentActivelyReferenced",
+        "ClayStore.attachmentRecoverablyReferenced",
+        "helper.qid"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.rowAttachmentIds",
+      "sourceBytes": 300,
+      "roots": [],
+      "calls": [
+        "ClayStore.attachmentIds",
+        "ClayStore.rowAttachmentIds"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.reconcileRowAttachments",
+      "sourceBytes": 1523,
+      "roots": [],
+      "calls": [
+        "ClayStore.attachmentActivelyReferenced",
+        "ClayStore.reconcileRowAttachments",
+        "helper.qid"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.addAttachment",
+      "sourceBytes": 554,
+      "roots": [],
+      "calls": [
+        "ClayStore.#addCapturedAttachment",
+        "ClayStore.addAttachment",
+        "helper.sha256"
+      ],
+      "reachable": false
+    },
+    {
+      "name": "ClayStore.#addCapturedAttachment",
+      "sourceBytes": 3049,
+      "roots": [],
+      "calls": [
+        "ClayStore.#insertAttachmentBytes",
+        "ClayStore.attachmentColumn",
+        "ClayStore.attachmentIds",
+        "ClayStore.attachmentMetadata",
+        "ClayStore.attachmentStorage",
+        "ClayStore.recordRowEvent",
+        "ClayStore.writeRowHistory",
+        "helper.qid",
+        "helper.safeAttachmentIdentity",
+        "helper.validateAttachmentSignature"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.#insertAttachmentBytes",
+      "sourceBytes": 397,
+      "roots": [],
+      "calls": [],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.attachmentsForRecord",
+      "sourceBytes": 532,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:1728",
+        "packages/kernel/src/production-authority.ts:212",
+        "packages/kernel/src/production-authority.ts:258",
+        "packages/shell/src/worker/db-worker.ts:1414"
+      ],
+      "calls": [
+        "ClayStore.attachmentIds",
+        "ClayStore.attachmentMetadata",
+        "ClayStore.attachmentsForRecord"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.readAttachment",
+      "sourceBytes": 567,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:241",
+        "packages/kernel/src/production-authority.ts:291",
+        "packages/shell/src/worker/db-worker.ts:1417"
+      ],
+      "calls": [
+        "ClayStore.attachmentMetadata",
+        "ClayStore.readAttachment",
+        "helper.sha256"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.removeAttachment",
+      "sourceBytes": 1259,
+      "roots": [
+        "packages/kernel/src/production-mutation-coordinator.ts:1140",
+        "packages/kernel/src/production-mutation-coordinator.ts:943"
+      ],
+      "calls": [
+        "ClayStore.attachmentActivelyReferenced",
+        "ClayStore.attachmentIds",
+        "ClayStore.recordRowEvent",
+        "ClayStore.removeAttachment",
+        "ClayStore.writeRowHistory",
+        "helper.qid"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.attachmentStorage",
+      "sourceBytes": 584,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:211",
+        "packages/kernel/src/production-authority.ts:257",
+        "packages/shell/src/worker/db-worker.ts:1421",
+        "packages/shell/src/worker/db-worker.ts:1620"
+      ],
+      "calls": [
+        "ClayStore.attachmentStorage"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.purgeDeletedAttachments",
+      "sourceBytes": 1149,
+      "roots": [
+        "packages/kernel/src/production-mutation-coordinator.ts:1151",
+        "packages/kernel/src/production-mutation-coordinator.ts:944",
+        "packages/kernel/src/production-mutation-coordinator.ts:945"
+      ],
+      "calls": [
+        "ClayStore.attachmentRecoverablyReferenced",
+        "ClayStore.purgeDeletedAttachments"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.intakeState",
+      "sourceBytes": 596,
+      "roots": [],
+      "calls": [
+        "ClayStore.getSetting",
+        "ClayStore.intakeState"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.writeIntakeState",
+      "sourceBytes": 1832,
+      "roots": [],
+      "calls": [
+        "ClayStore.setSetting",
+        "ClayStore.writeIntakeState"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.listIntakeForms",
+      "sourceBytes": 121,
+      "roots": [
+        "packages/kernel/src/legacy-owner-recovery.ts:134",
+        "packages/kernel/src/production-authority.ts:1625",
+        "packages/kernel/src/production-authority.ts:228",
+        "packages/kernel/src/production-authority.ts:277",
+        "packages/kernel/src/production-intake-boundary.ts:21",
+        "packages/shell/src/worker/db-worker.ts:1425"
+      ],
+      "calls": [
+        "ClayStore.intakeState",
+        "ClayStore.listIntakeForms"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.listIntakeAutoAcceptRules",
+      "sourceBytes": 144,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:1626",
+        "packages/kernel/src/production-authority.ts:229",
+        "packages/kernel/src/production-authority.ts:278"
+      ],
+      "calls": [
+        "ClayStore.intakeState",
+        "ClayStore.listIntakeAutoAcceptRules"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.saveIntakeForm",
+      "sourceBytes": 1730,
+      "roots": [
+        "packages/kernel/src/production-mutation-coordinator.ts:1220",
+        "packages/kernel/src/production-mutation-coordinator.ts:962"
+      ],
+      "calls": [
+        "ClayStore.currentVersion",
+        "ClayStore.intakeState",
+        "ClayStore.saveIntakeForm",
+        "ClayStore.validationRegistrySnapshot",
+        "ClayStore.writeIntakeState"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.markIntakeFormPublished",
+      "sourceBytes": 769,
+      "roots": [
+        "packages/kernel/src/production-mutation-coordinator.ts:1229",
+        "packages/kernel/src/production-mutation-coordinator.ts:964",
+        "packages/kernel/src/production-mutation-coordinator.ts:965"
+      ],
+      "calls": [
+        "ClayStore.intakeState",
+        "ClayStore.markIntakeFormPublished",
+        "ClayStore.writeIntakeState"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.closeIntakePublication",
+      "sourceBytes": 1240,
+      "roots": [
+        "packages/kernel/src/production-mutation-coordinator.ts:1225",
+        "packages/kernel/src/production-mutation-coordinator.ts:963"
+      ],
+      "calls": [
+        "ClayStore.closeIntakePublication",
+        "ClayStore.intakeState",
+        "ClayStore.writeIntakeState"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.revokeIntakeForm",
+      "sourceBytes": 990,
+      "roots": [
+        "packages/kernel/src/production-mutation-coordinator.ts:1233",
+        "packages/kernel/src/production-mutation-coordinator.ts:966"
+      ],
+      "calls": [
+        "ClayStore.intakeState",
+        "ClayStore.revokeIntakeForm",
+        "ClayStore.writeIntakeState"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.markIntakeFormExpired",
+      "sourceBytes": 999,
+      "roots": [
+        "packages/kernel/src/production-mutation-coordinator.ts:1237",
+        "packages/kernel/src/production-mutation-coordinator.ts:967",
+        "packages/kernel/src/production-mutation-coordinator.ts:968"
+      ],
+      "calls": [
+        "ClayStore.intakeState",
+        "ClayStore.markIntakeFormExpired",
+        "ClayStore.writeIntakeState"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.intakeDeliveryFailures",
+      "sourceBytes": 301,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:1629",
+        "packages/kernel/src/production-authority.ts:231",
+        "packages/kernel/src/production-authority.ts:280",
+        "packages/shell/src/worker/db-worker.ts:1429"
+      ],
+      "calls": [
+        "ClayStore.intakeDeliveryFailures",
+        "ClayStore.intakeState"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.recordIntakeDeliveryFailure",
+      "sourceBytes": 2008,
+      "roots": [
+        "packages/kernel/src/production-mutation-coordinator.ts:1246",
+        "packages/kernel/src/production-mutation-coordinator.ts:970",
+        "packages/kernel/src/production-mutation-coordinator.ts:971"
+      ],
+      "calls": [
+        "ClayStore.intakeState",
+        "ClayStore.recordIntakeDeliveryFailure",
+        "ClayStore.writeIntakeState"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.authorizeIntakeDeliveryDiscard",
+      "sourceBytes": 790,
+      "roots": [
+        "packages/kernel/src/production-mutation-coordinator.ts:1251",
+        "packages/kernel/src/production-mutation-coordinator.ts:972",
+        "packages/kernel/src/production-mutation-coordinator.ts:973"
+      ],
+      "calls": [
+        "ClayStore.authorizeIntakeDeliveryDiscard",
+        "ClayStore.intakeState",
+        "ClayStore.writeIntakeState"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.resolveIntakeDeliveryFailure",
+      "sourceBytes": 1072,
+      "roots": [
+        "packages/kernel/src/production-mutation-coordinator.ts:1255",
+        "packages/kernel/src/production-mutation-coordinator.ts:974",
+        "packages/kernel/src/production-mutation-coordinator.ts:975"
+      ],
+      "calls": [
+        "ClayStore.intakeState",
+        "ClayStore.resolveIntakeDeliveryFailure",
+        "ClayStore.writeIntakeState"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.stageIntakeSubmission",
+      "sourceBytes": 2736,
+      "roots": [
+        "packages/kernel/src/production-mutation-coordinator.ts:1241",
+        "packages/kernel/src/production-mutation-coordinator.ts:969"
+      ],
+      "calls": [
+        "ClayStore.currentVersion",
+        "ClayStore.intakeState",
+        "ClayStore.stageIntakeSubmission",
+        "ClayStore.validationRegistrySnapshot",
+        "ClayStore.writeIntakeState"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.intakeInbox",
+      "sourceBytes": 570,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:1627",
+        "packages/kernel/src/production-authority.ts:230",
+        "packages/kernel/src/production-authority.ts:279",
+        "packages/kernel/src/production-intake-boundary.ts:19",
+        "packages/shell/src/worker/db-worker.ts:1427"
+      ],
+      "calls": [
+        "ClayStore.intakeInbox",
+        "ClayStore.intakeState"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.rejectIntakeSubmission",
+      "sourceBytes": 917,
+      "roots": [
+        "packages/kernel/src/production-mutation-coordinator.ts:1260",
+        "packages/kernel/src/production-mutation-coordinator.ts:976"
+      ],
+      "calls": [
+        "ClayStore.intakeState",
+        "ClayStore.rejectIntakeSubmission",
+        "ClayStore.writeIntakeState"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.simulateIntakeAutoAccept",
+      "sourceBytes": 1954,
+      "roots": [
+        "packages/kernel/src/production-mutation-coordinator.ts:1264",
+        "packages/kernel/src/production-mutation-coordinator.ts:977",
+        "packages/kernel/src/production-mutation-coordinator.ts:978"
+      ],
+      "calls": [
+        "ClayStore.currentVersion",
+        "ClayStore.intakeState",
+        "ClayStore.simulateIntakeAutoAccept",
+        "ClayStore.validationRegistrySnapshot",
+        "ClayStore.writeIntakeState"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.enableIntakeAutoAccept",
+      "sourceBytes": 2234,
+      "roots": [
+        "packages/kernel/src/production-mutation-coordinator.ts:1269",
+        "packages/kernel/src/production-mutation-coordinator.ts:979",
+        "packages/kernel/src/production-mutation-coordinator.ts:980"
+      ],
+      "calls": [
+        "ClayStore.currentVersion",
+        "ClayStore.enableIntakeAutoAccept",
+        "ClayStore.intakeState",
+        "ClayStore.validationRegistrySnapshot",
+        "ClayStore.writeIntakeState"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.disableIntakeAutoAccept",
+      "sourceBytes": 260,
+      "roots": [
+        "packages/kernel/src/production-mutation-coordinator.ts:1274",
+        "packages/kernel/src/production-mutation-coordinator.ts:981",
+        "packages/kernel/src/production-mutation-coordinator.ts:982"
+      ],
+      "calls": [
+        "ClayStore.disableIntakeAutoAccept",
+        "ClayStore.intakeState",
+        "ClayStore.writeIntakeState"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.processIntakeAutoAccept",
+      "sourceBytes": 1556,
+      "roots": [
+        "packages/kernel/src/production-mutation-coordinator.ts:1277",
+        "packages/kernel/src/production-mutation-coordinator.ts:983",
+        "packages/kernel/src/production-mutation-coordinator.ts:984"
+      ],
+      "calls": [
+        "ClayStore.acceptIntakeSubmission",
+        "ClayStore.currentVersion",
+        "ClayStore.intakeState",
+        "ClayStore.processIntakeAutoAccept",
+        "ClayStore.validationRegistrySnapshot"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.acceptIntakeSubmission",
+      "sourceBytes": 7227,
+      "roots": [
+        "packages/kernel/src/production-mutation-coordinator.ts:1281",
+        "packages/kernel/src/production-mutation-coordinator.ts:985"
+      ],
+      "calls": [
+        "ClayStore.#insertAttachmentBytes",
+        "ClayStore.acceptIntakeSubmission",
+        "ClayStore.applyBatch",
+        "ClayStore.attachmentStorage",
+        "ClayStore.currentVersion",
+        "ClayStore.intakeState",
+        "ClayStore.recordRowEvent",
+        "ClayStore.validationRegistrySnapshot",
+        "ClayStore.writeIntakeState",
+        "helper.qid",
+        "helper.safeAttachmentIdentity",
+        "helper.validateAttachmentSignature"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.intakeReceipts",
+      "sourceBytes": 247,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:1628",
+        "packages/kernel/src/production-authority.ts:232",
+        "packages/kernel/src/production-authority.ts:281",
+        "packages/kernel/src/production-intake-boundary.ts:20",
+        "packages/shell/src/worker/db-worker.ts:1431"
+      ],
+      "calls": [
+        "ClayStore.intakeReceipts",
+        "ClayStore.intakeState"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.undoIntakeReceipt",
+      "sourceBytes": 2438,
+      "roots": [
+        "packages/kernel/src/production-mutation-coordinator.ts:1287",
+        "packages/kernel/src/production-mutation-coordinator.ts:986"
+      ],
+      "calls": [
+        "ClayStore.intakeState",
+        "ClayStore.undoBatch",
+        "ClayStore.undoIntakeReceipt",
+        "ClayStore.writeIntakeState",
+        "helper.validateAttachmentSignature"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.attachmentIntegrityIssues",
+      "sourceBytes": 4638,
+      "roots": [],
+      "calls": [
+        "ClayStore.attachmentIntegrityIssues",
+        "helper.qid",
+        "helper.safeAttachmentIdentity",
+        "helper.sha256",
+        "helper.validateAttachmentSignature"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.automationIntegrityIssues",
+      "sourceBytes": 1153,
+      "roots": [],
+      "calls": [
+        "ClayStore.automationDefinitionV2FromRow",
+        "ClayStore.automationIntegrityIssues"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.assertAutomationsCompatible",
+      "sourceBytes": 263,
+      "roots": [],
+      "calls": [
+        "ClayStore.assertAutomationsCompatible",
+        "ClayStore.automationIntegrityIssues"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.automationDefinitionV2FromRow",
+      "sourceBytes": 3168,
+      "roots": [],
+      "calls": [
+        "ClayStore.automationDefinitionV2FromRow",
+        "helper.automationTargetFromJson",
+        "helper.sameAutomationTarget"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.automationRecipes",
+      "sourceBytes": 97,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:1642",
+        "packages/kernel/src/production-authority.ts:214",
+        "packages/kernel/src/production-authority.ts:260",
+        "packages/shell/src/worker/db-worker.ts:1463"
+      ],
+      "calls": [
+        "ClayStore.automationRecipes"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.automationRuntimeStatus",
+      "sourceBytes": 878,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:1643",
+        "packages/kernel/src/production-authority.ts:216",
+        "packages/kernel/src/production-authority.ts:262",
+        "packages/shell/src/worker/db-worker.ts:1465"
+      ],
+      "calls": [
+        "ClayStore.automationRuntimeStatus",
+        "ClayStore.listAutomations"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.automationNextState",
+      "sourceBytes": 1983,
+      "roots": [],
+      "calls": [
+        "ClayStore.automationNextState"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.automationSkipState",
+      "sourceBytes": 1989,
+      "roots": [],
+      "calls": [
+        "ClayStore.automationSkipState",
+        "ClayStore.automationTriggerSucceeded",
+        "helper.automationClock"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.automationRunRuntimeState",
+      "sourceBytes": 3070,
+      "roots": [],
+      "calls": [
+        "ClayStore.automationRunRuntimeState",
+        "helper.qid",
+        "helper.sameAutomationLineage"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.automationRuntimeOverview",
+      "sourceBytes": 1441,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:1643",
+        "packages/kernel/src/production-authority.ts:215",
+        "packages/kernel/src/production-authority.ts:261",
+        "packages/shell/src/worker/db-worker.ts:1467"
+      ],
+      "calls": [
+        "ClayStore.automationNextState",
+        "ClayStore.automationRunRuntimeState",
+        "ClayStore.automationRuns",
+        "ClayStore.automationRuntimeOverview",
+        "ClayStore.automationSkipState",
+        "ClayStore.listAutomations"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.saveAutomationRecipeDraft",
+      "sourceBytes": 235,
+      "roots": [
+        "packages/kernel/src/production-automation-observer-routes.ts:30",
+        "packages/kernel/src/production-automation-observer-routes.ts:31",
+        "packages/kernel/src/production-automation-observer-routes.ts:99"
+      ],
+      "calls": [
+        "ClayStore.saveAutomationDraft",
+        "ClayStore.saveAutomationRecipeDraft"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.saveAutomationDraft",
+      "sourceBytes": 3895,
+      "roots": [
+        "packages/kernel/src/production-automation-observer-routes.ts:28",
+        "packages/kernel/src/production-automation-observer-routes.ts:29",
+        "packages/kernel/src/production-automation-observer-routes.ts:92"
+      ],
+      "calls": [
+        "ClayStore.automationDefinitionV2FromRow",
+        "ClayStore.saveAutomationDraft"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.enableAutomation",
+      "sourceBytes": 5902,
+      "roots": [
+        "packages/kernel/src/production-automation-observer-routes.ts:105",
+        "packages/kernel/src/production-automation-observer-routes.ts:32",
+        "packages/kernel/src/production-automation-observer-routes.ts:33"
+      ],
+      "calls": [
+        "ClayStore.automationDefinitionV2FromRow",
+        "ClayStore.automationRows",
+        "ClayStore.enableAutomation",
+        "ClayStore.executableAutomationV2",
+        "ClayStore.simulateAutomation",
+        "helper.automationTargetJson"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.pauseAutomation",
+      "sourceBytes": 1730,
+      "roots": [
+        "packages/kernel/src/production-automation-observer-routes.ts:112",
+        "packages/kernel/src/production-automation-observer-routes.ts:34",
+        "packages/kernel/src/production-automation-observer-routes.ts:35"
+      ],
+      "calls": [
+        "ClayStore.automationDefinitionV2FromRow",
+        "ClayStore.pauseAutomation"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.executableAutomationV2",
+      "sourceBytes": 398,
+      "roots": [],
+      "calls": [
+        "ClayStore.executableAutomationV2"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.automationForSimulation",
+      "sourceBytes": 769,
+      "roots": [],
+      "calls": [
+        "ClayStore.automationDefinitionV2FromRow",
+        "ClayStore.automationForSimulation",
+        "ClayStore.executableAutomationV2"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.foreignAutomationView",
+      "sourceBytes": 493,
+      "roots": [],
+      "calls": [
+        "ClayStore.foreignAutomationView",
+        "helper.sameAutomationLineage"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.runnableAutomations",
+      "sourceBytes": 412,
+      "roots": [],
+      "calls": [
+        "ClayStore.listAutomations",
+        "ClayStore.runnableAutomations"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.listAutomations",
+      "sourceBytes": 1683,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:1641",
+        "packages/kernel/src/production-authority.ts:226",
+        "packages/kernel/src/production-authority.ts:275",
+        "packages/kernel/src/production-automation-observer-routes.ts:26",
+        "packages/kernel/src/production-automation-observer-routes.ts:27",
+        "packages/kernel/src/production-automation-observer-routes.ts:86",
+        "packages/shell/src/worker/db-worker.ts:1470"
+      ],
+      "calls": [
+        "ClayStore.automationDefinitionV2FromRow",
+        "ClayStore.foreignAutomationView",
+        "ClayStore.listAutomations"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.upsertAutomation",
+      "sourceBytes": 1821,
+      "roots": [
+        "packages/kernel/src/production-automation-observer-routes.ts:24",
+        "packages/kernel/src/production-automation-observer-routes.ts:25",
+        "packages/kernel/src/production-automation-observer-routes.ts:83"
+      ],
+      "calls": [
+        "ClayStore.upsertAutomation"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.deleteAutomation",
+      "sourceBytes": 410,
+      "roots": [
+        "packages/kernel/src/production-automation-observer-routes.ts:117",
+        "packages/kernel/src/production-automation-observer-routes.ts:36",
+        "packages/kernel/src/production-automation-observer-routes.ts:37"
+      ],
+      "calls": [
+        "ClayStore.deleteAutomation"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.automationRows",
+      "sourceBytes": 1611,
+      "roots": [],
+      "calls": [
+        "ClayStore.automationRows",
+        "ClayStore.query",
+        "helper.automationClock"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.queuedAutomationEventScope",
+      "sourceBytes": 2211,
+      "roots": [],
+      "calls": [
+        "ClayStore.automationEventSnapshot",
+        "ClayStore.executableAutomationV2",
+        "ClayStore.queuedAutomationEventScope"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.automationLabel",
+      "sourceBytes": 484,
+      "roots": [],
+      "calls": [
+        "ClayStore.automationLabel"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.resolveAutomationValue",
+      "sourceBytes": 424,
+      "roots": [],
+      "calls": [
+        "ClayStore.resolveAutomationValue"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.automationPlan",
+      "sourceBytes": 2494,
+      "roots": [],
+      "calls": [
+        "ClayStore.automationPlan",
+        "ClayStore.resolveAutomationValue"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.retainedAutomationMutations",
+      "sourceBytes": 679,
+      "roots": [],
+      "calls": [
+        "ClayStore.retainedAutomationMutations",
+        "helper.qid"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.simulateAutomation",
+      "sourceBytes": 6193,
+      "roots": [
+        "packages/kernel/src/production-mutation-coordinator.ts:1863"
+      ],
+      "calls": [
+        "ClayStore.automationDefinitionV2FromRow",
+        "ClayStore.automationForSimulation",
+        "ClayStore.automationLabel",
+        "ClayStore.automationPlan",
+        "ClayStore.automationRows",
+        "ClayStore.currentVersion",
+        "ClayStore.queuedAutomationEventScope",
+        "ClayStore.retainedAutomationMutations",
+        "ClayStore.simulateAutomation",
+        "ClayStore.validateBatchMutations"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.automationRunFromRow",
+      "sourceBytes": 1160,
+      "roots": [],
+      "calls": [
+        "ClayStore.automationRunFromRow",
+        "helper.automationTargetFromJson",
+        "helper.sameAutomationLineage"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.automationRuntimeBindingTarget",
+      "sourceBytes": 440,
+      "roots": [],
+      "calls": [
+        "ClayStore.automationRuntimeBindingTarget",
+        "helper.sameAutomationLineage"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.automationTriggerSucceeded",
+      "sourceBytes": 725,
+      "roots": [],
+      "calls": [
+        "ClayStore.automationRuntimeBindingTarget",
+        "ClayStore.automationTriggerSucceeded",
+        "helper.automationTargetJson"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.executeAutomation",
+      "sourceBytes": 5069,
+      "roots": [],
+      "calls": [
+        "ClayStore.applyBatch",
+        "ClayStore.automationPlan",
+        "ClayStore.automationRuntimeBindingTarget",
+        "ClayStore.automationTriggerSucceeded",
+        "ClayStore.executableAutomationV2",
+        "ClayStore.executeAutomation",
+        "ClayStore.retainedAutomationMutations",
+        "helper.automationTargetJson"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.runAutomationNow",
+      "sourceBytes": 3571,
+      "roots": [
+        "packages/kernel/src/production-automation-observer-routes.ts:38"
+      ],
+      "calls": [
+        "ClayStore.automationDefinitionV2FromRow",
+        "ClayStore.automationRows",
+        "ClayStore.executableAutomationV2",
+        "ClayStore.executeAutomation",
+        "ClayStore.runAutomationNow",
+        "ClayStore.simulateAutomation"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.automationEventSnapshot",
+      "sourceBytes": 3796,
+      "roots": [],
+      "calls": [
+        "ClayStore.automationEventSnapshot"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.transitionAutomationToError",
+      "sourceBytes": 812,
+      "roots": [],
+      "calls": [
+        "ClayStore.transitionAutomationToError"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.runDueAutomations",
+      "sourceBytes": 9570,
+      "roots": [
+        "packages/kernel/src/production-automation-observer-routes.ts:127",
+        "packages/kernel/src/production-automation-observer-routes.ts:40",
+        "packages/kernel/src/production-automation-observer-routes.ts:41"
+      ],
+      "calls": [
+        "ClayStore.automationEventSnapshot",
+        "ClayStore.automationRows",
+        "ClayStore.automationRuntimeBindingTarget",
+        "ClayStore.automationTriggerSucceeded",
+        "ClayStore.executableAutomationV2",
+        "ClayStore.executeAutomation",
+        "ClayStore.runDueAutomations",
+        "ClayStore.runnableAutomations",
+        "ClayStore.transitionAutomationToError",
+        "helper.automationClock",
+        "helper.automationTargetFromJson",
+        "helper.automationTargetJson",
+        "helper.sameAutomationTarget"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.automationRuns",
+      "sourceBytes": 645,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:1641",
+        "packages/kernel/src/production-authority.ts:217",
+        "packages/kernel/src/production-authority.ts:263",
+        "packages/shell/src/worker/db-worker.ts:1494"
+      ],
+      "calls": [
+        "ClayStore.automationRunFromRow",
+        "ClayStore.automationRuns"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.undoAutomationRun",
+      "sourceBytes": 2276,
+      "roots": [
+        "packages/kernel/src/production-automation-observer-routes.ts:129",
+        "packages/kernel/src/production-automation-observer-routes.ts:42",
+        "packages/kernel/src/production-automation-observer-routes.ts:43"
+      ],
+      "calls": [
+        "ClayStore.automationRunFromRow",
+        "ClayStore.undoAutomationRun",
+        "ClayStore.undoBatch",
+        "helper.automationTargetFromJson",
+        "helper.automationTargetJson",
+        "helper.sameAutomationLineage",
+        "helper.sameAutomationTarget"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.inboxDispositions",
+      "sourceBytes": 67,
+      "roots": [
+        "packages/kernel/src/production-daily-projection.ts:25",
+        "packages/kernel/src/production-inbox.ts:13",
+        "packages/kernel/src/production-inbox.ts:51",
+        "packages/kernel/src/store.ts:6069"
+      ],
+      "calls": [
+        "ClayStore.inboxDispositions"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.writeInboxDisposition",
+      "sourceBytes": 92,
+      "roots": [
+        "packages/kernel/src/production-inbox.ts:43",
+        "packages/kernel/src/production-inbox.ts:59",
+        "packages/kernel/src/store.ts:6070"
+      ],
+      "calls": [
+        "ClayStore.writeInboxDisposition"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.dailyHomeRecordRevisions",
+      "sourceBytes": 1216,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:219",
+        "packages/kernel/src/production-authority.ts:265",
+        "packages/kernel/src/production-daily-projection.ts:11",
+        "packages/kernel/src/production-daily-projection.ts:28"
+      ],
+      "calls": [
+        "ClayStore.dailyHomeRecordRevisions"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.dailyHomeNotificationWatermark",
+      "sourceBytes": 559,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:218",
+        "packages/kernel/src/production-authority.ts:264",
+        "packages/kernel/src/production-daily-projection.ts:12",
+        "packages/kernel/src/production-daily-projection.ts:28"
+      ],
+      "calls": [
+        "ClayStore.dailyHomeNotificationWatermark"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.listNotifications",
+      "sourceBytes": 637,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:1642",
+        "packages/kernel/src/production-authority.ts:227",
+        "packages/kernel/src/production-authority.ts:276",
+        "packages/kernel/src/production-daily-projection.ts:27",
+        "packages/kernel/src/production-daily-projection.ts:9",
+        "packages/shell/src/worker/db-worker.ts:1501"
+      ],
+      "calls": [
+        "ClayStore.listNotifications"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.dailyHomeUnreadNotifications",
+      "sourceBytes": 915,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:220",
+        "packages/kernel/src/production-authority.ts:266",
+        "packages/kernel/src/production-daily-projection.ts:10",
+        "packages/kernel/src/production-daily-projection.ts:27"
+      ],
+      "calls": [
+        "ClayStore.dailyHomeUnreadNotifications"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.markNotificationRead",
+      "sourceBytes": 231,
+      "roots": [
+        "packages/kernel/src/production-automation-observer-routes.ts:131",
+        "packages/kernel/src/production-automation-observer-routes.ts:44",
+        "packages/kernel/src/production-automation-observer-routes.ts:45"
+      ],
+      "calls": [
+        "ClayStore.markNotificationRead"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.globalSearch",
+      "sourceBytes": 3274,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:223",
+        "packages/kernel/src/production-authority.ts:272",
+        "packages/shell/src/worker/db-worker.ts:1505"
+      ],
+      "calls": [
+        "ClayStore.globalSearch",
+        "ClayStore.query"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.validateBatchMutations",
+      "sourceBytes": 951,
+      "roots": [],
+      "calls": [
+        "ClayStore.mustExist",
+        "ClayStore.validateBatchMutations",
+        "ClayStore.validateRelationReferences"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.#importReceiptKey",
+      "sourceBytes": 91,
+      "roots": [],
+      "calls": [],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.importReceipt",
+      "sourceBytes": 244,
+      "roots": [],
+      "calls": [
+        "ClayStore.#importReceiptKey",
+        "ClayStore.getSetting",
+        "ClayStore.importReceipt"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.#activeImportRow",
+      "sourceBytes": 273,
+      "roots": [],
+      "calls": [],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.#validatePreparedImportMutation",
+      "sourceBytes": 2245,
+      "roots": [],
+      "calls": [
+        "ClayStore.#activeImportRow",
+        "ClayStore.validateRelationReferences",
+        "helper.qid"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.commitImport",
+      "sourceBytes": 6547,
+      "roots": [
+        "packages/kernel/src/production-mutation-coordinator.ts:1080",
+        "packages/kernel/src/production-mutation-coordinator.ts:941"
+      ],
+      "calls": [
+        "ClayStore.#activeImportRow",
+        "ClayStore.#importReceiptKey",
+        "ClayStore.#insertWithId",
+        "ClayStore.#recordOperationBatch",
+        "ClayStore.#validatePreparedImportMutation",
+        "ClayStore.assertRelationIntegrity",
+        "ClayStore.commitImport",
+        "ClayStore.currentVersion",
+        "ClayStore.headVersion",
+        "ClayStore.importReceipt",
+        "ClayStore.setSetting",
+        "ClayStore.update",
+        "helper.validatedMutationTotals",
+        "helper.validatedSourceTotals"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.undoImport",
+      "sourceBytes": 857,
+      "roots": [
+        "packages/kernel/src/production-mutation-coordinator.ts:1085",
+        "packages/kernel/src/production-mutation-coordinator.ts:942"
+      ],
+      "calls": [
+        "ClayStore.#importReceiptKey",
+        "ClayStore.importReceipt",
+        "ClayStore.setSetting",
+        "ClayStore.undoBatch",
+        "ClayStore.undoImport"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.applyBatch",
+      "sourceBytes": 2336,
+      "roots": [
+        "packages/kernel/src/production-daily.ts:97",
+        "packages/kernel/src/production-inbox.ts:37",
+        "packages/kernel/src/production-mutation-coordinator.ts:1155",
+        "packages/kernel/src/production-mutation-coordinator.ts:946",
+        "packages/kernel/src/store.ts:6071"
+      ],
+      "calls": [
+        "ClayStore.#recordOperationBatch",
+        "ClayStore.applyBatch",
+        "ClayStore.assertRelationIntegrity",
+        "ClayStore.insert",
+        "ClayStore.restoreRow",
+        "ClayStore.softDelete",
+        "ClayStore.update",
+        "ClayStore.validateBatchMutations"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.#recordOperationBatch",
+      "sourceBytes": 398,
+      "roots": [],
+      "calls": [],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.operationBatches",
+      "sourceBytes": 635,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:234",
+        "packages/kernel/src/production-authority.ts:283",
+        "packages/shell/src/worker/db-worker.ts:1509"
+      ],
+      "calls": [
+        "ClayStore.operationBatches"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.undoBatch",
+      "sourceBytes": 3246,
+      "roots": [
+        "packages/kernel/src/production-daily.ts:118",
+        "packages/kernel/src/production-inbox.ts:54",
+        "packages/kernel/src/production-mutation-coordinator.ts:1162",
+        "packages/kernel/src/production-mutation-coordinator.ts:947",
+        "packages/kernel/src/store.ts:6072"
+      ],
+      "calls": [
+        "ClayStore.assertRelationIntegrity",
+        "ClayStore.reconcileRowAttachments",
+        "ClayStore.recordRowEvent",
+        "ClayStore.rowAttachmentIds",
+        "ClayStore.undoBatch",
+        "helper.qid"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.writeRowHistory",
+      "sourceBytes": 1091,
+      "roots": [],
+      "calls": [
+        "ClayStore.writeRowHistory",
+        "helper.qid"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.finishBatchHistory",
+      "sourceBytes": 525,
+      "roots": [],
+      "calls": [
+        "ClayStore.finishBatchHistory",
+        "helper.qid"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.rowHistoryCount",
+      "sourceBytes": 132,
+      "roots": [
+        "packages/kernel/src/production-app-lifecycle.ts:114",
+        "packages/kernel/src/production-authority.ts:1502"
+      ],
+      "calls": [
+        "ClayStore.rowHistoryCount"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.attemptStats",
+      "sourceBytes": 409,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:213",
+        "packages/kernel/src/production-authority.ts:259",
+        "packages/shell/src/worker/db-worker.ts:1622"
+      ],
+      "calls": [
+        "ClayStore.attemptStats"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.restorableRows",
+      "sourceBytes": 423,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:1721",
+        "packages/kernel/src/production-authority.ts:243",
+        "packages/kernel/src/production-authority.ts:293",
+        "packages/shell/src/worker/db-worker.ts:1552"
+      ],
+      "calls": [
+        "ClayStore.restorableRows"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.rowHistory",
+      "sourceBytes": 780,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:1724",
+        "packages/kernel/src/production-authority.ts:244",
+        "packages/kernel/src/production-authority.ts:294",
+        "packages/shell/src/worker/db-worker.ts:1513"
+      ],
+      "calls": [
+        "ClayStore.rowHistory"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.restoreRow",
+      "sourceBytes": 1725,
+      "roots": [
+        "packages/kernel/src/production-mutation-coordinator.ts:1164",
+        "packages/kernel/src/production-mutation-coordinator.ts:948"
+      ],
+      "calls": [
+        "ClayStore.assertRelationIntegrity",
+        "ClayStore.finishBatchHistory",
+        "ClayStore.mustExist",
+        "ClayStore.reconcileRowAttachments",
+        "ClayStore.recordRowEvent",
+        "ClayStore.restoreRow",
+        "ClayStore.rowAttachmentIds",
+        "ClayStore.rowById",
+        "ClayStore.writeRowHistory",
+        "helper.qid"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.update",
+      "sourceBytes": 914,
+      "roots": [
+        "packages/kernel/src/asyncstore.ts:47",
+        "packages/kernel/src/production-mutation-coordinator.ts:1065",
+        "packages/kernel/src/production-mutation-coordinator.ts:938"
+      ],
+      "calls": [
+        "ClayStore.finishBatchHistory",
+        "ClayStore.mustExist",
+        "ClayStore.recordRowEvent",
+        "ClayStore.rowById",
+        "ClayStore.update",
+        "ClayStore.validateRelationReferences",
+        "ClayStore.writeRowHistory",
+        "helper.qid"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.softDelete",
+      "sourceBytes": 888,
+      "roots": [
+        "packages/kernel/src/asyncstore.ts:51",
+        "packages/kernel/src/production-mutation-coordinator.ts:1072",
+        "packages/kernel/src/production-mutation-coordinator.ts:939",
+        "packages/kernel/src/production-samples.ts:173",
+        "packages/kernel/src/production-samples.ts:213"
+      ],
+      "calls": [
+        "ClayStore.assertRelationIntegrity",
+        "ClayStore.attachmentActivelyReferenced",
+        "ClayStore.finishBatchHistory",
+        "ClayStore.mustExist",
+        "ClayStore.recordRowEvent",
+        "ClayStore.rowAttachmentIds",
+        "ClayStore.softDelete",
+        "ClayStore.writeRowHistory",
+        "helper.qid"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.query",
+      "sourceBytes": 111,
+      "roots": [
+        "packages/kernel/src/asyncstore.ts:36",
+        "packages/kernel/src/planner-authority.ts:121",
+        "packages/kernel/src/planner-authority.ts:82",
+        "packages/kernel/src/production-authority.ts:1494",
+        "packages/kernel/src/production-authority.ts:1723",
+        "packages/kernel/src/production-authority.ts:1780",
+        "packages/kernel/src/production-authority.ts:239",
+        "packages/kernel/src/production-authority.ts:289",
+        "packages/kernel/src/production-daily-projection.ts:24",
+        "packages/kernel/src/production-daily.ts:83",
+        "packages/kernel/src/production-mutation-coordinator.ts:949",
+        "packages/kernel/src/production-mutation-coordinator.ts:999",
+        "packages/kernel/src/store.ts:6073",
+        "packages/shell/src/shells/sample-provenance.ts:174",
+        "packages/shell/src/shells/sample-provenance.ts:237",
+        "packages/shell/src/worker/db-worker.ts:902",
+        "packages/shell/src/worker/db-worker.ts:924",
+        "packages/shell/src/worker/db-worker.ts:950",
+        "packages/shell/src/worker/release-c/import-session-coordinator.ts:272"
+      ],
+      "calls": [
+        "ClayStore.query"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.queryBounded",
+      "sourceBytes": 151,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:240",
+        "packages/kernel/src/production-authority.ts:290"
+      ],
+      "calls": [
+        "ClayStore.queryBounded"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.mustExist",
+      "sourceBytes": 258,
+      "roots": [],
+      "calls": [
+        "ClayStore.mustExist",
+        "helper.qid"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.rowById",
+      "sourceBytes": 319,
+      "roots": [],
+      "calls": [
+        "ClayStore.rowById"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.revertPanel",
+      "sourceBytes": 1375,
+      "roots": [
+        "packages/kernel/src/production-core-routes.ts:286",
+        "packages/kernel/src/store.ts:6088"
+      ],
+      "calls": [
+        "ClayStore.commit",
+        "ClayStore.livePanels",
+        "ClayStore.revertPanel"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.dumpTable",
+      "sourceBytes": 148,
+      "roots": [],
+      "calls": [
+        "ClayStore.dumpTable",
+        "helper.qid"
+      ],
+      "reachable": false
+    },
+    {
+      "name": "ClayStore.exportArchive",
+      "sourceBytes": 192,
+      "roots": [
+        "packages/kernel/src/archive-authority.ts:1322"
+      ],
+      "calls": [
+        "ClayStore.#buildArchive",
+        "ClayStore.exportArchive",
+        "ClayStore.scrubLegacyCredentialSettings"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.#exportArchiveReadOnly",
+      "sourceBytes": 360,
+      "roots": [],
+      "calls": [
+        "ClayStore.#buildArchive"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.#buildArchive",
+      "sourceBytes": 927,
+      "roots": [],
+      "calls": [
+        "ClayStore.attachmentIntegrityIssues",
+        "ClayStore.attachmentStorage",
+        "ClayStore.headVersion"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.parseArchive",
+      "sourceBytes": 2726,
+      "roots": [
+        "packages/kernel/src/archive-authority.ts:428"
+      ],
+      "calls": [
+        "ClayStore.parseArchive"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.archiveTimelineIssues",
+      "sourceBytes": 3285,
+      "roots": [],
+      "calls": [
+        "ClayStore.archiveTimelineIssues",
+        "ClayStore.currentVersion",
+        "ClayStore.livePanels",
+        "helper.activeRegistryShape"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.verifyIntegrity",
+      "sourceBytes": 3532,
+      "roots": [
+        "packages/kernel/src/app-generation.ts:62"
+      ],
+      "calls": [
+        "ClayStore.archiveTimelineIssues",
+        "ClayStore.headVersion",
+        "ClayStore.history",
+        "ClayStore.livePanels",
+        "ClayStore.semanticOperationBounds",
+        "ClayStore.verifyIntegrity",
+        "helper.qid"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.archiveCopyShape",
+      "sourceBytes": 929,
+      "roots": [],
+      "calls": [
+        "ClayStore.archiveCopyShape",
+        "helper.qid"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "ClayStore.replaceFromArchive",
+      "sourceBytes": 205,
+      "roots": [],
+      "calls": [
+        "ClayStore.importArchive",
+        "ClayStore.replaceFromArchive"
+      ],
+      "reachable": false
+    },
+    {
+      "name": "ClayStore.importArchive",
+      "sourceBytes": 4613,
+      "roots": [
+        "packages/kernel/src/archive-authority.ts:1086",
+        "packages/kernel/src/archive-authority.ts:1173",
+        "packages/kernel/src/archive-authority.ts:1333",
+        "packages/kernel/src/archive-authority.ts:432"
+      ],
+      "calls": [
+        "ClayStore.archiveCopyShape",
+        "ClayStore.assertRelationIntegrity",
+        "ClayStore.attachmentIntegrityIssues",
+        "ClayStore.automationIntegrityIssues",
+        "ClayStore.close",
+        "ClayStore.fromDriver",
+        "ClayStore.importArchive",
+        "ClayStore.livePanels",
+        "ClayStore.parseArchive",
+        "ClayStore.registrySnapshot",
+        "ClayStore.scrubLegacyCredentialSettings",
+        "ClayStore.verifyIntegrity",
+        "helper.rawArchiveSchemaIssues"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "helper.renameQueryFields",
+      "sourceBytes": 715,
+      "roots": [],
+      "calls": [
+        "helper.renameQueryFields"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "helper.qid",
+      "sourceBytes": 166,
+      "roots": [
+        "packages/kernel/src/store.ts:186"
+      ],
+      "calls": [],
+      "reachable": true
+    },
+    {
+      "name": "helper.automationClock",
+      "sourceBytes": 1186,
+      "roots": [],
+      "calls": [
+        "helper.automationClock"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "helper.sameAutomationTarget",
+      "sourceBytes": 428,
+      "roots": [],
+      "calls": [
+        "helper.sameAutomationTarget"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "helper.sameAutomationLineage",
+      "sourceBytes": 333,
+      "roots": [],
+      "calls": [
+        "helper.sameAutomationLineage"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "helper.automationTargetJson",
+      "sourceBytes": 150,
+      "roots": [],
+      "calls": [
+        "helper.automationTargetJson"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "helper.automationTargetFromJson",
+      "sourceBytes": 263,
+      "roots": [],
+      "calls": [
+        "helper.automationTargetFromJson"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "helper.parseDiff",
+      "sourceBytes": 424,
+      "roots": [],
+      "calls": [
+        "helper.parseDiff"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "helper.normalizedLabel",
+      "sourceBytes": 128,
+      "roots": [],
+      "calls": [
+        "helper.normalizedLabel"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "helper.safeAttachmentIdentity",
+      "sourceBytes": 742,
+      "roots": [],
+      "calls": [
+        "helper.safeAttachmentIdentity"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "helper.hasPrefix",
+      "sourceBytes": 133,
+      "roots": [],
+      "calls": [
+        "helper.hasPrefix"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "helper.validateAttachmentSignature",
+      "sourceBytes": 1130,
+      "roots": [],
+      "calls": [
+        "helper.hasPrefix",
+        "helper.validateAttachmentSignature"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "helper.sha256",
+      "sourceBytes": 311,
+      "roots": [],
+      "calls": [
+        "helper.sha256"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "helper.canonicalUserTableIssues",
+      "sourceBytes": 1384,
+      "roots": [],
+      "calls": [
+        "helper.canonicalUserTableIssues",
+        "helper.qid"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "helper.canonicalInternalTableIssues",
+      "sourceBytes": 1012,
+      "roots": [],
+      "calls": [
+        "helper.canonicalInternalTableIssues",
+        "helper.qid"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "helper.activeRegistryShape",
+      "sourceBytes": 549,
+      "roots": [],
+      "calls": [
+        "helper.activeRegistryShape"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "helper.rawArchiveSchemaIssues",
+      "sourceBytes": 6228,
+      "roots": [],
+      "calls": [
+        "helper.canonicalInternalTableIssues",
+        "helper.canonicalUserTableIssues",
+        "helper.qid",
+        "helper.rawArchiveSchemaIssues"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "helper.boundedImportCount",
+      "sourceBytes": 226,
+      "roots": [],
+      "calls": [
+        "helper.boundedImportCount"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "helper.exactImportRecord",
+      "sourceBytes": 485,
+      "roots": [],
+      "calls": [
+        "helper.exactImportRecord"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "helper.validatedSourceTotals",
+      "sourceBytes": 1258,
+      "roots": [],
+      "calls": [
+        "helper.boundedImportCount",
+        "helper.exactImportRecord",
+        "helper.validatedSourceTotals"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "helper.validatedMutationTotals",
+      "sourceBytes": 780,
+      "roots": [],
+      "calls": [
+        "helper.boundedImportCount",
+        "helper.exactImportRecord",
+        "helper.validatedMutationTotals"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "helper.executeCapturedAttachmentAdd",
+      "sourceBytes": 310,
+      "roots": [
+        "packages/kernel/src/production-mutation-coordinator.ts:1131"
+      ],
+      "calls": [
+        "helper.executeCapturedAttachmentAdd"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "helper.stableFingerprint",
+      "sourceBytes": 251,
+      "roots": [],
+      "calls": [
+        "helper.stableFingerprint"
+      ],
+      "reachable": false
+    },
+    {
+      "name": "helper.exportStoreArchiveReadOnly",
+      "sourceBytes": 265,
+      "roots": [
+        "packages/kernel/src/production-authority.ts:1690"
+      ],
+      "calls": [
+        "helper.exportStoreArchiveReadOnly"
+      ],
+      "reachable": true
+    },
+    {
+      "name": "helper.refreshStoreAfterPhysicalRollback",
+      "sourceBytes": 239,
+      "roots": [
+        "packages/kernel/src/production-mutation-coordinator.ts:2531"
+      ],
+      "calls": [
+        "helper.refreshStoreAfterPhysicalRollback"
+      ],
+      "reachable": true
+    }
+  ],
+  "parser": {
+    "version": "5.9.3",
+    "sha256": "3ae902c92cc44dace175c0e69e13a4b0899f6983c6121d76b9ab8dd5795e7675"
+  },
+  "inputs": {
+    "packages/kernel/src/app-generation.ts": "6d6cf7c1c22842077e283b351f9c2476d08ddea05f65a5201e1ef9080bba363f",
+    "packages/kernel/src/app-lifecycle-request.ts": "cd628c39bd621aa0d1cb918ef5504d15e4b83c8bbc93e2e2cc059c6beac180c7",
+    "packages/kernel/src/archive-authentication.ts": "75fbb683c032950a13a198fa3084cf0aa3a736e5363e08d48e7a62f677a09c66",
+    "packages/kernel/src/archive-authority.ts": "e44586b6dfc26a0871bbe1fb704d2edb4bd4a1905a16d5de19a8291721484da2",
+    "packages/kernel/src/asyncstore.ts": "f3c71bc36822564c1ffa0804974ea7612869b03f653a7669e9211e56efe4cc7b",
+    "packages/kernel/src/authority-graph.ts": "1a7fec17f9857216b407a33b22a5e61a5786dacabd6ea870c6ba871399a83be1",
+    "packages/kernel/src/automation-v2.ts": "d8516c23e6bc65647ac1be2becc684d7b42fbe6853ae706ad9c8d5b2d57ef23a",
+    "packages/kernel/src/automation.ts": "fad04ec252cc077a9d2bd5123a598fe33e79937ce63fc3b46899bd43876cd29c",
+    "packages/kernel/src/backup-retention.ts": "0670e1af6846854c17649ed0345cacffae1dbb628ba2f422961e46997782a5ca",
+    "packages/kernel/src/blueprint-contract.ts": "873a0a58a0c9db673856cf7360be4bdd5e4c6ab49b1677a7fde13e83d629fba7",
+    "packages/kernel/src/blueprints.ts": "ea0f9db8c48c6623477dc56aa4584a997682deb12375908baacbd299425f3656",
+    "packages/kernel/src/canonical-json.ts": "218a83f64c67b8b3932b36d16328ee601187630411f6aca58a9e23f063829fa4",
+    "packages/kernel/src/canonical-state.ts": "267546ceb9d42a4df37dc9df51e82bbab22bfd25b6296b53cdcce70b63cab73c",
+    "packages/kernel/src/catalog-pending.ts": "6912069bb96a8230c2eb646e2fdee8a13124c47645f56b5a9682b20db1c5a13c",
+    "packages/kernel/src/credential-policy.ts": "af2e29ade60bdf538ea326c1e3dbc11e696ab077eb03362b174fbf3a037d7909",
+    "packages/kernel/src/daily-calendar.ts": "d32bfabb802c590a1c1e31acc281c66ab0e5a9f4f479122b9684bf751bbcec6a",
+    "packages/kernel/src/daily-home-basis.ts": "568f6249f7c8e5bfdc615670fa88ceadc19395b719bdd071fd4f66ddb59b12c1",
+    "packages/kernel/src/daily-home-projection.ts": "b1ff5c1bd7eb17629eff9493d01af0f4a0ea4e73f10bfc092d977189da8d17d4",
+    "packages/kernel/src/daily-navigation.ts": "b2c6cacdcf22745344d6514e88061fbc0255157411fec3123c4f035b0e8b3f1c",
+    "packages/kernel/src/daily-source-profile.ts": "9e628fa75e073fd83a0d0c1f1939c0085f41ea180b91673f023577d1f5323356",
+    "packages/kernel/src/db.ts": "714a1192603fc6e6ba47f65d948784941515ee1f492f877db0e5668b65ce44fd",
+    "packages/kernel/src/device-catalog.ts": "74d1f3287bb67dfadd9428378480f31d41153f3bf4a662656022dfe4c590db63",
+    "packages/kernel/src/durable-inventory.ts": "a1a0308ad07089a42e855efc6eee84d21a6912d8020fa6598268cbd73d3d1964",
+    "packages/kernel/src/errors.ts": "4c8fdc144313737ea70be522db81f43d6ccca73447a0df69051bbaa3445b2216",
+    "packages/kernel/src/expr.ts": "5bba3c362c2089b3580c2b1a6a2e5a96c52b5a9bc29a3e65398a4888ef646580",
+    "packages/kernel/src/first-success.ts": "37025d34dea81168b3e3c34887ac71bf5bab1a68cf462a03ffad59dc8c2bd660",
+    "packages/kernel/src/import-analysis.ts": "7d4f723c67b9a935761715cac1067645031b58c747a8edc802c30193dd4df5cf",
+    "packages/kernel/src/import-grammar.ts": "3ff792145d3bd75fb75325c36920b647c30a44b15376c3ad72303adc86e65031",
+    "packages/kernel/src/import-journey.ts": "82402e31980da70cadbee6f46cae2c14bd27bf9a2976e8c0cbffff70c71ecc1b",
+    "packages/kernel/src/inbox-dispositions.ts": "35a60d7b26a83c5cc6fef12b512c3c170308fd8bdc3cae5e731f85a90076b0c2",
+    "packages/kernel/src/index-authority.ts": "8d96b9ce24c9e73b242129961b9c3fe5a779700b78a5030619283f2af1b992f4",
+    "packages/kernel/src/intake-archive-boundary.ts": "77550738bfcb5744a9b89e8942d0ccda7e8a4de9e547fd6e61c1ccc93d7b5863",
+    "packages/kernel/src/intake.ts": "e38923441502f98f8674fed1c813a808db80539417d6778e68e38d35752254a1",
+    "packages/kernel/src/legacy-owner-recovery.ts": "15f578513e93ba9fa01d62848d8682ef4a19cc84dd908e77edf860e84b6e3e73",
+    "packages/kernel/src/lifecycle-reattestation-evidence.ts": "6c18b331d15b1d67ec8ab81e0f7d4859e4a7238acd003316cb70c6a9b681c191",
+    "packages/kernel/src/lifecycle-recovery-inventory.ts": "f00698ba66bfb39f24974259cd4629f8bb68fc289ba67d1f5d4e49f1b960cb2f",
+    "packages/kernel/src/live-write-guard.ts": "c31f038ab4c7723be508c988e10c673eb6e8043d6b6362455e80a77ca520d4f1",
+    "packages/kernel/src/main-schema-grammar.ts": "1386e01455a696907abe9306a4f6288173499bf16f5b2e040c3c01353cfd98bf",
+    "packages/kernel/src/migrate.ts": "932783fc826ef42a0d36a205490c5e6c64141db24c2e474024d0d632e25a433a",
+    "packages/kernel/src/native-recovery-bounds.ts": "9720d3e96d4631644bb96be2297a67027908b8d5667381f5ea13235d33bca7c3",
+    "packages/kernel/src/native-recovery-shadow.ts": "1ba1effc96b9d22c5523a503e84640c4cd21c62bce46a3fd38056e1f624cd3ea",
+    "packages/kernel/src/observe.ts": "aa2b388f8ee7db34bf0360d7c753c7e5dcd5926b52a801930b8a085c664a7e61",
+    "packages/kernel/src/panel-program.ts": "54f2a1fced7f4932478a278c7ad7eb03507e06e6c281db49c98d91c2135379dd",
+    "packages/kernel/src/panel-rewrite.ts": "8b6459ea8891b791acb03a92d97a3abded02802745dda73296b2df1d6edd0226",
+    "packages/kernel/src/pipeline.ts": "3c35668a39fcea4ddc427870311d4df8269253c2316d7f958f485da9096b1440",
+    "packages/kernel/src/planner-authority.ts": "8419c5632c34e63f2e15de89f4ab04c98c7968029d9341a8d482cb7db9004456",
+    "packages/kernel/src/planner-command.ts": "1c517937fc280f81cb44f893d9d0ed65d2045a5e028e460d0a0dc6c2b3cdde12",
+    "packages/kernel/src/private-metrics-sqlite.ts": "e09d1b1d354a3e90c161aa4913abe60b11902e537c034be73b6776c6db1a83df",
+    "packages/kernel/src/private-metrics.ts": "5ac2c5f3951907687db11ce25d1bc21488ff081d8eec0cdf5680ebdd2dea8cda",
+    "packages/kernel/src/production-app-lifecycle.ts": "95deed149a36dfac68374c861f946eece41e796f641661483c882f7f0888c5a2",
+    "packages/kernel/src/production-authority.ts": "6dce24644222fd9953bad93f33ab3a8d829bc46f6db62d75ccc50b1ac3307ae7",
+    "packages/kernel/src/production-automation-input.ts": "7c3b9201783c2f258cff666f4ead5672bc40f0df964b063fb13022fea4c4b522",
+    "packages/kernel/src/production-automation-observer-routes.ts": "758c0b0a49ca09a87840ed9050fee939f76675338851d1555164e0cca838728c",
+    "packages/kernel/src/production-catalog-migration.ts": "eb1944d52fb5bb63db0f591b19adead25b59f7aa303fe9885b395a452a47ef4e",
+    "packages/kernel/src/production-core-routes.ts": "9a8d729d4719e3ff716c4af84ff88f073f951ba74d9f398cee41e071860505e3",
+    "packages/kernel/src/production-daily-projection.ts": "6b634a8ce034fb7677009208350af698818b1da650ce8d0793af608abb76ba01",
+    "packages/kernel/src/production-daily.ts": "4b72aba21099826b0a89eb1051a9c2d8ba891bfc29bc8d339b2a30a95e044fce",
+    "packages/kernel/src/production-import.ts": "46644717baee3f612624937f9add91be0b32a4fdba10db49841ed7a1c68682c3",
+    "packages/kernel/src/production-inbox.ts": "4c36ffb4feb919c237160b665dd56c7a567007f8ad05b1c02a8ebad2d8658f35",
+    "packages/kernel/src/production-input-capture.ts": "79cfc26a2a70ce140123b7adf2da597ed8ddc87939dd9f6622a19b562f907637",
+    "packages/kernel/src/production-intake-boundary.ts": "15b9e3843cbfa38f39dfcb16ed52bf20ebab2745ee965204c3c8525b0195dd75",
+    "packages/kernel/src/production-json-capture.ts": "6a22cc6ea4bd04dc62cee608488d08263330fc706b5f5632a3ac39e7056c229e",
+    "packages/kernel/src/production-manual-backup.ts": "921a39c988682d7b1dc7a604ba5082f91b7edd45623866acdb10e3693ba23b5a",
+    "packages/kernel/src/production-mutation-coordinator.ts": "246581a22b3b62cbe44403cab8b83bf1688d17ebc83cd37fea00eb7fbf0900a7",
+    "packages/kernel/src/production-native-recovery.ts": "a0c37373e17d0898f066a045cb448378483ab778c66386f0b9f42537772cdd16",
+    "packages/kernel/src/production-operation-id.ts": "def50602d9ea5b59a66b62bfb23e6795bbceebaf9e81c7d7f1826dcb735cd0d5",
+    "packages/kernel/src/production-owner-witness.ts": "06dd6422bf2afff50f3153435265d4ae5e63970f1c6d61f81b20d77f5a28b0b6",
+    "packages/kernel/src/production-presentation-proof.ts": "f3e3b3de5ec754e70d397e771b998ae3629cea406319561942f57d570f50bd85",
+    "packages/kernel/src/production-private-metric-authority.ts": "87545382ada8015a2b114f13d6f88e6502485c4588b968d8c835d333b816ad1c",
+    "packages/kernel/src/production-relation.ts": "021211649b37c01f2a9132c6d5d2f3e75d8d547da3194ca3bb5d3bfdea80822a",
+    "packages/kernel/src/production-request-journal.ts": "ecb61004408a7d0bae4389427a5006b7dc53a411172f212fcd46c41933443381",
+    "packages/kernel/src/production-response-envelope.ts": "f0e30942e2567d584f5fbb4c6231222c8114cb7df9e193eafb6c69e99cf9c72c",
+    "packages/kernel/src/production-restore.ts": "934982c9ce2007e57a543bbcfda0318f395b167d859e69d5ab9be78a86736290",
+    "packages/kernel/src/production-samples.ts": "12b02f980ab172d3dffa0a3b829508d08985e082d7d38cb07ce5486d805d302f",
+    "packages/kernel/src/production-seed.ts": "fb9b7b784cb9c43cbba09070c3e5ce5e50a8dcc56726f0e13d81b7d4e768786a",
+    "packages/kernel/src/projection.ts": "0699ebd80b7e2775ef1640067f8f4e5f67148d89f430c0ee2f4cc43a230ca365",
+    "packages/kernel/src/protection.ts": "db05558455c4002ccabb828a3122fed569f09c8400a4d71e985560511e5a408f",
+    "packages/kernel/src/query.ts": "d5946e38580bf9b48f45b3a53e87d25b4392cd210eb04f817903a7af856fc8c7",
+    "packages/kernel/src/registry.ts": "a77afb429c857881fbd9df10ef23620531eee11c4cc6c2ee0d0058f408b9fe62",
+    "packages/kernel/src/rows.ts": "db3e5540231e996316723198cd615a457d59146b736648126d12a55a0f0e524a",
+    "packages/kernel/src/sahpool-initialization.ts": "a755cdb6cb20244df31afb28b21a4a689d958cc176c07d0f08e483e9aa5d613b",
+    "packages/kernel/src/sahpool-journal-recovery.ts": "be80ef726178d1a0cf5e606a93a96116a4a837899d0239a6957d47f5bb1ed8f9",
+    "packages/kernel/src/sample-provenance-proof.ts": "b8b4c9a182ad4ad7d8698e020ab6cb59f5f351a70a485c7c93e3a198cfcc737b",
+    "packages/kernel/src/semantic.ts": "350607c539a59e4d2ba7c65d49f8988dd986468491b50ba288cbd23345dca675",
+    "packages/kernel/src/stable-json.ts": "d5a8fab5a837b12009a697df087f9a3a4002a5785b3274a5d3c72148718a9585",
+    "packages/kernel/src/state-digest.ts": "cc4b1062108cc63b1d67f1aaa564570c2f0d58524591c76631eca9214843ff00",
+    "packages/kernel/src/state-key.ts": "4e0201e08aec48fa70a0b9c002ec331c2cd5c51b2f1622b9bd337323a5ef49cb",
+    "packages/kernel/src/state-merkle-index.ts": "e43eefdfd525da8262e8e2dac383d6f9b88d89be56a7ea979973c8e8987c89ef",
+    "packages/kernel/src/state-merkle.ts": "ae7195b5989a98692bb006a0c96c82d148a65c501711faef3fdd2e58ff344836",
+    "packages/kernel/src/state-sql-canonical.ts": "f6f8a416be265f042d543e2bb2c52e17d76fb4a357da886bdd35ef1d7f049153",
+    "packages/kernel/src/store.ts": "fc86fb3b8a38dd2f2c17a5ac23c10493cef67324996bce500a8bf40ebf4e81c4",
+    "packages/kernel/src/stored-date.ts": "6a820bef70a87701a3ac5d4fe18619745ae982bb89f787cabd19e657eeb5e102",
+    "packages/kernel/src/strict-json-capture.ts": "15ed1524539920988d4e6626663567c685e65512c7255c1aecefd0ab5ff9abec",
+    "packages/kernel/src/target-authority.ts": "82744a0cf684ed54af49ad89335b76619fa5cb4c5638a4cfb44d1fdbac6b4439",
+    "packages/kernel/src/target-commit-coordinator.ts": "8b0fc90d1257627f44ddf040ac6836621f63875aadd63cfcc7b5165eb865f2fb",
+    "packages/kernel/src/validate.ts": "6ae5b811b814fc79b688e98f8796d9610726b7d6b6039b75e5e2574c0bcf94b4",
+    "packages/kernel/src/zip.ts": "9fd76b7d1b81f7313f9e5796335a48cb9c6662f519309a70b4eb18b240c9e82f",
+    "packages/schema/src/standalone/archive.mjs": "c0771cf05b9d7cc9f1d6b97d5b027e76be69c4eed87aaf30517c57b959efa2fe",
+    "packages/schema/src/standalone/backup.mjs": "236762067f3a82634dff3e543bcb4ec84a8794632e4e340b1352a34f09f22ae7",
+    "packages/schema/src/standalone/catalog.mjs": "89a56085bf69ef187e046dc9010b2469426d74fe52f5d96cb531f2ad57aca8f5",
+    "packages/schema/src/standalone/daily-home.mjs": "4de28a76f60d85cca35461c81f288b2cb622a264c485cdfc396d73c8d3f2c5c1",
+    "packages/schema/src/standalone/import-staging.mjs": "3c01a47d790139a7e98a63da46dbc2c69c0e21042821170c4d3fffd669b2e881",
+    "packages/schema/src/standalone/index.mjs": "408fdc51a403291c2e75a26fa98abe2aba56b1d02441bfc6def6970971067413",
+    "packages/schema/src/standalone/intake-state.mjs": "69a187511f283aa6b6e2f5bf4a0f4d5c37efbeda9a24b4c427886558e70028ea",
+    "packages/schema/src/standalone/intake.mjs": "172cea72d2edaf707ce9cc63fad7ff3e6b6333bf02aaa8e8abdfa8f3538150ca",
+    "packages/schema/src/standalone/legacy-owner.mjs": "40cc192c8dda49493456c3da43d82d47ad886f02f1a99da1fe401d432488e765",
+    "packages/schema/src/standalone/owner-witness.mjs": "f9c6118e44f4ac06216adeab23b59959d50b4ecfdd3379a887f785d02307a828",
+    "packages/schema/src/standalone/private-metrics.mjs": "5ea50c9c0da90b49b74a0898a990267616b32709b85fe005b9bf62260226104d",
+    "packages/schema/src/standalone/programs.mjs": "c938f7307978fe5440c2efab4ce2746eb5f8eec6159654c00173b188cfda21d7",
+    "packages/schema/src/standalone/projection.mjs": "f0a5289dd205bbceae883691f0186265aefa4400d6143f0eaa868486577f267e",
+    "packages/schema/src/standalone/pure-compute.mjs": "8ff6a868d8157b54d4368dc7f9863e0d680bbe9f00176b3218db1c2673919ee0",
+    "packages/schema/src/standalone/restore.mjs": "962aaf9606511e76229beea84c3241b44c0fc0c42b0f7e5241e927004a7d69b2",
+    "packages/schema/src/standalone/runtime.mjs": "ce3990c817c39314c8b8fd9332fcddfc2fd75188cdd590ff8fc49000335d89c8",
+    "packages/schema/src/standalone/saved-views.mjs": "d3adc8f242272f10c3aaaee47f232227937badda9ab26e05853242f162a1d13f",
+    "packages/schema/src/standalone/worker-contracts.mjs": "f4ab89eb40979f880ccaae9f635b27eecaeee0cc9b1cd86b8a86fff2d4da632c",
+    "packages/shell/config/store-reachability.mjs": "f6360ac38bf451400159281b19653b6cbc4a88e6318bbed942c870606d36be89",
+    "packages/shell/src/legacy/owner-protocol.ts": "d5b5f63bc7937499ccfd4e1520ad72fea46802d2e35f414603e9e232c74fcdbd",
+    "packages/shell/src/shells/sample-provenance.ts": "b7e6f34f2bf161e0cb812e52ef90359f250c7afc41c2283d164eaa815796bcaa",
+    "packages/shell/src/worker/archive-verification-channel.ts": "0adae9a2da9ad2ccf9a128aca326191489cad380054cd5dee0df5e6b3f49f751",
+    "packages/shell/src/worker/db-worker.ts": "49b1425e1d160089bcf15e4061e85ad881827000839e2ce5b47051fe2a646edb",
+    "packages/shell/src/worker/legacy-owner-channel.ts": "b0b3e5b17a9e170f0712574e1097b09e41134023aa43beca4dd051683bfa1582",
+    "packages/shell/src/worker/mutation-route-census.ts": "6143f3fe6b542d3e50c6d9b1fc3376f4243292393449efe53cc508752f84f95a",
+    "packages/shell/src/worker/production-backup-routes.ts": "30919b7d9535ed15f9f4e6a72fe530920bbf82d9dfffa692bc223297fc5cd590",
+    "packages/shell/src/worker/pure-compute-client.ts": "dd1c8fc294772adda74e596a2a07b158f9b111aafa9f99ae7ba7e87ede7765ce",
+    "packages/shell/src/worker/pure-compute-contract.ts": "d1fd462bd4de91ea928b89137ff0268d193326b73b851fece3ddb878f288539a",
+    "packages/shell/src/worker/release-c/import-session-coordinator.ts": "914dd7fefe86599b48e1ee6c6a5f69d235fa1896ce798e3fc10392dda7ceddcf",
+    "packages/shell/src/worker/samples.ts": "52c4a471b4a35ae371615814e647975e1f40568fca0cf9e84eafdb96bfea96b9",
+    "packages/shell/tsconfig.json": "fed58b8ca7b176eda091e97081d41a0593c7a1e0df586475c496473a0f81bf0c",
+    "pnpm-lock.yaml": "17f8d5cf829fb5a41889e969e15465578c81f575cb28fdad6eb2c47840f1c568",
+    "scripts/store-reachability.mjs": "19c00463ee7c478840d8ce2c5511cc56a688e8da56dc8aec7a8a843846e8fa68",
+    "tsconfig.base.json": "f3af529dc396267fa9453ef8c102b2e9fbe5bf4be024efa0bf56bc065d1a012e"
+  },
+  "productionOmissions": [],
+  "verdict": "OMISSION_BLOCKED"
+}

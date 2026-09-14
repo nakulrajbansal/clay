@@ -7,6 +7,7 @@ import { createSharedSqliteRuntime } from "./config/shared-sqlite-runtime.mjs";
 import { createPanelParserSpecialization } from "./config/panel-parser-specialization.mjs";
 import { rendererAliases, productionRendererGuard } from "./config/renderer-runtime.mjs";
 import { productionStandaloneGuard } from "./config/standalone-validators.mjs";
+import { productionPureComputeGuard } from "./config/pure-compute-boundary.mjs";
 
 import {
   createProductionCssOptimizer,
@@ -31,6 +32,7 @@ export default defineConfig({
   resolve: { alias: rendererAliases, dedupe: ["preact"] },
   plugins: [
     productionRendererGuard(),
+    productionPureComputeGuard({ verifyInputs: true }),
     productionStandaloneGuard({ verifyInputs: true }),
     createSharedSqliteRuntime(),
     createPanelParserSpecialization(),
@@ -66,7 +68,7 @@ export default defineConfig({
   },
   worker: {
     format: "es",
-    plugins: () => [productionStandaloneGuard(), createSharedSqliteRuntime(), createPanelParserSpecialization()],
+    plugins: () => [productionStandaloneGuard(), productionPureComputeGuard(), createSharedSqliteRuntime(), createPanelParserSpecialization()],
     rollupOptions: {
       output: {
         onlyExplicitManualChunks: true,

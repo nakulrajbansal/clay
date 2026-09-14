@@ -5,6 +5,7 @@ import { StateMerkleIndex } from "../../kernel/src/state-merkle-index";
 import { TargetAuthorityStore } from "../../kernel/src/target-authority";
 import { classifyDurableFileInventory } from "../../kernel/src/durable-inventory";
 import { StoreRpcClient, portFromMessagePort } from "../../kernel/src/asyncstore";
+import { OwnedComputeWorker } from "./helpers/owned-compute-worker";
 
 /** Real SQLite + real WorkerClient + real db-worker + real ProductionStoreAuthority.
  * Only browser file acquisition and the message transport are substituted. This
@@ -91,6 +92,7 @@ it("executes isolated lifecycle and receipt-bound first-run import through the r
       queueMicrotask(() => scope.onmessage?.({ data: structuredClone(data), ports: sentPorts } as unknown as MessageEvent));
     }, terminate: () => {} };
   vi.stubGlobal("self", scope);
+  vi.stubGlobal("Worker", OwnedComputeWorker); OwnedComputeWorker.reset();
   let client = new WorkerClient(transport as unknown as Worker);
   const records = () => {
     const port = client.openStorePort("live"); ports.push(port);

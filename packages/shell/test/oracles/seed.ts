@@ -1,3 +1,4 @@
+// Frozen pre-compute starter oracle from 3ddcbbcf3cf88bcfa99014d52452242c93497096.
 // First-run seeding (G9): static registries + hand-written panels + sample
 // rows flagged for one-click removal. Zero network — US-01's promise.
 //
@@ -54,13 +55,6 @@ const col = (name: string, type: ShellColumn["type"],
 const soon = (offsetDays: number): string =>
   `@clay/starter-day:${offsetDays >= 0 ? "+" : ""}${offsetDays}`;
 
-// Visible, non-executable row matrices avoid repeating column names per record.
-function sampleRows(fields: string[], rows: unknown[][]): Record<string, unknown>[] {
-  if (fields.length > 128 || new Set(fields).size !== fields.length || rows.length > 1_000
-      || rows.some(row => row.length !== fields.length)) throw new Error("Invalid static sample matrix");
-  return rows.map(row => Object.fromEntries(fields.map((field, index) => [field, row[index]])));
-}
-
 export const STARTER_SHELLS: StarterShell[] = [
   {
     id: "blank", name: "Blank canvas",
@@ -77,11 +71,11 @@ export const STARTER_SHELLS: StarterShell[] = [
         col("status", "enum", false, ["todo", "doing", "done"]),
         col("due", "date"), col("notes", "text"),
       ],
-      sampleRows: sampleRows(["name","owner","status","due"], [
-          ["Ship the deck", "You", "doing", soon(3)],
-          ["Book dentist", "You", "todo", soon(12)],
-          ["Water plants", "You", "done", soon(-5)],
-        ]),
+      sampleRows: [
+        { name: "Ship the deck", owner: "You", status: "doing", due: soon(3) },
+        { name: "Book dentist", owner: "You", status: "todo", due: soon(12) },
+        { name: "Water plants", owner: "You", status: "done", due: soon(-5) },
+      ],
     }],
   },
   {
@@ -93,11 +87,11 @@ export const STARTER_SHELLS: StarterShell[] = [
         col("title", "text", true), col("on", "date", true),
         col("amount", "number"), col("rating", "integer"), col("notes", "text"),
       ],
-      sampleRows: sampleRows(["title","on","amount","rating"], [
-          ["Morning run", soon(-2), 5, 4],
-          ["Read: The Overstory", soon(-4), 40, 5],
-          ["Swim", soon(-8), 1, 3],
-        ]),
+      sampleRows: [
+        { title: "Morning run", on: soon(-2), amount: 5, rating: 4 },
+        { title: "Read: The Overstory", on: soon(-4), amount: 40, rating: 5 },
+        { title: "Swim", on: soon(-8), amount: 1, rating: 3 },
+      ],
     }],
   },
   {
@@ -110,13 +104,13 @@ export const STARTER_SHELLS: StarterShell[] = [
         col("category", "enum", false, ["a", "b", "c"]),
         col("value", "number"), col("on", "date"),
       ],
-      sampleRows: sampleRows(["name","category","value","on"], [
-          ["Website refresh", "a", 1200, soon(-40)],
-          ["Logo pack", "b", 450, soon(-33)],
-          ["Brand audit", "a", 900, soon(-20)],
-          ["Social kit", "c", 300, soon(-8)],
-          ["Retainer", "b", 2000, soon(-2)],
-        ]),
+      sampleRows: [
+        { name: "Website refresh", category: "a", value: 1200, on: soon(-40) },
+        { name: "Logo pack", category: "b", value: 450, on: soon(-33) },
+        { name: "Brand audit", category: "a", value: 900, on: soon(-20) },
+        { name: "Social kit", category: "c", value: 300, on: soon(-8) },
+        { name: "Retainer", category: "b", value: 2000, on: soon(-2) },
+      ],
     }],
   },
   {
@@ -129,11 +123,11 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("name", "text", true), col("phone", "text"), col("email", "text"),
           col("address", "text"), col("notes", "text"),
         ],
-        sampleRows: sampleRows(["name","phone","email","address"], [
-          ["Alice Nguyen", "555-0110", "alice@example.com", "12 Oak St"],
-          ["Bob's Cafe", "555-0143", "bob@bobscafe.com", "44 Main St"],
-          ["Carla Reyes", "555-0177", "carla@example.com", "9 Pine Ave"],
-        ]),
+        sampleRows: [
+          { name: "Alice Nguyen", phone: "555-0110", email: "alice@example.com", address: "12 Oak St" },
+          { name: "Bob's Cafe", phone: "555-0143", email: "bob@bobscafe.com", address: "44 Main St" },
+          { name: "Carla Reyes", phone: "555-0177", email: "carla@example.com", address: "9 Pine Ave" },
+        ],
       },
       {
         name: "jobs",
@@ -142,13 +136,13 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("status", "enum", false, ["lead", "scheduled", "in_progress", "done", "invoiced"]),
           col("scheduled", "date"), col("price", "number"), col("notes", "text"),
         ],
-        sampleRows: sampleRows(["title","customer","status","scheduled","price"], [
-          ["Kitchen faucet fix", "Alice Nguyen", "scheduled", soon(2), 180],
-          ["Espresso machine service", "Bob's Cafe", "in_progress", soon(5), 420],
-          ["Bathroom remodel quote", "Carla Reyes", "lead", soon(9), 0],
-          ["Water heater install", "Alice Nguyen", "done", soon(-6), 950],
-          ["Drain cleaning", "Bob's Cafe", "invoiced", soon(-14), 140],
-        ]),
+        sampleRows: [
+          { title: "Kitchen faucet fix", customer: "Alice Nguyen", status: "scheduled", scheduled: soon(2), price: 180 },
+          { title: "Espresso machine service", customer: "Bob's Cafe", status: "in_progress", scheduled: soon(5), price: 420 },
+          { title: "Bathroom remodel quote", customer: "Carla Reyes", status: "lead", scheduled: soon(9), price: 0 },
+          { title: "Water heater install", customer: "Alice Nguyen", status: "done", scheduled: soon(-6), price: 950 },
+          { title: "Drain cleaning", customer: "Bob's Cafe", status: "invoiced", scheduled: soon(-14), price: 140 },
+        ],
       },
       {
         name: "invoices",
@@ -157,11 +151,11 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("status", "enum", false, ["draft", "sent", "paid"]),
           col("issued", "date"), col("due", "date"),
         ],
-        sampleRows: sampleRows(["customer","job","amount","status","issued","due"], [
-          ["Bob's Cafe", "Drain cleaning", 140, "paid", soon(-14), soon(-4)],
-          ["Alice Nguyen", "Water heater install", 950, "sent", soon(-6), soon(6)],
-          ["Bob's Cafe", "Espresso machine service", 420, "draft", soon(-2), soon(12)],
-        ]),
+        sampleRows: [
+          { customer: "Bob's Cafe", job: "Drain cleaning", amount: 140, status: "paid", issued: soon(-14), due: soon(-4) },
+          { customer: "Alice Nguyen", job: "Water heater install", amount: 950, status: "sent", issued: soon(-6), due: soon(6) },
+          { customer: "Bob's Cafe", job: "Espresso machine service", amount: 420, status: "draft", issued: soon(-2), due: soon(12) },
+        ],
       },
       {
         name: "items",
@@ -169,11 +163,11 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("name", "text", true), col("price", "number"),
           col("category", "enum", false, ["service", "product", "material"]),
         ],
-        sampleRows: sampleRows(["name","price","category"], [
-          ["Standard callout", 90, "service"],
-          ["Replacement faucet", 65, "product"],
-          ["Copper pipe (per m)", 12, "material"],
-        ]),
+        sampleRows: [
+          { name: "Standard callout", price: 90, category: "service" },
+          { name: "Replacement faucet", price: 65, category: "product" },
+          { name: "Copper pipe (per m)", price: 12, category: "material" },
+        ],
       },
       {
         name: "expenses",
@@ -182,10 +176,10 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("category", "enum", false, ["supplies", "fuel", "tools", "other"]),
           col("on", "date"),
         ],
-        sampleRows: sampleRows(["description","amount","category","on"], [
-          ["Van fuel", 60, "fuel", soon(-5)],
-          ["Pipe stock", 210, "supplies", soon(-8)],
-        ]),
+        sampleRows: [
+          { description: "Van fuel", amount: 60, category: "fuel", on: soon(-5) },
+          { description: "Pipe stock", amount: 210, category: "supplies", on: soon(-8) },
+        ],
       },
     ],
   },
@@ -199,11 +193,11 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("name", "text", true), col("email", "text"), col("phone", "text"),
           col("company", "text"), col("title", "text"),
         ],
-        sampleRows: sampleRows(["name","email","phone","company","title"], [
-          ["Dana Lee", "dana@northwind.co", "555-0101", "Northwind", "Owner"],
-          ["Sam Patel", "sam@brightlab.io", "555-0102", "BrightLab", "Ops"],
-          ["Rosa Diaz", "rosa@harborcafe.com", "555-0103", "Harbor Cafe", "Manager"],
-        ]),
+        sampleRows: [
+          { name: "Dana Lee", email: "dana@northwind.co", phone: "555-0101", company: "Northwind", title: "Owner" },
+          { name: "Sam Patel", email: "sam@brightlab.io", phone: "555-0102", company: "BrightLab", title: "Ops" },
+          { name: "Rosa Diaz", email: "rosa@harborcafe.com", phone: "555-0103", company: "Harbor Cafe", title: "Manager" },
+        ],
       },
       {
         name: "companies",
@@ -211,10 +205,10 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("name", "text", true), col("industry", "text"), col("website", "text"),
           col("size", "enum", false, ["small", "medium", "large"]),
         ],
-        sampleRows: sampleRows(["name","industry","website","size"], [
-          ["Northwind", "Retail", "northwind.co", "small"],
-          ["BrightLab", "Software", "brightlab.io", "medium"],
-        ]),
+        sampleRows: [
+          { name: "Northwind", industry: "Retail", website: "northwind.co", size: "small" },
+          { name: "BrightLab", industry: "Software", website: "brightlab.io", size: "medium" },
+        ],
       },
       {
         name: "deals",
@@ -225,13 +219,13 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("source", "enum", false, ["inbound", "outbound", "referral", "event"]),
           col("probability", "integer"), col("expected_close", "date"),
         ],
-        sampleRows: sampleRows(["title","contact","company","stage","value","owner","source","probability","expected_close"], [
-          ["Northwind annual plan", "Dana Lee", "Northwind", "proposal", 8000, "You", "inbound", 60, soon(9)],
-          ["BrightLab pilot", "Sam Patel", "BrightLab", "qualified", 3500, "You", "outbound", 40, soon(20)],
-          ["BrightLab expansion", "Sam Patel", "BrightLab", "negotiation", 12000, "You", "referral", 80, soon(4)],
-          ["Harbor Cafe setup", "Rosa Diaz", "Harbor Cafe", "won", 1200, "You", "referral", 100, soon(-16)],
-          ["Referral lead", "Sam Patel", "BrightLab", "lead", 0, "You", "referral", 10, soon(30)],
-        ]),
+        sampleRows: [
+          { title: "Northwind annual plan", contact: "Dana Lee", company: "Northwind", stage: "proposal", value: 8000, owner: "You", source: "inbound", probability: 60, expected_close: soon(9) },
+          { title: "BrightLab pilot", contact: "Sam Patel", company: "BrightLab", stage: "qualified", value: 3500, owner: "You", source: "outbound", probability: 40, expected_close: soon(20) },
+          { title: "BrightLab expansion", contact: "Sam Patel", company: "BrightLab", stage: "negotiation", value: 12000, owner: "You", source: "referral", probability: 80, expected_close: soon(4) },
+          { title: "Harbor Cafe setup", contact: "Rosa Diaz", company: "Harbor Cafe", stage: "won", value: 1200, owner: "You", source: "referral", probability: 100, expected_close: soon(-16) },
+          { title: "Referral lead", contact: "Sam Patel", company: "BrightLab", stage: "lead", value: 0, owner: "You", source: "referral", probability: 10, expected_close: soon(30) },
+        ],
       },
       {
         name: "activities",
@@ -240,11 +234,11 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("type", "enum", false, ["call", "email", "meeting", "note"]),
           col("on", "date"),
         ],
-        sampleRows: sampleRows(["subject","contact","deal","type","on"], [
-          ["Discovery call", "Dana Lee", "Northwind annual plan", "call", soon(-8)],
-          ["Sent proposal", "Dana Lee", "Northwind annual plan", "email", soon(-7)],
-          ["Kickoff", "Rosa Diaz", "Harbor Cafe setup", "meeting", soon(-12)],
-        ]),
+        sampleRows: [
+          { subject: "Discovery call", contact: "Dana Lee", deal: "Northwind annual plan", type: "call", on: soon(-8) },
+          { subject: "Sent proposal", contact: "Dana Lee", deal: "Northwind annual plan", type: "email", on: soon(-7) },
+          { subject: "Kickoff", contact: "Rosa Diaz", deal: "Harbor Cafe setup", type: "meeting", on: soon(-12) },
+        ],
       },
       {
         name: "tasks",
@@ -254,12 +248,12 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("priority", "enum", false, ["low", "medium", "high"]),
           col("status", "enum", false, ["open", "done"]),
         ],
-        sampleRows: sampleRows(["title","deal","owner","due","priority","status"], [
-          ["Follow up on proposal", "Northwind annual plan", "You", soon(1), "high", "open"],
-          ["Send pilot scope", "BrightLab pilot", "You", soon(3), "medium", "open"],
-          ["Contract review", "BrightLab expansion", "You", soon(6), "high", "open"],
-          ["Thank-you note", "Harbor Cafe setup", "You", soon(-9), "low", "done"],
-        ]),
+        sampleRows: [
+          { title: "Follow up on proposal", deal: "Northwind annual plan", owner: "You", due: soon(1), priority: "high", status: "open" },
+          { title: "Send pilot scope", deal: "BrightLab pilot", owner: "You", due: soon(3), priority: "medium", status: "open" },
+          { title: "Contract review", deal: "BrightLab expansion", owner: "You", due: soon(6), priority: "high", status: "open" },
+          { title: "Thank-you note", deal: "Harbor Cafe setup", owner: "You", due: soon(-9), priority: "low", status: "done" },
+        ],
       },
     ],
   },
@@ -274,10 +268,10 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("type", "enum", false, ["checking", "savings", "credit", "cash"]),
           col("balance", "number"),
         ],
-        sampleRows: sampleRows(["name","type","balance"], [
-          ["Business checking", "checking", 8400],
-          ["Business card", "credit", -1200],
-        ]),
+        sampleRows: [
+          { name: "Business checking", type: "checking", balance: 8400 },
+          { name: "Business card", type: "credit", balance: -1200 },
+        ],
       },
       {
         name: "transactions",
@@ -286,12 +280,12 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("kind", "enum", false, ["income", "expense"]),
           col("category", "text"), col("on", "date"),
         ],
-        sampleRows: sampleRows(["description","account","amount","kind","category","on"], [
-          ["Client payment — Northwind", "Business checking", 1200, "income", "Sales", soon(-9)],
-          ["Software subscription", "Business card", 90, "expense", "Software", soon(-6)],
-          ["Supplies", "Business card", 210, "expense", "Materials", soon(-7)],
-          ["Client payment — Harbor", "Business checking", 1200, "income", "Sales", soon(-3)],
-        ]),
+        sampleRows: [
+          { description: "Client payment — Northwind", account: "Business checking", amount: 1200, kind: "income", category: "Sales", on: soon(-9) },
+          { description: "Software subscription", account: "Business card", amount: 90, kind: "expense", category: "Software", on: soon(-6) },
+          { description: "Supplies", account: "Business card", amount: 210, kind: "expense", category: "Materials", on: soon(-7) },
+          { description: "Client payment — Harbor", account: "Business checking", amount: 1200, kind: "income", category: "Sales", on: soon(-3) },
+        ],
       },
       {
         name: "invoices",
@@ -300,11 +294,11 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("status", "enum", false, ["draft", "sent", "paid", "overdue"]),
           col("issued", "date"), col("due", "date"),
         ],
-        sampleRows: sampleRows(["customer","amount","status","issued","due"], [
-          ["Northwind", 8000, "sent", soon(-6), soon(8)],
-          ["BrightLab", 3500, "draft", soon(-1), soon(14)],
-          ["Harbor Cafe", 1200, "paid", soon(-14), soon(-2)],
-        ]),
+        sampleRows: [
+          { customer: "Northwind", amount: 8000, status: "sent", issued: soon(-6), due: soon(8) },
+          { customer: "BrightLab", amount: 3500, status: "draft", issued: soon(-1), due: soon(14) },
+          { customer: "Harbor Cafe", amount: 1200, status: "paid", issued: soon(-14), due: soon(-2) },
+        ],
       },
       {
         name: "bills",
@@ -312,10 +306,10 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("vendor", "text", true), col("amount", "number"),
           col("status", "enum", false, ["unpaid", "paid"]), col("due", "date"),
         ],
-        sampleRows: sampleRows(["vendor","amount","status","due"], [
-          ["Supply Co", 210, "unpaid", soon(4)],
-          ["Cloud Host", 90, "paid", soon(-13)],
-        ]),
+        sampleRows: [
+          { vendor: "Supply Co", amount: 210, status: "unpaid", due: soon(4) },
+          { vendor: "Cloud Host", amount: 90, status: "paid", due: soon(-13) },
+        ],
       },
     ],
   },
@@ -330,11 +324,11 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("email", "text"),
           col("status", "enum", false, ["active", "on_leave", "inactive"]),
         ],
-        sampleRows: sampleRows(["name","role","phone","email","status"], [
-          ["Maya Chen", "Barista", "555-0201", "maya@x.com", "active"],
-          ["Leo Park", "Shift lead", "555-0202", "leo@x.com", "active"],
-          ["Ivy Ross", "Barista", "555-0203", "ivy@x.com", "on_leave"],
-        ]),
+        sampleRows: [
+          { name: "Maya Chen", role: "Barista", phone: "555-0201", email: "maya@x.com", status: "active" },
+          { name: "Leo Park", role: "Shift lead", phone: "555-0202", email: "leo@x.com", status: "active" },
+          { name: "Ivy Ross", role: "Barista", phone: "555-0203", email: "ivy@x.com", status: "on_leave" },
+        ],
       },
       {
         name: "shifts",
@@ -343,11 +337,11 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("start_time", "text"), col("end_time", "text"), col("role", "text"),
           col("status", "enum", false, ["scheduled", "confirmed", "completed"]),
         ],
-        sampleRows: sampleRows(["employee","date","start_time","end_time","role","status"], [
-          ["Maya Chen", soon(1), "08:00", "14:00", "Barista", "confirmed"],
-          ["Leo Park", soon(2), "13:00", "21:00", "Shift lead", "scheduled"],
-          ["Maya Chen", soon(4), "08:00", "14:00", "Barista", "scheduled"],
-        ]),
+        sampleRows: [
+          { employee: "Maya Chen", date: soon(1), start_time: "08:00", end_time: "14:00", role: "Barista", status: "confirmed" },
+          { employee: "Leo Park", date: soon(2), start_time: "13:00", end_time: "21:00", role: "Shift lead", status: "scheduled" },
+          { employee: "Maya Chen", date: soon(4), start_time: "08:00", end_time: "14:00", role: "Barista", status: "scheduled" },
+        ],
       },
       {
         name: "time_off",
@@ -357,10 +351,10 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("start_date", "date"), col("end_date", "date"),
           col("status", "enum", false, ["pending", "approved", "denied"]),
         ],
-        sampleRows: sampleRows(["employee","kind","start_date","end_date","status"], [
-          ["Ivy Ross", "vacation", soon(3), soon(10), "approved"],
-          ["Leo Park", "personal", soon(6), soon(6), "pending"],
-        ]),
+        sampleRows: [
+          { employee: "Ivy Ross", kind: "vacation", start_date: soon(3), end_date: soon(10), status: "approved" },
+          { employee: "Leo Park", kind: "personal", start_date: soon(6), end_date: soon(6), status: "pending" },
+        ],
       },
     ],
   },
@@ -376,14 +370,14 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("streak", "number"), col("best", "number"),
           col("last_done", "date"), col("notes", "text"),
         ],
-        sampleRows: sampleRows(["name","category","streak","best","last_done"], [
-          ["Morning run", "health", 12, 20, soon(0)],
-          ["Read 20 min", "mind", 5, 14, soon(-1)],
-          ["Inbox to zero", "work", 3, 9, soon(0)],
-          ["Call a friend", "social", 0, 6, soon(-4)],
-          ["Meditate", "mind", 8, 8, soon(0)],
-          ["Meal prep", "health", 2, 5, soon(-2)],
-        ]),
+        sampleRows: [
+          { name: "Morning run", category: "health", streak: 12, best: 20, last_done: soon(0) },
+          { name: "Read 20 min", category: "mind", streak: 5, best: 14, last_done: soon(-1) },
+          { name: "Inbox to zero", category: "work", streak: 3, best: 9, last_done: soon(0) },
+          { name: "Call a friend", category: "social", streak: 0, best: 6, last_done: soon(-4) },
+          { name: "Meditate", category: "mind", streak: 8, best: 8, last_done: soon(0) },
+          { name: "Meal prep", category: "health", streak: 2, best: 5, last_done: soon(-2) },
+        ],
       },
     ],
   },
@@ -398,14 +392,14 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("category", "enum", false, ["retail", "food", "supplies", "other"]),
           col("price", "number"), col("stock", "number"), col("reorder_at", "number"),
         ],
-        sampleRows: sampleRows(["name","sku","category","price","stock","reorder_at"], [
-          ["House blend beans 1kg", "COF-001", "food", 18, 4, 6],
-          ["Oat milk carton", "MLK-002", "food", 3, 24, 12],
-          ["Ceramic mug", "MUG-010", "retail", 14, 2, 5],
-          ["Paper cups (sleeve)", "CUP-050", "supplies", 6, 40, 15],
-          ["Tote bag", "BAG-003", "retail", 22, 9, 4],
-          ["Cleaning spray", "CLN-007", "supplies", 5, 1, 3],
-        ]),
+        sampleRows: [
+          { name: "House blend beans 1kg", sku: "COF-001", category: "food", price: 18, stock: 4, reorder_at: 6 },
+          { name: "Oat milk carton", sku: "MLK-002", category: "food", price: 3, stock: 24, reorder_at: 12 },
+          { name: "Ceramic mug", sku: "MUG-010", category: "retail", price: 14, stock: 2, reorder_at: 5 },
+          { name: "Paper cups (sleeve)", sku: "CUP-050", category: "supplies", price: 6, stock: 40, reorder_at: 15 },
+          { name: "Tote bag", sku: "BAG-003", category: "retail", price: 22, stock: 9, reorder_at: 4 },
+          { name: "Cleaning spray", sku: "CLN-007", category: "supplies", price: 5, stock: 1, reorder_at: 3 },
+        ],
       },
     ],
   },
@@ -422,13 +416,13 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("stage", "enum", false, ["submitted", "in_review", "approved", "paid"]),
           col("decision_note", "text"), col("submitted_on", "date"),
         ],
-        sampleRows: sampleRows(["title","requester","category","amount","stage","decision_note","submitted_on"], [
-          ["Standing desk", "Ava Patel", "equipment", 640, "submitted", "", soon(-1)],
-          ["Conference travel — DevConf", "Liam Chen", "travel", 1850, "in_review", "Waiting on flight quote", soon(-4)],
-          ["Design tool licences (5)", "Maya Rodriguez", "software", 900, "in_review", "", soon(-3)],
-          ["Team offsite venue deposit", "Noah Kim", "other", 1200, "approved", "Approved for Q3 budget", soon(-9)],
-          ["Laptop replacement", "Zoe Ahmed", "equipment", 1400, "paid", "Paid 07/02", soon(-14)],
-        ]),
+        sampleRows: [
+          { title: "Standing desk", requester: "Ava Patel", category: "equipment", amount: 640, stage: "submitted", decision_note: "", submitted_on: soon(-1) },
+          { title: "Conference travel — DevConf", requester: "Liam Chen", category: "travel", amount: 1850, stage: "in_review", decision_note: "Waiting on flight quote", submitted_on: soon(-4) },
+          { title: "Design tool licences (5)", requester: "Maya Rodriguez", category: "software", amount: 900, stage: "in_review", decision_note: "", submitted_on: soon(-3) },
+          { title: "Team offsite venue deposit", requester: "Noah Kim", category: "other", amount: 1200, stage: "approved", decision_note: "Approved for Q3 budget", submitted_on: soon(-9) },
+          { title: "Laptop replacement", requester: "Zoe Ahmed", category: "equipment", amount: 1400, stage: "paid", decision_note: "Paid 07/02", submitted_on: soon(-14) },
+        ],
       },
       {
         name: "request_activity",
@@ -436,11 +430,11 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("request", "text", true), col("from_stage", "text"),
           col("to_stage", "text"), col("moved_on", "date"),
         ],
-        sampleRows: sampleRows(["request","from_stage","to_stage","moved_on"], [
-          ["Laptop replacement", "in_review", "approved", soon(-10)],
-          ["Laptop replacement", "approved", "paid", soon(-7)],
-          ["Team offsite venue deposit", "in_review", "approved", soon(-2)],
-        ]),
+        sampleRows: [
+          { request: "Laptop replacement", from_stage: "in_review", to_stage: "approved", moved_on: soon(-10) },
+          { request: "Laptop replacement", from_stage: "approved", to_stage: "paid", moved_on: soon(-7) },
+          { request: "Team offsite venue deposit", from_stage: "in_review", to_stage: "approved", moved_on: soon(-2) },
+        ],
       },
     ],
   },
@@ -471,11 +465,11 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("application", "text", true), col("from_stage", "text"),
           col("to_stage", "text"), col("moved_on", "date"),
         ],
-        sampleRows: sampleRows(["application","from_stage","to_stage","moved_on"], [
-          ["Initech", "applied", "interview", soon(-4)],
-          ["Umbrella Labs", "interview", "offer", soon(-2)],
-          ["Hooli", "applied", "closed", soon(-15)],
-        ]),
+        sampleRows: [
+          { application: "Initech", from_stage: "applied", to_stage: "interview", moved_on: soon(-4) },
+          { application: "Umbrella Labs", from_stage: "interview", to_stage: "offer", moved_on: soon(-2) },
+          { application: "Hooli", from_stage: "applied", to_stage: "closed", moved_on: soon(-15) },
+        ],
       },
     ],
   },
@@ -491,14 +485,14 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("stage", "enum", false, ["idea", "draft", "review", "scheduled", "published"]),
           col("publish_on", "date"), col("owner", "text"), col("notes", "text"),
         ],
-        sampleRows: sampleRows(["title","channel","stage","publish_on","owner","notes"], [
-          ["How we cut onboarding time in half", "blog", "published", soon(-5), "Ava", ""],
-          ["Q3 product roadmap teaser", "newsletter", "scheduled", soon(3), "Liam", "Waiting on final screenshots"],
-          ["Customer story: Harbor Cafe", "youtube", "review", soon(9), "Maya", "Legal sign-off pending"],
-          ["5 workflow patterns that stick", "blog", "draft", soon(14), "Ava", ""],
-          ["Behind the scenes: support week", "social", "idea", soon(21), "Noah", ""],
-          ["Pricing page refresh announcement", "newsletter", "idea", soon(28), "Liam", ""],
-        ]),
+        sampleRows: [
+          { title: "How we cut onboarding time in half", channel: "blog", stage: "published", publish_on: soon(-5), owner: "Ava", notes: "" },
+          { title: "Q3 product roadmap teaser", channel: "newsletter", stage: "scheduled", publish_on: soon(3), owner: "Liam", notes: "Waiting on final screenshots" },
+          { title: "Customer story: Harbor Cafe", channel: "youtube", stage: "review", publish_on: soon(9), owner: "Maya", notes: "Legal sign-off pending" },
+          { title: "5 workflow patterns that stick", channel: "blog", stage: "draft", publish_on: soon(14), owner: "Ava", notes: "" },
+          { title: "Behind the scenes: support week", channel: "social", stage: "idea", publish_on: soon(21), owner: "Noah", notes: "" },
+          { title: "Pricing page refresh announcement", channel: "newsletter", stage: "idea", publish_on: soon(28), owner: "Liam", notes: "" },
+        ],
       },
     ],
   },
@@ -513,12 +507,12 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("quarter", "enum", false, ["Q1", "Q2", "Q3", "Q4"]),
           col("status", "enum", false, ["draft", "active", "done"]),
         ],
-        sampleRows: sampleRows(["title","owner","quarter","status"], [
-          ["Make onboarding effortless", "Ava Patel", "Q3", "active"],
-          ["Grow qualified pipeline", "Liam Chen", "Q3", "active"],
-          ["Harden the platform", "Maya Rodriguez", "Q3", "draft"],
-          ["Ship the mobile beta", "Noah Kim", "Q2", "done"],
-        ]),
+        sampleRows: [
+          { title: "Make onboarding effortless", owner: "Ava Patel", quarter: "Q3", status: "active" },
+          { title: "Grow qualified pipeline", owner: "Liam Chen", quarter: "Q3", status: "active" },
+          { title: "Harden the platform", owner: "Maya Rodriguez", quarter: "Q3", status: "draft" },
+          { title: "Ship the mobile beta", owner: "Noah Kim", quarter: "Q2", status: "done" },
+        ],
       },
       {
         name: "key_results",
@@ -526,14 +520,14 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("objective", "text", true), col("metric", "text"),
           col("target", "number"), col("current", "number"),
         ],
-        sampleRows: sampleRows(["objective","metric","target","current"], [
-          ["Make onboarding effortless", "Time to first value (min)", 10, 22],
-          ["Make onboarding effortless", "Setup completion %", 90, 61],
-          ["Grow qualified pipeline", "Qualified leads / mo", 120, 84],
-          ["Grow qualified pipeline", "Demo-to-close %", 25, 19],
-          ["Harden the platform", "p95 latency (ms)", 200, 340],
-          ["Ship the mobile beta", "Beta installs", 500, 512],
-        ]),
+        sampleRows: [
+          { objective: "Make onboarding effortless", metric: "Time to first value (min)", target: 10, current: 22 },
+          { objective: "Make onboarding effortless", metric: "Setup completion %", target: 90, current: 61 },
+          { objective: "Grow qualified pipeline", metric: "Qualified leads / mo", target: 120, current: 84 },
+          { objective: "Grow qualified pipeline", metric: "Demo-to-close %", target: 25, current: 19 },
+          { objective: "Harden the platform", metric: "p95 latency (ms)", target: 200, current: 340 },
+          { objective: "Ship the mobile beta", metric: "Beta installs", target: 500, current: 512 },
+        ],
       },
     ],
   },
@@ -548,16 +542,16 @@ export const STARTER_SHELLS: StarterShell[] = [
           col("day", "date"), col("start_time", "text"),
           col("status", "enum", false, ["proposed", "confirmed", "cancelled"]),
         ],
-        sampleRows: sampleRows(["title","speaker","room","day","start_time","status"], [
-          ["Opening keynote", "Ava Patel", "Main Hall", soon(6), "09:00", "confirmed"],
-          ["Scaling with small teams", "Liam Chen", "Room A", soon(6), "11:00", "confirmed"],
-          ["Design systems that last", "Maya Rodriguez", "Room B", soon(6), "14:00", "proposed"],
-          ["The future of local-first", "Noah Kim", "Room A", soon(7), "10:00", "confirmed"],
-          ["Panel: shipping weekly", "Zoe Ahmed", "Main Hall", soon(7), "13:00", "proposed"],
-          ["Lightning talks", "Ethan Brooks", "Room B", soon(7), "15:00", "proposed"],
-          ["Hands-on workshop", "Ines Fournier", "Lab", soon(6), "16:00", "cancelled"],
-          ["Closing fireside chat", "Ravi Shah", "Main Hall", soon(7), "17:00", "confirmed"],
-        ]),
+        sampleRows: [
+          { title: "Opening keynote", speaker: "Ava Patel", room: "Main Hall", day: soon(6), start_time: "09:00", status: "confirmed" },
+          { title: "Scaling with small teams", speaker: "Liam Chen", room: "Room A", day: soon(6), start_time: "11:00", status: "confirmed" },
+          { title: "Design systems that last", speaker: "Maya Rodriguez", room: "Room B", day: soon(6), start_time: "14:00", status: "proposed" },
+          { title: "The future of local-first", speaker: "Noah Kim", room: "Room A", day: soon(7), start_time: "10:00", status: "confirmed" },
+          { title: "Panel: shipping weekly", speaker: "Zoe Ahmed", room: "Main Hall", day: soon(7), start_time: "13:00", status: "proposed" },
+          { title: "Lightning talks", speaker: "Ethan Brooks", room: "Room B", day: soon(7), start_time: "15:00", status: "proposed" },
+          { title: "Hands-on workshop", speaker: "Ines Fournier", room: "Lab", day: soon(6), start_time: "16:00", status: "cancelled" },
+          { title: "Closing fireside chat", speaker: "Ravi Shah", room: "Main Hall", day: soon(7), start_time: "17:00", status: "confirmed" },
+        ],
       },
     ],
   },

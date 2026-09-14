@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { WorkerClient } from "../src/app/worker-client";
+import { OwnedComputeWorker } from "./helpers/owned-compute-worker";
 import { ownedBrowserStorage } from "../../kernel/test/helpers/owned-browser-storage";
 
 vi.mock("../src/app/backup-trust-store.browser", async () => {
@@ -27,6 +28,7 @@ it("authenticates before creating targets and restores through real WorkerClient
       queueMicrotask(() => scope.onmessage?.({ data: structuredClone(data), ports: sentPorts } as unknown as MessageEvent));
     }, terminate: () => {} };
   vi.stubGlobal("self", scope);
+  vi.stubGlobal("Worker", OwnedComputeWorker); OwnedComputeWorker.reset();
   let client = new WorkerClient(transport as unknown as Worker);
   try {
     await import("../src/worker/db-worker");

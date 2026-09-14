@@ -1,4 +1,5 @@
 import { OperationId, RequestId } from "@clay/schema/standalone/index";
+import { ComputeSourceV1 } from "@clay/schema/standalone/pure-compute";
 import { MAX_CAPTURE_BYTES, captureJsonValue, invalidCapturedJson, capturedExecution, type CapturedMutationExecution } from "./production-json-capture";
 import {
   TargetEvidenceV1,
@@ -1530,13 +1531,18 @@ export class ProductionMutationCoordinator {
     return mintProductionAuthorityId("req");
   }
 
-  execute(input: unknown): Promise<ProductionMutationResult> {
+  execute(input: unknown, computedSource?: unknown): Promise<ProductionMutationResult> {
     if (this.#poisoned)
       return Promise.reject(invalid("production authority is poisoned; reopen for reservation recovery"));
     // Capture before queueing: caller-owned accessors and arrays are never retained.
     const captured = captureMutation(input);
     assertCapturedMutationBytes(captured);
+    const expected = computedSource === undefined ? undefined : ComputeSourceV1.parse(captureJsonRecord(computedSource));
+    if (expected && captured.route !== "starter.seed")
+      throw invalid("computed source is only permitted for starter computation");
     const run = this.#queue(() => {
+      if (expected) this.#authorityState(expected.target, expected.catalogGeneration, null,
+        "starter computed source changed; retry the same starter");
       return this.#executeCaptured(captured);
     });
     return run.then(result => { assertIntakeResponsePublic(captured.route, result.result); return result; });

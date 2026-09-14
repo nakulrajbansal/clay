@@ -8,7 +8,7 @@ export function assertStandaloneModules(chunks, requireRuntime = true) {
     if (!module.rendered) continue;
     const id = `/${module.id.replaceAll("\\", "/")}`;
     if (/\/node_modules\/zod\//.test(id)
-        || /\/schema\/src\/(?:validation-runtime|index|archive|backup|catalog|daily-home|intake|intake-workflow|legacy-owner|owner-witness|projection|restore|share|import-staging|import|private-metrics|saved-views|intake-state|worker-contracts)\.ts$/.test(id))
+        || /\/schema\/src\/(?:validation-runtime|index|archive|backup|catalog|daily-home|intake|intake-workflow|legacy-owner|owner-witness|projection|restore|share|import-staging|import|private-metrics|saved-views|intake-state|worker-contracts|pure-compute)\.ts$/.test(id))
       throw new Error(`Authoring schema runtime in production: ${module.id}`);
     if (id.endsWith("/schema/src/standalone/runtime.mjs")) {
       files.add(chunk.file); identities.add(id);

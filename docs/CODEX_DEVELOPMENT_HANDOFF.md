@@ -1,3 +1,182 @@
+# Pure compute FIX checkpoint — 2026-09-14
+
+Base: `3ddcbbcf3cf88bcfa99014d52452242c93497096`, `D:\Clay`,
+`codex/clay-project`. Entry checkout was clean; HEAD and local origin tracking ref
+matched. This section supersedes the older continuations below. Sole writer;
+no commits/pushes, installs/downloads, credentials, other worktrees, server stops,
+deployment/configuration, browser launches or release/review evidence.
+
+## Outcome and source boundary
+
+**Partial optimization, not certification or completion of this FIX phase.**
+A–F source/UI behavior is retained. The new owned pure worker constructs only
+starter fragments; export/Daily projection, final panel/plan validation, Store,
+catalog, SQL, Merkle, receipts, lifecycle/restore and native recovery remain in
+the sole DB worker. SQLite initializer/WASM/VFS behavior is unchanged.
+
+- Closed generated standalone schemas (`pure-compute.ts` + generated `.mjs` /
+  `.d.mts`) and descriptor-safe capture bound a finite starter enum, ephemeral
+  nonce and original catalog/app/generation/lineage/revision/digest. No provider,
+  storage, fence, journal, receipt, SQL or arbitrary command enters the CPU task.
+- `pure-compute-client.ts`, `pure-compute-worker.ts`, `pure-compute.ts` and
+  `pure-compute-contract.ts` own a fresh worker/private port per task. Failure,
+  timeout, malformed/duplicate/forged/stale/oversized responses and teardown
+  terminate that owned worker. A CPU task cannot produce durable effects.
+- `seed-manifest.json` pins **both historical wire-order and canonical SHA-256**
+  plus byte counts for all 16 starters. The DB client verifies both before
+  returning a fragment. Build-time `seed-manifest.mjs --check` rejects source or
+  fragment drift; `--candidate` only prints proposed data. Existing mutation IDs,
+  request fingerprints and receipt/replay semantics are unchanged.
+- `ProductionMutationCoordinator.execute` recaptures an optional closed computed
+  source, permitted only for `starter.seed`, and revalidates it inside the serial
+  authority queue. It then uses the existing capture/prepare/fence/reserve/execute/
+  canonical/publish/receipt/readback path. The obsolete internal direct seed
+  dispatch branch was removed; no public route was removed or reclassified.
+- 29 visible row matrices and static panel wrapper primitives remove repeated
+  source declarations. No compressed executable data, evaluator or changed panel
+  output. Independent pre-refactor `test/oracles/seed.ts` and `seed-panels.ts`
+  retain pinned original bytes; all bundle/panel/order/canonical outputs match.
+- Build-time pure import/AST guards and `pure-compute-module-check.mjs` require
+  one CPU entry, no forbidden dependency/capability, and no starter implementation
+  in the DB JavaScript closure. Existing renderer/standalone/graph/transition
+  guards and frozen collectors were not weakened.
+- `store-reachability.mjs` / checked JSON enumerate 213 Store method/helper nodes:
+  205 referenced, 28 unresolved capability flows. **OMISSION_BLOCKED**; no Store
+  facade/method was removed. Its source/parser/lockfile pins and escape tests are
+  a conservative inventory, not a closed points-to proof or optimizer permission.
+- `sqlite-api-trace.json` was refreshed only for changed Clay corpus/input hashes
+  and their syntax inventory. Pinned SDK, initializer, WASM, section hashes and
+  `SPECIALIZATION_BLOCKED` verdict/empty approved omissions are identical.
+
+Architecture details and next projection prerequisites: `docs/PURE_COMPUTE_BOUNDARY.md`.
+
+## RED/GREEN and verification
+
+Initial compute and source/module guard packets failed with missing modules.
+Four source-guard cases then reproduced actual incorrect seeding on stale
+generation/revision/catalog/intervening-write state; all became GREEN with the
+queued authority precondition. The first independent physical packet found
+**11 real parity failures**: canonical key sorting changed stored record-event
+bytes despite identical user rows/panels. It also found one CRM fixture collision
+in a repeating synthetic RNG. Preserving original wire order and checking both
+wire/canonical hashes fixed the product regression; a deterministic SHA-256
+fixture stream fixed the separate test collision. The subsequent packet passed
+**49/49**, including independent physical/canonical/history/receipt comparisons
+for every starter. No output assertion, safety limit or product timeout was relaxed.
+
+The first full shell run passed 980 tests and failed three obsolete source-call
+assertions in `production-mutation-route-census.test.ts` and
+`release-a-foundation-boundary.test.ts`. The updated assertions require the exact
+ordered capture -> owned compute -> original-authority check -> source-bound
+`starter.seed` execution, unchanged request ID and no direct Store/seed builder.
+The caller/real-worker packet then passed 34/34; full shell was rerun below.
+
+Repository-local binaries, package-local working directories, serial broad runs:
+
+| Gate | Actual result |
+| --- | --- |
+| First compute/source/real-worker/graph focused packet | 55 passed / 6 files; 14.25s (before adding exhaustive physical and extra fault cases) |
+| Final seed physical parity + compute faults | 49 passed / 2 files; 41.30s |
+| Real WorkerClient/DB compute + lifecycle + seed packet | 40 passed / 3 files; 40.10s (before wire-order correction; final full shell supersedes this) |
+| Final caller census / Release A boundary / real compute worker | 34 passed / 3 files; 7.36s |
+| Full kernel | 1,372 passed / 1 skipped; 119 passing / 1 skipped files; 670.30s |
+| Full schema | 516 passed / 22 files; 18.12s |
+| Full mutation | 60 passed / 8 files; 4.93s |
+| Full panel-runtime | 66 passed / 4 files; 7.32s |
+| Full backend | 111 passed / 11 files; 9.96s |
+| Full shell (final rerun) | 983 passed / 145 files; 467.94s; no failed tests or unhandled errors reported |
+| Six package typechecks | schema, kernel, mutation, panel-runtime, backend, shell: each exit 0 (`node node_modules/typescript/bin/tsc --noEmit`) |
+| Panel production build | 5 modules; 652ms; exit 0 |
+| `node scripts/bundle-module-report.mjs` production build | 162 modules; 14.56s; exit 0 |
+| Renderer/planner/standalone/AuthorityGraph/transition/pure-compute module guards | All passed, exit 0 |
+| Standalone generator `--check` | 19 modules / 372 validators / 40 generated files; exit 0 |
+| Starter manifest `--check` | 16 exact fragments; exit 0 |
+| SQLite trace `--check` | MATCH; SPECIALIZATION_BLOCKED; unchanged initializer/WASM; exit 0 |
+| Store reachability `--check` | MATCH; OMISSION_BLOCKED; 213 nodes / 205 referenced / 28 escapes; exit 0 |
+| Unchanged collector tests (final rerun) | 19 passed; 131.832ms; exit 0 |
+| Bundle diagnostic | Only completeWorker / completeBrowser fail; exit 1 |
+| Unchanged frozen budget | Freshness PASS; fails completeWorker; exit 1 |
+| Read-only development census | exit 0; A-F source development remains complete, no packaged/certification pass claimed |
+| Changed-source safety scan / whitespace | 43 source/config/test files: no credential or unsafe-runtime pattern hits; only earlier handoff prose matched in the wider 45-path scan and was confirmed present at HEAD; `git diff --check` exit 0. Not independent security certification. |
+
+Final six-suite total: **3,108 passed / 1 skipped**, zero failed. All six JSON
+reports have `success: true`. Final HEAD and local origin tracking ref remain
+`3ddcbbcf3cf88bcfa99014d52452242c93497096`; no remote readback/network claim.
+
+Full suite command from each package:
+`node node_modules/vitest/vitest.mjs run --maxWorkers=1 --minWorkers=1 --reporter=dot --reporter=json --outputFile=../../test-results/fix-batch/<package>-pure-compute.json`.
+Focused outputs are `pure-compute-focused.json` and `seed-physical-parity.json`
+plus `seed-caller-green.json` in the same ignored directory. The latter two
+contain the final GREEN packets; RED
+findings above came from real terminal output. No release report was regenerated.
+
+## Exact measurements (final production build)
+
+| Boundary | Raw / gzip | Frozen limit | Result |
+| --- | ---: | ---: | --- |
+| Shell JS | 892,215 / 279,153 | 980,000 / 290,000 | PASS |
+| Styles | 60,905 / 16,825 | 67,000 / 17,000 | PASS |
+| Worker authority | 218,846 / 56,633 | 240,000 / 60,000 | PASS |
+| Complete worker | 1,299,397 / 364,778 | 1,010,000 / 280,000 | FAIL: 289,397 / 84,778 over |
+| Complete browser | 3,299,607 / 1,114,842 | 3,250,000 / 1,100,000 | FAIL: 49,607 / 14,842 over |
+
+Compared with entry: **complete-worker down 71,437 raw / 12,264 gzip**;
+**complete-browser UP 3,738 raw / 4,544 gzip**. The browser deletion target is
+NOT met. Worker movement is not presented as aggregate browser optimization.
+All other boundaries remain green; ProductionBackupRuntime is 32,099 / 10,851.
+
+Measurements after structural moves:
+
+- First owned worker: complete-worker 1,297,939 / 363,871;
+  complete-browser 3,303,192 / 1,114,103.
+- Source compaction: complete-worker 1,297,939 / 363,854;
+  complete-browser 3,298,332 / 1,113,994. Real browser deletion from that first
+  boundary: 4,860 raw / 109 gzip, insufficient.
+- Final historical wire parity fix and redundant dispatch removal: table above.
+  The extra integrity manifest/check is retained despite its cost.
+
+New CPU asset: **75,175 / 16,800**. DB entry: **87,884 / 27,475**.
+Unchanged controlling chunks: asyncstore **497,379 / 143,281**, target-authority
+**191,808 / 41,102**, pinned SQLite **210,779 / 62,560**. Actual module reports:
+`test-results/fix-batch/bundle-modules.json` and `bundles.json` (diagnostics only).
+Frozen error:
+
+```text
+Error: database worker JavaScript closure: 1299397 B raw / 364778 B gzip exceeds 1010000 B / 280000 B
+```
+
+## Exact continuation
+
+1. Preserve the full seed boundary, dual hashes, original-order physical parity,
+   retained mutation IDs, original oracles and fail-closed source guard. A–F
+   source development is unchanged; aggregate optimization is unfinished.
+2. Do not delete the seven unreferenced Store methods from this inventory:
+   `openMemory`, `commitLayout`, `rollForwardTo`, `markSuggestionShown`,
+   `addAttachment`, `dumpTable`, `replaceFromArchive`. With the one unreferenced
+   `stableFingerprint` helper they total only 3,791 source bytes (NOT emitted
+   savings). Remaining proof edges include captured WeakMap writers/rollback/
+   archive callbacks, held/returned Store capabilities and the read-only facade.
+   The inventory is conservative and explicitly blocks omission, not an
+   assertion that those runtime paths are unsafe.
+3. Highest remaining real modules: Store 263,224 rendered; DeviceCatalog 166,513;
+   Acorn specialization 91,373; DB projection 27,113 (another 9,432 rendered in
+   shell); Daily basis 25,844.
+   No low-yield descriptor migration, KVVFS/vtab removal, authority relocation or
+   per-route feature deletion. Source compaction/duplication deletion must supply
+   the real browser gap; another worker by itself does not.
+4. A possible next pure seam is `projection.ts` at `PreparedProjectionV1` /
+   `finishProjectionRows`, but first prove a bounded immutable row/semantic capture
+   with exact old/new CSV/plaintext, completeness, field/attachment/redaction,
+   cancellation and source CAS parity. Existing memory benchmark p95 is only
+   6.437ms (1k) / 26.784ms (5k), so no demonstrated CPU bottleneck justifies a
+   blind projection move. Daily action/CAS proof must remain authoritative.
+5. Parent runs packaged browser/nested-worker CSP and canonical 180-case physical
+   transaction gates after source stabilizes. Release B binding, clean-tree local
+   export, accessibility/NVDA and final review remain later gates. None was run
+   or certified here. No restart or sandbox bypass was requested.
+
+---
+
 # SQLite FIX trace checkpoint — 2026-09-14
 
 Base: `4fd7c6a728342ca60071d7d3a9d9686cbcffde8c`, `D:\Clay`,
