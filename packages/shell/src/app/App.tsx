@@ -2626,7 +2626,10 @@ export function App(): React.JSX.Element {
               opfsAvailable={persistent}
               quarantinedStorageSlots={deviceProtectionState?.storageQuarantine?.slots ?? 0}
               ownerRecovery={workerRef.current ? <OriginalOwnerRecovery worker={workerRef.current}
-                relayBaseUrl={getRelayOwnerUrl()} publicBaseUrl={location.origin} /> : undefined}
+                relayBaseUrl={getRelayOwnerUrl()} publicBaseUrl={location.origin}
+                onNewIntake={() => { setShowRecoveryCenter(false); setShowIntake(true); }}
+                onNewShare={() => { setShowRecoveryCenter(false); openData(); }}
+                onNewApp={() => { setShowRecoveryCenter(false); newApp(); }} /> : undefined}
               backupTrustStatus={backupTrustStatus}
               backupAdapterStatus={backupAdapterStatus}
               backupTarget={backupTarget ? {

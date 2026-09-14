@@ -1,10 +1,167 @@
-# A-F development continuation - 2026-09-13
+# A-F source-development completion - 2026-09-13
 
-Development checkpoint only. Development is NOT complete. No certification or
-shipping claim. Continue from Exact continuation; do not start the integrated
-regression/build/budget/browser/accessibility/review campaign yet.
+Source/UI development is complete under the bounded compatibility outcomes in
+ADR-070. This is NOT certification, shipment, or a claim that all release gates
+pass. The requested single integrated test campaign is NEXT, not run in this turn.
+This current section supersedes all historical development/code-blocker notes below.
 
-## Latest development continuation on 674a001f
+## Current completion on 18d88eeb
+
+Started clean in `D:\Clay`, branch `codex/clay-project`. HEAD and the local tracking
+origin both read `18d88eebca78353322257ca73a50eca557a80f52`; no network remote readback
+or Git metadata write was attempted. Leave this source/test/documentation diff for
+the parent workflow to preserve. No commit, push, download, production setting,
+deployment, user browser/storage access or release evidence regeneration occurred.
+
+### Completed final bounded source work
+
+- Closed public `LegacyOwnerCandidateV1`/inventory/proof contracts. WorkerClient
+  `legacyOwnerInventory` -> db-worker -> serialized ProductionStoreAuthority reads
+  only receipt metadata. Original catalog/generation, mirrored receipt/reservation
+  history and route-anchored operation IDs must match. The existing public
+  `intakeOwnerWitness` and proven deleted-original recovery remain unchanged.
+- `transferLegacyOwner` carries only that public candidate and an owned private
+  port through WorkerClient. A separately serialized internal kernel sink validates
+  exact original response byte length/hash, the closed historical envelope and
+  reconstructed route payload. It never normalizes or replaces original bytes.
+  AES-GCM ciphertext with RSA-OAEP wrapping is bound to the actual worker/shell
+  origin, nonce and public proof. Neither plaintext responses nor private fields
+  enter ordinary worker responses, panel runtime, diagnostics, logs or archives.
+- The trusted shell preserves exact historical bytes in a bounded insert-only
+  IndexedDB vault, commits and reads back, verifies original private key evidence,
+  then commits/readbacks applicable active owner custody before acknowledgement.
+  Interrupted insertion, owner commit and readback retry the same source/form/
+  receipt with the same original keys. Public historical responses never mint
+  missing private custody. Superseded definitions are recoverable as custody-only.
+- Recovery Center -> Legacy ownership compatibility exposes explicit discovery,
+  proven recovery, original-definition activation, exact retry and safe cancellation.
+  Activation is an immutable public `intake.command` intent retained before the
+  effect, original app/generation/lineage-bound, receipt-first across reload and
+  later presentation changes. Renew only after exact cancellation/readback and
+  a fresh explicit original-target review; preserve every previous request ID.
+- A separate V2 intake state can coexist with quarantined V1 without reading,
+  stripping, overwriting or adopting it implicitly. Underlying app data stays
+  usable. Explicit new form/share/app actions do not claim old work is terminal.
+  Old source-free sharing receipts are detected by storage KEY only; private URLs
+  and tokens are never read to guess ownership. Copied metadata never gains custody.
+- Native recovery and conditional automation code were NOT redesigned. Focused
+  owned SAHPool/real-worker and native capability/bounds checks pass; unexplained
+  tuples, oversized corpora and uncertain slots remain fail-closed. Scheduler
+  reconciliation, intake deferral, relay tombstones and default-denied config stay
+  intact. ADR-070 documents development completion vs compatibility vs certification.
+
+### Explicit safe compatibility outcomes (not open code work)
+
+- Source-free/unanchored V1 records, missing exact response bodies, malformed
+  envelopes, wrong-source copies and old source-free share receipts cannot prove
+  automatic ownership. Keep originals untouched/quarantined. Reconnect the proven
+  original app if available, or create an independent reviewed form/share/app.
+  Possession of a key/URL, semantic IDs, cache state or HTTP absence is not proof.
+- The original catalog can prove public deletion history even when a new fork no
+  longer has the original response bytes. Do not reconstruct a private body from
+  that witness. Existing proven deleted-original publication recovery still uses
+  original shell custody and exact relay tombstones. Missing proof/custody remains
+  an explained compatibility state, not fabricated closure or automatic retargeting.
+- Legacy private app state and historical responses remain archive-export denied,
+  INCLUDING after sealed adoption, because originals are deliberately preserved.
+  Sealed shell custody is not an external backup. No secret-bearing archive,
+  silent scrubbing, source replacement or inherited fork/restore ownership exists.
+- Limits: 100,000 receipt metadata rows, 16 per page; each response at most
+  2,000,000 bytes; 32 recovered histories; eight retained activation attempts per
+  history. No eviction to make room. Unknown old invocations stay retained and may
+  still be active remotely; new publication is not their revocation.
+
+### A-F source/UI inventory (not certification)
+
+The executable census has 21 capability entries with exact route classifications,
+UI files, recovery behavior and focused test paths. The grouped map below includes
+preserved work; this turn did not rerun all earlier A-F tests.
+
+| Phase / capability | Production/trusted-shell route and UI | Durable retry/recovery / focused finder |
+| --- | --- | --- |
+| A lifecycle, first use, starter/import-as-new | boot/createApp/seed/switchApp/renameApp/forkApp/deleteApp/importNewApp/undoNewAppImport; App, ImportReview | Catalog identities/fences/receipts, independent targets, Preview/Keep/Discard/Undo; worker-lifecycle-integration |
+| B start over, authenticated export/Kit/restore, manual download, folders/automatic backup/retention and record recovery | New-app setup; shell key vault/verifier; collectArchiveSnapshot/validateBackupStage/publishBackup/restoreAsNew, manual/retention routes, recoveryCandidates/restoreRow/undoBatch/makeLatest; RecoveryCenter | Format 5 authentication before installation, fresh restore jobs, retained manual receipt, permission revalidation, per-file retention acknowledgements; worker-restore-integration, worker-manual-download-integration, worker-backup-retention-integration |
+| C preview-first CSV/TSV/XLSX and relation conversion | beginImport/stageImportChunk/configureImport/previewImport/commitImport/cancelImport/undoImport; previewRelationConversion/convertTextToRelation/undoRelationConversion; ImportWizard, RelationConversionDialog | Exact 2,000,000-byte input bound, retained immutable Keep/Undo and terminal cancellation; release-c-import-coordinator, relation-conversion-recovery |
+| D sources/timezone/favorites/recents, Capture/Undo, Inbox/Complete/Snooze/Dismiss/Undo | dailyPresentation, dailyHome source/navigation CAS/timezone/Capture/Undo, dailyInboxAction/dailyInboxUndo; TodayView, CommandPalette | Original source/projection/semantic IDs, immutable desired-value CAS, local-calendar disposition storage, receipts and bounded inverse; worker-daily-relation-integration, quick-capture, daily-inbox-authority |
+| E recipes/custom lossless V2 editor, preview, create/edit/enable/pause/delete, manual/due runtime, history/notifications/Undo | automationPresentation/automationCommand/simulateAutomation; AutomationCenter, TodayView | Original-connection native capability is conditional; retained command reconciliation and intake deferral; worker-automation-integration, production-native-recovery, automation-retained-ui |
+| F local Print/CSV, immutable sharing/attachments/expiry/revocation/delivery | projectPlaintextV1/cancelProjectionV1/attachmentsForRecord/readAttachment; shell source/origin-bound vault and authenticated relay; ExportDialog, ShareDialog | Immutable encrypted projection/ciphertext, original source custody and exact relay terminal proof; export-dialog, share-custody, share-terminal |
+| F intake V2, publication/delivery/attachments/expiry/revoke, review/accept/reject, auto-accept/receipts/Undo | intakePresentation/intakeCommand plus outcome/cancellation; shell-only custody/decryption/HTTP; IntakeCenter | Original source/request contexts, retained workflows, staged review, exact terminal/tombstone/renewal and inverse; worker-intake-integration, intake-ui |
+| F original-owner recovery and legacy compatibility | intakeOwnerWitness, legacyOwnerInventory/transferLegacyOwner, intakeCommand/mutationOutcome/cancelPresentation; RecoveryCenter/OriginalOwnerRecovery/LegacyOwnerRecovery | Public history proof, sealed exact bytes, custody readback before actions, retained activation and bounded safe unprovable states; worker-owner-recovery-integration, worker-legacy-owner-integration, legacy-owner-custody, legacy-owner-ui |
+
+`node scripts/roadmap-development-census.mjs` now reports `developmentComplete:
+true`, zero development blockers/disabled UI flags, and 25 unavailable routes,
+ALL explicitly callerless retired compatibility routes. It is read-only inventory,
+not executable user-journey proof, a source fingerprint or a release gate.
+
+### Actual focused output in this turn
+
+Repository-local commands ran serially, without downloads. Vitest suffix for each
+packet: `--maxWorkers=1 --minWorkers=1 --reporter=dot`, package-local cwd.
+
+| Command after `node node_modules/vitest/vitest.mjs run` | Actual final output |
+| --- | --- |
+| kernel: test/legacy-owner-recovery.test.ts test/intake-owner-witness.test.ts test/intake-v2-authority.test.ts test/intake-archive-boundary.test.ts | 4 files / 32 passed; 40.01s |
+| shell: test/legacy-owner-custody.test.ts test/worker-legacy-owner-integration.test.ts test/legacy-owner-ui.test.tsx test/original-owner-recovery.test.tsx test/production-mutation-route-census.test.ts test/intake-ui.test.tsx test/intake-workflows.test.ts test/share-custody.test.ts test/share-owner-ui.test.tsx test/share-terminal.test.ts | 10 files / 67 passed; 29.38s |
+| shell: test/worker-automation-integration.test.ts -t owned_sahpool | 1 file / 1 passed, 1 skipped; 18.10s |
+| kernel: test/production-native-recovery.test.ts -t 'grants automation\|bounds the actual\|rejects a corrupted' | 1 file / 3 passed, 27 skipped; 21.16s |
+
+These disjoint selections contain 103 passing tests, not a comprehensive regression
+campaign. Earlier repeated packets are not extra tests; output lost at a context
+boundary was rerun, not invented. Missing authority/custody paths and legacy V2
+coexistence were exercised RED before implementation. Malformed later state now
+allows proven custody-only history; no proof guard was removed. A fixture initially
+assumed a new fork retained original response bodies: actual production readback
+showed it does not, and the test now proves rejection instead of fabricating bytes.
+
+- Schema, kernel and shell: `node node_modules/typescript/bin/tsc --noEmit`, all
+  exit 0. Shell initially reported two TEST-fixture typing errors (an indexed
+  byte and incomplete MessageEvent); corrected using bounded bytes/real MessageEvent,
+  then reran its focused packet and typecheck successfully.
+- Census: exit 0, candidate HEAD 18d88eeb, 21 capabilities, developmentComplete true,
+  testsExecutedByThisCommand false, disabledUiFlags 0, unavailableRoutes 25,
+  unretiredUnavailable 0, developmentBlockers 0.
+- No production build, full ordinary suite, budget, packaged browser matrix,
+  accessibility or formal review was run. Earlier red/stale release evidence is
+  NOT changed into passing evidence. Human NVDA remains pending.
+
+### Changed paths in this final source diff
+
+- Kernel: package.json, production-authority.ts, store.ts, new
+  legacy-owner-recovery.ts; intake-owner-witness.test.ts, new
+  legacy-owner-recovery.test.ts and helpers/legacy-intake-history.ts.
+- Schema: package.json and new legacy-owner.ts.
+- Shell app: App.tsx, IntakeCenter.tsx, OriginalOwnerRecovery.tsx, worker-client.ts
+  and new LegacyOwnerRecovery.tsx. Shell intake: workflows.ts.
+- Shell custody/worker: new legacy/owner-protocol.ts, legacy/owner-recovery.ts,
+  legacy/owner-vault.browser.ts, worker/legacy-owner-channel.ts;
+  worker/db-worker.ts and worker/mutation-route-census.ts.
+- Shell tests: new legacy-owner-custody.test.ts, legacy-owner-ui.test.tsx,
+  worker-legacy-owner-integration.test.ts.
+- Inventory: this handoff, CODEX_HANDOFF.md current-status pointer,
+  scripts/roadmap-development-census.mjs and specs/docs/10-decisions.md (ADR-070).
+
+## Exact continuation
+
+1. Preserve the complete current diff externally; verify live HEAD/status first.
+   No Git write is authorized inside this sandbox. Read this current section, not
+   the superseded historical task lists below. Keep one writer in D:\Clay.
+2. Source-development is complete. STOP development slicing and hand off to the
+   parent's SINGLE integrated test campaign. Do not keep the roadmap open merely
+   because an intrinsically unprovable historical format cannot grant ownership;
+   its tested, explicit safe compatibility outcome is the intended product behavior.
+3. When that campaign is explicitly authorized: exercise one exact integrated
+   source tree through ordinary/security/property suites, typechecks, production
+   build, unchanged frozen budgets, source-bound owned browser journeys and the
+   requested Chromium/Firefox/WebKit/keyboard/axe gates, then formal review and
+   fix/retest actual findings. No fabricated source binding or passing evidence.
+   Real human NVDA certification stays pending until performed by a human.
+4. Certification and external configuration/deployment remain separate: no real
+   relay/provider values are configured, origin authentication remains default-
+   denied, and deployment is not authorized. Native browser crash certification,
+   bundle limits and historical blocked/stale browser reports are still open
+   release gates. No certification, shipment or full roadmap release is claimed.
+
+## Historical development continuation on 674a001f (superseded)
 
 This section and the new Exact continuation below supersede the historical notes.
 Started clean in D:\Clay, codex/clay-project, local HEAD and tracking origin both
@@ -150,7 +307,7 @@ Final development checks on the preserved source diff:
   specs/docs/10-decisions.md (ADR-068/069). No generated release evidence, lockfile,
   production configuration or dependency installation changed.
 
-## Exact continuation
+## Historical continuation on 674a001f (superseded)
 
 1. Preserve this entire working diff or the externally saved checkpoint on
    674a001f47f6abf05a107206d4cae1cf0135e4fb. Check live HEAD/status, read this

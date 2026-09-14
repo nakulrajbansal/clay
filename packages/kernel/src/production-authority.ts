@@ -1605,6 +1605,15 @@ export class ProductionStoreAuthority {
     const captured = captureAppImportRequest(input);
     return this.#coordinator.serializeRead(async () => (await import("./production-owner-witness")).readIntakeOwnerWitness(this.#driver, captured));
   }
+  legacyOwnerInventory(after: unknown) {
+    const captured = after === null ? null : captureAppImportRequest(after);
+    return this.#coordinator.serializeRead(async () => (await import("./legacy-owner-recovery")).legacyOwnerInventory(this.#driver, captured));
+  }
+  /** Internal sealed-port adapter only; never expose the callback on Store RPC. */
+  withLegacyOwner<T>(input: unknown, sink: (proof: import("@clay/schema/legacy-owner").LegacyOwnerProofV1, bytes: Uint8Array<ArrayBuffer>) => Promise<T>) {
+    const captured = captureAppImportRequest(input);
+    return this.#coordinator.serializeRead(async () => (await import("./legacy-owner-recovery")).withLegacyOwner(this.#driver, captured, sink, this.#store));
+  }
   async storageQuarantine() { return (await import("./db")).browserStorageQuarantine(); }
   intakePresentation() {
     return this.#coordinator.serializeRead(async () => {

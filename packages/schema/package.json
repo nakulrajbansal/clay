@@ -13,6 +13,7 @@
     "./intake": "./src/intake.ts",
     "./intake-workflow": "./src/intake-workflow.ts",
     "./owner-witness": "./src/owner-witness.ts",
+    "./legacy-owner": "./src/legacy-owner.ts",
     "./projection": "./src/projection.ts",
     "./share": "./src/share.ts",
     "./daily-home": "./src/daily-home.ts",

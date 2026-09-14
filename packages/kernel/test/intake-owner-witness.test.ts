@@ -108,6 +108,13 @@ it("uses retained catalog creation and exact completed deletion history after th
     authority = await authority.executeAppLifecycle({ kind: "fork", requestId: authority.createRequestId() });
     const copy = authority.inspectAuthority().target;
     await expect(authority.intakeOwnerWitness(claim)).resolves.toMatchObject({ status: "history_only" });
+    // A new fork does not copy original request response bytes. Catalog-only
+    // metadata still proves public history, but must not fabricate a sealed body.
+    expect((await authority.legacyOwnerInventory(null)).candidates.some(row => row.receipt.requestId === claim.requestId)).toBe(false);
+    const originalWitness = await authority.intakeOwnerWitness(claim);
+    const retained = { schema: 1 as const, authorityIncarnationId: originalWitness.authorityIncarnationId, route: "intake.command" as const,
+      source, receipt: originalWitness.receipt };
+    await expect(authority.withLegacyOwner(retained, async proof => proof)).rejects.toThrow(/quarantined/);
     await expect(authority.intakeOwnerWitness({ ...claim, source: copy, form: { ...form, ownerSource: {
       appInstanceId: copy.appInstanceId, activeGenerationId: copy.activeGenerationId, lineageEpoch: copy.lineageEpoch } } })).rejects.toThrow(/owner.*proof|owner.*witness/i);
     authority = await authority.executeAppLifecycle({ kind: "switch", requestId: authority.createRequestId(), appInstanceId: source.appInstanceId });
@@ -118,6 +125,7 @@ it("uses retained catalog creation and exact completed deletion history after th
     await expect(authority.intakeOwnerWitness(claim)).resolves.toMatchObject({ status: "deleted" });
     const witness = await authority.intakeOwnerWitness(claim);
     expect(witness).toMatchObject({ status: "deleted", retirement: { kind: "delete", requestedAppInstanceId: source.appInstanceId } });
+    await expect(authority.withLegacyOwner(retained, async proof => proof)).rejects.toThrow(/quarantined/);
     authority.close(); authority = await ProductionStoreAuthority.bootBrowser({ requestedAppId: null, appCache: [] });
     const reloaded = await authority.intakeOwnerWitness(claim);
     expect(reloaded.claim).toEqual(claim); expect(reloaded.receipt).toEqual(witness.receipt);

@@ -1217,6 +1217,12 @@ async function handle(req: Request, ports: readonly MessagePort[]): Promise<unkn
     ? payloadDescriptor.value : undefined;
   const p = (rawPayload ?? {}) as Record<string, unknown>;
   switch (req.op) {
+    case "legacyOwnerInventory":
+      if (Object.keys(p).join() !== "after") throw new ClayError("E_VALIDATION", "Closed legacy inventory cursor required");
+      return mustAuthority().legacyOwnerInventory(p.after);
+    case "transferLegacyOwner":
+      if (ports.length !== 1) throw new ClayError("E_VALIDATION", "Owned private recovery port required");
+      return (await import("./legacy-owner-channel")).sendLegacyOwner(mustAuthority(), rawPayload, ports[0], self.location.origin);
     case "boot":
       // appId/localStorage is presentation-only. Durable selection and any
       // legacy adoption are derived by trusted worker inventory + catalog.

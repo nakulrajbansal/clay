@@ -1996,6 +1996,20 @@ export class WorkerClient {
   async backupRetentionHistory(): Promise<BackupRetentionHistoryV1> {
     return BackupRetentionHistoryV1.parse(await this.ephemeralCall("backupRetentionHistory"));
   }
+  async legacyOwnerInventory(after: string | null = null) {
+    const { LegacyOwnerInventoryV1 } = await import("@clay/schema/legacy-owner");
+    return LegacyOwnerInventoryV1.parse(await this.ephemeralCall("legacyOwnerInventory", { after }));
+  }
+  async transferLegacyOwner(candidate: import("@clay/schema/legacy-owner").LegacyOwnerCandidateV1, port: MessagePort) {
+    const { LegacyOwnerCandidateV1, LegacyOwnerProofV1 } = await import("@clay/schema/legacy-owner");
+    // Only closed public metadata and an owned port cross WorkerClient. Private
+    // decryption and vault adapters are confined to the separate shell runtime.
+    let captured: import("@clay/schema/legacy-owner").LegacyOwnerCandidateV1;
+    try { captured = LegacyOwnerCandidateV1.parse(candidate); } catch { throw new Error("Legacy owner request is not public proof"); }
+    const result = await this.ephemeralCall<{ status: "custody_committed"; proof: unknown }>("transferLegacyOwner", captured, [port]);
+    if (result.status !== "custody_committed") throw new Error("Legacy custody readback is unconfirmed");
+    return { status: result.status, proof: LegacyOwnerProofV1.parse(result.proof) };
+  }
   async authorizeBackupRemoval(intent: BackupRemovalIntentV1, context: WorkerMutationContext): Promise<BackupRemovalAuthorizationV1> {
     return BackupRemovalAuthorizationV1.parse(await this.mutationCall("authorizeBackupRemoval", { intent }, context));
   }

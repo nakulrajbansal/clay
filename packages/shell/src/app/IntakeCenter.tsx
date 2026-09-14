@@ -466,7 +466,7 @@ export function IntakeCenter(props: {
             ? ` (${inbox.filter(item => item.status === "pending" || item.status === "blocked").length})` : ""}</button>
       </nav>
       {configured.error ? <p role="status">{configured.error}</p> : null}
-      {read?.legacyCustody === "quarantined" ? <p role="alert">Legacy intake custody is quarantined. Original forms, private material and historical receipts are untouched. Archive export remains blocked until safe custody adoption.</p> : null}
+      {read?.legacyCustody === "quarantined" ? <p role="alert">Legacy intake remains quarantined and untouched. Recovery Center can recover proven original ownership; formats without enough history cannot be recovered automatically. You can create a separate new form here. Archives containing original private bytes remain unavailable, including after custody recovery.</p> : null}
       {recoveryError ? <p role="alert">{recoveryError}</p> : null}
       {retainedPublication ? <p role="status">Publication has a retained original form and request.
         {!closingPublication && !legacyPublication ? <button disabled={busy} onClick={() => void publish()}>Resume original publication</button> : null}
@@ -495,7 +495,7 @@ export function IntakeCenter(props: {
         }, "Request terminalized without another effect.")}>Cancel uncommitted request</button></p> : null}
 
       {tab === "forms" ? <div className="intake-content">
-        <section className="intake-author"><h3>Create a public form</h3><fieldset disabled={blocked || !configured.publication || read?.legacyCustody === "quarantined"}>
+        <section className="intake-author"><h3>Create a public form</h3><fieldset disabled={blocked || !configured.publication}>
           <label>Recipe<select value={recipe} onChange={event => {
             const id = event.target.value as typeof recipe;
             setRecipe(id); setTitle(RECIPES.find(item => item[0] === id)![1]); setPreview(null);

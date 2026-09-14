@@ -12,7 +12,7 @@ export interface IntakeWorkflows {
   listKeys?(shellOrigin: string): Promise<string[]>;
 }
 export class UnfencedIntakeWorkflowError extends Error {
-  constructor() { super("Legacy cache-only intake workflow is unfenced. Original work is quarantined until safe owner adoption is available; nothing was discarded."); }
+  constructor() { super("Legacy cache-only intake workflow is unfenced. It cannot be recovered automatically without original owner proof. Original work stays quarantined; nothing was discarded. Recovery Center explains the safe compatibility options."); }
 }
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const keyFor = (origin: string, app: string, kind: Kind) => JSON.stringify([1, origin, app, kind]);

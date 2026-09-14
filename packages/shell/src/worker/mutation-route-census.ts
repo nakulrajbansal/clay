@@ -33,6 +33,8 @@ export const DB_WORKER_ROUTE_CENSUS = Object.freeze({
   intakeCommand: route("authority", "live"),
   intakePresentation: route("read", "none"),
   intakeOwnerWitness: route("read", "none"),
+  legacyOwnerInventory: route("read", "none"),
+  transferLegacyOwner: route("read", "none"),
   automationCommand: route("authority", "live"),
   automationPresentation: route("read", "none"),
   boot: route("boot", "lifecycle"),

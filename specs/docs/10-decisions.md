@@ -1592,3 +1592,53 @@ ADR-069 (2026-09-13) Catalog-proven native preflight and bounded runtime capabil
   remain development feedback, not OS/browser durability or release certification.
   Unexplained/legacy-unadopted tuples and out-of-bound recovery remain fail-closed;
   no repair, deletion or reuse is invented to obtain a green runtime flag.
+
+ADR-070 (2026-09-13) Sealed legacy-owner adoption and bounded compatibility.
+  CONTEXT: The final source-development scope distinguishes missing code from
+  historical formats which never recorded sufficient ownership evidence. V1
+  intake.saveForm/markPublished/revokeForm/markExpired wrote private local state
+  and sometimes route-anchored receipts (pre-49d1b77). Old share receipts
+  (63d5662 owner-receipts.ts) were only localStorage values: no original app,
+  generation, lineage, catalog reservation or durable projection operation.
+  Possession of those URLs/tokens or copied semantic IDs is not original ownership.
+  DECISION: Public legacy discovery selects closed receipt metadata only, in
+  bounded pages. Original catalog/generation, mirrored receipt and committed
+  reservation history plus a V2 route-anchored operation establish the candidate.
+  In a separately serialized package-private sink, check exact response byte
+  length/hash and the closed historical envelope/form, then reconstruct the exact
+  permitted route payload hash. Raw historical JSON is accepted only with that
+  independent route/hash proof; its bytes/identity are not normalized or replaced.
+  Catalog proof alone cannot reconstruct missing private response bytes.
+  Encrypt to an owned trusted-shell MessagePort using ephemeral RSA-OAEP-SHA256
+  wrapping and AES-256-GCM, binding nonce, shell origin and full public proof as
+  authenticated data. No owner secret, plaintext response or private error cause
+  crosses WorkerClient/ordinary routes/panels/logs. Owner keys are not generated
+  during adoption. Preserve exact bytes in an insert-only shell-origin custody
+  record, validate readback, prove the historical owner key pair, and commit/read
+  back applicable active owner custody before acknowledging. Retried/lost commits
+  resume the same original source/form/response record, never replacement keys.
+  Public responses preserve public history, not fictional missing private custody.
+  Superseded or schema-stale definitions remain custody-only. Only an unchanged
+  original definition, selected original app/generation/lineage, reviewed current
+  target and committed shell custody can start public V2 activation. The explicit
+  intake.command request is retained in the private ledger BEFORE invocation;
+  exact receipt reconciliation survives teardown/reload and later presentation
+  changes. Before a reviewed renewal, cancel/read back the exact previous request.
+  Preserve all prior IDs; never retoggle/rebase a delayed original invocation.
+  Limits: 100,000 receipt metadata rows, pages of 16; 2,000,000 response bytes;
+  32 recovered history records; eight immutable activation attempts each. Unknown
+  originals are not evicted to make room. No production payload or bundle limit
+  is raised. V1 settings and original response bytes are untouched in the app;
+  archives containing those private originals remain denied even after adoption.
+  New V2 forms can use a separate state row; ordinary V1 reads remain quarantined.
+  CONSEQUENCE: Recovery Center explicitly explains unprovable ownership, missing
+  bytes/custody, unanchored history, old source-free shares, and unrecoverable
+  original contexts. The app remains usable. Offer reconnection through the app
+  selector, a separate reviewed form/share, or an independent app if old unknown
+  work prevents new work in its slot. This does NOT close/revoke old remote forms
+  or declare unknown requests terminal. Existing relay tombstones, active-form
+  revocation, deleted-original proof and scheduler deferral are unchanged.
+  Intrinsically unprovable histories with this safe UI/recovery outcome are
+  documented compatibility limits, not perpetually unfinished development.
+  Source-development completion is distinct from the deferred integrated test,
+  build/budget, browser/accessibility and formal-review campaign.

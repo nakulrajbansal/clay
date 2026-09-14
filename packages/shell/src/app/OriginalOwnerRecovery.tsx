@@ -8,11 +8,12 @@ import { IntakePublication, intakeConfiguration } from "../intake/publication";
 import { IntakeSession } from "../intake/session";
 import { ownerIntakeFetch } from "../intake/relay-owner-configuration";
 import type { WorkerClient } from "./worker-client";
+import { LegacyOwnerRecovery } from "./LegacyOwnerRecovery";
 
 /** Public discovery is independent of current app selection. Nothing here can
  * recover source-free V1/private legacy values or inherit a copied app's keys. */
 export function OriginalOwnerRecovery(props: { worker: WorkerClient; relayBaseUrl: string | null; publicBaseUrl: string;
-  workflows?: IntakeWorkflows; ownerVault?: IntakeOwnerVault; fetchImpl?: typeof fetch }): React.JSX.Element {
+  workflows?: IntakeWorkflows; ownerVault?: IntakeOwnerVault; fetchImpl?: typeof fetch; onNewIntake?: () => void; onNewShare?: () => void; onNewApp?: () => void }): React.JSX.Element {
   const workflows = useMemo(() => props.workflows ?? new IndexedDbIntakeWorkflows(), [props.workflows]);
   const vault = useMemo(() => props.ownerVault ?? new IndexedDbIntakeOwnerVault(), [props.ownerVault]);
   const [keys, setKeys] = useState<string[]>([]), [page, setPage] = useState(0), [records, setRecords] = useState<IntakeWorkflowRecord[]>([]);
@@ -50,8 +51,9 @@ export function OriginalOwnerRecovery(props: { worker: WorkerClient; relayBaseUr
     setReview({ record, witness });
   };
   return <section aria-labelledby="original-owner-recovery-title">
+    <LegacyOwnerRecovery worker={props.worker} origin={location.origin} onNewIntake={props.onNewIntake} onNewShare={props.onNewShare} onNewApp={props.onNewApp} />
     <h3 id="original-owner-recovery-title">Original owner recovery</h3>
-    <p>Inspect retained public intake work, including work from a deleted app. Private legacy state and old source-free share receipts stay quarantined. Copies never inherit owner custody.</p>
+    <p>Inspect retained public intake work, including work from a deleted app. Use Legacy ownership compatibility above for private historical custody. Unprovable originals stay quarantined; copies never inherit owner custody.</p>
     <button disabled={busy} onClick={() => void work(async () => {
       if (!workflows.listKeys) throw new Error("Public workflow inventory is unavailable");
       await load(await workflows.listKeys(location.origin), 0);

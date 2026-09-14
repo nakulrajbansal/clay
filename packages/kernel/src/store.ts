@@ -2711,10 +2711,12 @@ export class ClayStore {
   }
 
   // ---------- Release F public intake: untrusted staging -> trusted receipt ----------
-  private intakeState(): IntakeLocalStateV2 {
+  private intakeState(newV2Form = false): IntakeLocalStateV2 {
     const active = this.getSetting<unknown>("intake_v2");
-    if (active === undefined && this.#driver.select("SELECT key FROM sys.settings WHERE key = 'intake_v1'").length)
-      throw new ClayError("E_CONFLICT", "Legacy intake custody requires adoption; original state was kept");
+    // Separate V2 state is not adoption of V1. New forms remain usable while
+    // original legacy bytes stay quarantined and excluded from archives.
+    if (!newV2Form && active === undefined && this.#driver.select("SELECT key FROM sys.settings WHERE key='intake_v1'").length)
+      throw new ClayError("E_CONFLICT", "Legacy intake state remains quarantined; create a separate V2 form or review original custody in Recovery Center");
     return parseIntakeState(active);
   }
 
@@ -2755,7 +2757,7 @@ export class ClayStore {
   saveIntakeForm(input: LocalIntakeFormV2): LocalIntakeFormV2 {
     const form = parseLocalIntakeForm(input);
     resolveIntakeForm(form.publicForm, this.validationRegistrySnapshot(), this.currentVersion());
-    const state = this.intakeState();
+    const state = this.intakeState(true);
     if (state.publicationClosures?.some(row => row.form.publicForm.formId === form.publicForm.formId))
       throw new ClayError("E_CONFLICT", "intake publication identity is terminally closed");
     const index = state.forms.findIndex(candidate =>

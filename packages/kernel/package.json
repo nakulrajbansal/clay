@@ -24,7 +24,8 @@
     "./worker-rpc": "./src/worker-rpc.ts",
     "./planner-pipeline": "./src/planner-pipeline-entry.ts",
     "./projection": "./src/projection.ts",
-    "./worker-authority": "./src/worker-authority.ts"
+    "./worker-authority": "./src/worker-authority.ts",
+    "./production-response-envelope": "./src/production-response-envelope.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

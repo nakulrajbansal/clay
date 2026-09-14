@@ -4,17 +4,20 @@
 
 This document gives Codex the compact engineering, product, safety, and release context needed to continue Clay without importing private chat transcripts or rediscovering the campaign history.
 
-## Active development mission (2026-09-12)
+## Current source-development handoff (2026-09-13)
 
-The active user instruction supersedes the per-feature release sequence below:
-finish A-F development first using targeted RED/GREEN tests and affected package
-typechecks. Defer broad regression, builds/budgets, browser/accessibility
-certification, and independent review to the single integrated test phase.
+The active user instruction supersedes the per-feature release sequence below.
+A-F source/UI development, including sealed legacy custody and explicit bounded
+safe compatibility states (ADR-070), is complete in the current working diff.
+Only targeted tests and affected typechecks were used during development. The
+single integrated regression/build/budget/browser/accessibility/review campaign
+is the NEXT parent-workflow phase; it was not run in the completion turn.
 Do not commit or push: `.git` is intentionally protected. Sole writer, `D:\Clay`,
-branch `codex/clay-project`, development base `ad76c940e18b31eff0b6d78c8c3dd18568b8ef55`.
-The uncommitted development continuation, capability matrix, real finder-loop
-results, and next code tasks are recorded in `docs/CODEX_DEVELOPMENT_HANDOFF.md`.
-Neither development completion nor release completion is currently claimed.
+branch `codex/clay-project`, development base `18d88eebca78353322257ca73a50eca557a80f52`.
+The uncommitted source completion, capability matrix, actual focused results,
+compatibility limitations and Exact continuation are recorded in
+`docs/CODEX_DEVELOPMENT_HANDOFF.md`. Certification and release completion are NOT
+claimed. Earlier red/stale release gates remain open until actually rerun.
 
 ## Repository identity
 
