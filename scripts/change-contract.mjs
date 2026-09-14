@@ -6,6 +6,7 @@ import { chromium } from "playwright";
 import AxeBuilder from "@axe-core/playwright";
 import { mkdir } from "node:fs/promises";
 import { productGateUrl } from "./product-gate-url.mjs";
+import { chooseProductStarter, productChromiumOptions } from "./product-onboarding.mjs";
 
 const url = productGateUrl();
 const outDir = process.argv[2] || "evidence";
@@ -24,7 +25,7 @@ const apiPlan = JSON.stringify({
     panel_id: "pipeline_pulse",
     title: "Pipeline pulse",
     placement: { region: "side", order: 8 },
-    code: "export default function(clay){clay.db.watch({from:\"deals\"},rows=>{clay.ui.render(h(MetricCard,{label:\"Deals inspected\",value:rows.length}));});}",
+    code: "//#blueprint {\"kind\":\"metrics\",\"table\":\"deals\",\"metrics\":[{\"label\":\"Deals inspected\",\"agg\":\"count\",\"field\":\"title\"}]}",
     declared_queries: [JSON.stringify({ from: "deals" })],
     declared_writes: [],
   }],
@@ -37,7 +38,7 @@ const anthropicResponse = JSON.stringify({
   stop_reason: "end_turn",
 });
 
-const browser = await chromium.launch();
+const browser = await chromium.launch(productChromiumOptions());
 const context = await browser.newContext({
   viewport: { width: 1440, height: 1050 },
   permissions: ["clipboard-read", "clipboard-write"],
@@ -78,7 +79,7 @@ const check = (condition, label) => {
 };
 
 await page.goto(url, { waitUntil: "domcontentloaded" });
-await page.getByText("Sales CRM", { exact: true }).click({ timeout: 15_000 });
+await chooseProductStarter(page, "Sales CRM");
 await page.locator(".panel-frame").first().waitFor({ timeout: 20_000 });
 await page.getByRole("button", { name: "Customize", exact: true }).click();
 await page.locator(".appbar-mode-button.active", { hasText: "Customize" }).waitFor();

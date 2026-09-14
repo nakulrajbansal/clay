@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ClayStore, InProcessAsyncStore, deriveInverse, openMemoryDriver,
   type AutomationDefinitionV2, type AutomationDraftInputV2,
@@ -18,6 +18,9 @@ import {
 import { completeEverydayActionFromCanonicalReadback } from "../src/worker/first-success-journey";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+afterEach(() => sessionStorage.clear()); // Only this test's owned jsdom cache.
+const authorityTarget = { appInstanceId: `app_${"a".repeat(26)}`, activeGenerationId: `gen_${"b".repeat(26)}`,
+  lineageEpoch: "1", protectionRevision: "4", digestSchema: 1 as const, stateSha256: `sha256:${"c".repeat(64)}` };
 
 const mutationIdentity = {
   createMutationContext: () => ({ requestId: `req_${"u".repeat(26)}` }),
@@ -134,6 +137,7 @@ describe("Daily Workbench UI", () => {
       semanticTrace: async () => store.semanticSchemaTrace(), sampleCount: async () => 0,
       operationBatches: async () => [], getSetting: async () => null,
       restorableRows: async () => [], recordFilter: async () => null,
+      mayRecordPresentationSideEffects: async () => true,
       completeEverydayAction: async (request: { action: "open"; table: string; rowId: string }) =>
         completeEverydayActionFromCanonicalReadback(driver, store, request),
     } as unknown as WorkerClient;
@@ -186,20 +190,24 @@ describe("Daily Workbench UI", () => {
     let minted = 0;
     const errors: string[] = [];
     const opened: string[] = [];
+    let committed = false;
+    const receipt = { id: "018f4c2a-7b31-7001-8000-000000000091",
+      created: [{ table: "tasks", id: "018f4c2a-7b31-7001-8000-000000000092" }] };
     const worker = {
       globalSearch: async () => [],
       createMutationContext: () => {
         minted++;
-        return { requestId: `req_${"v".repeat(26)}` };
+        return { requestId: `req_${(minted === 1 ? "v" : "w").repeat(26)}` };
       },
-      mutationOutcome: async () => ({ status: "not_invoked" }),
+      mutationOutcome: async () => committed ? { status: "recorded", current: true, result: receipt, target: authorityTarget }
+        : { status: "not_invoked" },
       quickCapture: async (
         _table: string, _row: unknown, _tableId: string,
         context: { requestId: string },
       ) => {
         contexts.push(context.requestId);
         if (contexts.length === 1) throw new Error("response lost");
-        return { id: "018f4c2a-7b31-7001-8000-000000000091", created: [{ table: "tasks", id: "task-1" }] };
+        committed = true; return receipt;
       },
     } as unknown as WorkerClient;
     const { unmount } = await mount(<CommandPalette appInstanceId={`app_${"a".repeat(26)}`}
@@ -527,20 +535,35 @@ describe("Automation Center UI", () => {
       },
       notifications: async () => [],
     } as unknown as WorkerClient;
+    let ids = 0; const errors: string[] = [];
+    const command = vi.fn(async (payload: any) => {
+      expect(payload.authorityTarget).toEqual(authorityTarget);
+      if (payload.command.route === "saveAutomationDraft") return worker.saveAutomationDraft(payload.command.payload.input, payload.command.payload.expectedRevision, mutationIdentity.createMutationContext());
+      if (payload.command.route === "enableAutomation") return worker.enableAutomation(payload.command.payload.id, payload.command.payload.expectedRevision, payload.command.payload.simulation, mutationIdentity.createMutationContext());
+      throw new Error("Unexpected owned automation command");
+    });
+    const paired = { ...worker,
+      createMutationContext: () => ({ requestId: `req_${String.fromCharCode(100 + ids++).repeat(26)}` }),
+      automationPresentation: async () => ({ authorityTarget, availability: { available: true, reason: null },
+        rules: await worker.listAutomations(), runs: [], notifications: [], recipes: [], trace,
+        runtime: await worker.automationRuntimeStatus(), overview: await worker.automationRuntimeOverview() }),
+      automationCommand: command, mutationOutcome: async () => ({ status: "not_invoked" }),
+    } as unknown as WorkerClient;
     const { unmount } = await mount(<AutomationCenter
-      worker={worker} tables={[table]} notifications={[]}
+      worker={paired} appInstanceId={authorityTarget.appInstanceId} tables={[table]} notifications={[]}
       onNotifications={() => undefined} onClose={() => undefined}
       onOpenRecord={() => undefined} onWrite={() => undefined}
-      onError={message => { throw new Error(message); }} onInfo={() => undefined}
+      onError={message => errors.push(message)} onInfo={() => undefined}
     />);
     await waitFor(() => document.body.textContent?.includes("Build a custom rule") ?? false);
     await act(async () => {
       [...document.body.querySelectorAll<HTMLButtonElement>("button")]
         .find(button => button.textContent?.includes("Build a custom rule"))!.click();
     });
-    const inputs = document.body.querySelectorAll<HTMLInputElement>(".automation-builder input");
-    const name = inputs[0]!;
-    const condition = inputs[1]!;
+    const labelled = (text: string) => [...document.querySelectorAll(".automation-builder label")]
+      .find(label => label.firstChild?.textContent?.trim() === text)!.querySelector<HTMLInputElement>("input")!;
+    const name = labelled("Rule name");
+    const condition = labelled("Equals");
     await act(async () => {
       typeInto(name, "Follow up");
       typeInto(condition, "Call");
@@ -557,6 +580,8 @@ describe("Automation Center UI", () => {
     });
     await waitFor(() => savedRule().enabled === true);
     expect(saved).toMatchObject({ name: "Follow up", state: "enabled", enabled: true });
+    expect(command.mock.calls.map(([payload]) => payload.command.route)).toEqual(["saveAutomationDraft", "enableAutomation"]);
+    expect(errors).toEqual([]);
     await unmount();
     store.close();
   });

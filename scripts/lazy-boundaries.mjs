@@ -1,11 +1,12 @@
 import { chromium } from "playwright";
 import { mkdir } from "node:fs/promises";
 import { productGateUrl } from "./product-gate-url.mjs";
+import { chooseProductStarter, productChromiumOptions } from "./product-onboarding.mjs";
 
 const url = productGateUrl();
 const outDir = process.argv[2] || "evidence";
 await mkdir(outDir, { recursive: true });
-const browser = await chromium.launch();
+const browser = await chromium.launch(productChromiumOptions());
 const check = (condition, label) => {
   if (!condition) throw new Error(`FAIL ${label}`);
   console.log(`PASS ${label}`);
@@ -16,7 +17,7 @@ async function bootWithFailure(asset, action, expectedLabel, screenshot) {
   await context.route(`**/assets/${asset}-*.js`, route => route.abort("failed"));
   const page = await context.newPage();
   await page.goto(url, { waitUntil: "domcontentloaded" });
-  await page.getByText("Sales CRM", { exact: true }).click({ timeout: 15_000 });
+  await chooseProductStarter(page, "Sales CRM");
   await action(page);
   const alert = page.getByRole("alert", { name: `${expectedLabel} failed to load` });
   await alert.waitFor({ timeout: 20_000 });
@@ -64,19 +65,20 @@ await bootWithFailure(
   const page = await context.newPage();
   await page.goto(url, { waitUntil: "domcontentloaded" });
   await page.getByRole("heading", { name: "This app didn’t open" }).waitFor({ timeout: 30_000 });
-  const startOver = page.getByRole("button", { name: "Start over…" });
-  await startOver.click();
-  const confirmation = page.getByRole("alertdialog", { name: "Confirm action" });
-  await confirmation.waitFor();
-  check(await confirmation.getByRole("button", { name: "Confirm" })
-    .evaluate(element => element === document.activeElement),
-    "boot-error Start over renders a focused recovery confirmation");
-  check(await page.locator(".boot-error").getAttribute("inert") !== null,
-    "boot-error confirmation makes the failed surface inert");
-  await page.keyboard.press("Escape");
-  await confirmation.waitFor({ state: "detached" });
-  check(await startOver.evaluate(element => element === document.activeElement),
-    "boot-error confirmation cancels with Escape and restores focus");
+  check(await page.getByRole("button", { name: /Start over|Delete|Switch/ }).count() === 0,
+    "boot failure offers no lifecycle action without catalog authority");
+  check((await page.locator(".boot-error-hint").textContent()).includes("do not clear this site's storage"),
+    "boot failure explains preservation and safe recovery");
+  const retry = page.getByRole("button", { name: "Try again", exact: true });
+  await retry.focus();
+  check(await retry.evaluate(element => element === document.activeElement),
+    "boot recovery is keyboard reachable");
+  await context.unroute(/\/assets\/db-worker-[^/]+\.js(?:\?.*)?$/);
+  await retry.press("Enter");
+  await chooseProductStarter(page, "Sales CRM");
+  await page.locator(".panel-frame").first().waitFor({ timeout: 20_000 });
+  check(await page.locator(".boot-error").count() === 0,
+    "retry reopens the worker and completes current onboarding after load recovers");
   await context.close();
 }
 

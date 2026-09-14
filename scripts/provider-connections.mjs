@@ -2,6 +2,7 @@ import { chromium } from "playwright";
 import AxeBuilder from "@axe-core/playwright";
 import { mkdir } from "node:fs/promises";
 import { productGateUrl } from "./product-gate-url.mjs";
+import { chooseProductStarter, productChromiumOptions } from "./product-onboarding.mjs";
 
 const url = productGateUrl();
 const outDir = process.argv[2] || "evidence";
@@ -12,14 +13,14 @@ const apiPlan = JSON.stringify({
   clarifying_question: null, assumptions: [], migration: null,
   panels: [{ panel_id: "provider_pulse", title: "Provider pulse",
     placement: { region: "side", order: 9 },
-    code: "export default function(clay){clay.ui.render(h(MetricCard,{label:\"Provider\",value:\"ready\"}));}",
-    declared_queries: [], declared_writes: [] }],
+    code: "//#blueprint {\"kind\":\"metrics\",\"table\":\"deals\",\"metrics\":[{\"label\":\"Provider pulse\",\"agg\":\"count\",\"field\":\"title\"}]}",
+    declared_queries: [JSON.stringify({ from: "deals" })], declared_writes: [] }],
   remove_panels: [], confidence: 0.97,
 });
 let planRequests = 0;
 let codexAuthorization = null;
 const connectorToken = "local-codex-connector-token-1234567890";
-const browser = await chromium.launch();
+const browser = await chromium.launch(productChromiumOptions());
 const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 await context.addInitScript(() => {
   try { localStorage.setItem("clay_session", "clay-session-must-not-cross-provider"); }
@@ -53,7 +54,7 @@ const check = (condition, label) => {
 };
 
 await page.goto(url, { waitUntil: "domcontentloaded" });
-await page.getByText("Sales CRM", { exact: true }).click({ timeout: 15_000 });
+await chooseProductStarter(page, "Sales CRM");
 await page.locator(".panel-frame").first().waitFor({ timeout: 20_000 });
 await page.getByRole("button", { name: "Customize", exact: true }).click();
 await page.locator(".appbar-mode-button.active", { hasText: "Customize" }).waitFor();

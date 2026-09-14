@@ -3,8 +3,10 @@ import {
   BackupRunV1,
   BackupStageValidationV1,
   BackupTargetV1,
-  buildAutomaticBackupFileName,
-  inspectAuthenticatedArchiveV5Header,
+} from "@clay/schema/backup";
+import { buildAutomaticBackupFileName } from "@clay/kernel/external-backup";
+import { inspectAuthenticatedArchiveV5Header } from "@clay/kernel/archive-authentication";
+import {
   type BackupPublicationReceipt,
   type BackupPublicationRequest,
   type BackupRecord,

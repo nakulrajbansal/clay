@@ -2,7 +2,9 @@ import {
   BackupResultV1,
   BackupTargetV1,
   MAX_BACKUP_ARCHIVE_BYTES,
-  runExternalBackup,
+} from "@clay/schema/backup";
+import { runExternalBackup } from "@clay/kernel/external-backup";
+import {
   type BackupPublicationReceipt,
   type BackupPublicationRequest,
   type BackupResult,

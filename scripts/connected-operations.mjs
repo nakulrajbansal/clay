@@ -5,12 +5,13 @@ import { chromium } from "playwright";
 import AxeBuilder from "@axe-core/playwright";
 import { mkdir } from "node:fs/promises";
 import { productGateUrl } from "./product-gate-url.mjs";
+import { chooseProductStarter, productChromiumOptions } from "./product-onboarding.mjs";
 
 const url = productGateUrl();
 const outDir = process.argv[2] || "evidence";
 await mkdir(outDir, { recursive: true });
 
-const browser = await chromium.launch();
+const browser = await chromium.launch(productChromiumOptions());
 const context = await browser.newContext({
   viewport: { width: 1440, height: 1100 },
   reducedMotion: "reduce",
@@ -64,7 +65,7 @@ const addColumn = async (name, type) => {
 
 try {
   await page.goto(url, { waitUntil: "domcontentloaded" });
-  await page.getByText("Small Business", { exact: true }).click({ timeout: 15_000 });
+  await chooseProductStarter(page, "Small Business");
   await page.locator(".panel-frame").first().waitFor({ timeout: 20_000 });
   check(await page.locator(".panel-boundary").count() === 0,
     "Small Business opens without a panel boundary");
@@ -78,11 +79,11 @@ try {
     "Data uses a viewport-fixed modal backdrop");
   check(await page.locator('[role="dialog"][aria-modal="true"]').count() === 1,
     "only the top trusted surface is exposed as modal");
-  const dataImport = page.getByLabel("Import CSV or JSON");
+  const dataImport = page.getByRole("button", { name: /Import data/ });
   await dataImport.focus();
   check(await dataImport.evaluate(element => document.activeElement === element
       && element.getClientRects().length > 0),
-    "Data import is keyboard-focusable while visually hidden");
+    "Data import review is keyboard-focusable");
   await page.getByRole("button", { name: "customers", exact: true }).click();
   const customerName = (await page.locator(".dataview-grid tbody > tr").first()
     .locator("td").nth(1).textContent())?.trim() ?? "";
@@ -112,7 +113,8 @@ try {
   const matched = Number(await relationDialog.locator(".relation-stat.good strong").textContent());
   check(matched >= 1, "text-to-link preview reports at least one exact match");
   await settledAxe(".relation-dialog", "linked-record preview");
-  await relationDialog.getByRole("button", { name: new RegExp(`Connect ${matched} rows`) }).click();
+  await relationDialog.getByRole("button", { name: new RegExp(`Keep — connect ${matched} rows`) }).click();
+  await relationDialog.getByRole("button", { name: "Keep linked records" }).click();
   await relationDialog.waitFor({ state: "detached" });
   await page.waitForFunction(() => [...document.querySelectorAll(".dataview-grid thead th")]
     .some(cell => cell.textContent?.includes("link")));
@@ -251,12 +253,12 @@ try {
 
   await page.getByRole("button", { name: "Open automations" }).click();
   const automation = page.getByRole("dialog", { name: "Automations" });
-  await automation.getByRole("button", { name: /New rule/ }).click();
+  await automation.getByRole("button", { name: "Build a custom rule" }).click();
   await automation.getByLabel("Rule name").fill("Review every job");
   await automation.getByLabel("When").selectOption("manual");
   await automation.getByLabel("In table").selectOption("jobs");
   await automation.getByRole("button", { name: "Save and simulate" }).click();
-  await automation.getByText("Simulation", { exact: true }).waitFor();
+  await automation.getByText("Target-bound simulation", { exact: true }).waitFor();
   const matchedText = await automation.locator(".automation-simulation strong").textContent();
   check(Number(matchedText?.split(" ")[0]) >= 5,
     "automation simulation shows the bounded real-record impact before enable");
@@ -267,7 +269,9 @@ try {
   await page.screenshot({ path: `${outDir}/automation-simulation.png`, fullPage: true });
   await enableRule.click();
   const rule = automation.locator(".automation-rule").filter({ hasText: "Review every job" });
-  await rule.getByRole("button", { name: "Run now" }).click();
+  await rule.getByRole("button", { name: "Preview run" }).click();
+  await automation.getByText("Run preview", { exact: true }).waitFor();
+  await automation.getByRole("button", { name: "Confirm run" }).click();
   await automation.locator(".automation-history article").first().waitFor();
   await automation.getByRole("button", { name: /Inbox/ }).click();
   await page.waitForFunction(() => document.querySelectorAll(".automation-inbox article").length >= 5);

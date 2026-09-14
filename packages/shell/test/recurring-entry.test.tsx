@@ -9,7 +9,7 @@ import type { WorkerClient } from "../src/app/worker-client";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe("recurring-record entry", () => {
-  it("keeps unavailable mutations gated while opening the exact automation read-only", async () => {
+  it.each([true, false])("opens the exact recurring rule and uses paired authority availability (%s)", async available => {
     const tables = [{
       name: "tasks",
       columns: [
@@ -70,34 +70,42 @@ describe("recurring-record entry", () => {
         v: 1, tables: [], fields: [], relationships: [], opBindings: [],
       }),
     } as unknown as WorkerClient;
+    const errors: string[] = [];
+    const paired = { ...worker, automationPresentation: async () => ({
+      authorityTarget: { appInstanceId: `app_${"a".repeat(26)}`, activeGenerationId: `gen_${"b".repeat(26)}`,
+        lineageEpoch: "0", protectionRevision: "1", digestSchema: 1, stateSha256: `sha256:${"c".repeat(64)}` },
+      availability: { available, reason: available ? null : "physical_recovery_unavailable" }, rules: [rule], runs: [], notifications, recipes: [],
+      runtime: await worker.automationRuntimeStatus(), overview: await worker.automationRuntimeOverview(), trace: await worker.semanticTrace(),
+    }) } as unknown as WorkerClient;
     const host = document.createElement("div");
     document.body.replaceChildren(host);
     const root = createRoot(host);
     await act(async () => root.render(<AutomationCenter
-      worker={worker} tables={tables} notifications={notifications}
-      initialAutomationId={automationId} mutationsAvailable={false}
+      worker={paired} tables={tables} notifications={notifications}
+      initialAutomationId={automationId}
       onNotifications={() => undefined} onClose={() => undefined} onOpenRecord={() => undefined}
-      onWrite={() => undefined} onError={message => { throw new Error(message); }}
+      onWrite={() => undefined} onError={message => errors.push(message)}
       onInfo={() => undefined}
     />));
     await vi.waitFor(() => expect(document
       .querySelector<HTMLElement>(`.automation-rule[data-automation-id="${automationId}"]`)
       ?.getAttribute("aria-current")).toBe("true"));
 
-    expect(document.body.textContent).toContain("Automation changes are unavailable");
+    expect(document.body.textContent?.includes("Automation changes are unavailable")).toBe(!available);
     const selected = document.querySelector<HTMLElement>(`.automation-rule[data-automation-id="${automationId}"]`);
     expect(selected?.getAttribute("aria-current")).toBe("true");
     expect(document.querySelector<HTMLButtonElement>('button[aria-label="Enable Create recurring Tasks"]')?.disabled)
-      .toBe(true);
+      .toBe(!available);
     expect([...document.querySelectorAll<HTMLButtonElement>("button")]
-      .find(button => button.textContent === "Preview run")?.disabled).toBe(true);
+      .find(button => button.textContent === "Preview run")?.disabled).toBe(!available);
     expect([...document.querySelectorAll<HTMLButtonElement>("button")]
-      .find(button => button.textContent?.trim() === "Build a custom rule")?.disabled).toBe(true);
+      .find(button => button.textContent?.trim() === "Build a custom rule")?.disabled).toBe(false); // Local draft preparation is safe even if execution is gated.
 
     await act(async () => [...document.querySelectorAll<HTMLButtonElement>(".automation-tabs button")]
       .find(button => button.textContent?.startsWith("Inbox"))!.click());
     expect([...document.querySelectorAll<HTMLButtonElement>("button")]
-      .find(button => button.textContent === "Mark read")?.disabled).toBe(true);
+      .find(button => button.textContent === "Mark read")?.disabled).toBe(!available);
+    expect(errors).toEqual([]);
 
     await act(async () => root.unmount());
   });

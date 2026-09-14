@@ -13,8 +13,10 @@ it("start over cannot erase OPFS or bypass lifecycle authority after worker fail
   expect(reset).not.toContain("removeItem");
 });
 
-it("does not advertise restore before the production lifecycle is connected", () => {
+it("offers authenticated restore-as-new while replacement reset/import routes remain retired", () => {
   const source = readFileSync(new URL("../src/app/App.tsx", import.meta.url), "utf8");
-  expect(productionWorkerRouteAvailable("restoreAsNew")).toBe(false);
+  expect(productionWorkerRouteAvailable("restoreAsNew")).toBe(true);
+  expect(productionWorkerRouteAvailable("reset")).toBe(false);
+  expect(productionWorkerRouteAvailable("importArchive")).toBe(false);
   expect(source.includes('productionWorkerRouteAvailable("restoreAsNew") ? restoreAsNew : undefined')).toBe(true);
 });

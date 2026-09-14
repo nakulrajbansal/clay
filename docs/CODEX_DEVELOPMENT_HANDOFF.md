@@ -1,4 +1,215 @@
-# A-F source-development completion - 2026-09-13
+# Integrated deterministic FIX checkpoint - 2026-09-13
+
+This section supersedes the old "integrated campaign is next" instruction below.
+The campaign collected the deterministic batch; this is its partial FIX checkpoint,
+not certification or shipment. The batch is NOT all green. Preserve the whole
+uncommitted diff. No commit/push, production change, dependency download, formal
+review, release-evidence regeneration, or change to frozen budget rules occurred.
+
+## Current FIX baseline and outcome
+
+- Started clean in `D:\Clay`, branch `codex/clay-project`, HEAD and local tracking
+  origin `2da7760c5ad9a255a233505ccb9f4d5b0aebc458`. No network remote readback.
+- Kernel and shell full-suite regressions are fixed with test-only corrections to
+  obsolete fixtures. Real production exclusion, authority, recovery and availability
+  checks are unchanged. Production without `navigator.locks` still fails closed.
+- Backup writer lazy closure is now under both frozen limits through narrow public
+  imports. Kit enrollment and archive authentication remain in the trusted shell;
+  their code is no longer an incidental static dependency of directory publication.
+- Eight browser scripts were updated for current source/UI. Their packaged journeys
+  are NOT passed: every owned browser launch failed before page creation on this
+  host. Cold-start performance is unmeasured, not explained away by longer waits.
+- Four aggregate budget boundaries remain RED (including two previously hidden by
+  the fail-fast backup check). Release B's old source/runtime certificate is still
+  invalid for this source. Do not alter old evidence or equate hash rebinding with
+  a freshly observed certificate.
+
+## Fixes and changed-file scope
+
+Use `git status --short --untracked-files=all` for the exact source/test/script list.
+
+1. Kernel fixtures: `test/helpers/owned-lifecycle-locks.ts`,
+   `production-authority.test.ts`, `production-native-recovery.test.ts`, and
+   `lifecycle-recovery-inventory.test.ts`.
+   - Reused the disposable serialized lock fixture. Current memory-catalog tests
+     explicitly stub native browser preflight, retention migration and restore
+     discovery instead of accidentally opening real OPFS. The native suite still
+     runs its actual owned recovery implementation; no production seam was changed.
+   - Audited reader expectation now includes `listIntakeAutoAcceptRules`.
+   - New tests reject absent navigator/locks before work, prove serialization and
+     release after failure. On this Node host, the initial six stale fixtures failed
+     at `strictBrowserPool` (no durable browser storage), rather than at locks.
+     Stubbing native recovery alone still left the migration/restore OPFS seams RED.
+2. Shell fixtures: `start-over-boundary.test.ts`, `operations-ui.test.tsx`,
+   `recurring-entry.test.tsx`, `data-export-integration.test.tsx`.
+   - Safe new-app Start Over stays; authenticated restore is correctly available.
+   - Paired automation presentation/commands, original source IDs, receipt/outcome
+     readback and independent capture Undo IDs replace old incomplete mocks.
+   - Share-preview export binds `presentationSource` AND DataView's app identity.
+   - Tests cover available/unavailable automation, retain exact retry assertions,
+     isolate owned jsdom session state, and assert collected errors. No async error
+     suppression or timeout inflation was added; both unhandled errors are gone.
+3. Production import boundaries: `packages/kernel/package.json` exposes narrow
+   `external-backup`, `backup-trust`, `recovery-kit` entry points. Shell
+   `backup-target.browser.ts`, `production-backup.browser.ts`, `automatic-backup.ts`,
+   `backup-trust-runtime.ts`, `restore-as-new.ts` import actual implementations and
+   closed schemas directly; existing barrel/type compatibility remains. An attempted
+   db-worker narrow import did not reduce complete bytes and was reverted.
+4. Browser finders: `product-onboarding.mjs`/`.test.mjs`, `shape-map.mjs`,
+   `change-contract.mjs`, `provider-connections.mjs`, `lazy-boundaries.mjs`,
+   `connected-operations.mjs`, `workspace-mode.mjs`, `multi-app-archive.mjs`,
+   `browsers.mjs`, and kernel `product-gate-panels.test.ts`.
+   - Use recommended starter or explicitly open "See all templates". Workspace
+     mode creates/switches real catalog apps, never mints localStorage identities.
+   - Current import/close, conversion Keep/finalize and automation draft/simulation/
+     Preview run/Confirm run controls replace obsolete labels and callbacks.
+   - Model interception fixtures now use closed `//#blueprint` directives. Their
+     old executable JavaScript is rejected by the existing production boundary;
+     deterministic tests reproduced this independent of browser availability.
+   - Multi-app archive checks Kit enrollment, download record readback, authenticated
+     restore-as-new, exactly three apps, restored write/reload, original and sibling
+     isolation. Kit bytes are never read/printed/copied into evidence; only an owned
+     temporary download path is passed to the real Kit-check UI.
+   - Boot error gate checks safe retry and absence of unavailable lifecycle actions.
+     Existing modal/keyboard/axe/network/sibling checks remain. Browser matrix no
+     longer calls a memory fallback a successful persistence journey.
+   - Chromium sandbox is explicitly enabled. Default uses Playwright's installed
+     browser; `CLAY_TEST_CHROMIUM_CHANNEL=chrome` or `msedge` is an explicit owned
+     finder override, not frozen-version certification. External CDP is rejected.
+5. Diagnostic scripts (not certification): `bundle-module-report.mjs` builds with
+   ordinary production options and reports actual Rollup membership;
+   `bundle-diagnostic.mjs` measures all current frozen boundaries with the unchanged
+   budget library; `product-cold-start.mjs` records separate launch/document/boot/
+   starter/write/reload phases without increasing timeout limits. Outputs are in
+   ignored `test-results/fix-batch/`, not checked-in `evidence/`.
+
+## Actual commands and results
+
+All Vitest commands below use package-local
+`node node_modules/vitest/vitest.mjs run ... --maxWorkers=1 --minWorkers=1 --reporter=dot`.
+Broad suites/builds were serialized. No pnpm dependency install was attempted.
+
+| Finder / affected gate | Real result |
+| --- | --- |
+| Kernel `test/production-authority.test.ts`, initial RED | 7 failed / 62 passed, 52.73 s |
+| Kernel intermediate native-only seam fix | 6 failed / 76 passed; migration still entered real OPFS |
+| Kernel authority + lifecycle-inventory GREEN | 82 passed, 57.99 s |
+| Shell initial five-file packet | 6 failed / 18 passed, 2 unhandled errors, 17.17 s |
+| Shell same packet GREEN | 25 passed, no unhandled errors, 8.68 s |
+| Full kernel suite | 112 files passed / 1 skipped; 1,200 tests passed / 1 skipped; 495.54 s |
+| Full shell suite | 125 files and 834 tests passed; no unhandled errors; 397.75 s |
+| New kernel product-gate model fixtures RED | 2 failed: new model output was executable JavaScript |
+| Product-gate fixtures + blueprints GREEN | 11 passed, 1.64 s |
+| Shell planner bridge + production backup + directory adapter + automatic recovery + trust packet | 65 passed, 39.09 s |
+| Root onboarding / product-gate config / frozen-budget unit tests | `node --test scripts/product-onboarding.test.mjs scripts/product-gate-config.test.mjs scripts/bundle-budget.test.mjs`: 32 passed |
+| Kernel and shell affected typechecks | package-local `node node_modules/typescript/bin/tsc --noEmit`: exit 0 |
+| Panel production build | package-local `node node_modules/vite/bin/vite.js build`: exit 0; final run 198 ms |
+| Shell production build with module diagnostic | `node scripts/bundle-module-report.mjs`: exit 0; final run 14.52 s |
+| Frozen gate | `node scripts/bundle-budget.mjs`: exit 1 at total shell JS; freshness and all named lazy checks preceding it passed |
+| Full diagnostic | `node scripts/bundle-diagnostic.mjs`: exit 1; all 24 boundaries measured, four RED |
+
+Final `git diff --check` exited 0. Added tracked lines and seven new source files
+were scanned for runtime eval, unsafe HTML assignment, private-key/credential
+patterns and debugger statements: zero matches. All 13 changed/new JavaScript
+scripts passed `node --check`. These are targeted hygiene checks, not security
+review or a certificate. HEAD and the local origin ref remain `2da7760...`.
+
+Full-suite results above are development finder results, not an immutable candidate
+certificate. The later model-fixture test and script-only changes have focused
+coverage; the final exact-tree campaign still follows completion of the FIX work.
+
+### Final measured bundles (raw / gzip bytes)
+
+| Boundary | Measured | Frozen limit | Result |
+| --- | --- | --- | --- |
+| ProductionBackupRuntime | 32,057 / 10,833 | 45,000 / 14,000 | PASS (was 45,250 / 15,509) |
+| Worker authority | 212,676 / 53,290 | 240,000 / 60,000 | PASS, unchanged |
+| Total shell JavaScript | 1,183,647 / 349,690 | 980,000 / 290,000 | FAIL |
+| Complete worker closure | 1,461,057 / 392,375 | 1,010,000 / 280,000 | FAIL, unchanged |
+| Application styles | 78,807 / 20,198 | 67,000 / 17,000 | FAIL |
+| Complete browser payload | 4,027,944 / 1,287,860 | 3,250,000 / 1,100,000 | FAIL |
+
+All other measured boundaries passed, including entry/boot, other named lazy
+surfaces, planner chunks, SQLite support workers/WASM, and panel bootstrap.
+`scripts/bundle-budget.mjs` and `bundle-budget-lib.mjs` are unchanged. No measurements
+exclude dynamic imports, support assets or styles. Splitting a chunk alone cannot
+fix these remaining aggregate boundaries.
+
+## Browser and external gate status
+
+Owned finder commands actually attempted:
+
+```powershell
+node scripts/product-cold-start.mjs
+$env:CLAY_TEST_CHROMIUM_CHANNEL='chrome'; node scripts/product-cold-start.mjs
+$env:CLAY_TEST_CHROMIUM_CHANNEL='msedge'; node scripts/product-cold-start.mjs
+```
+
+- Default: exit 1, missing
+  `C:\Users\nakul\AppData\Local\ms-playwright\chromium_headless_shell-1228\chrome-headless-shell-win64\chrome-headless-shell.exe`.
+- Installed Chrome 152.0.7977.76 and Edge 153.0.4234.32: exit 1 before page creation;
+  launch reports Windows access/token failures, "DevTools remote debugging requires
+  a non-default data directory" despite an owned temporary profile, and GPU process
+  exit `-1073741790`. Sandboxing stayed enabled. No existing browser context was used.
+- A final `launchPersistentContext` attempt using an owned new
+  `D:\Clay\test-results\fix-batch\owned-chrome-lBAC5E` directory also failed before
+  page creation, with `GPU process isn't usable. Goodbye.` No app timing or packaged
+  browser success is claimed. Its launch diagnostic is `owned-profile-launch.json`;
+  the last regular finder failure is `cold-start.json` in the same ignored folder.
+- The only preview started was local Vite on 127.0.0.1:4181 with `--strictPort`.
+  It was stopped via its owned exec session after the failed attempts. Reserved
+  4173/4174/4175/4177/4180 servers and unrelated workloads were not touched.
+- Release B's frozen Chromium 149.0.7827.55 runtime was not found in the available
+  default/installed locations. Its verifier was NOT weakened or rerun using a
+  substitute runtime, and its historical evidence was NOT rewritten. Current
+  `backup-target.browser.ts` SHA-256 is
+  `441e83ef9824e5697f181c26603ef850b3097aa204da0b13edd7a840bc22385e`, not the old
+  `6b6832f14b5c1b932424b082f67d7a0771fb86ec9fc1d34bb64fa272019d8fc1` binding.
+- Preserve collector classifications: canonical transaction certificate 180/180
+  PASSED in D:\Clay (not rerun here); detached junction WASM error is not a product
+  regression. Release C parser and other package checks were reported passed by
+  the collector. Live Anthropic regression remains optional/external; no credentials
+  were requested, inspected, added or used. Local export must run on a clean final
+  candidate, with its clean-tree requirement unchanged. Release A needs its explicit
+  loopback URL; the collector omission was not a source defect.
+
+## Exact continuation - finish FIX, then immutable campaign
+
+1. Preserve this entire diff on base `2da7760...`; one writer, no Git writes here.
+   Do not redo the fixed fixture defects or disable production native recovery.
+2. CODE: finish aggregate budget work. Inspect ignored `bundle-modules.json` and
+   `bundles.json`, not a guessed source size. The worker's largest shared chunk
+   contains pinned SQLite, ClayStore, Acorn and closed schema validation; shell
+   contains independent schema/React/domain code. Vite's nested worker diagnostic
+   can list identical emitted import-worker filenames twice; the budget collector
+   correctly counts each emitted file once. Preserve parser/validation/recovery
+   functionality. All four aggregate red boundaries above require real reduction;
+   do not remove capabilities, raise limits or alter the collector.
+3. HOST / BROWSER: run the updated owned journeys on a host that can launch a
+   sandboxed browser. Rebuild this exact source first. Start only an owned 4181
+   preview (`node node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4181
+   --strictPort` from packages/shell), then from root set
+   `$env:URL='http://127.0.0.1:4181'`. Use `product-cold-start.mjs` to isolate timings,
+   and the eight updated product scripts, with output dirs under ignored
+   `test-results/fix-batch/`. An explicit installed Chrome finder override is not
+   Release B or cross-browser certification. No timeout inflation/storage clearing/
+   external-CDP/sandbox bypass. More selector drift may remain until execution.
+4. SOURCE BINDING + CERTIFICATION: after bundle/source fixes stabilize, regenerate
+   Release B code/build/matrix/suite binding AND genuinely observed frozen-runtime
+   restart/memory evidence through `node scripts/release-b-backup-certification.mjs`.
+   Do not merely rebind the shared certification object to new bytes and call its
+   historical `verdict: pass` current. If frozen runtime/human evidence is unavailable,
+   retain an explicit external gate. Authentication-before-ZIP and key custody stay.
+5. On the clean immutable final candidate, run remaining campaign gates, including
+   `CLAY_RELEASE_A_URL` on the owned loopback preview and clean-tree local export.
+   Manual NVDA remains human-only. Do not start formal independent review until the
+   coherent deterministic FIX batch and requested automated campaign are ready.
+
+No claim of P0, A-F, release certification, or shipment is made by this checkpoint.
+
+---
+
+# Historical A-F source-development completion - 2026-09-13
 
 Source/UI development is complete under the bounded compatibility outcomes in
 ADR-070. This is NOT certification, shipment, or a claim that all release gates

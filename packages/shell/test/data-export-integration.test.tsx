@@ -43,6 +43,8 @@ describe("Data view local projection integration", () => {
     const projectExport = vi.fn(async (projectionRequest: ProjectionRequestV1) =>
       projectPlaintextV1(store, projectionRequest));
     const worker = {
+      presentationSource: async () => ({ appInstanceId: `app_${"a".repeat(26)}`, activeGenerationId: `gen_${"b".repeat(26)}`,
+        lineageEpoch: "0", protectionRevision: "4", digestSchema: 1, stateSha256: `sha256:${"c".repeat(64)}` }),
       registryTables: async () => [...store.registrySnapshot().values()],
       semanticTrace: async () => store.semanticSchemaTrace(),
       getSetting: async () => null,
@@ -103,6 +105,8 @@ describe("Data view local projection integration", () => {
       return projectPlaintextV1(store, request);
     });
     const worker = {
+      presentationSource: async () => ({ appInstanceId: `app_${"a".repeat(26)}`, activeGenerationId: `gen_${"b".repeat(26)}`,
+        lineageEpoch: "0", protectionRevision: "4", digestSchema: 1, stateSha256: `sha256:${"c".repeat(64)}` }),
       registryTables: async () => [...store.registrySnapshot().values()],
       semanticTrace: async () => store.semanticSchemaTrace(),
       getSetting: async () => null,
@@ -114,7 +118,7 @@ describe("Data view local projection integration", () => {
     const host = document.createElement("div"); document.body.replaceChildren(host);
     const root = createRoot(host);
     await act(async () => root.render(<DataView
-      worker={worker} store={new InProcessAsyncStore(store)} initialTable="tasks"
+      worker={worker} appInstanceId={`app_${"a".repeat(26)}`} store={new InProcessAsyncStore(store)} initialTable="tasks"
       onWrite={() => undefined} onClose={() => undefined}
       onError={message => { throw new Error(message); }} onInfo={() => undefined}
     />));

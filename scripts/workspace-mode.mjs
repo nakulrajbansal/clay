@@ -2,6 +2,7 @@ import { chromium } from "playwright";
 import AxeBuilder from "@axe-core/playwright";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { chooseProductStarter, createProductApp, switchProductApp, productChromiumOptions } from "./product-onboarding.mjs";
 import {
   isExpectedProductGateRequest, monitorProductGatePage,
   productGateBuildDigest, productGateBuildEntry, productGateUrl,
@@ -31,19 +32,8 @@ const localAssets = await Promise.all(localBuildPaths.map(async path => {
 }));
 const expectedBuildDigest = productGateBuildDigest(localManifest, localAssets);
 await mkdir(outDir, { recursive: true });
-const browser = await chromium.launch();
+const browser = await chromium.launch(productChromiumOptions());
 const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, reducedMotion: "reduce" });
-await context.addInitScript(() => {
-  try {
-    const app = { id: "workspace-mode-proof", name: "Sales CRM", shellId: "crm" };
-    if (!sessionStorage.getItem("clay_workspace_mode_proof_initialized")) {
-      localStorage.setItem("clay_apps", JSON.stringify([app]));
-      localStorage.setItem("clay_current_app", app.id);
-      localStorage.removeItem(`clay_workspace_mode:${encodeURIComponent(app.id)}`);
-      sessionStorage.setItem("clay_workspace_mode_proof_initialized", "true");
-    }
-  } catch { /* sandboxed panel frames have intentionally opaque origins */ }
-});
 const page = await context.newPage();
 const assertCurrentOrigin = monitorProductGatePage(page, url);
 const failures = [];
@@ -78,6 +68,7 @@ const measureLayout = async () => page.evaluate(() => {
 
 await page.goto(url, { waitUntil: "domcontentloaded" });
 assertCurrentOrigin();
+await chooseProductStarter(page, "Sales CRM");
 try {
   await page.getByRole("button", { name: "Work", exact: true }).waitFor();
 } catch (error) {
@@ -139,18 +130,13 @@ assertCurrentOrigin();
 await waitSelected("Customize");
 check(await present("Open automations"), "Customize preference did not survive reload");
 
-await page.evaluate(() => {
-  const apps = JSON.parse(localStorage.getItem("clay_apps") ?? "[]");
-  apps.push({ id: "workspace-mode-proof-b", name: "Second CRM", shellId: "crm" });
-  localStorage.setItem("clay_apps", JSON.stringify(apps));
-  localStorage.setItem("clay_current_app", "workspace-mode-proof-b");
-});
+await createProductApp(page, "Tracker");
 await page.reload({ waitUntil: "domcontentloaded" });
 assertCurrentOrigin();
 await waitSelected("Work");
 check(await absent("Open automations"), "Customize leaked into a second app");
 
-await page.evaluate(() => localStorage.setItem("clay_current_app", "workspace-mode-proof"));
+await switchProductApp(page, "Sales CRM");
 await page.reload({ waitUntil: "domcontentloaded" });
 assertCurrentOrigin();
 await waitSelected("Customize");

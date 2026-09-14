@@ -1,7 +1,6 @@
+import { BackupTrustCoordinator } from "@clay/kernel/backup-trust";
+import { generateBackupTrustMaterialV1, encodeRecoveryKitV1 } from "@clay/kernel/recovery-kit";
 import {
-  BackupTrustCoordinator,
-  generateBackupTrustMaterialV1,
-  encodeRecoveryKitV1,
   type BackupFreshnessAssessment,
   type BackupTrustRecordStore,
   type BackupTrustReservationV1,

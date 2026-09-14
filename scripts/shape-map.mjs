@@ -5,12 +5,13 @@ import { chromium } from "playwright";
 import AxeBuilder from "@axe-core/playwright";
 import { mkdir } from "node:fs/promises";
 import { productGateUrl } from "./product-gate-url.mjs";
+import { chooseProductStarter, productChromiumOptions } from "./product-onboarding.mjs";
 
 const url = productGateUrl();
 const outDir = process.argv[2] || "evidence";
 await mkdir(outDir, { recursive: true });
 
-const browser = await chromium.launch();
+const browser = await chromium.launch(productChromiumOptions());
 const context = await browser.newContext({ viewport: { width: 1440, height: 1050 } });
 const page = await context.newPage();
 const errors = [];
@@ -25,7 +26,7 @@ const check = (condition, label) => {
 };
 
 await page.goto(url, { waitUntil: "domcontentloaded" });
-await page.getByText("Sales CRM", { exact: true }).click({ timeout: 15_000 });
+await chooseProductStarter(page, "Sales CRM");
 await page.locator(".panel-frame").first().waitFor({ timeout: 20_000 });
 
 const shellAxe = await new AxeBuilder({ page }).exclude("iframe").analyze();

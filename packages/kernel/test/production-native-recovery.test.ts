@@ -1,14 +1,12 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { initializedSahpool, OwnedSahDirectory } from "./helpers/owned-sahpool";
+import { ownedLifecycleLocks } from "./helpers/owned-lifecycle-locks";
 
 afterEach(() => { vi.useRealTimers(); vi.doUnmock("@sqlite.org/sqlite-wasm"); vi.resetModules(); vi.unstubAllGlobals(); });
 async function runtime(owned: OwnedSahDirectory) {
   const sqlite = await initializedSahpool(owned);
   // Disposable exclusion fixture. Actual SAHPool holds the same original SAHs.
-  let tail: Promise<unknown> = Promise.resolve();
-  Object.assign(navigator, { locks: { request: (_name: string, _options: unknown, action: () => Promise<unknown>) => {
-    const task = tail.then(action); tail = task.catch(() => {}); return task;
-  } } });
+  Object.assign(navigator, { locks: ownedLifecycleLocks() });
   vi.resetModules(); vi.doMock("@sqlite.org/sqlite-wasm", () => ({ default: async () => sqlite }));
   return { sqlite, db: await import("../src/db"), Authority: (await import("../src/production-authority")).ProductionStoreAuthority };
 }

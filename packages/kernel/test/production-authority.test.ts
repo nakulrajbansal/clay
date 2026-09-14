@@ -1,6 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ownedLifecycleLocks } from "./helpers/owned-lifecycle-locks";
 import { LocalIntakeFormV2 as LocalIntakeFormSchema } from "@clay/schema/intake";
 import * as browserDb from "../src/db";
+import * as browserMigration from "../src/production-catalog-migration";
+import * as browserRestore from "../src/production-restore";
 import {
   Bridge, ClayStore, StoreRpcClient, deriveInverse, openMemoryDriver, serveStore,
   type DbDriver, type ForwardOpT, type MessagePortLike,
@@ -267,6 +270,18 @@ async function independentCatalogTarget(
 }
 
 describe("production Store authority", () => {
+  beforeEach(() => {
+    // These boot fixtures own memory SQLite snapshots, not SAHPool files.
+    // Native rollback is covered by production-native-recovery.test.ts. Keep
+    // physical lifecycle exclusion serialized while substituting that seam.
+    vi.stubGlobal("navigator", { locks: ownedLifecycleLocks() });
+    vi.spyOn(browserDb, "recoverBrowserNativeJournals").mockResolvedValue();
+    // All snapshots below already have the current catalog and no physical
+    // restore jobs. Their file preflights have separate owned-directory tests.
+    vi.spyOn(browserMigration, "migrateBrowserCatalogRetention").mockResolvedValue();
+    vi.spyOn(browserRestore, "reconcilePendingBrowserRestore").mockResolvedValue();
+  });
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
   it("exports through a read-only authority snapshot without granting live Store writes", async () => {
     const driver = await cataloguedStore();
     const authority = ProductionStoreAuthority.openExisting(driver, {
@@ -430,7 +445,7 @@ describe("production Store authority", () => {
         "dailyHomeNotificationWatermark", "dailyHomeRecordRevisions",
         "dailyHomeUnreadNotifications",
         "fieldProvenance", "getSetting", "globalSearch", "headVersion", "history",
-        "intakeDeliveryFailures", "intakeInbox", "intakeReceipts", "listAutomations", "listIntakeForms",
+        "intakeDeliveryFailures", "intakeInbox", "intakeReceipts", "listAutomations", "listIntakeAutoAcceptRules", "listIntakeForms",
         "listNotifications", "livePanels", "operationBatches",
         "panelProvenance", "previewRelationConversion",
         "privateMetricsSummary", "projectionSnapshot", "query", "queryBounded", "readAttachment", "registrySnapshot",

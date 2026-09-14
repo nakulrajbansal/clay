@@ -1,7 +1,7 @@
 import {
   inspectAuthenticatedArchiveV5Header,
   type AuthenticatedArchiveHeaderV1,
-} from "@clay/kernel/backup";
+} from "@clay/kernel/archive-authentication";
 import {
   parseAuthenticatedFormat5RestoreGrant,
   type AuthenticatedFormat5RestoreGrant,
