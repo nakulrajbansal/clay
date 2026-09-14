@@ -259,6 +259,12 @@ test("local-export browser evidence observes real dialog states and doubles ever
 
 test("compact export controls truly reflow below the wrapped app bar", async () => {
   const styles = await readFile(new URL("packages/shell/src/app/styles.css", root), "utf8");
+  const primitives = await readFile(new URL(
+    "packages/shell/src/app/primitives.css", root,
+  ), "utf8");
+  const exportDialog = await readFile(new URL(
+    "packages/shell/src/app/ExportDialog.tsx", root,
+  ), "utf8");
   const exportStyles = await readFile(new URL(
     "packages/shell/src/app/ExportDialog.css", root,
   ), "utf8");
@@ -269,8 +275,15 @@ test("compact export controls truly reflow below the wrapped app bar", async () 
   assert.match(compact, /\.rail\s*\{[^}]*position:\s*absolute;[^}]*top:\s*0;/);
   assert.match(compact,
     /\.appbar-theme-btn\s+\.appbar-action-label\s*\{[^}]*display:\s*none;/);
+  assert.match(exportDialog,
+    /className="[^"]*ui-flex-wrap-wrap[^"]*export-redaction-options[^"]*"/,
+    "the redaction controls must opt into the shared wrapping primitive");
+  assert.match(primitives,
+    /\.ui:where\(\.ui-flex-wrap-wrap\)\s*\{[^}]*flex-wrap:\s*wrap;/,
+    "the shared wrapping primitive must remain executable CSS");
   assert.match(exportStyles,
-    /\.export-redaction-options\s*\{[^}]*flex-wrap:\s*wrap;[^}]*overflow-x:\s*visible;/);
+    /\.export-redaction-options\s*\{[^}]*overflow-x:\s*visible;/,
+    "the export-specific control group must not create a horizontal scroller");
 });
 
 test("shared product-gate helpers bind override, final origin, and manifest entry", () => {
