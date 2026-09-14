@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { sharedRuntimeChunk } from "./config/shared-runtime-chunks.mjs";
 import { createSharedSqliteRuntime } from "./config/shared-sqlite-runtime.mjs";
+import { createPanelParserSpecialization } from "./config/panel-parser-specialization.mjs";
 
 import {
   createProductionCssOptimizer,
@@ -27,6 +28,7 @@ if (sourceTree !== "unbound") {
 export default defineConfig({
   plugins: [
     createSharedSqliteRuntime(),
+    createPanelParserSpecialization(),
     createProductionCssOptimizer({
       sourceRoot: fileURLToPath(new URL("./src/", import.meta.url)),
     }),
@@ -57,7 +59,7 @@ export default defineConfig({
   },
   worker: {
     format: "es",
-    plugins: () => [createSharedSqliteRuntime()],
+    plugins: () => [createSharedSqliteRuntime(), createPanelParserSpecialization()],
     rollupOptions: {
       output: {
         onlyExplicitManualChunks: true,

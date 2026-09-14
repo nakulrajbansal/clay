@@ -1,3 +1,177 @@
+# Aggregate bundle FIX continuation - 2026-09-14
+
+Started clean at `5043099b407d0af7523af298e1e894d0db88487f` in `D:\Clay`,
+`codex/clay-project`; local origin tracking ref matches. No network remote
+readback, commits, pushes, deployments, dependency downloads, other-worktree
+edits, credential access or existing-server changes. A-F development remains
+complete. This is a PARTIAL size FIX, not a certificate or release.
+
+## Implemented: closed production panel-parser specialization
+
+Preserved the prior shared Zod/SQLite assets and minified panel bootstrap.
+The complete worker really uses Acorn for V1-V7 validation and syntactic field
+rename, including archived panels. The replacement is NOT a regex scanner or a
+new JavaScript grammar. The same installed Acorn 8.17.0 grammar, Unicode tables,
+scope/private-field checks, regexp validation, AST positions and errors remain.
+
+- New kernel `panel-program.ts` exposes ONLY the two existing modes: ECMAScript
+  2023 module validation and latest-module rewriting. `validate.ts` and
+  `panel-rewrite.ts` call those entry points; their safety checks are unchanged.
+- New shell `config/panel-parser-specialization.mjs` partially evaluates the
+  pinned dependency at build time. It folds unused options and edition tests
+  with the SAME result for both supported modes. It removes unreachable public
+  parser/plugin/reflection APIs, and minifies only private Parser.prototype
+  method names inside that isolated dependency compilation. AST fields, error
+  fields, syntax strings and other Clay properties are not mangled.
+- Exact hashes guard both installed parser bytes and the closed wrapper's
+  normalized source. Alternate importers, direct-path bypasses, dynamic imports,
+  or missing loaded-module identity fail the build. No vendor file was edited.
+  The plugin runs for both ordinary and worker builds; development/Node paths
+  continue to use the original parser through the same closed wrapper.
+- Added the `.d.mts` declaration, a compiled real-validator/rewrite fixture and
+  `panel-parser-specialization.test.mjs`. The RED test reproduced retention of
+  unused parser callbacks. GREEN compares full ASTs (including regexp/bigint
+  literal values), exact syntax error metadata, V1-V7 issue lists and rewrite
+  results against the original parser/validator. It covers starter panels,
+  forbidden identifiers, private names, imports, hashbangs, Unicode, both grammar
+  versions, string/depth bounds and deterministic syntax faults. No fixture code
+  is executed as panel/model output; only the compiled trusted checks run in VM.
+
+## Measured hypotheses and limits of this pass
+
+1. Parser specialization yielded a real worker reduction: complete worker
+   1,459,870 / 391,399 -> 1,434,879 / 387,588 raw/gzip in the first build.
+   This is 24,991 raw / 3,811 gzip, not the much larger pre-minification change
+   (Acorn rendered length 231,930 -> 91,373). No bytes were moved outside the
+   collector or merely put into another lazy chunk.
+2. AST caller inventory of Store, DeviceCatalog, authority and coordinator did
+   NOT identify a large safely removable public-method block. Apparent small
+   orphans (`rollForwardTo`, `markSuggestionShown`, `dumpTable`, catalog
+   `generationDescriptors`) are not grounds to delete compatibility APIs; dynamic
+   dispatch and the writer census still need to be accounted for. No method or
+   route was removed. The 15 identical retired-intake throws are already reduced
+   to one emitted throw by Terser; rewriting those cases would not save bytes.
+3. CSS membership was checked against actual rendered production modules, not
+   every file in the source tree. Almost all selectors are used; unmatched names
+   are mostly runtime suffixes, so blind pruning is invalid. Source analysis found
+   611 main and 271 Operations rules, with repeated display/color/control styling.
+   Straight grouping/minification is already substantially handled by CSSO.
+   No CSS was changed without a cascade-equivalence proof. The CSS gate stays RED.
+4. Seed inventory found 34 literal code bodies totaling 22,670 characters, with
+   only seven async form bodies and differing payload/default semantics. Moving
+   seed material alone does not remove browser bytes; do not estimate a 60 KB
+   reduction from that module's rendered length or change persisted panel bytes.
+
+The read-only investigation scripts in ignored `test-results/fix-batch/` are
+`source-seams.mjs`, `css-seams.mjs`, `css-membership.mjs`, and `parser-size.mjs`.
+They are development diagnostics, not release evidence or a proven call graph.
+
+## Verification and current measurements
+
+Serial package-local test command:
+`node node_modules/vitest/vitest.mjs run [files] --maxWorkers=1 --minWorkers=1 --reporter=dot`.
+Full-suite JSON outputs use `*-optimization-2.json` in `test-results/fix-batch/`.
+
+- Parser/runtime boundary packet: 4 files, 8 passed, 8.05 s.
+- Expanded compiled parser/validator/rewrite packet: 2 passed, 3.61 s.
+- Final packet including the real direct-path import bypass: 3 passed, 4.51 s.
+- Kernel validator, exemplar, hostile-corpus and rewrite packet: 4 files,
+  121 passed, 2.86 s. The nonexistent `archive-fuzz.test.ts` filter in that command
+  added no tests; it is NOT an archive-fuzz pass.
+- All six final package typechecks exited 0, run serially from each package with
+  `node node_modules/typescript/bin/tsc --noEmit`.
+- Full suites ran serially with `--reporter=dot --reporter=json
+  --outputFile.json=../../test-results/fix-batch/<package>-optimization-2.json`:
+
+| Package | Files passed / skipped | Tests passed / skipped | Duration | Exit |
+| --- | --- | --- | --- | --- |
+| Kernel | 113 / 1 | 1,202 / 1 | 466.47 s | 0 |
+| Shell | 129 / 0 | 843 / 0 | 394.80 s | 0 |
+| Schema | 15 / 0 | 157 / 0 | 5.75 s | 0 |
+| Mutation | 6 / 0 | 48 / 0 | 3.97 s | 0 |
+| Backend | 11 / 0 | 111 / 0 | 9.57 s | 0 |
+| Panel runtime | 4 / 0 | 66 / 0 | 6.83 s | 0 |
+
+Total: 2,427 passed, one skipped. No unhandled-error report. Kernel projection
+benchmarks passed (30 samples: 1k p95 8.559 ms; 5k p95 26.854 ms). These package
+runs do not substitute for the deferred production browser/certification campaign.
+
+- `node --test scripts/bundle-budget.test.mjs`: 19 passed, zero failed, exit 0.
+- Panel package `node node_modules/vite/bin/vite.js build`: exit 0, 660 ms;
+  output 44,487 raw / 14,376 gzip bytes.
+- Final root `node scripts/bundle-module-report.mjs`: production build exit 0,
+  14.63 s; regenerated `test-results/fix-batch/bundle-modules.json`. Existing
+  static/dynamic import and >500 KB chunk warnings remain; no warning limit changed.
+- `node scripts/bundle-diagnostic.mjs`: exit 1; regenerated the full development
+  diagnostic `test-results/fix-batch/bundles.json`, with exactly four red boundaries.
+- Actual frozen `node scripts/bundle-budget.mjs`: exit 1, freshness PASS,
+  entry/boot/lazy boundaries PASS, then the unchanged fail-fast error:
+  `total shell JavaScript: 1137944 B raw / 342911 B gzip exceeds 980000 B / 290000 B`.
+  The full diagnostic, not an inferred later gate pass, supplies worker/style/
+  browser measurements below. No checked-in release evidence was regenerated.
+
+| Boundary | Current raw / gzip | Frozen limit | Remaining raw / gzip |
+| --- | --- | --- | --- |
+| Shell JavaScript | 1,137,944 / 342,911 | 980,000 / 290,000 | 157,944 / 52,911 |
+| Complete worker | 1,434,879 / 387,588 | 1,010,000 / 280,000 | 424,879 / 107,588 |
+| Application styles | 78,807 / 20,198 | 67,000 / 17,000 | 11,807 / 3,198 |
+| Complete browser | 3,577,766 / 1,178,506 | 3,250,000 / 1,100,000 | 327,766 / 78,506 |
+
+These are FINAL build readbacks for this diff; all four remain RED. Complete
+worker savings are 24,991 raw / 3,811 gzip, complete browser savings 24,991 raw /
+3,839 gzip. Shell raw bytes and CSS bytes are unchanged; the 27-byte shell gzip
+variation is not a structural saving. `asyncstore-CikdDNyU.js` is 481,016 raw /
+138,307 gzip. Worker authority remains green at 212,973 / 53,318;
+ProductionBackupRuntime remains green at 32,098 / 10,846. All other diagnostic
+boundaries are green. Collectors, frozen limits and prior shared assets are intact.
+
+Changed paths: kernel `src/panel-program.ts`, `src/validate.ts`,
+`src/panel-rewrite.ts`; shell `vite.config.ts`,
+`config/panel-parser-specialization.mjs`, its `.d.mts` declaration,
+`test/panel-parser-specialization.test.mjs`,
+`test/fixtures/compiled-panel-validation.ts`; this handoff. No route, authority,
+catalog, CSS, dependency or existing-user-data code was changed. `git diff --check`
+and both new JavaScript syntax checks passed. The changed code's targeted scan
+found no dynamic eval/Function constructor, unsafe HTML assignment, provider HTTP
+call or credential-shaped literal. VM execution is confined to the test-owned
+compiled trusted validator, never the panel strings supplied to that validator.
+Build/test diagnostics remain under ignored `test-results/fix-batch/`.
+HEAD and local origin tracking ref remain
+`5043099b407d0af7523af298e1e894d0db88487f`; this is one UNCOMMITTED nine-path diff,
+not an immutable/reviewed or certified candidate.
+
+## Exact continuation
+
+1. Preserve this source/test/config diff and both prior FIX checkpoints. Do not
+   reopen the parser grammar or replace it with a permissive scanner. A future
+   Acorn/wrapper change must deliberately rerun the equivalence packet; do not
+   silently update its pinned hashes to bypass the build guard.
+2. The large remaining worker seam is still Store/catalog/authority code, not an
+   unused parser import. In `device-catalog.ts`, examine `readValidatedCatalog`,
+   `mapCatalogGenerationEvent`, `mapRevisionReservation`, and target publication
+   against `archive-authority.ts`'s `mapEvent`, `mapReceipt`, and
+   `validateAuthorityHistory`. Public event-row mapping is genuinely repeated;
+   receipt error/null handling and history checks differ and cannot be merged
+   blindly. Start with bounded row/fault/roundtrip equivalence tests, preserve
+   validation order, physical cardinality, all pending kinds and error boundaries.
+   Existing finder packets: `device-catalog.test.ts`,
+   `device-catalog-metadata.test.ts`, `catalog-backup-recovery.test.ts`,
+   `archive-authority.test.ts`, `archive-authentication.test.ts`, and
+   `intake-archive-boundary.test.ts`. These are next seams to test and measure,
+   not a claim that their consolidation can close the 424,879-byte worker gap.
+3. Shell/controller reduction still needs source-level consolidation. It is not
+   fixed by extracting more chunks. CSS candidates are the history/data overlay
+   shell, record/relation/automation inputs and focus states in `styles.css` and
+   `Operations.css`. Prove default, focus, disabled, theme, embedded and 320px
+   cascade behavior before introducing shared primitives. Keep each lazy style's
+   activation contract. No CSS or shell saving from those candidates is claimed.
+4. Parent-side owned sandboxed browser execution and Release B rebinding remain
+   deferred until source stabilizes. No browser was launched or historical
+   release evidence rewritten in this continuation. All four aggregate limits
+   still require code work; no certification/shipment claim is made.
+
+---
+
 # Aggregate bundle FIX checkpoint - 2026-09-14
 
 This section supersedes the prior FIX continuation below. A-F development remains

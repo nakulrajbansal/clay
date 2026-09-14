@@ -1,6 +1,6 @@
-import * as acorn from "acorn";
+import { parseRewritablePanel, type PanelProgramNode } from "./panel-program";
 
-type Node = acorn.Node & Record<string, unknown>;
+type Node = PanelProgramNode & Record<string, unknown>;
 type Edit = { start: number; end: number; replacement: string };
 
 const isNode = (value: unknown): value is Node =>
@@ -40,7 +40,7 @@ function isWritePayloadKey(node: Node, parent: Node | undefined,
 
 /** Rewrite only syntactic field references, never comments or unrelated prose. */
 export function renamePanelFieldReferences(code: string, from: string, to: string): string {
-  const ast = acorn.parse(code, { ecmaVersion: "latest", sourceType: "module" }) as unknown as Node;
+  const ast = parseRewritablePanel(code) as unknown as Node;
   const edits: Edit[] = [];
 
   const visit = (node: Node, ancestors: Node[]): void => {

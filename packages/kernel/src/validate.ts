@@ -7,7 +7,7 @@
 // match only {"$var": true} declarations; queries built dynamically pass
 // statically and are enforced at the Bridge (runtime V4). Write calls'
 // table argument must be a string literal in declared_writes (G22/ADR-014).
-import * as acorn from "acorn";
+import { parseValidatedPanel, type PanelProgramNode } from "./panel-program";
 import { MutationPlan as MutationPlanSchema } from "@clay/schema";
 import type { z } from "zod";
 import { ClayError } from "./errors";
@@ -41,7 +41,7 @@ const FORBIDDEN = new Set([
 const MAX_AST_DEPTH = 40;
 const MAX_STRING = 4096;
 
-type AnyNode = acorn.Node & Record<string, unknown>;
+type AnyNode = PanelProgramNode & Record<string, unknown>;
 
 const isNode = (v: unknown): v is AnyNode =>
   typeof v === "object" && v !== null && typeof (v as AnyNode).type === "string";
@@ -144,7 +144,7 @@ function checkPanelCode(panel: PanelT): ValidationIssue[] {
 
   let ast: AnyNode;
   try {
-    ast = acorn.parse(panel.code, { ecmaVersion: 2023, sourceType: "module" }) as unknown as AnyNode;
+    ast = parseValidatedPanel(panel.code) as unknown as AnyNode;
   } catch (e) {
     issue("V1", `parse error: ${String(e)}`);
     return issues;
