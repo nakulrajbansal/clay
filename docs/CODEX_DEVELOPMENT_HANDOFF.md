@@ -1,3 +1,181 @@
+# SQLite FIX trace checkpoint — 2026-09-14
+
+Base: `4fd7c6a728342ca60071d7d3a9d9686cbcffde8c`, `D:\Clay`,
+`codex/clay-project`. HEAD and the local origin tracking ref matched; entry tree
+was clean. This section supersedes the older continuation below. Sole writer;
+no Git writes, dependencies, external browser/profile access, server termination,
+credentials, other worktrees, deployment/configuration or release evidence.
+
+## Outcome: no authorized SQLite omission
+
+**Production remains byte-for-byte source unchanged.** The source audit and
+independent executable counterexamples do not support the proposed KVVFS/vtab
+omissions. No minimal initializer, VFS replacement, split authority, relocated
+validation or changed collector/budget was introduced. A–F development and all
+prior architecture/oracles remain intact. Optimization/certification is NOT done.
+
+- `packages/shell/config/sqlite-api-trace.mjs` and its checked JSON manifest bind
+  the exact 3.53.0-build1 package/index/support-worker/WASM, TypeScript parser,
+  30 explicit operational/fixture/generator inputs, and all 317 production
+  JavaScript/TypeScript source files across six packages. Eleven registration
+  statements plus intervening
+  bootstrap/struct/callback code form an exact contiguous AST partition.
+- The inventory records calls, constructors, aliases, public property effects,
+  callbacks, reflection and computed accesses. **It is a conservative syntax
+  inventory, not a completed points-to/closed omission proof.** Unresolved
+  dynamic edges stay blocked; no absence-of-string-reference inference grants
+  removal. The generator accepts only a closed `retain-intact` policy, validates
+  all pins/manifest inputs and returns the original initializer. Unsupported
+  policy, accessors/symbol keys, malformed registrations, drift and forged
+  omission verdicts fail closed. There is no production plugin hook.
+- `scripts/sqlite-api-trace.mjs --check` is read-only. `MATCH` means the inventory
+  matches; its explicit verdict is `SPECIALIZATION_BLOCKED`, not a size or
+  release pass. `--candidate` prints a blocked inventory, never writes or
+  auto-approves code. The detailed rationale/API paths are in
+  `docs/SQLITE_API_TRACE.md`.
+- Two independent owned VM/WASM realm test variants compare the ORIGINAL
+  package initializer and intact shared initializer. Test-only AST omission
+  mutants stay in memory, outside the generator and all production configs.
+  KVVFS omission leaves Worker1 advertising `kvvfs` but unable to open its
+  named-memory database; the original can open/query/export/close it. Vtab
+  omission removes real public struct methods and module helpers. The KVVFS
+  `create_module` consumer is `__isUnderTest`-conditional, **not** an unconditional
+  production dependency (an initial test assumption was corrected from source).
+- New oracle checks cover exported descriptors/initialization effects, memory
+  SQL/attached rollback, export/deserialize exact bytes, errors/close and Worker1.
+  They are not OPFS/browser certificates. Existing owned-handle native/SAHPool
+  faults were run unchanged; no claim of specialized physical equivalence is made.
+
+Provenance: intact extracted initializer **568,539 UTF-8 bytes**, SHA-256
+`35fb438f17dc39e3f3bf3ac8cf58810c5054c19d3224a289bd0af68b65ce6208`;
+WASM SHA-256
+`02d7e48164395fa68f81c6ec33e9da5461be397dc57602ac0cd89b4bbba1d312`.
+The independent installed package remains the oracle; nothing in node_modules
+was patched.
+
+## Final verification
+
+Commands use repository-local binaries (no install/download), package-local
+working directories and serial broad suites. Initial trace tests were RED:
+**3 failed**, missing trace/generator/manifest. The new oracle packet reached
+**7 passed** after correcting a virtual-entry fixture and the test-conditional
+KVVFS helper expectation; production was not changed. A later policy test hit
+the unchanged 5-second test limit by repeatedly reparsing the whole SDK for
+already-forbidden requests (**27 passed / 1 timeout**). Moving closed-policy
+rejection before the expensive audit fixed that tool seam without extending
+timeouts or skipping any validation for an allowed output.
+
+| Gate | Actual result |
+| --- | --- |
+| Final focused SQLite trace/oracle/shared-runtime packet | 28 passed / 3 files; 23.40s |
+| Native recovery + SAHPool recovery/initialization + browser authority fixtures | 143 passed / 4 files; 152.87s |
+| Full kernel | 1,372 passed / 1 skipped; 119 passing / 1 skipped files; 674.94s |
+| Full schema | 512 passed / 22 files; 17.98s |
+| Full mutation | 60 passed / 8 files; 5.06s |
+| Full panel-runtime | 66 passed / 4 files; 7.21s |
+| Full backend | 111 passed / 11 files; 10.43s |
+| Full shell, including real WorkerClient/db-worker A–F packets | 907 passed / 139 files; 423.81s |
+| `node node_modules/typescript/bin/tsc --noEmit` in all six packages | All six exited 0 |
+| Panel `node node_modules/vite/bin/vite.js build` | 5 modules; 662ms; exit 0 |
+| `node scripts/bundle-module-report.mjs` production build | 162 modules; 14.70s; exit 0 |
+| Renderer / standalone / AuthorityGraph / production-transition module checks | All four exited 0 |
+| `node packages/schema/scripts/generate-standalone.mjs --check` | 18 modules, 368 validators, 38 current files; exit 0 |
+| `node --test scripts/bundle-budget.test.mjs` | 19 passed; 128.9294ms; exit 0 |
+| `node scripts/sqlite-api-trace.mjs --check` | MATCH, SPECIALIZATION_BLOCKED, approvedOmissions=[], productionSpecialization=false; exit 0 |
+| `node scripts/roadmap-development-census.mjs` | developmentComplete=true; 21 capabilities; no development blockers or hard-disable flags; 25 explicitly retired routes; inventory only; exit 0 |
+| `node scripts/bundle-diagnostic.mjs` | Only completeWorker and completeBrowser fail; exit 1 |
+| Unchanged `node scripts/bundle-budget.mjs` | Freshness PASS; fails completeWorker; exit 1 (exact error below) |
+| Before/after full build artifact SHA-256 comparison | All 66 files byte-identical; no emitted audit/test module; emitted WASM hash matches the pin |
+| Bounded scan of four new executable/tool test files; `git diff --check` | No flagged eval/Function, unsafe HTML assignment, debugger or private-key/bearer literal; diff check exit 0; not a security certificate |
+
+All six full suites: **3,028 passed / 1 skipped**, no reported unhandled errors.
+There are 26 new trace/oracle tests; the focused 28-test packet also includes
+the two pre-existing shared-SQLite runtime tests. All application code and
+previous oracles were unchanged throughout these runs.
+
+Full suite command from each package:
+`node node_modules/vitest/vitest.mjs run --maxWorkers=1 --minWorkers=1 --reporter=dot --reporter=json --outputFile=../../test-results/fix-batch/<package>-sqlite-trace.json`.
+Focused outputs: `sqlite-trace-focused.json` and `sqlite-trace-native.json` in
+the same ignored directory. The former now contains the final GREEN run;
+earlier RED outcomes above come from real terminal output. No release report
+or certificate was overwritten.
+
+## Final measured boundaries
+
+| Boundary | Raw / gzip | Frozen limit | Result |
+| --- | ---: | ---: | --- |
+| Shell JS | 892,215 / 279,146 | 980,000 / 290,000 | PASS |
+| Styles | 60,905 / 16,825 | 67,000 / 17,000 | PASS |
+| Worker authority | 218,583 / 56,541 | 240,000 / 60,000 | PASS |
+| Complete worker | 1,370,834 / 377,042 | 1,010,000 / 280,000 | FAIL: 360,834 / 97,042 over |
+| Complete browser | 3,295,869 / 1,110,298 | 3,250,000 / 1,100,000 | FAIL: 45,869 / 10,298 over |
+
+**Net saving: 0 raw / 0 gzip** in both aggregate closures. All other measured
+boundaries pass. Shared SQLite is still **210,779 / 62,560**, 566,876 rendered
+source bytes. `asyncstore` remains **497,379 / 143,281**, target-authority
+**191,808 / 41,103**. Fresh module and full diagnostic output are in
+`test-results/fix-batch/bundle-modules.json` and `bundles.json`. None is release
+evidence. The unchanged frozen gate's real error is:
+
+```text
+Error: database worker JavaScript closure: 1370834 B raw / 377042 B gzip exceeds 1010000 B / 280000 B
+```
+
+## Working-tree boundary and cleanup exception
+
+The intended uncommitted diff is seven paths:
+
+- `packages/shell/config/sqlite-api-trace.mjs`
+- `packages/shell/config/sqlite-api-trace.json`
+- `scripts/sqlite-api-trace.mjs`
+- `packages/shell/test/sqlite-api-trace.test.mjs`
+- `packages/shell/test/sqlite-initializer-oracle.test.mjs`
+- `docs/SQLITE_API_TRACE.md`
+- `docs/CODEX_DEVELOPMENT_HANDOFF.md`
+
+HEAD/local origin tracking ref are still
+`4fd7c6a728342ca60071d7d3a9d9686cbcffde8c`. No commit/push was attempted.
+Tracked package/application sources, Vite config, lockfile, frozen collectors
+and release evidence have no diff.
+
+An additional untracked tool artifact appeared:
+`D:\Clay\Microsoft\Windows\PowerShell\ModuleAnalysisCache` (8,246 bytes when
+listed). Its contents were not read. A cleanup script required resolution of
+that explicit target before `Remove-Item -LiteralPath $clayResolvedCache`, with subsequent
+non-recursive removal of only empty parent directories under `D:\Clay\Microsoft`.
+The command tool rejected the script **before process creation**:
+`exec_command failed: CreateProcess ... rejected: blocked by policy`.
+Nothing was deleted; no alternate deletion/bypass was tried. Parent should
+remove this generated cache/empty directories from the candidate outside this
+blocked cleanup operation; **do not commit it**. This is an ancillary workspace
+cleanup blocker, not a SQLite/authority or browser product failure.
+
+## Exact continuation
+
+1. Preserve this checked, blocked trace and all prior A–F/oracle checkpoints.
+   The requested non-browser verification above is complete; the two frozen
+   aggregate gates remain RED. Remove only the ancillary tool cache noted above
+   before preserving a clean candidate. Do not rerun this as a claimed SQLite
+   optimization success: no specialized runtime was produced or switched.
+2. Do NOT remove KVVFS/vtab wholesale or revive low-yield descriptor/Store
+   extraction. The new tests establish real incompatible outcomes; a smaller
+   initializer change needs a new positive proof, not a new label or exemption.
+   The initializer alone (210,779 / 62,560) is smaller than the worker gap.
+3. Next source investigation: `packages/shell/src/worker/db-worker.ts` imports
+   `shells/seed-panels.ts` (60,830 rendered), `shells/seed.ts` (30,120), kernel
+   `projection.ts` (27,113) and `daily-home-basis.ts` (25,844); Store remains
+   263,224 rendered in asyncstore. These are module memberships, NOT savings.
+   Establish actual duplicate work and a product/performance reason before a
+   bounded pure-computation boundary. Preserve sole DB-worker Store/catalog
+   ownership and final validation/fence/SQL/Merkle/readback. Another emitted
+   asset alone cannot close completeBrowser. No such move is implemented here.
+4. Parent runs the canonical 180-case physical transaction certificate and
+   packaged browsers after source stabilization. Release B binding/frozen-runtime
+   evidence, clean-tree export, accessibility/NVDA and final review remain later
+   gates. No certification/release/roadmap shipment claim is made.
+
+---
+
 # Worker FIX samples and Store reducers — 2026-09-14
 
 Base: `a8aa18742783cf358e6313f387923bdd63d9c110`, `D:\Clay`,
